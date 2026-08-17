@@ -3,7 +3,7 @@
  */
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
@@ -21,16 +21,6 @@ type McpAuthProfileOptions = {
   cfg?: OpenClawConfig;
   agentDir?: string;
 };
-
-function normalizeStringHeaders(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const entries = Object.entries(value).filter(
-    (entry): entry is [string, string] => typeof entry[1] === "string",
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
 
 /** Returns the refresh-capable auth profile selected for one MCP server. */
 export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined {
@@ -229,7 +219,7 @@ export async function resolveMcpBearerBundleConfig(
       nextEnv[envVar] = token;
       authorization = `Bearer \${${envVar}}`;
     }
-    const headers = withoutMcpAuthorizationHeader(normalizeStringHeaders(server.headers));
+    const headers = withoutMcpAuthorizationHeader(filterStringRecord(server.headers));
     nextServers ??= { ...params.config.mcpServers };
     nextServers[serverName] = stripOpenClawOnlyOAuthConfig({
       ...server,

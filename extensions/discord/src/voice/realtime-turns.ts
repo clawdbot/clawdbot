@@ -5,18 +5,16 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import {
   createRealtimeVoiceTurnContextTracker,
+  isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceActivationName,
   type RealtimeVoiceActivationNameTranscriptResult,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceTurnContextHandle,
   type RealtimeVoiceTurnContextTracker,
+  type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  isDiscordRealtimeWakeNameRequired,
-  type DiscordRealtimeWakeNamePolicy,
-} from "./activation.js";
 import { convertDiscordPcm48kStereoToRealtimePcm24kMono } from "./audio.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
@@ -93,7 +91,7 @@ export class DiscordRealtimeTurns {
       realtimeConfig: () => DiscordRealtimeVoiceConfig;
       recordInputAudio: (audio: Buffer) => boolean;
       stopped: () => boolean;
-      wakeNamePolicy: () => DiscordRealtimeWakeNamePolicy;
+      wakeNamePolicy: () => RealtimeVoiceWakeNamePolicy;
       wakeNames: () => string[];
     },
   ) {}
@@ -315,7 +313,7 @@ export class DiscordRealtimeTurns {
   private isWakeNameRequired(
     humanParticipantCount = this.params.getHumanParticipantCount(),
   ): boolean {
-    return isDiscordRealtimeWakeNameRequired(this.params.wakeNamePolicy(), humanParticipantCount);
+    return isRealtimeVoiceWakeNameRequired(this.params.wakeNamePolicy(), humanParticipantCount);
   }
 
   private transcriptAttributionFromTurn(

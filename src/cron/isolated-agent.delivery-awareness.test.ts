@@ -5,7 +5,12 @@ import "./isolated-agent.mocks.js";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
@@ -116,6 +121,9 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
       expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
+      const globalEvents = peekSystemEventEntries("global");
+      expect(selectAgentSystemEvents(globalEvents, "main")).toHaveLength(1);
+      expect(selectAgentSystemEvents(globalEvents, "other")).toEqual([]);
     });
   });
 

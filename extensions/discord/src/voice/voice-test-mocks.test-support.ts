@@ -158,8 +158,16 @@ const {
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn(),
-    resolveConfiguredRealtimeVoiceProviderMock: vi.fn(() => ({
-      provider: { id: "openai" },
+    resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
+      () => {
+        provider: {
+          id: string;
+          capabilities?: { supportsActivationNameGating?: boolean };
+        };
+        providerConfig: Record<string, unknown>;
+      }
+    >(() => ({
+      provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),
@@ -274,7 +282,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {

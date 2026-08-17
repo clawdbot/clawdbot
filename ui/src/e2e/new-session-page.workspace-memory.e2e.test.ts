@@ -27,7 +27,7 @@ const DESKTOP_CONTEXT: BrowserContextOptions = {
 };
 const MOBILE_CONTEXT: BrowserContextOptions = {
   ...BASE_CONTEXT,
-  viewport: { height: 568, width: 320 },
+  viewport: { height: 740, width: 364 },
 };
 const MODELS = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
@@ -100,10 +100,23 @@ async function withNewSessionPage(
 }
 
 suite.define(() => {
-  it("keeps the mobile footer controls separated and reveals session modes on hover or focus", async () => {
+  it("keeps rail privacy visible and reveals the mobile footer mode on hover or focus", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
-        models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }],
+        models: [
+          {
+            id: "gpt-5.6-luna",
+            name: "GPT 5.6 Luna",
+            provider: "openai",
+            contextWindow: 400_000,
+          },
+          {
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            provider: "anthropic",
+            contextWindow: 200_000,
+          },
+        ],
         hasMultipleSessionSharingIdentities: true,
       });
       await page.goto(`${suite.server.baseUrl}new`);
@@ -126,46 +139,47 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await expect
         .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await expect
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
       await footer.hover();
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       await page.mouse.move(0, 0);
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
       await message.focus();
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
+      expect(
+        await incognito.evaluate(
+          (element) => element.closest(".new-session-page__incognito-rail") != null,
+        ),
+      ).toBe(true);
 
-      const [footerBox, attachBox, draftBox, incognitoBox, modelBox] = await Promise.all([
+      const [footerBox, attachBox, draftBox, modelBox] = await Promise.all([
         footer.boundingBox(),
         attach.boundingBox(),
         draft.boundingBox(),
-        incognito.boundingBox(),
         model.boundingBox(),
       ]);
       expect(footerBox).not.toBeNull();
       expect(attachBox).not.toBeNull();
       expect(draftBox).not.toBeNull();
-      expect(incognitoBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
       expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
-      expect((draftBox?.x ?? 0) + (draftBox?.width ?? 0)).toBeLessThanOrEqual(incognitoBox?.x ?? 0);
-      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
-        modelBox?.x ?? 0,
-      );
-      for (const control of [attachBox, draftBox, incognitoBox, modelBox]) {
+      for (const control of [attachBox, draftBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
         );
       }
       // The new-session footer keeps flex (not the shared chat mobile grid), so
-      // all four controls share one 320px row; wrap or overflow here means the
-      // new-session.css mobile override regressed.
+      // its transient mode switches can wrap before the model picker overflows.
       const controlsOverflow = await footer.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       );
@@ -205,8 +219,10 @@ suite.define(() => {
         modelSelect.evaluate(
           (element) => element.closest("details")?.hasAttribute("open") ?? false,
         );
+      const modelMenu = page.locator(".chat-controls__model-menu");
+      await expect.poll(() => modelMenu.isVisible()).toBe(true);
       const modelTriggerBox = await modelSelect.boundingBox();
-      const modelMenuBox = await page.locator(".chat-controls__model-menu").boundingBox();
+      const modelMenuBox = await modelMenu.boundingBox();
       expect(modelTriggerBox).not.toBeNull();
       expect(modelMenuBox).not.toBeNull();
       expect(modelMenuBox?.x ?? 0).toBeLessThanOrEqual(modelTriggerBox?.x ?? 0);
@@ -400,10 +416,13 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const projectTrigger = page.locator("#new-session-project-trigger");
       await choosePackagesFolder(page);
       await placeTrigger.click();
       await page.getByRole("button", { name: "Worktree" }).click();
+      await page.getByLabel("Base branch").fill("release/next");
+      await page.getByLabel("Worktree name").fill("remembered-task");
       await page.keyboard.press("Escape");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
@@ -412,14 +431,24 @@ suite.define(() => {
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await thinkingSlider.press("End");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
       await page.goto(`${suite.server.baseUrl}new`);
-      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+      await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "packages",
       );
+      await pollLocatorText(
+        page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
+      ).toBe("Local");
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await placeTrigger.click();
+      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/next");
+      await expect
+        .poll(() => page.getByLabel("Worktree name").inputValue())
+        .toBe("remembered-task");
+      await page.keyboard.press("Escape");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
@@ -455,7 +484,7 @@ suite.define(() => {
     });
   });
 
-  it("uses identity-scoped server project recents instead of the shared roster", async () => {
+  it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -485,7 +514,14 @@ suite.define(() => {
       methodResponses: {
         "projects.list": {
           projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
-          recents: [{ kind: "project", projectId: "registered", displayName: "Registered" }],
+          recents: [
+            { kind: "project", projectId: "registered", displayName: "Registered" },
+            {
+              kind: "folder",
+              folder: `${WORKSPACE}/scratch`,
+              displayName: "scratch",
+            },
+          ],
         },
         "sessions.list": {
           count: 1,
@@ -504,13 +540,16 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
-      const recent = page.locator('[data-value="recent-project:registered"]');
-      await recent.waitFor();
-      await captureProjectUiProof(page, "identity-project-recents.png");
-      await recent.click();
+      expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
+      const project = page.locator('[data-value="project:registered"]');
+      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      await project.waitFor();
+      await recentFolder.waitFor();
+      await captureProjectUiProof(page, "identity-project-recents-after.png");
+      await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -609,9 +648,10 @@ suite.define(() => {
             },
           },
         });
-        const trigger = page.locator("#new-session-place-trigger");
+        const trigger = page.locator("#new-session-project-trigger");
+        const detailTrigger = page.locator("#new-session-detail-trigger");
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
-        await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+        await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
         await captureProjectUiProof(page, "identity-preferences-migrated.png");
 
         await navigateInApp(page, "chat");
@@ -705,7 +745,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await choosePackagesFolder(page);
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
       await placeTrigger.click();
       await page.getByRole("button", { name: "Worktree" }).click();
       await page.keyboard.press("Escape");
@@ -780,7 +820,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-project-trigger");
       await placeTrigger.click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
@@ -847,7 +887,7 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: `Error: ENOENT: no such file or directory, scandir '${PICKED}'`,
       });
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-project-trigger");
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
@@ -865,7 +905,9 @@ suite.define(() => {
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect
+        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+        .toBe("false");
       await expect
         .poll(
           async () =>
@@ -913,10 +955,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("fs.listDir")).length)
         .toBeGreaterThan(validationRequests);
 
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeTrigger = page.locator("#new-session-project-trigger");
       await placeTrigger.click();
       await page
-        .locator('wa-popover.new-session-page__place-popover [data-value="workspace"]')
+        .locator('wa-popover.new-session-page__project-popover [data-value="workspace"]')
         .click();
       await gateway.resolveDeferred("fs.listDir", {
         path: PICKED,
@@ -947,7 +989,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       await page.getByRole("button", { name: "Browse folders" }).click();
       const browserPath = page.locator("input.new-session-page__browser-path");

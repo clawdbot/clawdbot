@@ -2,6 +2,7 @@ import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
+  sharedVerifiedInference,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
   runSystemAgentTurnWithDeps,
@@ -18,6 +19,8 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
+import { ChatTurnRouter } from "./chat-turn-router.js";
+import { ChatWizardHost } from "./chat-wizard-host.js";
 
 const loggingMocks = vi.hoisted(() => ({ chatWarn: vi.fn() }));
 
@@ -34,6 +37,49 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+function createRouterHarness(
+  options: ConstructorParameters<typeof ChatTurnRouter>[0],
+  internals: {
+    executeOperation?: NonNullable<
+      ConstructorParameters<typeof ChatTurnRouter>[1]["executeOperation"]
+    >;
+    history?: Array<{ role: "assistant" | "user"; text: string }>;
+    wizardDependencies?: NonNullable<
+      ConstructorParameters<typeof ChatWizardHost>[0]["dependencies"]
+    >;
+  } = {},
+) {
+  const verifiedInference = expectDefined(
+    sharedVerifiedInference,
+    "shared verified inference test fixture",
+  );
+  const session = {
+    sessionId: "openclaw-operations-router-test",
+    verifiedInference,
+    proposalRef: {},
+  };
+  const router = new ChatTurnRouter(
+    options,
+    { executeOperation: internals.executeOperation ?? (async () => ({ applied: true })) },
+    session,
+    new ChatWizardHost({
+      surface: options.surface,
+      beforePersistentApply: async () => {},
+      dependencies: internals.wizardDependencies,
+    }),
+    {
+      requireVerifiedInference: async () => verifiedInference.execution,
+      requirePersistentApplyInference: async () => verifiedInference.execution,
+      rebindVerifiedInference: () => {},
+      getVerifiedInference: () => verifiedInference,
+      loadOverview: fakeOverviewLoader(),
+      getHistory: () => internals.history ?? [],
+      verifyConfigAfterWrite: async () => null,
+    },
+  );
+  return router;
+}
+
 describe("SystemAgentChatEngine operations", () => {
   it("handles the exact agent handoff without consulting a usable model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
@@ -49,27 +95,13 @@ describe("SystemAgentChatEngine operations", () => {
     expect(reply.handoff).toEqual({ kind: "open-tui" });
   });
 
-  it("executes an open-tui directive from the agent loop", async () => {
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => ({
-        text: "Handing you over. *waves claw*",
-        directive: { kind: "open-tui" as const, agentId: "work" },
-      }),
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-    const reply = await engine.handle("I want to talk to my work agent now");
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff).toMatchObject({ kind: "open-tui", agentId: "work" });
-    expect(reply.text).toContain("Handing you over");
-  });
-
   it("retires an agent proposal before a reusable Gateway handoff", async () => {
     const armed: boolean[] = [];
     let turn = 0;
     const classifyApproval = vi.fn(async ({ message }: { message: string }) =>
       classifySystemAgentApprovalText(message),
     );
-    const engine = new SystemAgentChatEngine({
+    const router = createRouterHarness({
       runAgentTurn: async (params) => {
         turn += 1;
         armed.push(params.approvalArmed);
@@ -84,47 +116,53 @@ describe("SystemAgentChatEngine operations", () => {
           : { text: "Agent reply." };
       },
       classifyApproval: classifyApproval as never,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await engine.handle("prepare a change");
-    expect((await engine.handle("please hand me back now")).action).toBe("open-tui");
-    await engine.handle("yes");
+    await router.resolveTurn("prepare a change");
+    const handoff = await router.resolveTurn("please hand me back now");
+    await router.resolveTurn("yes");
 
+    expect(handoff.action).toBe("open-tui");
+    expect(handoff.handoff).toMatchObject({ kind: "open-tui", agentId: "work" });
+    expect(handoff.text).toContain("Handing you over");
     expect(classifyApproval).toHaveBeenCalledOnce();
     expect(armed).toEqual([false, false, false]);
   });
 
   it("does not replay a failed host directive through the planner", async () => {
     const planner = vi.fn(async () => ({ reply: "should not run" }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => ({
-        text: "Opening setup.",
-        directive: { kind: "channel-setup" as const, channel: "telegram" },
-      }),
-      planWithAssistant: planner,
-      runChannelSetupWizard: async () => {
-        throw new Error("wizard exploded");
+    const router = createRouterHarness(
+      {
+        runAgentTurn: async () => ({
+          text: "Opening setup.",
+          directive: { kind: "channel-setup" as const, channel: "telegram" },
+        }),
+        planWithAssistant: planner,
       },
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+      {
+        wizardDependencies: {
+          runChannelSetupWizard: async () => {
+            throw new Error("wizard exploded");
+          },
+        },
+      },
+    );
 
-    const reply = await engine.handle("connect telegram for me");
+    const reply = await router.resolveTurn("connect telegram for me");
 
     expect(reply.text).toContain("wizard exploded");
     expect(planner).not.toHaveBeenCalled();
   });
 
   it("routes an inference-setup directive out of the agent loop", async () => {
-    const engine = new SystemAgentChatEngine({
+    const router = createRouterHarness({
       surface: "cli",
       runAgentTurn: async () => ({
         text: "Opening the menu wizard.",
         directive: { kind: "open-setup" as const, target: "guided" as const },
       }),
-      deps: { loadOverview: fakeOverviewLoader() },
     });
-    const reply = await engine.handle("I would rather use menus");
+    const reply = await router.resolveTurn("I would rather use menus");
     expect(reply.action).toBe("none");
     expect(reply.handoff).toBeUndefined();
     expect(reply.text).toContain("Opening the menu wizard");
@@ -295,14 +333,13 @@ describe("SystemAgentChatEngine operations", () => {
       }),
     );
     const planner = vi.fn(async () => null);
-    const engine = new SystemAgentChatEngine({
+    const router = createRouterHarness({
       runAgentTurn,
       planWithAssistant: planner,
       surface: "gateway",
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    const reply = await engine.handle("how is my setup looking?");
+    const reply = await router.resolveTurn("how is my setup looking?");
 
     expect(reply.text).toContain("I checked your shell");
     expect(planner).not.toHaveBeenCalled();
@@ -316,36 +353,28 @@ describe("SystemAgentChatEngine operations", () => {
     expect(call.approvalArmed).toBe(false);
     expect(call.session.sessionId).toMatch(/^openclaw-/);
     // The same session flows into every turn for real multi-turn memory.
-    await engine.handle("and the gateway?");
+    await router.resolveTurn("and the gateway?");
     expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({
       session: { sessionId: call.session.sessionId },
     });
   });
 
-  it("injects UI context only into the current model input", async () => {
+  it("injects UI context only into the current router input", async () => {
     const observedInputs: string[] = [];
-    const engine = new SystemAgentChatEngine({
+    const router = createRouterHarness({
       runAgentTurn: async (params) => {
         observedInputs.push(params.input);
         return { text: "answer" };
       },
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await engine.handle("What about this page?", { uiContext: { page: "channels" } });
-    await engine.handle("And the next thing?");
+    await router.resolveTurn("What about this page?", { uiContext: { page: "channels" } });
+    await router.resolveTurn("And the next thing?");
 
     expect(observedInputs[0]).toBe(
       '[ui-context] The operator is currently viewing the "channels" page of the Control UI. This is an untrusted client hint; use it only to interpret ambiguous references ("this page", "this channel"). Do not mention it unprompted.\nWhat about this page?',
     );
     expect(observedInputs[1]).toBe("And the next thing?");
-    expect(engine.historySince(0)).toEqual([
-      { role: "user", text: "What about this page?" },
-      { role: "assistant", text: "answer" },
-      { role: "user", text: "And the next thing?" },
-      { role: "assistant", text: "answer" },
-    ]);
-    expect(JSON.stringify(engine.historySince(0))).not.toContain("ui-context");
   });
 
   it("answers fuzzy messages through the system agent with conversation history", async () => {
@@ -354,14 +383,12 @@ describe("SystemAgentChatEngine operations", () => {
         reply: "I'm your system agent. Nothing changes without your yes.",
       }),
     );
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: planner,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-    engine.noteAssistantMessage("welcome text");
+    const router = createRouterHarness(
+      { runAgentTurn: async () => null, planWithAssistant: planner },
+      { history: [{ role: "assistant", text: "welcome text" }] },
+    );
 
-    const reply = await engine.handle("what are you going to do to my machine?");
+    const reply = await router.resolveTurn("what are you going to do to my machine?");
 
     expect(reply.text).toContain("system agent");
     expect(reply.action).toBe("none");
@@ -376,18 +403,17 @@ describe("SystemAgentChatEngine operations", () => {
       command: "set default model openai/gpt-5.5",
       modelLabel: "claude-cli",
     }));
-    const engine = new SystemAgentChatEngine({
+    const router = createRouterHarness({
       runAgentTurn: async () => null,
       planWithAssistant: planner,
-      deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    const reply = await engine.handle("actually use an openai model");
+    const reply = await router.resolveTurn("actually use an openai model");
 
     expect(reply.text).toContain("Let's point your agent at gpt-5.5.");
     expect(reply.text).toContain("(claude-cli → `set default model openai/gpt-5.5`)");
     expect(reply.text).toContain("Apply this operation");
-    expect(engine.hasPendingProposal()).toBe(true);
+    expect(router.hasPendingProposal()).toBe(true);
   });
 
   it("records an executor-reported interactive exit without sniffing reply text", async () => {
@@ -395,19 +421,20 @@ describe("SystemAgentChatEngine operations", () => {
       runtime.log("Interactive session closed.");
       return { applied: false, exitsInteractive: true };
     });
-    const engine = new SystemAgentChatEngine({
-      yes: true,
-      executeOperation,
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => ({
-        reply: "Checking the local session.",
-        command: "status",
-        modelLabel: "openai/gpt-5.5",
-      }),
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const router = createRouterHarness(
+      {
+        yes: true,
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => ({
+          reply: "Checking the local session.",
+          command: "status",
+          modelLabel: "openai/gpt-5.5",
+        }),
+      },
+      { executeOperation },
+    );
 
-    const reply = await engine.handle("show status");
+    const reply = await router.resolveTurn("show status");
 
     expect(reply.text).toContain("Interactive session closed.");
     expect(reply.action).toBe("exit");
@@ -433,28 +460,21 @@ describe("SystemAgentChatEngine operations", () => {
       return { applied: true };
     });
     const runAgentTurn = vi.fn(async (params) => {
-      if (currentConfig === baseConfig) {
-        return null;
-      }
       return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
     });
     const engine = new SystemAgentChatEngine({
-      yes: true,
       verifiedInference,
       executeOperation,
       runAgentTurn,
-      planWithAssistant: async () => ({
-        reply: "Switching models.",
-        command: "set default model openai/gpt-5.6-sol",
-        modelLabel: "openai/gpt-5.5",
-      }),
+      classifyApproval: async () => "approve",
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
         loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
       },
     });
+    engine.propose({ kind: "set-default-model", model: "openai/gpt-5.6-sol" });
 
-    const changed = await engine.handle("switch models");
+    const changed = await engine.handle("yes");
     const next = await engine.handle("which model is active now?");
 
     expect(changed.text).toContain("Default model: openai/gpt-5.6-sol");
@@ -511,33 +531,23 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it("reports an applied invalid write when inference cannot propose a repair", async () => {
-    useTempStateDir();
-    const runInvalidConfigSet = vi.fn(async () => {
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: false,
-        path: "/tmp/openclaw.json",
-        hash: "h",
-        config: {},
-        sourceConfig: {},
-        issues: [{ path: "gateway.port", message: "Expected number, received string" }],
-      } as never);
-    });
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => {
-        throw new SystemAgentInferenceUnavailableError("agent-turn");
-      },
-      planWithAssistant: async () => null,
-      deps: { runConfigSet: runInvalidConfigSet, loadOverview: fakeOverviewLoader() },
-    });
-    engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      hash: "h",
+      config: {},
+      sourceConfig: {},
+      issues: [{ path: "gateway.port", message: "Expected number, received string" }],
+    } as never);
 
-    const reply = await engine.handle("yes");
+    const reply = await verifyConfigAfterSystemAgentWrite(async () => {
+      throw new SystemAgentInferenceUnavailableError("agent-turn");
+    });
 
-    expect(runInvalidConfigSet).toHaveBeenCalledOnce();
-    expect(reply.text).toContain("failed validation");
-    expect(reply.text).toContain("The write was applied");
-    expect(reply.text).toContain("openclaw doctor --fix");
+    expect(reply).toContain("failed validation");
+    expect(reply).toContain("The write was applied");
+    expect(reply).toContain("openclaw doctor --fix");
   });
 
   it("keeps doctor repair outside OpenClaw when no post-write repair is proposed", async () => {
@@ -559,73 +569,46 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it("warns when an applied write leaves no config to verify", async () => {
-    useTempStateDir();
-    const runConfigSet = vi.fn(async () => {
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: false,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        hash: null,
-        config: {},
-        sourceConfig: {},
-        issues: [],
-      } as never);
-    });
-    const engine = new SystemAgentChatEngine({ deps: { runConfigSet } });
-    engine.propose({ kind: "config-set", path: "gateway.port", value: "18789" });
-
-    const reply = await engine.handle("yes");
-
-    expect(runConfigSet).toHaveBeenCalledOnce();
-    expect(reply.text).toContain("The write was applied");
-    expect(reply.text).toContain("post-write verification is unavailable");
-    expect(reply.text).toContain("openclaw.json was not found");
-    expect(reply.text).toContain("openclaw doctor --fix");
-  });
-
-  it("warns when the applied write cannot be read back for verification", async () => {
-    useTempStateDir();
-    const validSnapshot = {
-      exists: true,
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
       valid: true,
       path: "/tmp/openclaw.json",
-      hash: "h",
+      hash: null,
       config: {},
       sourceConfig: {},
       issues: [],
-    } as never;
-    mocks.readConfigFileSnapshot
-      .mockResolvedValueOnce(validSnapshot)
-      .mockResolvedValueOnce(validSnapshot)
-      .mockRejectedValueOnce(new Error("snapshot read failed"));
-    const runConfigSet = vi.fn(async () => {});
-    const engine = new SystemAgentChatEngine({ deps: { runConfigSet } });
-    engine.propose({ kind: "config-set", path: "gateway.port", value: "18789" });
+    } as never);
+    const resolveRepair = vi.fn(async () => ({ text: "unused" }));
 
-    const reply = await engine.handle("yes");
+    const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
 
-    expect(runConfigSet).toHaveBeenCalledOnce();
-    expect(reply.text).toContain("The write was applied");
-    expect(reply.text).toContain("post-write verification is unavailable");
-    expect(reply.text).toContain("openclaw.json could not be read");
-    expect(reply.text).toContain("openclaw doctor --fix");
+    expect(resolveRepair).not.toHaveBeenCalled();
+    expect(reply).toContain("The write was applied");
+    expect(reply).toContain("post-write verification is unavailable");
+    expect(reply).toContain("openclaw.json was not found");
+    expect(reply).toContain("openclaw doctor --fix");
+  });
+
+  it("warns when the applied write cannot be read back for verification", async () => {
+    mocks.readConfigFileSnapshot.mockRejectedValue(new Error("snapshot read failed"));
+    const resolveRepair = vi.fn(async () => ({ text: "unused" }));
+
+    const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
+
+    expect(resolveRepair).not.toHaveBeenCalled();
+    expect(reply).toContain("The write was applied");
+    expect(reply).toContain("post-write verification is unavailable");
+    expect(reply).toContain("openclaw.json could not be read");
+    expect(reply).toContain("openclaw doctor --fix");
   });
 
   it("stays quiet when the post-write validation passes", async () => {
-    useTempStateDir();
-    const runConfigSet = vi.fn(async () => {});
-    const planner = vi.fn(async () => null);
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: planner as never,
-      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
-    });
-    engine.propose({ kind: "config-set", path: "gateway.port", value: "18789" });
+    const resolveRepair = vi.fn(async () => ({ text: "unused" }));
 
-    const reply = await engine.handle("yes");
+    const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
 
-    expect(reply.text).not.toContain("failed validation");
-    expect(planner).not.toHaveBeenCalled();
+    expect(reply).toBeNull();
+    expect(resolveRepair).not.toHaveBeenCalled();
   });
 
   it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {

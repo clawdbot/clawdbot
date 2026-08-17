@@ -4,7 +4,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -19,20 +21,22 @@ import {
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
+import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { formatError } from "../server-utils.js";
-import {
-  dedupeDreamDiaryEntries,
-  loadShortTermPromotionDreamingStats,
-  previewGroundedRemMarkdown,
-  removeBackfillDiaryEntries,
-  removeGroundedShortTermCandidates,
-  repairDreamingArtifacts,
-  writeBackfillDiaryEntries,
-} from "./doctor.memory-core-runtime.js";
-import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+
+type DoctorMemoryCoreRuntime = Pick<
+  typeof defaultMemoryCoreRuntime,
+  | "dedupeDreamDiaryEntries"
+  | "loadShortTermPromotionDreamingStats"
+  | "previewGroundedRemMarkdown"
+  | "removeBackfillDiaryEntries"
+  | "removeGroundedShortTermCandidates"
+  | "repairDreamingArtifacts"
+  | "writeBackfillDiaryEntries"
+>;
 
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
@@ -132,24 +136,11 @@ export type DoctorMemoryStatusPayload = {
 export type DoctorMemoryEmbeddingRuntimePayload = {
   engine: "llama.cpp";
   state: "ready" | "failed";
-  backend?: "metal" | "cuda" | "vulkan" | "cpu";
-  buildType?: "localBuild" | "prebuilt";
-  deviceNames?: string[];
-  memory?: {
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-    unifiedBytes: number;
-    observedAtMs: number;
-  };
-  offload?: {
-    supported: boolean;
-    offloadedLayers?: number;
-    totalLayers?: number;
-  };
-  context?: {
-    requestedSize: number | "auto";
-  };
+  backend?: "metal" | "cpu";
+  buildInfo?: string;
+  model?: { id: string; path?: string };
+  capabilities?: { vision: boolean; draft: boolean };
+  endpoints?: Record<string, "ready" | "unavailable">;
   loadError?: string;
 };
 
@@ -393,6 +384,7 @@ function trimDreamingEntries(
 async function loadDreamingStoreStats(
   workspaceDir: string,
   nowMs: number,
+  loadShortTermPromotionDreamingStats: DoctorMemoryCoreRuntime["loadShortTermPromotionDreamingStats"],
   timezone?: string,
 ): Promise<DreamingStoreStats> {
   try {
@@ -518,14 +510,14 @@ function isManagedDreamingJob(
   job: ManagedCronJobLike,
   params: { name: string; tag: string; payloadText: string },
 ): boolean {
-  const description = normalizeTrimmedString(job.description);
+  const description = normalizeOptionalString(job.description);
   if (description?.includes(params.tag)) {
     return true;
   }
   // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
-  const name = normalizeTrimmedString(job.name);
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
-  const payloadText = normalizeTrimmedString(job.payload?.text);
+  const name = normalizeOptionalString(job.name);
+  const payloadKind = normalizeOptionalString(job.payload?.kind)?.toLowerCase();
+  const payloadText = normalizeOptionalString(job.payload?.text);
   return (
     name === params.name && payloadKind === "systemevent" && payloadText === params.payloadText
   );
@@ -659,7 +651,21 @@ function resolveDoctorMemoryAgent(
   }
   const requestedAgentId =
     typeof rawAgentId === "string" ? normalizeAgentId(rawAgentId) : undefined;
-  const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
+  let agentId = requestedAgentId;
+  if (!agentId) {
+    try {
+      agentId = resolveDefaultAgentId(cfg, {
+        surface: "doctor memory",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    } catch (error) {
+      if (!(error instanceof AgentSelectionRequiredError)) {
+        throw error;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+      return null;
+    }
+  }
   if (requestedAgentId && !listAgentIds(cfg).includes(agentId)) {
     respond(
       false,
@@ -697,7 +703,9 @@ const SKIPPED_MEMORY_EMBEDDING_PROBE = {
   error: "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
 } as const;
 
-export const doctorHandlers: GatewayRequestHandlers = {
+export const createDoctorHandlers = (
+  memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
+): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({ respond, context, params }) => {
     const resolved = resolveDoctorMemoryAgent(context, params, respond);
     if (!resolved) {
@@ -735,7 +743,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
-      const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
+      const workspaceDir = normalizeOptionalString(
+        (status as Record<string, unknown>).workspaceDir,
+      );
       const configuredWorkspaces = requestedAgentId
         ? workspaceDir
           ? [workspaceDir]
@@ -751,7 +761,12 @@ export const doctorHandlers: GatewayRequestHandlers = {
           ? mergeDreamingStoreStats(
               await Promise.all(
                 allWorkspaces.map((entry) =>
-                  loadDreamingStoreStats(entry, nowMs, dreamingConfig.timezone),
+                  loadDreamingStoreStats(
+                    entry,
+                    nowMs,
+                    memoryCoreRuntime.loadShortTermPromotionDreamingStats,
+                    dreamingConfig.timezone,
+                  ),
                 ),
               ),
             )
@@ -846,7 +861,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       respond(true, payload, undefined);
       return;
     }
-    const grounded = await previewGroundedRemMarkdown({
+    const grounded = await memoryCoreRuntime.previewGroundedRemMarkdown({
       workspaceDir,
       inputPaths: sourceFiles,
     });
@@ -867,7 +882,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-    const written = await writeBackfillDiaryEntries({
+    const written = await memoryCoreRuntime.writeBackfillDiaryEntries({
       workspaceDir,
       entries,
       timezone: remConfig.timezone,
@@ -890,7 +905,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const removed = await removeBackfillDiaryEntries({ workspaceDir });
+    const removed = await memoryCoreRuntime.removeBackfillDiaryEntries({ workspaceDir });
     const dreamDiary = await readDreamDiary(workspaceDir);
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
@@ -907,7 +922,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const removed = await removeGroundedShortTermCandidates({ workspaceDir });
+    const removed = await memoryCoreRuntime.removeGroundedShortTermCandidates({ workspaceDir });
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
       action: "resetGroundedShortTerm",
@@ -921,7 +936,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const repair = await repairDreamingArtifacts({ workspaceDir });
+    const repair = await memoryCoreRuntime.repairDreamingArtifacts({ workspaceDir });
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
       action: "repairDreamingArtifacts",
@@ -940,7 +955,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { agentId, workspaceDir } = target;
-    const dedupe = await dedupeDreamDiaryEntries({ workspaceDir });
+    const dedupe = await memoryCoreRuntime.dedupeDreamDiaryEntries({ workspaceDir });
     const dreamDiary = await readDreamDiary(workspaceDir);
     const payload: DoctorMemoryDreamActionPayload = {
       agentId,
@@ -953,5 +968,5 @@ export const doctorHandlers: GatewayRequestHandlers = {
     };
     respond(true, payload, undefined);
   },
-};
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

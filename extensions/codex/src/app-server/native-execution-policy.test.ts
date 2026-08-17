@@ -72,6 +72,8 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       requestedExecHost: "node",
       effectiveExecHost: "node",
       node: "worker-1",
+      blockReason:
+        "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
     });
   });
 

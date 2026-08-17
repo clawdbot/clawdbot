@@ -2,6 +2,7 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -16,6 +17,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "env.shellEnv.enabled": "Shell Environment Import Enabled",
   "env.shellEnv.timeoutMs": "Shell Environment Import Timeout (ms)",
   "env.vars": "Environment Variable Overrides",
+  secrets: "Secrets",
+  "secrets.egressProxy": "Secret Egress Proxy",
+  "secrets.egressProxy.enabled": "Secret Egress Proxy Enabled",
+  "secrets.egressProxy.bypassHosts": "Secret Egress Proxy Bypass Hosts",
   wizard: "Setup Preferences",
   "wizard.accessMode": "Setup Discovery Access",
   "wizard.appRecommendations": "Setup App Recommendations",
@@ -83,6 +88,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.experimental": "Agent Experimental Flags",
   "agents.entries.*.experimental.localModelLean": "Agent Lean Local Model Mode",
   agents: "Agents",
+  "agents.ownership": "Agent Ownership Generation",
   "agents.defaults": "Agent Defaults",
   "agents.defaults.contextLimits": "Default Context Limits",
   "agents.defaults.contextLimits.memoryGetMaxChars": "Default memory_get Max Chars",
@@ -102,6 +108,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...DESKTOP_FIELD_LABELS,
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",
@@ -133,9 +140,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools.deny": "Gateway Tool Denylist",
   "gateway.tailscale": "Gateway Tailscale",
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
-  "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
-  "gateway.tailscale.serviceName": "Gateway Tailscale Service Name",
-  "gateway.tailscale.preserveFunnel": "Gateway Tailscale Preserve External Funnel",
+  "gateway.tailscale.preserveFunnel": "Gateway Tailscale External Funnel Migration Guard",
   "gateway.remote": "Remote Gateway",
   "gateway.remote.transport": "Remote Gateway Transport",
   "gateway.reload": "Config Reload",
@@ -386,6 +391,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.agentRuns": "Node Agent Runs",
   "nodeHost.agentRuns.claude": "Node Claude Agent Runs",
   "nodeHost.agentRuns.claude.enabled": "Node Claude Agent Runs Enabled",
+  "nodeHost.workerRuns": "Node Worker Runs",
+  "nodeHost.workerRuns.enabled": "Node Worker Runs Enabled",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
@@ -400,6 +407,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "bindings[].agentId": "Binding Agent ID",
   "bindings[].session": "Binding Session",
   "bindings[].session.dmScope": "Binding Session DM Scope",
+  "bindings[].session.groupScope": "Binding Session Group Scope",
   "bindings[].match": "Binding Match Rule",
   "bindings[].match.channel": "Binding Channel",
   "bindings[].match.accountId": "Binding Account ID",
@@ -496,8 +504,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
-  "models.providers.*.contextWindow": "Model Provider Context Window",
-  "models.providers.*.contextTokens": "Model Provider Context Tokens",
   "models.providers.*.maxTokens": "Model Provider Max Tokens",
   "models.providers.*.timeoutSeconds": "Model Provider Request Timeout",
   "models.providers.*.region": "Model Provider Region",
@@ -637,6 +643,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
   "agents.defaults.systemAgent": "System Agent Target",
   "agents.defaults.systemAgent.agentId": "System Agent Owner",
+  "agents.defaults.authInheritance": "Auth Inheritance Target",
+  "agents.defaults.authInheritance.agentId": "Auth Inheritance Owner",
+  "agents.defaults.sessionStore": "Legacy Session Store Target",
+  "agents.defaults.sessionStore.agentId": "Legacy Session Store Owner",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
@@ -704,6 +714,7 @@ export const FIELD_LABELS: Record<string, string> = {
   session: "Session",
   "session.scope": "Session Scope",
   "session.dmScope": "DM Session Scope",
+  "session.groupScope": "Group Session Scope",
   "session.identityLinks": "Session Identity Links",
   "session.resetTriggers": "Session Reset Triggers",
   "session.reset": "Session Reset Policy",
@@ -740,6 +751,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",
   "session.maintenance.maxEntries": "Session Max Entries",
+  "session.maintenance.preserveRecent": "Preserve Recent Sessions",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",

@@ -2,7 +2,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { projectSessionActor } from "../session-utils-row.js";
 
@@ -45,10 +46,9 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     if (catalogEntries) {
       return catalogEntries;
     }
-    const defaultAgentId = resolveDefaultAgentId(params.cfg);
     const agentIds = [
-      defaultAgentId,
-      ...listAgentIds(params.cfg).filter((agentId) => agentId !== defaultAgentId),
+      params.fallbackAgentId,
+      ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
     ];
     catalogEntries = agentIds.flatMap((agentId) =>
       entriesForAgent(agentId).map((entry) => Object.assign({}, entry, { agentId })),
@@ -70,10 +70,14 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   };
 
   const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
-    if (actorBySessionKey.has(sessionKey)) {
-      return actorBySessionKey.get(sessionKey);
+    const agentId = resolveAgentIdFromSessionKey(
+      sessionKey,
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
+    );
+    const actorCacheKey = `${agentId}\0${sessionKey}`;
+    if (actorBySessionKey.has(actorCacheKey)) {
+      return actorBySessionKey.get(actorCacheKey);
     }
-    const agentId = resolveAgentIdFromSessionKey(sessionKey, params.fallbackAgentId);
     const index = entryIndexForAgent(agentId);
     const canonicalKey = resolveStoredSessionKeyForAgentStore({
       cfg: params.cfg,
@@ -89,7 +93,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     }
     const actor = projectSessionActor(freshest?.createdActor);
-    actorBySessionKey.set(sessionKey, actor);
+    actorBySessionKey.set(actorCacheKey, actor);
     return actor;
   };
 

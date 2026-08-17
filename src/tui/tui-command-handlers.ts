@@ -14,7 +14,11 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -256,7 +260,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       const result = await client.patchSession({
         key: selection.sessionKey,
-        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
         ...patch,
       });
       return isCurrentSessionSelection(selection) ? result : null;
@@ -300,7 +304,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     selector.onSelect = (item) => {
       void (async () => {
-        await onSelect(item.value);
+        try {
+          await onSelect(item.value);
+        } catch (err) {
+          // A rejected selection must not strand the overlay open with an
+          // unhandled rejection; close it and surface the cause in chat.
+          chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+        }
         closeOverlayAndRender(overlayHandle);
       })();
     };
@@ -768,7 +778,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const result = await client.resetSession(
           resetSelection.sessionKey,
           "reset",
-          resetSelection.sessionKey === "global" ? { agentId: resetSelection.agentId } : undefined,
+          !parseAgentSessionKey(resetSelection.sessionKey)
+            ? { agentId: resetSelection.agentId }
+            : undefined,
         );
         if (!isCurrentSessionSelection(resetSelection)) {
           return;
@@ -880,7 +892,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       const sendResult = await client.sendChat({
         sessionKey: sendSelection.sessionKey,
-        ...(sendSelection.sessionKey === "global" ? { agentId: sendSelection.agentId } : {}),
+        ...(!parseAgentSessionKey(sendSelection.sessionKey)
+          ? { agentId: sendSelection.agentId }
+          : {}),
         sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,

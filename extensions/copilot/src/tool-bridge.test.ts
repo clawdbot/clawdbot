@@ -10,6 +10,12 @@ import {
   type SandboxContext,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+  createOwnerBackedContractTool,
+  textToolResult,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearMemoryPluginState,
@@ -325,7 +331,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { toolSearch: true } },
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools,
       modelId: "gpt-4o",
@@ -359,7 +365,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { toolSearch: true } },
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -389,7 +395,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { toolSearch: true } },
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -412,7 +418,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: true } },
         runId: "run-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools,
       modelId: "gpt-4o",
@@ -457,7 +463,7 @@ describe("createCopilotToolBridge", () => {
         config: { tools: { codeMode: true } },
         hostCapabilities: { ...testHostCapabilities, bindToolSurface },
         runId: "run-code-mode-bound",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       },
       createOpenClawCodingTools: async () => [makeTool({ execute: hiddenExecute, name: "read" })],
       modelId: "gpt-test",
@@ -503,7 +509,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: false } },
         runId: "run-no-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools: vi.fn(async () => [makeTool({ name: "read" })]),
       modelId: "gpt-4o",
@@ -525,7 +531,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: true } },
         runId: "run-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -550,7 +556,7 @@ describe("createCopilotToolBridge", () => {
       attemptParams: {
         config: { tools: { codeMode: true } },
         runId: "run-code-mode",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
         toolsAllow: ["read"],
       } as never,
       createOpenClawCodingTools,
@@ -712,6 +718,29 @@ describe("createCopilotToolBridge", () => {
       });
 
       expect(getOpts().messageProvider).toBe("telegram");
+    });
+
+    it("preserves the Discord channel separately from the voice provider", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          agentAccountId: "account-a",
+          messageChannel: "discord",
+          messageProvider: "discord-voice",
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts()).toMatchObject({
+        agentAccountId: "account-a",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+      });
     });
 
     it("forwards authProfileStore, runId, config, and run hooks (onToolOutcome) from attemptParams", async () => {
@@ -923,8 +952,8 @@ describe("createCopilotToolBridge", () => {
         // sandbox key and the real run key is exposed as runSessionKey
         // so `session_status: "current"` resolves to the live session.
         attemptParams: {
-          sandboxSessionKey: "sandbox:agent:main",
-          sessionKey: "agent:main:main",
+          sandboxSessionKey: "sandbox:agent:agent-1",
+          sessionKey: "agent:agent-1:main",
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -933,8 +962,8 @@ describe("createCopilotToolBridge", () => {
       });
 
       const opts = getOpts();
-      expect(opts.sessionKey).toBe("sandbox:agent:main");
-      expect(opts.runSessionKey).toBe("agent:main:main");
+      expect(opts.sessionKey).toBe("sandbox:agent:agent-1");
+      expect(opts.runSessionKey).toBe("agent:agent-1:main");
     });
 
     it("derives runSessionKey as undefined when sandboxSessionKey equals sessionKey", async () => {
@@ -942,7 +971,7 @@ describe("createCopilotToolBridge", () => {
 
       await createCopilotToolBridge({
         agentId: "agent-1",
-        attemptParams: { sessionKey: "agent:main:main" } as never,
+        attemptParams: { sessionKey: "agent:agent-1:main" } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
@@ -950,7 +979,7 @@ describe("createCopilotToolBridge", () => {
       });
 
       const opts = getOpts();
-      expect(opts.sessionKey).toBe("agent:main:main");
+      expect(opts.sessionKey).toBe("agent:agent-1:main");
       expect(opts.runSessionKey).toBeUndefined();
     });
 
@@ -1278,14 +1307,14 @@ describe("createCopilotToolBridge", () => {
               deny: ["exec", "process", "write", "edit", "ask_user"],
             },
             runId: "policy-run",
-            sessionKey: "agent:main:policy-session",
+            sessionKey: "agent:agent-1:policy-session",
             workspaceDir,
           } as never,
           createOpenClawCodingTools: createRealOpenClawCodingTools,
           modelId: "gpt-4o",
           modelProvider: "github-copilot",
           sessionId: "policy-session",
-          sessionKey: "agent:main:policy-session",
+          sessionKey: "agent:agent-1:policy-session",
           workspaceDir,
         });
         const names = result.sdkTools.map((tool) => tool.name);
@@ -1993,6 +2022,112 @@ describe("createCopilotToolBridge tool conversion", () => {
     });
   });
 
+  it("surfaces an owner-backed memory delete failure before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    tool.execute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("memory delete failed"))
+      .mockResolvedValueOnce(textToolResult("Memory forgotten.", { action: "deleted" }));
+    const terminalObserver = createContractToolTerminalObserver("run-copilot-forget");
+    let lastToolError: ReturnType<typeof terminalObserver>["lastToolError"];
+    const observeToolTerminal: typeof terminalObserver = (observation) => {
+      const resolution = terminalObserver(observation);
+      lastToolError = resolution.lastToolError;
+      return resolution;
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(tool, { observeToolTerminal });
+    const result = await runSdkTool(
+      sdkTool,
+      { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      makeInvocation({ toolCallId: "forget-1", toolName: "memory_forget" }),
+    );
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Done - I forgot that memory.",
+      lastToolError,
+    });
+
+    expect(lastToolError).toMatchObject({
+      ownerKey: '["memory-lancedb","memory_forget"]',
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
+    });
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toContain("I forgot");
+    expect(payloads[1]).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).not.toContain("memory-lancedb");
+    expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
+
+    await runSdkTool(
+      sdkTool,
+      { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      makeInvocation({ toolCallId: "forget-2", toolName: "memory_forget" }),
+    );
+    expect(lastToolError).toBeUndefined();
+  });
+
+  it("keeps owner-backed failures before execution non-mutating", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    const terminalObserver = createContractToolTerminalObserver("run-copilot-pre-execution");
+    let lastToolError: ReturnType<typeof terminalObserver>["lastToolError"];
+    const observeToolTerminal: typeof terminalObserver = (observation) => {
+      const resolution = terminalObserver(observation);
+      lastToolError = resolution.lastToolError;
+      return resolution;
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(tool, {
+      abortSignal: controller.signal,
+      observeToolTerminal,
+    });
+
+    await runSdkTool(sdkTool, { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" });
+
+    expect(lastToolError).toMatchObject({
+      ownerKey: '["memory-lancedb","memory_forget"]',
+      mutatingAction: false,
+    });
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not classify an unowned same-name Copilot tool as mutating", async () => {
+    const terminalObserver = createContractToolTerminalObserver("run-copilot-unowned-forget");
+    let lastToolError: ReturnType<typeof terminalObserver>["lastToolError"];
+    const observeToolTerminal: typeof terminalObserver = (observation) => {
+      const resolution = terminalObserver(observation);
+      lastToolError = resolution.lastToolError;
+      return resolution;
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool({
+        name: "memory_forget",
+        execute: vi.fn(async () => {
+          throw new Error("third-party failure");
+        }),
+      }),
+      { observeToolTerminal },
+    );
+
+    await runSdkTool(sdkTool, { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" });
+
+    expect(lastToolError).toMatchObject({ mutatingAction: false });
+    expect(lastToolError).not.toHaveProperty("ownerKey");
+    expect(
+      buildContractReplyPayloads({
+        assistantText: "Done - I forgot that memory.",
+        lastToolError,
+      }),
+    ).toHaveLength(1);
+  });
+
   it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
     const onToolCompleted = vi.fn();
@@ -2022,7 +2157,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     );
   });
 
-  it("reports catalog tool failures to the host terminal observer", async () => {
+  it("reports owner-backed catalog tool failures to the host terminal observer", async () => {
     type CatalogExecutor = (params: {
       tool: AnyAgentTool;
       toolName: string;
@@ -2043,7 +2178,7 @@ describe("createCopilotToolBridge tool conversion", () => {
         config: { tools: { toolSearch: true } },
         observeToolTerminal,
         runId: "run-tool-search",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:agent-1:main",
       } as never,
       createOpenClawCodingTools: async (options: unknown) => {
         catalogExecutor = (options as { toolSearchCatalogExecutor?: CatalogExecutor })
@@ -2054,13 +2189,15 @@ describe("createCopilotToolBridge tool conversion", () => {
       modelProvider: "github-copilot",
       sessionId: "session-1",
     });
-    const target = makeTool({
-      execute: vi.fn(async () => {
-        throw new Error("catalog delivery failed");
-      }),
-      name: "message",
+    const target = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
     });
-    const args = { action: "send", message: "hello", target: "room-1" };
+    target.execute = vi.fn(async () => {
+      throw new Error("catalog delete failed");
+    });
+    const args = { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" };
 
     await expect(
       expectDefined(
@@ -2068,22 +2205,23 @@ describe("createCopilotToolBridge tool conversion", () => {
         "Copilot catalog executor",
       )({
         tool: target,
-        toolName: "message",
+        toolName: "memory_forget",
         source: "openclaw",
-        sourceName: "core",
-        toolCallId: "catalog-send-1",
+        sourceName: "memory-lancedb",
+        toolCallId: "catalog-forget-1",
         parentToolCallId: "tool-search-1",
         input: args,
       }),
-    ).rejects.toThrow("catalog delivery failed");
+    ).rejects.toThrow("catalog delete failed");
 
     expect(observeToolTerminal).toHaveBeenCalledWith({
-      toolCallId: "catalog-send-1",
-      toolName: "message",
+      toolCallId: "catalog-forget-1",
+      toolName: "memory_forget",
       arguments: args,
       executionStarted: true,
       outcome: "failure",
-      failure: { error: "catalog delivery failed" },
+      failure: { error: "catalog delete failed" },
+      ownerMutation: { ownerKey: '["memory-lancedb","memory_forget"]' },
     });
   });
 

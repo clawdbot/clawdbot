@@ -3,7 +3,7 @@
  * Used by manager, external CLI overlays, and persistence paths to decide when
  * incoming runtime credentials may replace or bootstrap stored profiles.
  */
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 328285,
-  "reason": "Gateway update outcome (#121686); Testbox-measured exact-head bytes",
-  "updatedAt": "2026-08-11"
+  "startupJsGzipBytes": 337511,
+  "reason": "cloud worker settings navigation and machine selection",
+  "updatedAt": "2026-08-16"
 }

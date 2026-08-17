@@ -20,6 +20,7 @@ import {
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
@@ -100,7 +101,13 @@ export type TelegramCommandExecutorParams = {
   telegramDeps?: TelegramNativeCommandDeps;
   opts: Pick<
     TelegramBotOptions,
-    "token" | "botInfo" | "allowFrom" | "groupAllowFrom" | "replyToMode" | "accountAbortSignal"
+    | "token"
+    | "ownerAgentId"
+    | "botInfo"
+    | "allowFrom"
+    | "groupAllowFrom"
+    | "replyToMode"
+    | "accountAbortSignal"
   >;
 };
 
@@ -447,6 +454,7 @@ export async function prepareTelegramCommandDispatch(
     policySessionKey?: string;
   }): DeliveryBaseOptions => ({
     cfg: runtimeCfg,
+    ownerAgentId: params.opts.ownerAgentId,
     chatId: String(auth.chatId),
     accountId: route.accountId,
     sessionKeyForInternalHooks: keys?.sessionKeyForInternalHooks,
@@ -505,7 +513,12 @@ export async function dispatchTelegramBuiltinTurn(params: {
   if (dispatch.isForum && dispatch.resolvedThreadId != null) {
     try {
       const storePath = resolveStorePath(dispatch.runtimeCfg.session?.store, {
-        agentId: dispatch.route.accountId,
+        agentId:
+          dispatch.opts.ownerAgentId ??
+          resolveTelegramAccountOwnerAgentId({
+            cfg: dispatch.runtimeCfg,
+            accountId: dispatch.route.accountId,
+          }),
       });
       topicName = await getTopicName(
         dispatch.chatId,

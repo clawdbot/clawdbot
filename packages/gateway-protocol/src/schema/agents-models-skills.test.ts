@@ -136,6 +136,9 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           kind: "agent",
+          createdVia: "agent",
+          creatorAgentId: "main",
+          createdAt: 42,
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -150,6 +153,24 @@ describe("AgentsListResultSchema", () => {
     };
 
     expectAccepted(AgentsListResultSchema, result);
+  });
+
+  it("keeps the legacy default required while accepting additive ownership metadata", () => {
+    const legacy = {
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "ops" }, { id: "research" }],
+    };
+    const current = {
+      ...legacy,
+      ownership: "explicit",
+      selectionRequired: true,
+    };
+
+    expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
   });
 
   it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
@@ -183,10 +204,25 @@ describe("ModelsListParamsSchema", () => {
       {
         agentId: "writer",
         view: "all",
+      },
+      {
+        agentId: "research",
         includeProviderCapabilities: true,
       },
+      {
+        preparedOnly: true,
+      },
+      {
+        refresh: true,
+        view: "all",
+      },
     );
-    expectRejected(ModelsListParamsSchema, { view: "provider-route" });
+    expectRejected(
+      ModelsListParamsSchema,
+      { view: "provider-route" },
+      { agentId: "" },
+      { preparedOnly: true, refresh: true },
+    );
   });
 });
 
@@ -218,7 +254,12 @@ describe("ModelsListResultSchema", () => {
       id: "gpt-image",
       name: "GPT Image",
       provider: "openai",
-      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
+      agentRuntime: {
+        id: "codex",
+        fallback: "openclaw",
+        cloudPlacementSupported: true,
+        source: "model",
+      },
       thinkingLevels: [
         { id: "off", label: "Off" },
         { id: "xhigh", label: "Extra high" },

@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import {
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -24,6 +27,9 @@ const SECRET_STORE_SCHEMA_END =
 const MCP_OAUTH_PENDING_SCHEMA_START =
   "CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (";
 const MCP_OAUTH_PENDING_SCHEMA_END = "\n) STRICT;";
+const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS device_pairing_join_codes (";
+const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -38,6 +44,7 @@ function secretStoreSchemaSql(): string {
 /** Lazily install the additive secret store table and index on first write. */
 export function ensureSecretStoreSchema(database: DatabaseSync): void {
   database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+  ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
 }
 
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */
@@ -49,6 +56,24 @@ export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
   }
   database.exec(
     OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MCP_OAUTH_PENDING_SCHEMA_END.length),
+  ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
+/** Lazily install the additive device join-code table on first mint or redemption. */
+export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(DEVICE_PAIRING_JOIN_CODE_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    DEVICE_PAIRING_JOIN_CODE_SCHEMA_END,
+    start,
+  );
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw device pairing join-code schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(
+      start,
+      endMarkerStart + DEVICE_PAIRING_JOIN_CODE_SCHEMA_END.length,
+    ),
   ); // sqlite-allow-raw -- Canonical additive DDL only.
 }
 
@@ -81,6 +106,30 @@ export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
       opened_at INTEGER NOT NULL
     ) STRICT
   `);
+}
+
+/**
+ * Same-version additive table, registered in LAZY_ADDITIVE_STATE_TABLES so
+ * existing v6 databases stay valid without it. Mirrors the canonical schema;
+ * a downgraded reader simply loses setup-completion reconciliation.
+ */
+export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+      setup_id TEXT NOT NULL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      device_name TEXT,
+      access TEXT NOT NULL,
+      completed_at_ms INTEGER NOT NULL,
+      delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+      retain_until_ms INTEGER NOT NULL
+    ) STRICT
+  `);
+}
+
+/** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
+export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
+  ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
 }
 
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
@@ -164,9 +213,34 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
   `);
 }
 
+/**
+ * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
+ *
+ * These columns normally stay absent until their owning feature first writes
+ * them, and the persistent schema contract accepts that shape. The STRICT
+ * table rebuild is the one caller that cannot: it recreates each table from
+ * canonical SQL, which already declares these columns, so a database missing
+ * them fails the canonical column check and rolls the entire repair back.
+ * Ensuring them immediately before that rebuild matches the shape the rebuild
+ * produces anyway, and stays scoped to databases old enough to need it.
+ */
+export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
+}
+
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureWorkerSessionToolStateSchema(db);
-  for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
@@ -333,27 +407,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "delivery_queue_entries", "recovery_state TEXT");
   ensureColumn(db, "delivery_queue_entries", "platform_send_started_at INTEGER");
   backfillDeliveryQueueEntriesFromEntryJson(db);
-  ensureColumn(db, "commitments", "account_id TEXT");
-  ensureColumn(db, "commitments", "recipient_id TEXT");
-  ensureColumn(db, "commitments", "thread_id TEXT");
-  ensureColumn(db, "commitments", "sender_id TEXT");
-  ensureColumn(db, "commitments", "kind TEXT NOT NULL DEFAULT 'followup'");
-  ensureColumn(db, "commitments", "sensitivity TEXT NOT NULL DEFAULT 'normal'");
-  ensureColumn(db, "commitments", "source TEXT NOT NULL DEFAULT 'unknown'");
-  ensureColumn(db, "commitments", "reason TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "suggested_text TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "dedupe_key TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "confidence REAL NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "due_timezone TEXT NOT NULL DEFAULT 'UTC'");
-  ensureColumn(db, "commitments", "source_message_id TEXT");
-  ensureColumn(db, "commitments", "source_run_id TEXT");
-  ensureColumn(db, "commitments", "created_at_ms INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "attempts INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "last_attempt_at_ms INTEGER");
-  ensureColumn(db, "commitments", "sent_at_ms INTEGER");
-  ensureColumn(db, "commitments", "dismissed_at_ms INTEGER");
-  ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
-  ensureColumn(db, "commitments", "expired_at_ms INTEGER");
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
@@ -424,6 +477,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_install_kind TEXT");
   ensureColumn(
     db,
     "worker_environments",

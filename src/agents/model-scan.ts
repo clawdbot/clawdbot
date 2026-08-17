@@ -20,11 +20,10 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
-import { cancelUnreadResponseBody } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
-import { readResponseWithLimit } from "../infra/http-body.js";
 import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";

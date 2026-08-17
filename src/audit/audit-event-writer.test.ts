@@ -1,5 +1,8 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -7,6 +10,8 @@ import {
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
+import { createAuditEventRecorder } from "./audit-recorder.js";
+import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -18,6 +23,7 @@ import {
   inspectExecutionIdentityRun,
   processExecutionIdentityAdmissionWork,
 } from "./execution-identity-context.js";
+import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
 function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
   // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real worker boundary.
@@ -73,6 +79,62 @@ function input(): AuditEventInput {
   };
 }
 
+function messageEvent(
+  action:
+    | "message.outbound.queued"
+    | "message.outbound.platform-started"
+    | "message.outbound.finished",
+): TrustedMessageAuditEvent {
+  const progress = action !== "message.outbound.finished";
+  return {
+    sourceId: `message-source:${action}`,
+    occurredAt: Date.now(),
+    kind: "message",
+    action,
+    status: progress ? "started" : "succeeded",
+    outcome:
+      action === "message.outbound.queued"
+        ? "queued"
+        : action === "message.outbound.platform-started"
+          ? "platform_started"
+          : "sent",
+    actorType: "agent",
+    actorId: "main",
+    agentId: "main",
+    runId: "message-worker-run",
+    direction: "outbound",
+    channel: "qa-channel",
+    conversationKind: "direct",
+    targetId: "raw-target",
+  } as TrustedMessageAuditEvent;
+}
+
+function decisionReceipt(): DecisionReceiptV1 {
+  return {
+    schemaVersion: 1,
+    receiptId: "worker-decision",
+    contextId: "worker-context",
+    executionId: "worker-execution",
+    runId: "worker-run",
+    occurredAt: Date.now(),
+    action: { family: "tool", operation: "policy" },
+    decision: { outcome: "denied", reasonCode: "tool_policy_denied" },
+    enforcement: {
+      coverageState: "enforced",
+      policyRefs: ["tool-policy:deny"],
+      grantRefs: [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "tool-policy",
+      recordRef: "worker-record",
+      decisionBoundary: "agent-tool.before-call",
+    },
+    missingEvidence: [],
+    remediation: [{ code: "choose_allowed_tool", text: "Choose an allowed tool and retry." }],
+  };
+}
+
 function captureWork(envelope: ExecutionIdentityAdmissionEnvelope) {
   return { kind: "capture" as const, envelope };
 }
@@ -83,6 +145,55 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit event worker", () => {
+  it("keeps progress absent while disabled and routes enabled progress off audit_events", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const disabledWriter = createAuditEventWriter({ stateDir });
+    const disabledRecorder = createAuditEventRecorder({
+      messageMode: "off",
+      writer: disabledWriter,
+    });
+    await disabledWriter.ready;
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+    disabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
+    await disabledWriter.stop();
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+
+    const enabledWriter = createAuditEventWriter({ stateDir });
+    const enabledRecorder = createAuditEventRecorder({
+      messageMode: "all",
+      writer: enabledWriter,
+    });
+    enabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
+    enabledRecorder.recordMessage(messageEvent("message.outbound.platform-started"));
+    enabledRecorder.recordMessage(messageEvent("message.outbound.finished"));
+    await enabledWriter.ready;
+    await enabledWriter.stop();
+
+    const { db } = openOpenClawStateDatabase(database);
+    expect(
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
+          count: number;
+        }
+      ).count,
+    ).toBe(2);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
+    ).toBe(1);
+    expect(
+      (
+        db.prepare("SELECT action FROM audit_events").get() as {
+          action: string;
+        }
+      ).action,
+    ).toBe("message.outbound.finished");
+  });
+
   it("keeps fresh storage identity-free when recovery evidence is missing", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -116,6 +227,48 @@ describe("audit event worker", () => {
         .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_decision_facts"),
+    ).toBeUndefined();
+  });
+
+  it("persists a generic decision through the bounded worker queue", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    await writer.ready;
+    const receipt = decisionReceipt();
+    const envelope = captureExecutionIdentityAdmissionEnvelope(
+      {
+        runId: receipt.runId,
+        agentId: "main",
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+        runtime: { kind: "embedded" },
+      },
+      {
+        contextId: receipt.contextId,
+        executionId: receipt.executionId,
+        runtimeInstanceId: "worker-runtime",
+        now: receipt.occurredAt,
+      },
+    );
+    expect(writer.recordExecutionIdentity(captureWork(envelope))).toBe(true);
+    expect(writer.recordExecutionDecision(receipt)).toBe(true);
+    await writer.stop();
+
+    expect(errors).toEqual([]);
+    expect(
+      pageExecutionDecisionFactsForContext({
+        context: receipt,
+        limit: 10,
+        now: receipt.occurredAt,
+        database,
+      }).receipts,
+    ).toEqual([receipt]);
   });
 
   it("keeps the shared queue nonblocking under a held write lock and flushes before stop", async () => {
@@ -232,6 +385,41 @@ describe("audit event worker", () => {
       expect(persisted.context_json).not.toContain(raw);
       expect(JSON.stringify(errors)).not.toContain(raw);
     }
+  });
+
+  it("stops without resetting the WAL owned by an active Gateway reader", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    recordAuditEvent(input(), database);
+    closeOpenClawStateDatabaseForTest();
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    await writer.ready;
+    const gateway = openOpenClawStateDatabase(database);
+    gateway.db.exec("BEGIN;");
+    gateway.db.prepare("SELECT count(*) FROM audit_events").get();
+
+    try {
+      expect(
+        writer.record({ ...input(), sourceId: "worker-before-stop", runId: "worker-before-stop" }),
+      ).toBe(true);
+      const stopStartedAt = performance.now();
+      await writer.stop();
+      const stopElapsedMs = performance.now() - stopStartedAt;
+
+      expect(errors).toEqual([]);
+      expect(stopElapsedMs).toBeLessThan(1_000);
+      expect(fs.statSync(`${gateway.path}-wal`).size).toBeGreaterThan(0);
+    } finally {
+      gateway.db.exec("ROLLBACK;");
+      await writer.stop();
+    }
+
+    expect(gateway.db.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toEqual([
+      "worker-before-stop",
+      "run-1",
+    ]);
   });
 
   it("persists owned unknown and omits inherited evidence through the worker clone boundary", async () => {
@@ -351,6 +539,7 @@ describe("audit event worker", () => {
       });
     } finally {
       clearSink();
+      await writer.ready;
       await writer.stop();
     }
 
@@ -560,6 +749,7 @@ describe("audit event worker", () => {
     const schemaStartedAt = performance.now();
     expect(schemaWriter.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(performance.now() - schemaStartedAt).toBeLessThan(250);
+    await schemaWriter.ready;
     await schemaWriter.stop();
     expect(schemaErrors).toContain("audit execution identity persistence failed");
 
@@ -593,6 +783,7 @@ describe("audit event worker", () => {
     const insertStartedAt = performance.now();
     expect(insertWriter.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(performance.now() - insertStartedAt).toBeLessThan(250);
+    await insertWriter.ready;
     await insertWriter.stop();
     expect(insertErrors).toContain("audit execution identity persistence failed");
     expect(JSON.stringify(insertErrors)).not.toContain("raw-trigger-secret");
@@ -672,6 +863,7 @@ describe("audit event worker", () => {
         ),
       ),
     ).toBe(true);
+    await writer.ready;
     await writer.stop();
     expect(errors).toContain("audit execution identity envelope could not be queued");
     expect(errors).toContain("audit execution identity envelope rejected");

@@ -7,6 +7,10 @@ import UIKit
 @testable import OpenClaw
 @testable import OpenClawKit
 
+private func percentEncodedPath(of url: URL?) -> String? {
+    url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+}
+
 @discardableResult
 private func saveActiveManualGateway(
     host: String,
@@ -922,6 +926,46 @@ private func waitUntil(
         #expect(appModel.activeGatewayConnectConfig?.password == nil)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == setupAuth.targetStableID)
+    }
+
+    @Test @MainActor func `setup context path survives registry reconnect`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let instanceID = "ios-context-path-\(UUID().uuidString)"
+        let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { temporaryState.restore() }
+        let link = GatewayConnectDeepLink(
+            host: "192.168.1.41",
+            port: 18789,
+            tls: false,
+            contextPath: "/openclaw%2Fgateway",
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.connectManual(
+            host: link.host,
+            port: link.port,
+            useTLS: link.tls,
+            contextPath: link.contextPath,
+            authOverride: setupAuth.manualAuthOverride)
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == "/openclaw%2Fgateway")
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == setupAuth.targetStableID)
+        let stored = try #require(GatewaySettingsStore.activeGatewayEntry())
+        #expect(stored.contextPath == "/openclaw%2Fgateway")
+
+        appModel.disconnectGateway()
+        await controller.connectActiveGateway()
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == "/openclaw%2Fgateway")
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stored.stableID)
     }
 
     @Test @MainActor func `legacy auth preserves proven relay credentials and otherwise requires full re-pair`() throws {
@@ -2176,6 +2220,35 @@ private func waitUntil(
         #expect(controller.pendingTrustPrompt == nil)
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
         #expect(!GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == stableID })
+    }
+
+    @Test @MainActor func `manual trust handoff persists its context path`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "context-path-trust.example.com"
+        let contextPath = "/openclaw-gateway"
+        let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: host,
+            port: 443,
+            contextPath: contextPath)
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = makeTLSProbeController(appModel: appModel, fingerprint: "context-path-fingerprint")
+
+        await controller.connectManual(
+            host: host,
+            port: 443,
+            useTLS: true,
+            contextPath: contextPath)
+        #expect(controller.pendingTrustPrompt?.stableID == stableID)
+        await controller.acceptPendingTrustPrompt()
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == contextPath)
+        let stored = try #require(GatewaySettingsStore.activeGatewayEntry())
+        #expect(stored.contextPath == contextPath)
     }
 
     @Test @MainActor func `forget gateway preserves another gateway pending trust handoff`() async {

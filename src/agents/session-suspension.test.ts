@@ -1,10 +1,10 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Verifies quota suspension records recovery state without blocking shared work.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
   patchSessionEntryCore: vi.fn(),

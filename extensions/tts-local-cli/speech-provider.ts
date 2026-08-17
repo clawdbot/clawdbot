@@ -345,36 +345,16 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
         log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
 
-        let buffer: Buffer;
-        let format: OutputFormat;
-
-        if (req.target === "voice-note") {
-          if (result.actualFormat !== "opus") {
-            const inputFile =
-              result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
-            if (!result.audioPath) {
-              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
-            }
-            buffer = await convertAudio(inputFile, tempDir, "opus");
-            format = "opus";
-          } else {
-            buffer = result.buffer;
-            format = "opus";
+        const format: OutputFormat =
+          req.target === "voice-note" ? "opus" : (config.outputFormat ?? "mp3");
+        let buffer = result.buffer;
+        if (result.actualFormat !== format) {
+          const inputName = `input${getFileExt(result.actualFormat)}`;
+          const inputFile = result.audioPath ?? path.join(tempDir, inputName);
+          if (!result.audioPath) {
+            await temp.write(inputName, result.buffer);
           }
-        } else {
-          const desired = config.outputFormat ?? "mp3";
-          if (result.actualFormat !== desired) {
-            const inputFile =
-              result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
-            if (!result.audioPath) {
-              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
-            }
-            buffer = await convertAudio(inputFile, tempDir, desired);
-            format = desired;
-          } else {
-            buffer = result.buffer;
-            format = result.actualFormat;
-          }
+          buffer = await convertAudio(inputFile, tempDir, format);
         }
 
         const fileExtension = format === "opus" ? ".ogg" : `.${format}`;

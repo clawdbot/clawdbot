@@ -16,14 +16,21 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
 
 <Steps>
   <Step title="Reset (optional)">
-    - `--reset` resets state before setup runs; without it, re-running onboarding
-      keeps existing config and reuses it as defaults.
+    - Reset is owned by the `--reset` command flag, not by the interactive
+      **Setup mode** menu. Without it, re-running onboarding keeps existing
+      config and reuses it as defaults.
     - `--reset-scope` controls what `--reset` removes: `config` (config file
       only), `config+creds+sessions` (default), or `full` (also removes the
       workspace).
-    - If the config file is invalid, onboarding stops and tells you to run
-      `openclaw doctor` first, then re-run setup.
-    - Reset moves state to Trash (never deletes directly).
+    - Before reset, the command validates TTY availability and rejectable CLI
+      options, including the full-reset workspace target. Non-interactive setup
+      also requires `--accept-risk` at this point.
+    - Migration import options (`--flow import`, `--import-from`,
+      `--import-source`, and `--import-secrets`) cannot be combined with
+      `--reset`; run the import without `--reset`.
+    - Interactive classic setup moves state to Trash (never deletes directly)
+      before showing its risk acknowledgement. Declining that later prompt
+      cancels setup but does not undo the reset.
 
   </Step>
   <Step title="Risk acknowledgement">
@@ -34,6 +41,12 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
       onboarding exits with an error instead of prompting.
     - Interactive runs get a confirm prompt instead of the flag; declining
       cancels setup.
+
+  </Step>
+  <Step title="Workspace">
+    - Default `~/.openclaw/workspace` (configurable).
+    - Seeds the workspace files needed for the agent bootstrap ritual.
+    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 
   </Step>
   <Step title="Model/Auth">
@@ -83,12 +96,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     `$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
     is only a legacy import source.
     </Note>
-  </Step>
-  <Step title="Workspace">
-    - Default `~/.openclaw/workspace` (configurable).
-    - Seeds the workspace files needed for the agent bootstrap ritual.
-    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
-
   </Step>
   <Step title="Gateway">
     - Port (default **18789**), bind, auth mode, tailscale exposure.

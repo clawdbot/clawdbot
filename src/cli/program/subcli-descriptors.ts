@@ -96,6 +96,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "connect",
+    description: "Connect this machine to an OpenClaw Gateway as a node",
+    hasSubcommands: false,
+  },
+  {
     name: "worker",
     description: "Run the restricted cloud worker runtime",
     hasSubcommands: false,

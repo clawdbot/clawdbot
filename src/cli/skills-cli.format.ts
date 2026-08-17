@@ -13,6 +13,7 @@ import {
 } from "../skills/discovery/status.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 /** Options for rendering the skill list command. */
 export type SkillsListOptions = {
@@ -204,7 +205,10 @@ export function formatSkillInfo(
   if (!skill) {
     if (opts.json) {
       return JSON.stringify(
-        sanitizeJsonValue({ error: "not found", skill: requestedName }),
+        sanitizeJsonValue({
+          ...formatCliJsonFailure(`Skill "${requestedName}" not found.`),
+          skill: requestedName,
+        }),
         null,
         2,
       );

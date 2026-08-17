@@ -64,6 +64,33 @@ describe("Codex incognito thread persistence", () => {
   });
 });
 
+describe("Codex context window config", () => {
+  it("forwards only a prepared cap on thread start and resume (#124702)", () => {
+    const appServer = createAppServerOptions() as never;
+    const capped = createAttemptParams({ provider: "openai" });
+    capped.authoredContextTokenCap = 32_000;
+    const uncapped = createAttemptParams({ provider: "openai" });
+    const build = (params: EmbeddedRunAttemptParams) => [
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      }),
+      buildThreadResumeParams(params, {
+        appServer,
+        threadId: "thread-1",
+      }),
+    ];
+
+    for (const request of build(capped)) {
+      expect(request.config?.model_context_window).toBe(32_000);
+    }
+    for (const request of build(uncapped)) {
+      expect(request.config).not.toHaveProperty("model_context_window");
+    }
+  });
+});
+
 describe("Codex ring-zero thread config", () => {
   it("accepts upstream-shaped inactive rows for the disabled MCP names", async () => {
     const request = vi.fn(async () => ({
@@ -234,6 +261,36 @@ describe("Codex delegation capability", () => {
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
+    }
+  });
+
+  it("disables only native image generation for an audited image_generate deny", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.image_generation"]).toBe(false);
+      expect(request.config?.["features.multi_agent"]).toBe(true);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(request.config?.["agents.enabled"]).toBeUndefined();
     }
   });
 
@@ -1048,7 +1105,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
     expect(instructions).toContain("`skill_workshop`");
-    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("Other generated work = pending proposal");
     expect(instructions).toContain("only explicit user ask");
   });
 
@@ -1083,7 +1140,7 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("set `final=true`");
+    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {

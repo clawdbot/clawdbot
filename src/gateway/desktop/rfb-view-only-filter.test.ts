@@ -53,6 +53,16 @@ describe("RFB view-only client message filter", () => {
     });
   });
 
+  it("starts at ClientInit after server-side authentication without forwarding input", () => {
+    const filter = createRfbClientMessageFilter({ startPhase: "clientInit" });
+    const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
+    const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+
+    expect(filter.filter(Buffer.concat([Buffer.from([0]), keyEvent, framebufferRequest]))).toEqual({
+      forward: Buffer.concat([Buffer.from([1]), framebufferRequest]),
+    });
+  });
+
   it("fails closed on unsupported security types", () => {
     const filter = createRfbClientMessageFilter();
     expect(filter.filter(Buffer.concat([VERSION, Buffer.from([19])]))).toEqual({

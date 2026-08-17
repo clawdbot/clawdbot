@@ -28,11 +28,13 @@ import {
   repairCronRuntimeAuthorityRows,
   replaceCronRuntimeAuthorityRows,
 } from "./store/runtime-authority-store.js";
+import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 import type {
   CronQuarantinedJob,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
+import type { CronStoreFile } from "./types.js";
 export type {
   CronConfigJobRuntimeEntry,
   CronQuarantinedJob,
@@ -40,7 +42,6 @@ export type {
   QuarantinedCronConfigJob,
 } from "./store/types.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
-import type { CronStoreFile } from "./types.js";
 
 const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
 const cronStoreRevisions = new Map<string, number>();
@@ -51,7 +52,7 @@ export function getCronJobsStoreRevision(storePath: string): number {
   return cronStoreRevisions.get(cronStoreKey(storePath)) ?? 0;
 }
 
-function noteCronJobsStoreCommit(storeKey: string): void {
+export function noteCronJobsStoreCommit(storeKey: string): void {
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
   cronStoreRevisions.delete(storeKey);
@@ -243,12 +244,21 @@ type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
   };
 };
 
+type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
+  transactionHooks?: CronStoreTransactionHooks;
+};
+
 /** Persists cron jobs, or only mutable runtime state when stateOnly is set. */
 export async function saveCronJobsStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
-) {
+): Promise<void>;
+export async function saveCronJobsStore(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreInternalOptions,
+): Promise<void> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   const stateOnly = opts?.stateOnly === true && !opts.quarantine?.entries.length;
@@ -256,6 +266,7 @@ export async function saveCronJobsStore(
     assertCronStoreCanPersist(store);
   }
   runOpenClawStateWriteTransaction((database) => {
+    opts?.transactionHooks?.beforeWrite?.(database.db);
     if (opts?.quarantine?.entries.length) {
       saveCronQuarantinedJobs({
         storePath: resolvedStorePath,
@@ -268,11 +279,16 @@ export async function saveCronJobsStore(
     // quarantine and full replacement commit together or roll back together.
     if (stateOnly) {
       updateCronRuntimeRows(database.db, storeKey, store);
+      opts?.transactionHooks?.afterWrite?.(database.db);
       return;
     }
     const normalizedJobs = replaceCronRows(database.db, storeKey, store);
     replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
+    opts?.transactionHooks?.afterWrite?.(database.db);
   });
+  // Timeout outcomes may commit before their runner settles. Only after this
+  // commit may a deferred receipt terminal request become externally visible.
+  opts?.transactionHooks?.afterCommit?.();
   noteCronJobsStoreCommit(storeKey);
 }
 

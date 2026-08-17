@@ -3,11 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
-  countFailedChannelIngressQueueEntries,
-  createChannelIngressQueue,
-} from "./ingress-queue.js";
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { countFailedChannelIngressQueueEntries } from "./ingress-queue-health.js";
+import { createChannelIngressQueue } from "./ingress-queue.js";
 
 async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ingress-dead-letters-"));
@@ -177,9 +178,15 @@ describe("channel ingress dead letters", () => {
         }
         await queue.fail(claim, { reason: "handler-error", failedAt });
       }
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      db.prepare(
+        "UPDATE channel_ingress_events SET failed_at = NULL WHERE channel_id = 'line'",
+      ).run();
 
       expect(countFailedChannelIngressQueueEntries(stateDir)).toEqual([
-        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 40 },
+        { channelId: "line", accountId: "default", count: 1 },
         { channelId: "telegram", accountId: "ops", count: 2, oldestFailedAt: 20 },
       ]);
     });

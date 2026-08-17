@@ -35,10 +35,7 @@ export type {
   ChannelDeliveryStreamingConfig,
   ChannelPreviewStreamingConfig,
   ChannelStreamingBlockConfig,
-  ChannelStreamingCommandTextMode,
-  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
-  ChannelStreamingPreviewConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
@@ -78,12 +75,10 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
   return value === "raw" || value === "status" ? value : undefined;
 }
 
-export { DEFAULT_PROGRESS_DRAFT_LABELS } from "../shared/progress-labels.js";
-
 // Short enough that a multi-tool turn is never silent, long enough that a
 // quick answer posts no draft at all: the gate only creates the draft when the
 // timer fires, and finalize cancels it.
-export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
+const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
 // Narration is a short paragraph, not a compact tool line; it gets its own
 // budget so the utility-model text is not mid-word truncated at line width.
@@ -173,8 +168,6 @@ export type ChannelProgressLineOptions = {
   commandText?: ChannelStreamingCommandTextMode;
 };
 
-export type ChannelProgressDraftRenderMode = "text" | "rich";
-
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
 
 export type AgentPlanStep = {
@@ -182,7 +175,7 @@ export type AgentPlanStep = {
   status: AgentPlanStepStatus;
 };
 
-export type AgentPlanStepInput = AgentPlanStep | string;
+type AgentPlanStepInput = AgentPlanStep | string;
 
 function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
   return value === "pending" || value === "in_progress" || value === "completed";
@@ -276,7 +269,7 @@ export type ChannelProgressDraftLineInput =
       summary?: string;
     };
 
-export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
+type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
 export type ChannelProgressDraftLine = {
   /** Stable line id used to update an existing progress line in place. */
@@ -379,7 +372,7 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
 }
 
 /** Tools whose detail is raw command text; commandText policy applies to these. */
-export function isCommandToolName(name: string | undefined): boolean {
+function isCommandToolName(name: string | undefined): boolean {
   return isCommandBearingToolCall(name);
 }
 
@@ -484,7 +477,7 @@ export function formatChannelProgressDraftLine(
   return buildChannelProgressDraftLine(input, options)?.text;
 }
 
-export function resolveChannelProgressDraftLineOptions(
+function resolveChannelProgressDraftLineOptions(
   /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
   /** Caller-supplied line formatting overrides. */
@@ -820,7 +813,7 @@ export function resolveChannelStreamingPreviewToolProgress(
   /**
    * The channel's resolved stream mode. Only the caller knows it: channels pick
    * their own default when `streaming.mode` is unset (Telegram uses "progress",
-   * Discord uses "off", and Slack uses "partial"), and this helper has no
+   * Discord uses "off", and Slack uses "progress"), and this helper has no
    * channel identity to guess with. Omitting it reads the configured mode and
    * treats unset as "partial".
    */
@@ -885,6 +878,7 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   entry: StreamingCompatEntry | null | undefined,
   options?: {
     draftStreamActive?: boolean;
+    mode?: StreamingMode;
     previewToolProgressEnabled?: boolean;
     previewStreamingEnabled?: boolean;
   },
@@ -892,7 +886,7 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
     return false;
   }
-  const mode = resolveChannelPreviewStreamMode(entry, "off");
+  const mode = options?.mode ?? resolveChannelPreviewStreamMode(entry, "off");
   if (mode === "off") {
     return false;
   }
@@ -926,7 +920,7 @@ function normalizeProgressLabels(labels: unknown): string[] {
   return normalized;
 }
 
-export function resolveChannelProgressDraftLabel(params: {
+function resolveChannelProgressDraftLabel(params: {
   entry?: StreamingCompatEntry | null;
   seed?: string;
   random?: () => number;
@@ -958,14 +952,6 @@ export function resolveChannelProgressDraftMaxLineChars(
 ): number {
   const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
   return configured && configured > 0 ? configured : defaultValue;
-}
-
-export function resolveChannelProgressDraftRender(
-  entry: StreamingCompatEntry | null | undefined,
-  defaultValue: ChannelProgressDraftRenderMode = "text",
-): ChannelProgressDraftRenderMode {
-  const configured = resolveChannelProgressDraftConfig(entry).render;
-  return configured === "rich" || configured === "text" ? configured : defaultValue;
 }
 
 function sliceCodePoints(value: string, start: number, end?: number): string {

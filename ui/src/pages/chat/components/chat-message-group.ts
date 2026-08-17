@@ -8,7 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -108,6 +108,10 @@ type RenderMessageGroupOptions = {
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 
+// Each automatic load attempt costs 2 revisions (loading, then error), so
+// this bounds auto-retries to 3 before the manual retry affordance takes over.
+const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
+
 function buildGroupedMessageRenderOptions(
   group: MessageGroup,
   item: MessageGroup["messages"][number],
@@ -124,9 +128,15 @@ function buildGroupedMessageRenderOptions(
   ) {
     const messageId = actionDetails.messageId;
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
+    const retriesExhausted =
+      expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
     assistantMessageDisclosure = {
       expanded: expansion?.status === "loaded",
       ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
+      // Manual re-entry once the bounded automatic retries gave up.
+      ...(retriesExhausted
+        ? { onRetryFullMessage: () => opts.onToggleAssistantMessageExpanded?.(messageId) }
+        : {}),
     };
   }
   return {
@@ -143,7 +153,6 @@ function buildGroupedMessageRenderOptions(
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
     runActive: opts.runActive,
-    turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
@@ -231,11 +240,6 @@ export function renderActivityGroup(
   const latestCards = latestGroup.messages.flatMap((item) =>
     extractToolCardsCached(item.message, item.key),
   );
-  const toolCount =
-    cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
-  // Aggregate chrome follows the latest group; older failures stay visible
-  // in the settled summary and expanded child rows.
-  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
@@ -243,16 +247,10 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(
-        cards.map((card) => ({
-          name: card.name,
-          args: card.args,
-          isError: isToolCardError(card),
-        })),
-      );
+    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
-  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const showAvatarGutter = opts.showAvatarGutter !== false;
   const assistantName = opts.assistantName ?? "Assistant";
 
@@ -282,33 +280,21 @@ export function renderActivityGroup(
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary ${hasError
-              ? "chat-activity-group__summary--error"
-              : ""}"
+            class="chat-inline-disclosure chat-activity-group__summary"
             type="button"
             aria-expanded=${String(activityExpanded)}
             aria-controls=${activityBodyId}
-            aria-label=${hasError
-              ? t(
-                  toolCount === 1
-                    ? "chat.toolCards.group.activityErrorOne"
-                    : "chat.toolCards.group.activityErrorMany",
-                  { count: String(toolCount) },
-                )
-              : nothing}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
               }
             }}
           >
-            <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
+            <span class="chat-activity-group__icon">${icons.activity}</span>
             <span class="chat-activity-group__label" title=${groupSummaryLabel}
               >${groupSummaryLabel}</span
             >
-            <span
-              class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
-              aria-hidden="true"
+            <span class="chat-inline-disclosure__chevron" aria-hidden="true"
               >${icons.chevronDown}</span
             >
           </button>
@@ -356,7 +342,7 @@ export function resolveMessageGroupSenderLabel(
     : normalizedRole === "assistant"
       ? (userLabel ?? assistantName)
       : normalizedRole === "tool"
-        ? "Tool"
+        ? t("chat.messages.toolSender")
         : group.messages.every((item) =>
               Boolean(workspaceResultConflictFromTranscript(item.message)),
             )
@@ -412,10 +398,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     }),
   );
   for (const details of messageActionDetails) {
+    if (!details?.shouldFetchFullMessage || !details.messageId) {
+      continue;
+    }
+    const expansion = opts.getAssistantMessageExpansion?.(details.messageId);
+    // A transient load failure must not pin the truncated preview for the
+    // whole session: retry on later render passes, bounded by revision
+    // (each attempt costs 2 revisions) so a dead loader cannot hot-loop.
     if (
-      details?.shouldFetchFullMessage &&
-      details.messageId &&
-      !opts.getAssistantMessageExpansion?.(details.messageId)
+      !expansion ||
+      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
     ) {
       opts.onToggleAssistantMessageExpanded?.(details.messageId);
     }

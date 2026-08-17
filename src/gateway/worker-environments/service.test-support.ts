@@ -19,7 +19,11 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerEnvironmentStore,
+  type WorkerEnvironmentStore,
+  type WorkerEnvironmentTransitionPatch,
+} from "./store.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -57,6 +61,7 @@ export const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.7.2",
   protocolFeatures: [],
+  tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };
@@ -159,12 +164,15 @@ export function createService(
       | "applyTranscriptCommit"
       | "bootstrapCallTimeoutMs"
       | "executeInference"
+      | "executeSessionTool"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
+      | "ensureNodeWorkerBundle"
       | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "nodeTunnelManager"
       | "placementStore"
       | "workerCredentialTtlMs"
     >
@@ -174,7 +182,7 @@ export function createService(
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>
-      testState.providersEnabled && providerId === "fake" ? provider : undefined,
+      testState.providersEnabled && providerId === provider.id ? provider : undefined,
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
@@ -288,7 +296,10 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
   });
 }
 
-export function readyPatch(environmentId: string, receipt = BOOTSTRAP_RECEIPT) {
+export function readyPatch(
+  environmentId: string,
+  receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
+) {
   return {
     bootstrapReceipt: receipt,
     credential: {
@@ -345,6 +356,13 @@ export function seedAttachedIdentity(
     bundleHash: credential.bundleHash,
     sessionId,
     runId: "run-1",
+    turnClaim: {
+      sessionId,
+      claimId: "claim-run-1",
+      runId: "run-1",
+      placementGeneration: 1,
+      owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
+    },
     ownerEpoch: attached.ownerEpoch,
     rpcSetVersion: credential.rpcSetVersion,
     protocolFeatures: [...attached.bootstrapReceipt.protocolFeatures],
@@ -432,26 +450,29 @@ export function sequencedLiveEvents(ackedSeq = (seq: number) => seq) {
   return { apply, liveEvents: createLiveEvents({ apply }) };
 }
 
-export function placementBinding(identity: WorkerConnectionIdentity) {
-  return {
-    sessionId: identity.sessionId ?? "session-missing",
-    environmentId: identity.environmentId,
-    ownerEpoch: identity.ownerEpoch,
-    runId: identity.runId ?? "run-missing",
-  };
-}
-
 export function placementHarness(
   environmentId: string,
   sessionId: string,
   serviceOptions: Parameters<typeof createService>[1] = {},
 ) {
   const identity = seedAttachedIdentity(environmentId, sessionId);
+  const claim = identity.turnClaim!;
+  const credentialHash = hashWorkerCredential(
+    [CREDENTIAL, environmentId, sessionId].join("-"),
+    claim,
+  );
+  testState.stateDb.db
+    .prepare(
+      "UPDATE worker_environment_credentials SET credential_hash = ? WHERE environment_id = ?",
+    )
+    .run(credentialHash, environmentId);
+  identity.credentialHash = credentialHash;
   const placementStore = {
-    hasWorkerTurn: vi.fn(() => true),
+    readWorkerTurnClaim: vi.fn(() => claim),
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),
+    registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
   return { identity, placementStore, workerService };

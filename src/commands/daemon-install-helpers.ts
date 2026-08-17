@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -34,10 +35,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import {
-  loadPluginManifestRegistryCore,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -300,7 +298,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     }
     const execProvider = isPluginIntegrationSecretProviderConfig(provider)
       ? (() => {
-          manifestRegistry ??= loadPluginManifestRegistryCore({
+          manifestRegistry ??= resolveConfigWidePluginManifestRegistry({
             config: params.config,
             env: params.env,
           });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterStringEntries,
   normalizeAtHashSlug,
+  normalizeCsvOrLooseStringList,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
   normalizeSortedUniqueStringEntries,
@@ -80,6 +81,15 @@ describe("normalization-core/string-normalization", () => {
     expect(normalizeTrimmedStringList("first")).toEqual([]);
     expect(normalizeOptionalTrimmedStringList(values)).toEqual(["first", "second"]);
     expect(normalizeOptionalTrimmedStringList(["", 42])).toBeUndefined();
+  });
+
+  it.each([
+    { value: " first, second, , first ", expected: ["first", "second", "first"] },
+    { value: [" first ", 42, "", "  ", 7], expected: ["first", "42", "7"] },
+    { value: null, expected: [] },
+    { value: { value: "first" }, expected: [] },
+  ])("normalizes CSV or loose string-list input", ({ value, expected }) => {
+    expect(normalizeCsvOrLooseStringList(value)).toEqual(expected);
   });
 
   it("normalizes sorted unique trimmed string lists", () => {

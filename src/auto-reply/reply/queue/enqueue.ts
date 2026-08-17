@@ -139,11 +139,14 @@ export function enqueueFollowupRun(
   if (options.steerCandidate) {
     run.steerAnchor = true;
   }
-  const queue = getFollowupQueue(key, settings);
+  // Peek before getFollowupQueue: rejecting a redelivery after the original
+  // queue drained and self-deleted must not recreate an empty registry entry,
+  // which nothing would ever delete again.
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && peekRecentQueueMessageId(recentMessageIdKey)) {
     return false;
   }
+  const queue = getFollowupQueue(key, settings);
 
   const dedupe =
     dedupeMode === "none"

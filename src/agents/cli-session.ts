@@ -10,7 +10,11 @@ import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 import { readErrorName } from "../infra/errors.js";
 import { isFailoverError } from "./failover-error.js";
-export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
+export {
+  clearAllCliSessions,
+  getCliSessionBinding,
+  getCliSessionId,
+} from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
@@ -106,18 +110,6 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
     entry.claudeCliSessionId = undefined;
   }
-}
-
-type MutableCliSessionFields = Pick<
-  SessionEntry,
-  "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId"
->;
-
-/** Remove every CLI session binding from a session entry. */
-export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): void {
-  entry.cliSessionBindings = undefined;
-  entry.cliSessionIds = undefined;
-  entry.claudeCliSessionId = undefined;
 }
 
 /** Decide whether a failed CLI turn invalidates the binding it tried to resume. */

@@ -3,8 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   createChannelOnboardingPostWriteHook,
-  createChannelOnboardingPostWriteHookCollector,
-  runCollectedChannelOnboardingPostWriteHooks,
+  createChannelSetupTransaction,
 } from "./onboard-channels.js";
 import { createExitThrowingRuntime } from "./test-wizard-helpers.js";
 
@@ -20,8 +19,8 @@ describe("setupChannels post-write hooks", () => {
     const adapter = {
       afterConfigWritten,
     };
-    const collector = createChannelOnboardingPostWriteHookCollector();
     const runtime = createExitThrowingRuntime();
+    const transaction = createChannelSetupTransaction({ runtime });
     const hook = createChannelOnboardingPostWriteHook({
       accountId: "acct-1",
       adapter,
@@ -32,16 +31,13 @@ describe("setupChannels post-write hooks", () => {
     if (!hook) {
       throw new Error("expected post-write hook");
     }
-    collector.collect(hook);
+    transaction.onPostWriteHook(hook);
 
     expect(afterConfigWritten).not.toHaveBeenCalled();
 
-    await runCollectedChannelOnboardingPostWriteHooks({
-      hooks: collector.drain(),
-      cfg,
-      runtime,
-    });
+    const committed = await transaction.commit(cfg, async () => cfg);
 
+    expect(committed).toBe(cfg);
     expect(afterConfigWritten).toHaveBeenCalledWith({
       previousCfg,
       cfg,
@@ -52,24 +48,35 @@ describe("setupChannels post-write hooks", () => {
 
   it("logs onboarding post-write hook failures without aborting", async () => {
     const runtime = createExitThrowingRuntime();
-
-    await runCollectedChannelOnboardingPostWriteHooks({
-      hooks: [
-        {
-          channel: "telegram",
-          accountId: "acct-1",
-          run: async () => {
-            throw new Error("hook failed");
-          },
-        },
-      ],
-      cfg: {} as OpenClawConfig,
-      runtime,
+    const transaction = createChannelSetupTransaction({ runtime });
+    transaction.onPostWriteHook({
+      channel: "telegram",
+      accountId: "acct-1",
+      run: async () => {
+        throw new Error("hook failed");
+      },
     });
+
+    await transaction.commit({} as OpenClawConfig, async (config) => config);
 
     expect(runtime.error).toHaveBeenCalledWith(
       'Channel telegram post-setup warning for "acct-1": hook failed',
     );
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not run hooks when config persistence fails", async () => {
+    const runtime = createExitThrowingRuntime();
+    const hook = vi.fn();
+    const transaction = createChannelSetupTransaction({ runtime });
+    transaction.onPostWriteHook({ channel: "matrix", accountId: "ops", run: hook });
+
+    await expect(
+      transaction.commit({} as OpenClawConfig, async () => {
+        throw new Error("write failed");
+      }),
+    ).rejects.toThrow("write failed");
+
+    expect(hook).not.toHaveBeenCalled();
   });
 });

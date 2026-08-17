@@ -285,10 +285,10 @@ export async function downloadMSTeamsGraphMedia(params: {
   } catch (err) {
     params.logger?.debug?.("graph media token acquisition failed", {
       messageUrl,
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     params.logger?.warn?.("msteams graph token acquisition failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return { media: [], messageUrl, tokenError: true };
   }

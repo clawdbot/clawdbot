@@ -20,6 +20,16 @@ describe("gateway concurrency benchmark script", () => {
         "50",
         "--timeout-ms",
         "90000",
+        "--cpu-prof-dir",
+        "/tmp/gateway-cpu-profiles",
+        "--plugin-count",
+        "50",
+        "--max-control-ms",
+        "2000",
+        "--max-handshake-ms",
+        "2000",
+        "--tool-events",
+        "--workspace-fanout",
         "--output",
         "concurrency.json",
         "--json",
@@ -27,11 +37,17 @@ describe("gateway concurrency benchmark script", () => {
     ).toMatchObject({
       cadenceMs: 50,
       concurrency: 12,
+      cpuProfDir: "/tmp/gateway-cpu-profiles",
       json: true,
+      maxControlMs: 2_000,
+      maxHandshakeMs: 2_000,
       output: "concurrency.json",
+      pluginCount: 50,
       runs: 2,
       timeoutMs: 90_000,
+      toolEvents: true,
       warmup: 0,
+      workspaceFanout: true,
     });
     expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
       "--concurrency must be at most 64",
@@ -40,6 +56,46 @@ describe("gateway concurrency benchmark script", () => {
       "--runs was provided more than once",
     );
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+    expect(() => testing.parseOptions(["--plugin-count", "101"])).toThrow(
+      "--plugin-count must be at most 100",
+    );
+  });
+
+  it("summarizes plugin metadata scans captured after startup warmup", () => {
+    expect(
+      testing.summarizePluginMetadataScans([
+        { durationMs: 18, name: "plugins.metadata.scan" },
+        { durationMs: 22, name: "plugins.metadata.scan" },
+        { durationMs: 9, name: "plugins.metadata.freeze" },
+      ]),
+    ).toEqual({
+      count: 2,
+      durationMs: { count: 2, max: 22, p50: 18, p95: 22, p99: 22 },
+      totalDurationMs: 40,
+    });
+  });
+
+  it("aggregates plugin metadata scans across measured runs", () => {
+    const createRun = (count: number, durations: number[]) => ({
+      controlUi: [],
+      durationMs: 10,
+      freshConnection: { error: null, latencyMs: 25, ok: true },
+      probeWarmup: { durationMs: 2, samples: [] },
+      pluginMetadataScans: {
+        count,
+        durationMs: testing.summarizeNumbers(durations),
+        totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
+      },
+      readyz: [],
+      sessionsList: [],
+      turnCount: 1,
+      turnsDurationMs: 5,
+    });
+
+    expect(testing.summarizeRuns([createRun(2, [10, 20]), createRun(1, [30])])).toMatchObject({
+      pluginMetadataScanCount: 3,
+      pluginMetadataScanTotalDurationMs: 60,
+    });
   });
 
   it("reports p50, p95, p99, and max with nearest-rank percentiles", () => {
@@ -81,6 +137,8 @@ describe("gateway concurrency benchmark script", () => {
     const sample = {
       controlUi: [],
       durationMs: 10,
+      freshConnection: { error: null, latencyMs: 25, ok: true },
+      pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
       probeWarmup: { durationMs: 2, samples: [] },
       readyz: [],
       sessionsList: [],
@@ -163,17 +221,21 @@ describe("gateway concurrency benchmark script", () => {
       };
       const healthyFast = {
         controlUi: { ...healthySlow.controlUi, latencyMs: 10 },
-        readyz: { ...healthySlow.readyz, latencyMs: 10 },
+        readyz: { ...healthySlow.readyz, degraded: true, latencyMs: 10 },
         sessionsList: { ...healthySlow.sessionsList, latencyMs: 10 },
       };
-      const samples = [sample, healthySlow, healthyFast];
+      const healthySettled = {
+        ...healthyFast,
+        readyz: { ...healthyFast.readyz, degraded: false },
+      };
+      const samples = [sample, healthySlow, healthyFast, healthySettled];
       const warmed = await testing.warmGatewayProbes({
         deadlineAt: performance.now() + 5_000,
         retryDelayMs: 0,
         sample: async () => samples.shift() ?? healthyFast,
         targetMs: 100,
       });
-      expect(warmed.samples).toHaveLength(3);
+      expect(warmed.samples).toHaveLength(4);
     } finally {
       server.close();
     }

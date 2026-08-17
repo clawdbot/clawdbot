@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
-import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
+import { logDebug, logError, logInfo, logWarn } from "./logger.js";
 import {
   resetLogger,
   setLoggerOverride,
@@ -29,10 +29,9 @@ describe("logger helpers", () => {
 
     logInfo("info", runtime);
     logWarn("warn", runtime);
-    logSuccess("ok", runtime);
     logError("bad", runtime);
 
-    expect(log).toHaveBeenCalledTimes(3);
+    expect(log).toHaveBeenCalledTimes(2);
     expect(error).toHaveBeenCalledTimes(1);
   });
 

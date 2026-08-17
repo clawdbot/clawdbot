@@ -2,7 +2,10 @@
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
+import {
+  type AgentRunDelegatedAuthority,
+  registerAgentRunDelegatedAuthorityClosedHandler,
+} from "../infra/agent-run-registry.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
@@ -127,6 +130,7 @@ export function createGatewayAuxHandlers(params: {
   getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
   onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
   validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
   chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
   registerWorkerTurnClaimClosedHandler?: (
@@ -153,11 +157,17 @@ export function createGatewayAuxHandlers(params: {
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       onLifecycle: params.onApprovalLifecycle,
-      ...(params.validateAgentRuntimeDelegatedAuthority
-        ? {
-            validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
-          }
-        : {}),
+      // Timeout expiry is gateway-clock truth: publish the terminal like a
+      // resolve so reviewer surfaces need not infer it from their own clocks.
+      // system-agent approvals have no forwarder/push route to notify.
+      onExpired: (record, liveRecord) => {
+        if (approvalKind === "system-agent") {
+          return;
+        }
+        const publication = { kind: approvalKind, record, liveRecord };
+        publishAuthorityClosure(publication as PendingAuthorityPublication);
+      },
+      validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
       onError: (error, context) =>
         params.log.error?.(
           `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
@@ -248,6 +258,7 @@ export function createGatewayAuxHandlers(params: {
       } catch (error) {
         params.log.error?.(`plugin approvals: authority-close settlement failed: ${String(error)}`);
       }
+      params.onAgentRunAuthorityClosed?.(authority);
     },
   );
   const unregisterWorkerTurnClaimClosedObserver = params.registerWorkerTurnClaimClosedHandler?.(

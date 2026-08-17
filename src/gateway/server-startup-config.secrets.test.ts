@@ -2937,7 +2937,7 @@ describe("gateway startup config secret preflight", () => {
 
         try {
           await activateStartupConfigWithEnv(
-            { agents: { list: [{ id: "default", default: true }] } },
+            { agents: { list: [{ id: "main", agentDir: relocatedMainAgentDir }] } },
             activationEnv,
           );
 
@@ -2980,7 +2980,7 @@ describe("gateway startup config secret preflight", () => {
           await activateStartupConfigWithEnv(
             {
               agents: {
-                list: [{ id: "default", default: true, agentDir: "~/configured-agent" }],
+                list: [{ id: "main", agentDir: "~/configured-agent" }],
               },
             },
             activationEnv,

@@ -78,12 +78,8 @@ separately tracked so supported upgrade paths can still repair old config.
 
 The remaining dated compatibility areas are:
 
-- the August and September SDK subpath windows listed in the migration guide
-- `api.on("deactivate", ...)` and `api.on("subagent_spawning", ...)` hook aliases
-- memory-specific embedding registration and the beta.5 session-store bridge
-- WhatsApp inbound callback aliases described below
-- explicit channel target parsing and `openclaw/plugin-sdk/messaging-targets`
-- embedded Pi agent aliases
+- the September SDK subpath window listed in the migration guide
+- the beta.5 session-store bridge
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
 - the October 2026 SDK annotation families listed below
@@ -132,50 +128,17 @@ runtime context.
 The security runtime similarly exports `buildChannelMetadata`; the deprecated
 `buildUntrustedChannelMetadata` alias remains available on the same schedule.
 
-### WhatsApp inbound callback flat aliases
+### WhatsApp inbound callback retirement
 
-WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical
-nested `event`, `payload`, `quote`, `group`, and `platform` contexts plus
-deprecated flat aliases for the shipped callback fields. New callback code
-should read the nested contexts. Code that constructs clean nested callback
-messages can use `WebInboundCallbackMessage`; compatibility listeners that
-still inject old flat test or plugin messages should use
-`LegacyFlatWebInboundMessage` or `WebInboundMessageInput`.
+The August 2026 WhatsApp callback compatibility window is closed. Runtime
+callbacks now accept only `WebInboundCallbackMessage`: nested `event`,
+`payload`, `quote`, `group`, and `platform` contexts plus the required public
+`admission` envelope. Flat callback fields and top-level admission aliases are
+no longer accepted.
 
-The flat aliases remain available until **2026-08-30**; that window applies
-only to flat alias access, not to the nested shape, which is the canonical
-runtime contract. Each flat alias's TypeScript `@deprecated` annotation
-names its exact nested replacement. Common examples:
-
-- `id`, `timestamp`, and `isBatched` move under `event`.
-- `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`,
-  and `channelStructuredContext` move under `payload`.
-- `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
-  `sendMedia(...)` move under `platform`.
-- `replyTo*` fields move under `quote`; group subject/participant/mention
-  fields move under `group`.
-
-`payload.channelStructuredContext` is extracted from inbound provider
-payloads. Plugins should inspect `label`, `source`, and `type` before
-treating its `payload` as authoritative.
-
-### WhatsApp inbound admission fields
-
-Accepted WhatsApp callback messages carry `admission`, a public-safe
-envelope for the access-control decision that admitted the message. New
-callback code should read admission facts from `msg.admission` instead of
-the older top-level admission fields.
-
-The top-level fields remain available until **2026-08-30**. Each field's
-TypeScript `@deprecated` annotation names its replacement:
-
-- `from` and `conversationId` move to `admission.conversation.id`.
-- `accountId` moves to `admission.accountId`.
-- `accessControlPassed` is a derived compatibility view of
-  `admission.ingress.decision === "allow"`; on messages that already carry
-  `admission`, writing the legacy boolean does not rewrite the ingress
-  graph.
-- `chatType` moves to `admission.conversation.kind`.
+`payload.channelStructuredContext` is extracted from inbound provider payloads.
+Plugins should inspect `label`, `source`, and `type` before treating its
+`payload` as authoritative.
 
 ## Plugin inspector package
 

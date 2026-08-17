@@ -6,7 +6,7 @@ import type {
   SlackShortcutMiddlewareArgs,
 } from "@slack/bolt";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
@@ -103,7 +103,7 @@ async function handleSlackShortcut(params: {
     messageText: messageBody?.message.text,
     responseUrl: messageBody?.response_url,
   };
-  const sessionKey = params.ctx.resolveSlackSystemEventSessionKey({
+  const route = params.ctx.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,
     senderId: userId,
@@ -125,8 +125,7 @@ async function handleSlackShortcut(params: {
   params.ctx.runtime.log?.(
     `slack:interaction ${interactionType} callback=${callbackId} user=${userId} channel=${channelId ?? "direct"}`,
   );
-  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
-    sessionKey,
+  const queued = enqueueRoutedSystemEvent(params.formatSystemEvent(eventPayload), route, {
     contextKey,
     deliveryContext: {
       channel: "slack",
@@ -140,7 +139,8 @@ async function handleSlackShortcut(params: {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
-      sessionKey,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
       heartbeat: { target: "last" },
     });
   }

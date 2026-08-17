@@ -26,6 +26,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -69,6 +70,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: HANDSHAKE.bundleHash,
   sessionId: null,
   runId: null,
+  turnClaim: null,
   ownerEpoch: 1,
   rpcSetVersion: 1,
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
@@ -97,6 +99,13 @@ const ATTACHED_IDENTITY: WorkerConnectionIdentity = {
   ...IDENTITY,
   sessionId: "session-1",
   runId: "run-1",
+  turnClaim: {
+    sessionId: "session-1",
+    claimId: "claim-1",
+    runId: "run-1",
+    placementGeneration: 1,
+    owner: { kind: "worker", environmentId: "worker-1", ownerEpoch: 1 },
+  },
 };
 const INFERENCE_IDS = {
   runEpoch: 1,
@@ -136,12 +145,28 @@ function createLogger() {
   return { warn: vi.fn() };
 }
 
+function createRateLimiter(overrides: Partial<AuthRateLimiter> = {}): AuthRateLimiter {
+  return {
+    check: vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 })),
+    recordFailure: vi.fn(),
+    recordFailureAndDelay: vi.fn(async () => {}),
+    reset: vi.fn(),
+    size: vi.fn(() => 0),
+    prune: vi.fn(),
+    dispose: vi.fn(),
+    ...overrides,
+  };
+}
+
 function attachHarness(
   options: {
     admissionFailure?: WorkerAdmissionFailureReason;
     commitFailure?: WorkerTranscriptCommitErrorReason;
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
+    ingress?: "loopback" | "public";
+    omitPublicAdmission?: boolean;
+    rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
     onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
@@ -201,11 +226,17 @@ function attachHarness(
   });
   const logGateway = createLogger();
   const logWsControl = createLogger();
+  const setCloseCause = vi.fn();
   const setLastFrameMeta = vi.fn();
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
     service,
+    ingress: options.ingress ?? "loopback",
+    publicAdmission:
+      options.ingress === "public" && !options.omitPublicAdmission
+        ? { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter }
+        : undefined,
     send: (frame) => responses.push(frame),
     close,
     isClosed: () => false,
@@ -214,7 +245,7 @@ function attachHarness(
     setClient,
     setHandshakeState: vi.fn(),
     advanceHandshakePhase: vi.fn(),
-    setCloseCause: vi.fn(),
+    setCloseCause,
     setLastFrameMeta,
     logGateway,
     logWsControl,
@@ -230,6 +261,7 @@ function attachHarness(
     responses,
     service,
     setClient,
+    setCloseCause,
     setLastFrameMeta,
     sendRequest: (method: string, params: unknown, id = "request-1") =>
       send({ type: "req", id, method, params }),
@@ -274,6 +306,96 @@ describe("dedicated worker websocket protocol", () => {
       `worker admission rejected reason=${reason}`,
     );
     expect(harness.setClient).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when public ingress context is missing", async () => {
+    const harness = attachHarness({ ingress: "public", omitPublicAdmission: true });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.service.admitWorker).not.toHaveBeenCalled();
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      "worker admission rejected reason=public-ingress-context-missing",
+    );
+  });
+
+  it.each(["invalid-credential", "environment-mismatch"] as const)(
+    "projects public %s failures to one opaque reason",
+    async (internalReason) => {
+      const recordFailure = vi.fn();
+      const rateLimiter = createRateLimiter({ recordFailure });
+      const harness = attachHarness({
+        admissionFailure: internalReason,
+        ingress: "public",
+        rateLimiter,
+      });
+      harness.sendConnect();
+
+      await waitForWorkerProtocol(() =>
+        expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+      );
+      expect(harness.responses[0]).toMatchObject({
+        ok: false,
+        error: { details: { reason: "invalid-handshake" } },
+      });
+      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+        `worker admission rejected reason=${internalReason}`,
+      );
+      expect(harness.setCloseCause).toHaveBeenCalledWith(internalReason);
+      expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+    },
+  );
+
+  it("rejects rate-limited public admission before credential verification", async () => {
+    const rateLimiter = createRateLimiter({
+      check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs: 12_000 })),
+    });
+    const harness = attachHarness({ ingress: "public", rateLimiter });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.responses[0]).toMatchObject({
+      ok: false,
+      error: {
+        details: { reason: "invalid-handshake" },
+      },
+    });
+    expect(harness.service.admitWorker).not.toHaveBeenCalled();
+    expect(harness.setCloseCause).toHaveBeenCalledWith("rate-limited");
+  });
+
+  it("resets public credential failures after successful admission", async () => {
+    const reset = vi.fn();
+    const rateLimiter = createRateLimiter({ reset });
+    const harness = attachHarness({ ingress: "public", rateLimiter });
+    await admit(harness);
+
+    expect(reset).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+  });
+
+  it("keeps public ownership failures opaque and charges the admission budget", async () => {
+    const reset = vi.fn();
+    const recordFailure = vi.fn();
+    const rateLimiter = createRateLimiter({ reset, recordFailure });
+    const harness = attachHarness({
+      ingress: "public",
+      rateLimiter,
+      validationFailure: "credential-replaced",
+    });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      "worker admission rejected reason=credential-replaced",
+    );
+    expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+    expect(reset).not.toHaveBeenCalled();
   });
 
   it.each([

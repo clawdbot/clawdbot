@@ -2707,15 +2707,6 @@ describe("buildOpenAIProvider", () => {
     ).toBe(explicit);
   });
 
-  it("shares OpenAI responses wrapper composition across provider variants", () => {
-    const provider = buildOpenAIProvider();
-    const codexProvider = buildOpenAIProvider();
-
-    expect(provider.wrapStreamFn).toBe(codexProvider.wrapStreamFn);
-    expect(provider.buildReplayPolicy).toBe(codexProvider.buildReplayPolicy);
-    expect(provider.resolveTransportTurnState).toBe(codexProvider.resolveTransportTurnState);
-  });
-
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {
     const provider = buildOpenAIProvider();
     const wrap = provider.wrapStreamFn;

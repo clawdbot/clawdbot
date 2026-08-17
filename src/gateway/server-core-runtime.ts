@@ -9,7 +9,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -26,7 +28,12 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
+import {
+  getHealthVersion,
+  getPresenceVersion,
+  incrementPresenceVersion,
+} from "./server/health-state.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -115,6 +122,7 @@ export async function startGatewayCoreRuntime(input: {
     kernel,
     startupTrace,
     channelManager,
+    readinessEventLoopHealth,
     workerDispatchAuthority,
     clients,
     startChannel,
@@ -131,17 +139,36 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     workerDesktopObserveAvailable,
+    desktopObserveAvailable,
+    desktopSessionRegistry,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
     pluginHostServices,
     baseMethods,
-    defaultWorkspaceDir,
+    pluginWorkspaceDir,
     ambientEnvTriggers,
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
     residentRegistry,
+    shutdownRuntime,
   } = runtime;
+  if (desktopSessionRegistry) {
+    kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
+  }
+  const secretEgressProxy =
+    cfgAtStart.secrets?.egressProxy?.enabled === true
+      ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
+          egressRuntime.startGatewaySecretEgressProxy(
+            cfgAtStart.secrets?.egressProxy?.bypassHosts
+              ? { bypassHosts: cfgAtStart.secrets.egressProxy.bypassHosts }
+              : {},
+          ),
+        )
+      : undefined;
+  if (secretEgressProxy) {
+    kernel.addGatewayLifetimeSidecar(secretEgressProxy);
+  }
   let earlyRuntimePromise: ReturnType<
     Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
   > | null = null;
@@ -163,6 +190,14 @@ export async function startGatewayCoreRuntime(input: {
         getPresenceVersion,
         getHealthVersion,
         refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
+        restartRunningChannels: async () =>
+          await restartRunningChannelAccounts(channelManager, {
+            shouldContinue: () => !isGatewayWorkAdmissionClosed(),
+            onError: (message) => logHealth.error(message),
+          }),
+        refreshPresence: () =>
+          broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
+        resetEventLoopHealth: readinessEventLoopHealth.reset,
         logHealth,
         dedupe,
         chatAbortControllers,
@@ -200,8 +235,7 @@ export async function startGatewayCoreRuntime(input: {
     stop: async () => {
       const earlyRuntime = await startEarlyRuntime();
       earlyRuntime.skillsChangeUnsub();
-      const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
-      stopTaskRegistryMaintenance();
+      shutdownRuntime.stopTaskRegistryMaintenance();
     },
   });
   const earlyRuntime = await startupTrace.measure("runtime.early", () =>
@@ -318,6 +352,9 @@ export async function startGatewayCoreRuntime(input: {
             delegatedAuthority: authority,
           }),
         onApprovalLifecycle: approvalSessionEvents.publish,
+        onAgentRunAuthorityClosed: (authority) => {
+          secretEgressProxy?.revokeRun(authority.operationalRunInstance);
+        },
       }),
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
@@ -335,14 +372,16 @@ export async function startGatewayCoreRuntime(input: {
     for (const sessionKey of keys) {
       revokeAttachGrantsForSession(sessionKey);
     }
-    for (const record of execApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        execApprovalManager.expire(record.id, "worker-dispatch");
-      }
-    }
-    for (const record of pluginApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        pluginApprovalManager.expire(record.id, "worker-dispatch");
+    // Dispatch fencing closes approval authority deliberately: record it as a
+    // run-aborted cancellation, not a timeout, so ask-fallback replay cannot
+    // re-admit through the fenced record (consumeAskFallback admits only
+    // expired/no-route terminals).
+    const fenceResolver = { kind: "system", id: "worker-dispatch" } as const;
+    for (const manager of [execApprovalManager, pluginApprovalManager]) {
+      for (const record of manager.listPendingRecords()) {
+        if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
+          manager.forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled");
+        }
       }
     }
   };
@@ -371,9 +410,12 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
+        (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
-          (descriptor.name !== "worker.desktop.observe" &&
+          (descriptor.name !== "desktop.launch" &&
+            descriptor.name !== "worker.desktop.observe" &&
             descriptor.name !== "worker.desktop.launch")),
     );
     return createGatewayMethodRegistry(
@@ -488,7 +530,7 @@ export async function startGatewayCoreRuntime(input: {
     });
     const nextPluginLookUpTable = loadPluginLookUpTable({
       config: nextPluginActivationConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       env: params.env,
       activationSourceConfig: params.nextConfig,
       // Workers can be created after startup; reload planning needs the live durable set.
@@ -551,7 +593,7 @@ export async function startGatewayCoreRuntime(input: {
     );
     const loaded = prepareGatewayPluginLoad({
       cfg: params.nextConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       log,
       coreGatewayMethodNames,
       hostServices: pluginHostServices,
@@ -563,12 +605,12 @@ export async function startGatewayCoreRuntime(input: {
       snapshot: nextPluginLookUpTable,
       config: params.nextConfig,
       env: params.env,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
     });
     setCurrentPluginMetadataSnapshot(nextPluginMetadataSnapshot, {
       config: params.nextConfig,
       env: params.env,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
     });
     replaceAttachedPluginRuntime(loaded);
     kernel.setPluginServices(null);
@@ -580,7 +622,7 @@ export async function startGatewayCoreRuntime(input: {
       await startPluginServices({
         registry: loaded.pluginRegistry,
         config: params.nextConfig,
-        workspaceDir: defaultWorkspaceDir,
+        workspaceDir: pluginWorkspaceDir,
         broadcastPluginEvent,
       }),
     );

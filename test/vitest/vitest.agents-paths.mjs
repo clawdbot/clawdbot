@@ -18,17 +18,10 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [
-  `${embeddedRoot}/run.incomplete-turn.attempt-lifecycle.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.empty-response-recovery.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.reasoning-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.settled-tool-continuation.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.settled-tool-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.silent-reply.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.terminal-evidence.test.ts`,
 ];
 const overflowCompactionFiles = [
   `${embeddedRoot}/run.overflow-compaction.test.ts`,

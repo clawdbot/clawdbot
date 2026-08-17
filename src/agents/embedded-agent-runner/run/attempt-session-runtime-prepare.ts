@@ -1,6 +1,7 @@
 /** Prepares the session-owned runtime used by one embedded attempt. */
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
@@ -240,7 +241,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       state: getProviderPromptState(attempt.runId),
       effectiveContextTokenBudget: Math.max(
         1,
-        Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
+        Math.floor(
+          attempt.contextTokenBudget ?? attempt.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+        ),
       ),
       ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },

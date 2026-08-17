@@ -448,23 +448,32 @@ class ProviderAdapterEmbeddings implements Embeddings {
 
 export async function runWithTimeout<T>(params: {
   timeoutMs: number;
-  task: () => Promise<T>;
+  task: (deadlineAtMs: number) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const TIMEOUT = Symbol("timeout");
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  // Share one absolute deadline with native work so the outer race cannot
+  // abandon a still-running operation after reporting a timeout.
+  const deadlineAtMs = Date.now() + timeoutMs;
   const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
-    timeout = setTimeout(() => resolve(TIMEOUT), resolveTimerTimeoutMs(params.timeoutMs, 1));
+    timeout = setTimeout(() => resolve(TIMEOUT), timeoutMs);
     timeout.unref?.();
   });
-  const taskPromise = params.task();
+  const taskPromise = params.task(deadlineAtMs);
   taskPromise.catch(() => undefined);
 
   try {
     const result = await Promise.race([taskPromise, timeoutPromise]);
-    if (result === TIMEOUT) {
+    if (result === TIMEOUT || Date.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     return { status: "ok", value: result };
+  } catch (error) {
+    if (Date.now() >= deadlineAtMs) {
+      return { status: "timeout" };
+    }
+    throw error;
   } finally {
     if (timeout) {
       clearTimeout(timeout);

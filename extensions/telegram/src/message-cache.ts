@@ -886,6 +886,13 @@ async function resolveSessionBoundaryNode(params: {
   );
 }
 
+/**
+ * Hard cap on reply-chain nodes rendered into the prompt. Model-visible context
+ * must be bounded; every producer that appends chain entries shares this ceiling
+ * so a busy chat cannot grow the turn past its budget.
+ */
+export const TELEGRAM_REPLY_CHAIN_MAX_DEPTH = 4;
+
 export async function buildTelegramReplyChain(params: {
   cache: TelegramMessageCache;
   accountId: string;
@@ -897,7 +904,7 @@ export async function buildTelegramReplyChain(params: {
   if (!replyMessage?.message_id) {
     return [];
   }
-  const maxDepth = params.maxDepth ?? 4;
+  const maxDepth = params.maxDepth ?? TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
   const visited = new Set<string>();
   const chain: TelegramCachedMessageNode[] = [];
   let current: TelegramCachedMessageNode | null =

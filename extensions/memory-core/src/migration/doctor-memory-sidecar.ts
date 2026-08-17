@@ -11,6 +11,8 @@ import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+// This doctor closure must stay dependency-light while accepting legacy array-backed objects.
+import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
 // enumeration does not cold-load it with this closure.
 import {
@@ -25,13 +27,6 @@ function formatLegacyVectorRows(count: number | undefined): string {
 }
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
-
-// This doctor closure must stay dependency-light while accepting legacy array-backed objects.
-function readLegacyObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
   const cfg = config as { agents?: { entries?: unknown; list?: unknown } };

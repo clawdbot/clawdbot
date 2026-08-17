@@ -155,7 +155,8 @@ function validatePairingFields(relayUrl, token, gatewayUrl) {
 
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
- * Shape: ws://127.0.0.1:<port>/extension?gateway=<url>#<token>
+ * Native local and direct-remote pairings use the Gateway route; local manual,
+ * browser-node, and legacy local pairings use the host relay route.
  * The additive gateway hint is not a credential; old extensions safely pass
  * it through to the relay while new extensions remove it before connecting.
  */

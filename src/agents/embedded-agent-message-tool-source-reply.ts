@@ -99,10 +99,6 @@ function isBareSentDeliveryStatus(value: unknown): boolean {
   return normalizeStatus(value) === SENT_DELIVERY_STATUS;
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  return safeParseJsonRecord(value);
-}
-
 function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
   const hasDeliveredId = (value: unknown) => {
     const normalized = normalizeStatus(value);
@@ -151,7 +147,7 @@ function deliveryEnvelopeHasCreatedConversationId(value: unknown, depth = 0): bo
     }
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeHasCreatedConversationId(parsed, depth + 1)) {
       return true;
     }
@@ -183,7 +179,7 @@ function deliveryEnvelopeIndicatesOk(value: unknown, depth = 0): boolean {
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesOk(parsed, depth + 1)) {
       return true;
     }
@@ -218,7 +214,7 @@ function deliveryEnvelopeIndicatesNonDelivery(value: unknown, depth = 0): boolea
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesNonDelivery(parsed, depth + 1)) {
       return true;
     }
@@ -263,7 +259,7 @@ function deliveryEnvelopeIndicatesNoOp(value: unknown, depth = 0): boolean {
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesNoOp(parsed, depth + 1)) {
       return true;
     }
@@ -314,7 +310,7 @@ function deliveryEnvelopeIndicatesSuccessfulBroadcast(value: unknown, depth = 0)
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesSuccessfulBroadcast(parsed, depth + 1)) {
       return true;
     }
@@ -348,7 +344,7 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesDryRun(parsed, depth + 1)) {
       return true;
     }
@@ -363,7 +359,7 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const text = (item as Record<string, unknown>).text;
         if (typeof text === "string") {
-          const parsed = parseJsonRecord(text);
+          const parsed = safeParseJsonRecord(text);
           if (parsed && deliveryEnvelopeIndicatesDryRun(parsed, depth + 1)) {
             return true;
           }
@@ -403,7 +399,7 @@ function deliveryEnvelopeIndicatesDelivered(
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
       return true;
     }
@@ -421,7 +417,7 @@ function deliveryEnvelopeIndicatesDelivered(
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const text = (item as Record<string, unknown>).text;
         if (typeof text === "string") {
-          const parsed = parseJsonRecord(text);
+          const parsed = safeParseJsonRecord(text);
           if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
             return true;
           }
@@ -455,7 +451,7 @@ function deliveryEnvelopeIndicatesSessionsSendAccepted(value: unknown, depth = 0
     return true;
   }
   if (typeof record.text === "string") {
-    const parsed = parseJsonRecord(record.text);
+    const parsed = safeParseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesSessionsSendAccepted(parsed, depth + 1)) {
       return true;
     }

@@ -9,6 +9,7 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -107,7 +108,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
 
 export async function runEmbeddedAttemptSettledPhase(
   input: EmbeddedAttemptExecutionPhaseInput & {
-    getRepairedRejectedThinkingReplay: () => boolean;
+    getRepairedRejectedProviderReplay: () => boolean;
     preparedStreamRuntime: PreparedStreamRuntime;
   },
 ): Promise<EmbeddedRunAttemptWithReceiptEvidence> {
@@ -237,6 +238,7 @@ export async function runEmbeddedAttemptSettledPhase(
         toolResultPromptProjectionState,
       },
       execution: {
+        mediaOwnerAgentId: input.setup.sessionAgentId,
         effectiveFsWorkspaceOnly: input.setup.effectiveFsWorkspaceOnly,
         effectiveWorkspace: input.setup.effectiveWorkspace,
         sandbox: input.setup.sandbox,
@@ -372,8 +374,10 @@ export async function runEmbeddedAttemptSettledPhase(
     }
     let settledStream: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>;
     try {
-      if (input.getRepairedRejectedThinkingReplay() && !rewoundBeforeAgentFinalizeRevision) {
-        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+      if (input.getRepairedRejectedProviderReplay() && !rewoundBeforeAgentFinalizeRevision) {
+        activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+          sessionManager.buildSessionContext().messages,
+        );
       }
       const settleTerminal = readTerminal();
       const streamSettleState = {
@@ -432,7 +436,9 @@ export async function runEmbeddedAttemptSettledPhase(
         await input.sessionLock.withOwnedTranscriptWrite(() => {
           // Settlement classifies the completed attempt from its original
           // in-memory messages. Later work always sees the rewound branch.
-          activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+          activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+            sessionManager.buildSessionContext().messages,
+          );
         });
       }
     }
@@ -559,6 +565,7 @@ export async function runEmbeddedAttemptSettledPhase(
   if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
     settleRequesterAfterSessionSpawns({
       requesterSessionKey: attempt.sessionKey,
+      requesterAgentId: input.setup.sessionAgentId,
       requesterTurnRunId: attempt.runId,
       requesterYielded: result.yieldDetected === true,
       acceptedSessionSpawns: result.acceptedSessionSpawns,

@@ -5,15 +5,18 @@ import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
+const isImplicitLocalGatewayTargetMock = vi.fn(async () => true);
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
+  isImplicitLocalGatewayTarget: isImplicitLocalGatewayTargetMock,
 }));
 
 vi.mock("./progress.js", () => ({
   withProgress: async (_options: unknown, action: () => Promise<unknown>) => await action(),
 }));
 
-const { callGatewayFromCliRuntime } = await import("./gateway-rpc.runtime.js");
+const { callGatewayFromCliRuntime, isImplicitLocalGatewayTargetFromCliRuntime } =
+  await import("./gateway-rpc.runtime.js");
 
 describe("addGatewayClientOptions", () => {
   it.each([
@@ -168,5 +171,23 @@ describe("callGatewayFromCliRuntime", () => {
         signal: controller.signal,
       }),
     );
+  });
+});
+
+describe("isImplicitLocalGatewayTargetFromCliRuntime", () => {
+  it("forwards CLI target options to the canonical Gateway classifier", async () => {
+    isImplicitLocalGatewayTargetMock.mockResolvedValueOnce(false);
+
+    await expect(
+      isImplicitLocalGatewayTargetFromCliRuntime({
+        url: "ws://127.0.0.1:18789",
+        token: "token",
+      }),
+    ).resolves.toBe(false);
+    expect(isImplicitLocalGatewayTargetMock).toHaveBeenCalledWith({
+      config: undefined,
+      url: "ws://127.0.0.1:18789",
+      localPortOverride: undefined,
+    });
   });
 });

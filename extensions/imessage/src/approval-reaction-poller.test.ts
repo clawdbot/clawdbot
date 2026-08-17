@@ -150,7 +150,9 @@ describe("iMessage approval reaction poller", () => {
   it("does not scan recent chats during fast polling with no pending targets", async () => {
     const request = vi.fn();
 
-    await pollPendingIMessageApprovalReactions(buildPollParams(request));
+    await pollPendingIMessageApprovalReactions(
+      buildPollParams(request, { allowRecentChatDiscovery: true }),
+    );
 
     expect(request).not.toHaveBeenCalled();
   });
@@ -166,164 +168,32 @@ describe("iMessage approval reaction poller", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("discovers observed approval prompts on the bounded recent-chat path", async () => {
-    const request = createRpcRequest([buildApprovalMessage()], [42]);
+  it("discovers typed handle-only targets through recent chat history", async () => {
+    registerTarget({
+      conversation: { handle: APPROVER },
+    });
+    const request = createRpcRequest([buildApprovalMessage()], [DEFAULT_CHAT_ID]);
 
     await pollPendingIMessageApprovalReactions(
       buildPollParams(request, { allowRecentChatDiscovery: true }),
     );
 
     expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
+    expect(request).toHaveBeenCalledWith(
+      "messages.history",
+      { chat_id: DEFAULT_CHAT_ID, limit: 30 },
+      { timeoutMs: 10_000 },
+    );
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(),
       approvalId: "exec-1",
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
-      senderId: "+15551230000",
+      senderId: APPROVER,
       gatewayUrl: undefined,
     });
-  });
-
-  it("bounds no-target recent-chat discovery to one pass per account", async () => {
-    const request = createRpcRequest([], [42]);
-
-    const pollParams = buildPollParams(request, { allowRecentChatDiscovery: true });
-
-    await pollPendingIMessageApprovalReactions(pollParams);
-    await pollPendingIMessageApprovalReactions(pollParams);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
-    expect(request).toHaveBeenCalledWith(
-      "messages.history",
-      { chat_id: 42, limit: 30 },
-      { timeoutMs: 10_000 },
-    );
-  });
-
-  it("bounds no-target discovery after resolving an observed reaction", async () => {
-    const request = vi.fn(async (method: string, payload?: { chat_id?: number }) => {
-      if (method === "chats.list") {
-        return { chats: [{ id: 42 }, { id: 99 }] };
-      }
-      if (method === "messages.history" && payload?.chat_id === 42) {
-        return { messages: [buildApprovalMessage()] };
-      }
-      if (method === "messages.history" && payload?.chat_id === 99) {
-        return { messages: [] };
-      }
-      throw new Error(`unexpected request ${method} ${JSON.stringify(payload)}`);
-    });
-
-    const pollParams = buildPollParams(request, { allowRecentChatDiscovery: true });
-
-    await pollPendingIMessageApprovalReactions(pollParams);
-    await pollPendingIMessageApprovalReactions(pollParams);
-
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(1);
-    expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(2);
-    expect(request).toHaveBeenCalledWith(
-      "messages.history",
-      { chat_id: 99, limit: 30 },
-      { timeoutMs: 10_000 },
-    );
-  });
-
-  it("retries no-target discovery after resolver failures expire observed targets", async () => {
-    resolverMocks.resolveApprovalOverGateway.mockRejectedValue(new Error("gateway down"));
-    const request = createRpcRequest([buildApprovalMessage()], [42]);
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-
-    try {
-      const pollParams = buildPollParams(request, { allowRecentChatDiscovery: true });
-
-      await pollPendingIMessageApprovalReactions(pollParams);
-      dateNow.mockReturnValue(1_800_000_301_000);
-      await pollPendingIMessageApprovalReactions(pollParams);
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
-  });
-
-  [
-    {
-      title: "retries no-target recent-chat discovery after the first chat list fails",
-      failingMethod: "chats.list",
-      errorMessage: "temporary imsg failure",
-      pollCount: 2,
-      expectFirstPollToReject: true,
-      expectedChatLists: 2,
-      expectedHistories: 1,
-    },
-    {
-      title: "retries no-target recent-chat discovery after the first history fetch fails",
-      failingMethod: "messages.history",
-      errorMessage: "temporary history failure",
-      pollCount: 3,
-      expectFirstPollToReject: false,
-      expectedChatLists: 2,
-      expectedHistories: 2,
-    },
-  ].forEach((testCase) => {
-    it(testCase.title, async () => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "chats.list") {
-          if (testCase.failingMethod !== method) {
-            return { chats: [{ id: 42 }] };
-          }
-        }
-        if (method !== "chats.list" && method !== "messages.history") {
-          throw new Error(`unexpected method ${method}`);
-        }
-        const methodCalls = request.mock.calls.filter(([calledMethod]) => calledMethod === method);
-        if (testCase.failingMethod === method && methodCalls.length === 1) {
-          throw new Error(testCase.errorMessage);
-        }
-        return method === "chats.list" ? { chats: [{ id: 42 }] } : { messages: [] };
-      });
-
-      const pollParams = buildPollParams(request, { allowRecentChatDiscovery: true });
-      const poll = () => pollPendingIMessageApprovalReactions(pollParams);
-
-      if (testCase.expectFirstPollToReject) {
-        await expect(poll()).rejects.toThrow(testCase.errorMessage);
-      } else {
-        await poll();
-      }
-      for (let index = 1; index < testCase.pollCount; index += 1) {
-        await poll();
-      }
-
-      expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(
-        testCase.expectedChatLists,
-      );
-      expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(
-        testCase.expectedHistories,
-      );
-    });
-  });
-
-  it("does not bind observed approval prompts when the process clock is invalid", async () => {
-    const request = createRpcRequest(
-      [buildApprovalMessage({ text: "Exec approval required\nID: exec-1" })],
-      [42],
-    );
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-
-    try {
-      await pollPendingIMessageApprovalReactions(
-        buildPollParams(request, { allowRecentChatDiscovery: true }),
-      );
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
   it("uses learned chat ids for fast scoped polling after discovery", async () => {
@@ -343,78 +213,6 @@ describe("iMessage approval reaction poller", () => {
       { chat_id: 42, limit: 30 },
       { timeoutMs: 10_000 },
     );
-  });
-
-  it("includes recent chats during discovery when scoped and unscoped targets are pending", async () => {
-    registerTarget({
-      conversation: { chatId: 42, chatGuid: "SMS;-;+15551230000" },
-      messageId: "msg-scoped",
-      approvalId: "exec-scoped",
-    });
-    registerTarget({
-      conversation: { handle: "+15551239999" },
-      messageId: "msg-handle",
-      approvalId: "exec-handle",
-    });
-    const request = vi.fn(async (method: string, payload?: { chat_id?: number }) => {
-      if (method === "chats.list") {
-        return { chats: [{ id: 42 }, { id: 99 }] };
-      }
-      if (method === "messages.history" && payload?.chat_id === 42) {
-        return { messages: [] };
-      }
-      if (method === "messages.history" && payload?.chat_id === 99) {
-        return {
-          messages: [
-            buildApprovalMessage({
-              guid: "msg-handle",
-              chat_id: 99,
-              chat_guid: "SMS;-;+15551239999",
-              chat_identifier: "+15551239999",
-              sender: "+15551239999",
-              text: "Exec approval required\nID: exec-handle",
-              reactions: [
-                buildReaction({
-                  id: 8,
-                  sender: "+15551239999",
-                  is_from_me: true,
-                  created_at: "2026-05-27T21:01:00.000Z",
-                }),
-              ],
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected request ${method} ${JSON.stringify(payload)}`);
-    });
-
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, {
-        cfg: buildApprovalConfig("+15551239999"),
-        allowRecentChatDiscovery: true,
-      }),
-    );
-
-    expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
-    expect(request).toHaveBeenCalledWith(
-      "messages.history",
-      { chat_id: 42, limit: 30 },
-      { timeoutMs: 10_000 },
-    );
-    expect(request).toHaveBeenCalledWith(
-      "messages.history",
-      { chat_id: 99, limit: 30 },
-      { timeoutMs: 10_000 },
-    );
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
-      cfg: buildApprovalConfig("+15551239999"),
-      approvalId: "exec-handle",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "imessage",
-      senderId: "+15551239999",
-      gatewayUrl: undefined,
-    });
   });
 
   it("continues scanning after an unauthorized reaction leaves the approval pending", async () => {
@@ -456,6 +254,7 @@ describe("iMessage approval reaction poller", () => {
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(APPROVER),
       approvalId: "exec-1",
       approvalKind: "exec",
@@ -563,6 +362,7 @@ describe("iMessage approval reaction poller", () => {
 
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(APPROVER),
       approvalId: "exec-1",
       approvalKind: "exec",

@@ -31,6 +31,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     sessionObserver,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
+    getPortalService,
     terminalLaunchPolicy,
     execApprovalManager,
     cancelRunBoundApprovals,
@@ -56,15 +57,16 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     nodeUnsubscribeAll,
     hasTalkNodeConnected,
     clients,
+    isConnectionActive,
     watchNodeHttpRuntime,
     sharedGatewaySessionGenerationState,
     resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
-    completeControlUiDeviceAuthMigrationForEffectiveOperator,
-    claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
+    nodeDesktopService,
     workerEnvironmentService,
+    hostDesktopService,
     workerEnvironmentStartup,
+    workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
     agentRunSeq,
@@ -94,10 +96,12 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
+    gatewayTls,
     lifecycle,
     startupState,
     clearFallbackGatewayContextForServer,
     kernel,
+    shutdownRuntime,
   } = runtime;
   const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: getRuntimeConfig,
@@ -111,9 +115,11 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
+      gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
       getMcpAppSandboxPort,
       ensureSandboxHostPort,
+      getPortalService,
       resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
       isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       execApprovalManager,
@@ -143,6 +149,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       nodeUnsubscribeAll,
       hasConnectedTalkNode: hasTalkNodeConnected,
       clients,
+      isConnectionActive,
       invalidateDeviceTransports: watchNodeHttpRuntime.invalidateSessionsForDevice,
       disconnectDeviceTransports: watchNodeHttpRuntime.disconnectSessionsForDevice,
       enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => {
@@ -153,16 +160,15 @@ export async function prepareGatewayKernelRequestRuntime(params: {
           clients,
         });
       },
-      completeControlUiDeviceAuthMigration:
-        completeControlUiDeviceAuthMigrationForEffectiveOperator,
-      claimControlUiDeviceAuthMigration: (deviceId: string) =>
-        claimControlUiDeviceAuthMigration(deviceId, { env: process.env }),
-      releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
-        releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
+      ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
+      ...(hostDesktopService ? { hostDesktopService } : {}),
       ...(workerEnvironmentStartup
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
+        : {}),
+      ...(workerPlacementRuntime
+        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
@@ -209,6 +215,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
     gatewayRequestContext,
+    flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;

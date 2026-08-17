@@ -445,6 +445,28 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 
+  it("preserves isolated source-checkout output for an external plugin", () => {
+    const repoRoot = makeRepoRoot("openclaw-external-plugin-local-dist-meta-");
+    createPlugin(repoRoot, {
+      id: "sms",
+      packageName: "@openclaw/sms",
+      packageOpenClaw: {
+        extensions: ["./index.ts"],
+        build: { bundledDist: false },
+        release: { publishToNpm: true },
+      },
+    });
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "sms");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(distPluginDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(distPluginDir, "openclaw.plugin.json"))).toBe(true);
+    expect(readBundledPackageJson(repoRoot, "sms").openclaw?.extensions).toEqual(["./index.js"]);
+  });
+
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-runtime-support-");
     const pluginDir = path.join(repoRoot, "extensions", "image-generation-core");

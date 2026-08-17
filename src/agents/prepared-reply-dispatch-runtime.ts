@@ -24,7 +24,14 @@ function createReplyDispatchRuntime(
       `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
     );
   }
-  return Object.freeze({ ...owner, inboundPluginRegistry });
+  return Object.freeze({
+    agentId: owner.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    config: owner.config,
+    modelCatalog: owner.modelCatalog,
+    inboundPluginRegistry,
+  });
 }
 
 function buildReplyDispatchPublication(

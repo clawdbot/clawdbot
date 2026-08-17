@@ -21,6 +21,24 @@ export function validateWorkerProviderContract(
     return { ok: false, message: "worker provider registration renew must be a function" };
   }
   if (
+    provider.listMachineOptions !== undefined &&
+    typeof provider.listMachineOptions !== "function"
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration listMachineOptions must be a function",
+    };
+  }
+  if (
+    provider.provisionBeforeInstallation !== undefined &&
+    typeof provider.provisionBeforeInstallation !== "boolean"
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration provisionBeforeInstallation must be a boolean",
+    };
+  }
+  if (
     provider.resolveSshIdentity !== undefined &&
     typeof provider.resolveSshIdentity !== "function"
   ) {

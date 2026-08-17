@@ -28,8 +28,16 @@ import type {
 } from "openclaw/plugin-sdk/reply-runtime";
 import ts from "typescript";
 import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
+import {
+  buildPluginSdkPackageExports,
+  deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
+  pluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
+  publicPluginSdkSubpaths as pluginSdkSubpaths,
+} from "../../../scripts/lib/plugin-sdk-entries.mts";
 import type {
+  ChannelMessageActionContext,
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,
@@ -51,13 +59,6 @@ import type {
 } from "../../plugin-sdk/channel-plugin-common.js";
 import * as channelReplyPipelineDirectSdk from "../../plugin-sdk/channel-reply-pipeline.js";
 import * as coreDirectSdk from "../../plugin-sdk/core.js";
-import {
-  buildPluginSdkPackageExports,
-  deprecatedPublicPluginSdkEntrypoints,
-  pluginSdkEntrypoints,
-  privateLocalOnlyPluginSdkEntrypoints,
-  publicPluginSdkSubpaths as pluginSdkSubpaths,
-} from "../../plugin-sdk/entrypoints.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
@@ -139,17 +140,6 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
       "normalizeHexColor",
     ],
   },
-  {
-    subpath: "browser-host-inspection",
-    artifactBasename: "browser-host-inspection.js",
-    mentions: [
-      "loadBundledPluginPublicSurfaceModuleSyncCore",
-      "resolveGoogleChromeExecutableForPlatform",
-      "readBrowserVersion",
-      "parseBrowserMajorVersion",
-    ],
-    omits: ["findFirstChromeExecutable", "findGoogleChromeExecutableLinux", "execText"],
-  },
 ];
 
 const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
@@ -180,16 +170,6 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
-    ],
-  },
-  {
-    corePath: "src/plugin-sdk/browser-host-inspection.ts",
-    extensionPath: "extensions/browser/browser-host-inspection.ts",
-    expectedExports: [
-      "BrowserExecutable",
-      "parseBrowserMajorVersion",
-      "readBrowserVersion",
-      "resolveGoogleChromeExecutableForPlatform",
     ],
   },
 ];
@@ -519,10 +499,19 @@ describe("plugin-sdk subpath exports", () => {
     expect(docs).toContain("private-local entries explicitly");
 
     for (const subpath of pluginSdkSubpaths) {
-      expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`);
+      expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
+        types: `./dist/plugin-sdk/${subpath}.d.ts`,
+        default: `./dist/plugin-sdk/${subpath}.js`,
+      });
     }
+    const packagedPrivateSubpaths = new Set(packagedPrivatePluginSdkRuntimeEntrypoints);
     for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
-      expect(packageExports).not.toHaveProperty(`./plugin-sdk/${subpath}`);
+      const packageExport = packageExports[`./plugin-sdk/${subpath}`];
+      if (packagedPrivateSubpaths.has(subpath)) {
+        expect(packageExport).toEqual({ default: `./dist/plugin-sdk/${subpath}.js` });
+      } else {
+        expect(packageExport).toBeUndefined();
+      }
     }
     for (const subpath of deprecatedPublicPluginSdkEntrypoints) {
       expect(pluginSdkSubpaths).toContain(subpath);
@@ -657,7 +646,6 @@ describe("plugin-sdk subpath exports", () => {
       "createChannelHistoryWindow",
       "recordPendingHistoryEntryIfEnabled",
     ]);
-    expectSourceMentions("matrix", ["runPluginCommandWithTimeout"]);
     expectSourceContract("reply-runtime", {
       omits: [
         "buildPendingHistoryContextFromMap",
@@ -683,25 +671,6 @@ describe("plugin-sdk subpath exports", () => {
         "SecretTargetRegistryEntry",
       ],
       omits: ["collectNestedChannelTtsAssignments"],
-    });
-    expectSourceContract("channel-secret-runtime", {
-      mentions: [
-        "collectSimpleChannelFieldAssignments",
-        "collectConditionalChannelFieldAssignments",
-        "collectSecretInputAssignment",
-        "getChannelSurface",
-        "pushAssignment",
-        "pushInactiveSurfaceWarning",
-        "ResolverContext",
-        "SecretTargetRegistryEntry",
-      ],
-      omits: [
-        "buildChannelMetadata",
-        "buildUntrustedChannelMetadata",
-        "evaluateSupplementalContextVisibility",
-        "resolvePinnedMainDmOwnerFromAllowlist",
-        "safeMatchRegex",
-      ],
     });
     expectSourceContract("channel-secret-tts-runtime", {
       mentions: ["collectNestedChannelTtsAssignments"],
@@ -1144,14 +1113,14 @@ describe("plugin-sdk subpath exports", () => {
       "shouldAckReaction",
       "DEFAULT_EMOJIS",
     ]);
-    expectSourceOmits("channel-feedback", [
+    // The load-only WhatsApp bridge lives in the barrel for published
+    // pre-#121257 artifacts; the owner file stays free of channel policy.
+    expectSourceMentions("channel-feedback", [
       "shouldAckReactionForWhatsApp",
       "WhatsAppAckReactionMode",
     ]);
     expectRepoSourceOmitsSnippet("src/channels/ack-reactions.ts", "shouldAckReactionForWhatsApp");
     expectRepoSourceOmitsSnippet("src/channels/ack-reactions.ts", "WhatsAppAckReactionMode");
-    expectSourceMentions("channel-streaming", ["SlackChannelStreamingConfig"]);
-    expectRepoSourceOmitsSnippet("src/channels/streaming.ts", "SlackChannelStreamingConfig");
     expectSourceMentions("status-helpers", [
       "appendMatchMetadata",
       "asString",
@@ -1286,15 +1255,10 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedAgentCompactResult"]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
-    expectSourceOmitsSnippet("google-model-id", "./google.js");
-    expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
-    expectSourceOmitsSnippet("google-model-id", "../../extensions/");
-    expectSourceMentions("xiaomi", ["./facade-runtime.js"]);
-    expectSourceOmitsSnippet("xiaomi", "./facade-loader.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");

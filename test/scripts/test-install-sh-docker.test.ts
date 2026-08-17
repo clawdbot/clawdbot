@@ -1978,13 +1978,23 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
         },
       );
 
+      // The descendant's pid file can be observed created-but-empty between its
+      // open() and write(); readiness must require parseable content, not
+      // existence, or the integer assertion below flakes on loaded runners.
+      const readDescendantPid = () => {
+        if (!existsSync(descendantPidPath)) {
+          return null;
+        }
+        const pid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+        return Number.isInteger(pid) && pid > 0 ? pid : null;
+      };
       try {
         await waitForCondition(
-          () => existsSync(readyPath) && existsSync(descendantPidPath),
+          () => existsSync(readyPath) && readDescendantPid() !== null,
           "Bun global smoke descendant readiness",
         );
-        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        descendantPid = readDescendantPid() ?? 0;
+        expect(descendantPid).toBeGreaterThan(0);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
         runner.kill("SIGTERM");

@@ -1,3 +1,5 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -8,7 +10,7 @@ import {
  * Applies service-tier and cache-control markers only when provider endpoint
  * capabilities allow them.
  */
-import { resolveProviderRequestCapabilities } from "./host-policy.js";
+import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -23,19 +25,78 @@ type AnthropicPayloadPolicyInput = {
   api?: string;
   baseUrl?: string;
   cacheRetention?: "short" | "long" | "none";
+  contextWindow?: unknown;
   enableCacheControl?: boolean;
+  enableServerCompaction?: boolean;
+  extraParams?: Record<string, unknown>;
   provider?: string;
   serviceTier?: AnthropicServiceTier;
 };
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+const ANTHROPIC_COMPACT_THRESHOLD_MIN = 50_000;
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicPayloadPolicy = {
   allowsServiceTier: boolean;
   cacheControl: AnthropicEphemeralCacheControl | undefined;
+  compactThreshold: number;
   serviceTier: AnthropicServiceTier | undefined;
+  useServerCompaction: boolean;
 };
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
+}
+
+/** Resolve the Anthropic input-token trigger, including the API's minimum. */
+function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: unknown): number {
+  const configuredThreshold = parsePositiveInteger(configured);
+  if (configuredThreshold !== undefined) {
+    return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, configuredThreshold);
+  }
+  const resolvedContextWindow = parsePositiveInteger(contextWindow);
+  return Math.max(
+    ANTHROPIC_COMPACT_THRESHOLD_MIN,
+    resolvedContextWindow === undefined
+      ? ANTHROPIC_COMPACT_THRESHOLD_MIN
+      : Math.floor(resolvedContextWindow * 0.7),
+  );
+}
+
+/** Resolve the server-compaction gate and effective threshold for an Anthropic route. */
+export function resolveAnthropicServerCompactionPlan(
+  model: {
+    provider?: unknown;
+    api?: unknown;
+    baseUrl?: string;
+    contextWindow?: unknown;
+  },
+  extraParams?: Record<string, unknown>,
+): { enabled: boolean; threshold?: number } {
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const api = normalizeOptionalLowercaseString(model.api);
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const enabled =
+    extraParams?.anthropicServerCompaction === true &&
+    provider === "anthropic" &&
+    api === "anthropic-messages" &&
+    (endpointClass === "default" || endpointClass === "anthropic-public");
+  return {
+    enabled,
+    ...(enabled
+      ? {
+          threshold: resolveAnthropicCompactThreshold(
+            model.contextWindow,
+            extraParams?.anthropicCompactThreshold,
+          ),
+        }
+      : {}),
+  };
+}
 
 function resolveBaseUrlHostname(baseUrl: string): string | undefined {
   try {
@@ -244,6 +305,7 @@ export function resolveAnthropicPayloadPolicy(
     capability: "llm",
     transport: "stream",
   });
+  const serverCompactionPlan = resolveAnthropicServerCompactionPlan(input, input.extraParams);
 
   return {
     allowsServiceTier: capabilities.allowsAnthropicServiceTier,
@@ -251,7 +313,14 @@ export function resolveAnthropicPayloadPolicy(
       input.enableCacheControl === true
         ? resolveAnthropicEphemeralCacheControl(input.baseUrl, input.cacheRetention)
         : undefined,
+    compactThreshold:
+      serverCompactionPlan.threshold ??
+      resolveAnthropicCompactThreshold(
+        input.contextWindow,
+        input.extraParams?.anthropicCompactThreshold,
+      ),
     serviceTier: input.serviceTier,
+    useServerCompaction: input.enableServerCompaction === true && serverCompactionPlan.enabled,
   };
 }
 
@@ -273,6 +342,17 @@ export function applyAnthropicPayloadPolicyToParams(
     applyAnthropicCacheControlToSystem(payloadObj.system, policy.cacheControl);
   } else {
     stripAnthropicSystemPromptBoundary(payloadObj.system);
+  }
+
+  if (policy.useServerCompaction && payloadObj.context_management === undefined) {
+    payloadObj.context_management = {
+      edits: [
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: policy.compactThreshold },
+        },
+      ],
+    };
   }
 
   if (!policy.cacheControl) {

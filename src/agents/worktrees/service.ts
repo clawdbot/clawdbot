@@ -5,8 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
-import { isMissingPathError } from "../../infra/errors.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
+import {
+  executeGitCommand as runGit,
+  requireGitCommand as requireGit,
+  requireGitCommandBuffer as requireGitBuffer,
+} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -19,9 +23,6 @@ import {
   listGitWorktrees,
   worktreePathExists,
   removeEmptyParents,
-  requireGit,
-  requireGitBuffer,
-  runGit,
   type GitResult,
 } from "./git.js";
 import { worktreeNameAllocationFamily } from "./name.js";

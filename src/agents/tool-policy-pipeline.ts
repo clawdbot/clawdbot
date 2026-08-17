@@ -3,10 +3,11 @@
  * stay tied to the layer that introduced them, while plugin groups are
  * expanded only after unknown core/plugin entries are classified.
  */
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
-import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
+import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -137,7 +138,6 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   toolMeta: (tool: TTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
-  auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
   onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
 }): TTool[] {
@@ -160,6 +160,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     }
 
     let policy: ToolPolicyLike | undefined = step.policy;
+    const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
       const resolved = analyzeAllowlistByToolType(
@@ -206,7 +207,13 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       policy = resolved.policy;
     }
 
-    const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded =
+      frozenAllow && policy
+        ? {
+            allow: policy.allow,
+            deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+          }
+        : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }
@@ -218,7 +225,6 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       policy: expanded,
       before,
       after: filtered,
-      logLevel: params.auditLogLevel,
     });
   }
   return filtered;

@@ -1,28 +1,29 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderDockDestinations } from "../dock-destination-controls.ts";
+import { icons } from "../icons.ts";
+import { renderPanelEmptyState } from "../panel-empty-state.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 const BACK_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5" /></svg>`;
 const FORWARD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5" /></svg>`;
 const RELOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" /></svg>`;
-const EXTERNAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5H3.5v9h9V9.5M9.5 3h3.5v3.5M12.8 3.2L7.5 8.5" /></svg>`;
 const PENCIL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.3 2.7l2 2L5 13H3v-2z" /></svg>`;
 const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l5.5 10 1.2-4.3L14 7.5z" /></svg>`;
 
 export type BrowserPanelDock = "bottom" | "right";
 
-function renderTabStrip(controller: BrowserPanelController) {
+function renderTabStrip(controller: BrowserPanelController, embedded: boolean) {
   return renderBrowserPanelTabs({
     tabs: controller.tabs,
     activeTargetId: controller.activeTargetId,
     onSelect: (targetId) => void controller.selectTab(targetId),
     onClose: (targetId) => controller.closeTab(targetId),
     onNew: () => controller.beginNewTab(),
+    hideNewControl: embedded,
   });
 }
 
@@ -34,27 +35,29 @@ function renderHeaderActions(
 ) {
   const activeUrl = controller.view?.metrics?.url || controller.view?.url || controller.urlDraft;
   return html`
-    <div class="bp-actions">
+    <div class="rail-header__actions bp-actions">
+      ${renderDockDestinations({
+        current: dock,
+        groupClass: "bp-dock-modes",
+        groupLabel: t("browser.title"),
+        destinations: [
+          {
+            dock: "bottom",
+            label: t("browser.dockBottom"),
+            icon: icons.panelBottomOpen,
+            className: "bp-icon",
+          },
+          {
+            dock: "right",
+            label: t("browser.dockRight"),
+            icon: icons.panelRightOpen,
+            className: "bp-icon",
+          },
+        ],
+        onSelect: onDockChange,
+      })}
       <button
-        class="bp-icon ${dock === "bottom" ? "is-active" : ""}"
-        type="button"
-        title=${t("browser.dockBottom")}
-        aria-label=${t("browser.dockBottom")}
-        @click=${() => onDockChange("bottom")}
-      >
-        ${DOCK_BOTTOM_GLYPH}
-      </button>
-      <button
-        class="bp-icon ${dock === "right" ? "is-active" : ""}"
-        type="button"
-        title=${t("browser.dockRight")}
-        aria-label=${t("browser.dockRight")}
-        @click=${() => onDockChange("right")}
-      >
-        ${DOCK_RIGHT_GLYPH}
-      </button>
-      <button
-        class="bp-icon"
+        class="rail-header__action bp-icon"
         type="button"
         title=${t("browser.openExternal")}
         aria-label=${t("browser.openExternal")}
@@ -65,25 +68,36 @@ function renderHeaderActions(
           }
         }}
       >
-        ${EXTERNAL_GLYPH}
+        ${icons.externalLink}
       </button>
       <button
-        class="bp-icon"
+        class="rail-header__action bp-icon"
         type="button"
-        title=${t("browser.hide")}
-        aria-label=${t("browser.hide")}
+        title=${t("browser.close")}
+        aria-label=${t("browser.close")}
         @click=${onClose}
       >
-        ${CLOSE_GLYPH}
+        ${icons.x}
       </button>
     </div>
   `;
 }
 
-function renderToolbar(controller: BrowserPanelController) {
+function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   const hasView = Boolean(controller.view);
   return html`
     <div class="bp-toolbar">
+      ${embedded
+        ? html`<button
+            class="bp-icon"
+            type="button"
+            title=${t("browser.newTab")}
+            aria-label=${t("browser.newTab")}
+            @click=${() => controller.beginNewTab()}
+          >
+            ${icons.plus}
+          </button>`
+        : nothing}
       <button
         class="bp-icon"
         type="button"
@@ -246,25 +260,25 @@ function renderInspectTooltip(controller: BrowserPanelController) {
 
 function renderViewportContent(controller: BrowserPanelController) {
   if (controller.running === false) {
-    return html`
-      <div class="bp-status">
-        <span>${t("browser.notRunning")}</span>
-        <button
-          class="bp-btn bp-btn--primary"
-          type="button"
-          @click=${() => void controller.startBrowserNow()}
-        >
+    return renderPanelEmptyState({
+      icon: icons.globe,
+      heading: t("chat.sidePanel.browser"),
+      description: t("browser.notRunning"),
+      action: html`
+        <button class="bp-btn" type="button" @click=${() => void controller.startBrowserNow()}>
           ${t("browser.start")}
         </button>
-      </div>
-    `;
+      `,
+    });
   }
   if (!controller.view) {
-    return html`
-      <div class="bp-status">
-        <span>${controller.loading ? t("browser.loading") : t("browser.empty")}</span>
-      </div>
-    `;
+    return controller.loading
+      ? html`<div class="bp-status"><span>${t("browser.loading")}</span></div>`
+      : renderPanelEmptyState({
+          icon: icons.globe,
+          heading: t("chat.sidePanel.browser"),
+          description: t("chat.sidePanel.browserEmpty"),
+        });
   }
   const overlayMode =
     controller.mode === "annotate"
@@ -322,16 +336,23 @@ export function renderBrowserPanelChrome(
   onDockChange: (dock: BrowserPanelDock) => void,
   onClose: () => void,
   resizer: TemplateResult | typeof nothing,
+  embedded = false,
 ) {
-  const style = dock === "bottom" ? `height:${height}px` : `width:${width}px`;
+  const style = embedded ? nothing : dock === "bottom" ? `height:${height}px` : `width:${width}px`;
   return html`
-    <section class="bp bp--${dock}" style=${style} aria-label=${t("browser.title")}>
-      ${resizer}
-      <header class="bp-header">
-        ${renderTabStrip(controller)}
-        ${renderHeaderActions(controller, dock, onDockChange, onClose)}
-      </header>
-      ${renderToolbar(controller)} ${renderAnnotateBar(controller)}
+    <section
+      class="bp bp--${embedded ? "embedded" : dock}"
+      style=${style}
+      aria-label=${t("browser.title")}
+    >
+      ${embedded ? nothing : resizer}
+      ${embedded && controller.tabs.length === 0
+        ? nothing
+        : html`<header class="rail-header bp-header">
+            ${renderTabStrip(controller, embedded)}
+            ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
+          </header>`}
+      ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
       ${controller.errorText
         ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
         : controller.noticeText

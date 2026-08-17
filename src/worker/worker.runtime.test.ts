@@ -808,8 +808,8 @@ class FakeWorkerGateway {
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
   return {
-    version: 2,
-    socketPath,
+    version: 3,
+    connectionEndpoint: { kind: "unix", socketPath },
     admission: {
       environmentId: "worker-environment",
       credential: CREDENTIAL,
@@ -1026,7 +1026,7 @@ describe("worker runtime", () => {
       silenceSessionSpawnResponses: 2,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1451,7 +1451,7 @@ describe("worker reconnect clients", () => {
   it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
     const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
     });
     let healthyReadyCalls = 0;
@@ -1474,7 +1474,7 @@ describe("worker reconnect clients", () => {
   it("fails closed when the overall admission deadline expires", async () => {
     const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       admissionTimeoutMs: 25,
       admissionDeadlineMs: 250,
@@ -1499,7 +1499,7 @@ describe("worker reconnect clients", () => {
   it("times out a silent admission attempt and admits on reconnect", async () => {
     const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       admissionTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1518,7 +1518,7 @@ describe("worker reconnect clients", () => {
       heartbeatIntervalMs: 1,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1538,7 +1538,7 @@ describe("worker reconnect clients", () => {
       silenceFirstInference: true,
     });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 40,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1559,9 +1559,14 @@ describe("worker reconnect clients", () => {
           timestamp: 1,
         },
       ]);
-      await live.emit(RUN_ID, {
+      live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: "silent live event", delta: "silent live event" },
+      });
+      await waitForFast(() => expect(gateway.liveEventRequests).toHaveLength(2));
+      await live.emitTerminal(RUN_ID, {
+        kind: "lifecycle",
+        payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
       });
       await inference.start({
         runEpoch: OWNER_EPOCH,
@@ -1575,7 +1580,7 @@ describe("worker reconnect clients", () => {
 
       expect(gateway.transcriptRequests).toHaveLength(2);
       expect(gateway.transcriptRequests[1]).toEqual(gateway.transcriptRequests[0]);
-      expect(gateway.liveEventRequests).toHaveLength(2);
+      expect(gateway.liveEventRequests).toHaveLength(3);
       expect(gateway.liveEventRequests[1]).toEqual(gateway.liveEventRequests[0]);
       expect(gateway.inferenceRequests).toHaveLength(2);
       expect(gateway.inferenceRequests[1]).toEqual(gateway.inferenceRequests[0]);
@@ -1590,7 +1595,7 @@ describe("worker reconnect clients", () => {
   it("settles an in-flight commit and a later live emit after stop", async () => {
     const { gateway, launch } = await setup({ silenceFirstTranscript: true });
     const connection = createWorkerConnection({
-      socketPath: gateway.socketPath,
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
       requestTimeoutMs: 5_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
@@ -1623,10 +1628,14 @@ describe("worker reconnect clients", () => {
       await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
 
       live = new WorkerLiveEventClient(connection, { runEpoch: OWNER_EPOCH });
+      live.enqueuePreview(RUN_ID, {
+        kind: "assistant",
+        payload: { text: "late live event", delta: "late live event" },
+      });
       await expect(
-        live.emit(RUN_ID, {
-          kind: "assistant",
-          payload: { text: "late live event", delta: "late live event" },
+        live.emitTerminal(RUN_ID, {
+          kind: "lifecycle",
+          payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
         }),
       ).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
       expect(waitForReady.mock.calls.length).toBeLessThanOrEqual(2);

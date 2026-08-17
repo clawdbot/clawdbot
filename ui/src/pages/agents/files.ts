@@ -6,6 +6,7 @@ import type {
   AgentsFilesListResult,
   AgentsFilesSetResult,
 } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 type AgentFilesState = {
   client: GatewayBrowserClient | null;
@@ -75,7 +76,7 @@ export async function loadAgentFileContent(
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = String(err);
+      state.agentFilesError = formatUiError(err);
     }
     return false;
   } finally {
@@ -91,10 +92,10 @@ export async function saveAgentFile(
   agentId: string,
   name: string,
   content: string,
-) {
+): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected || state.agentFileSaving) {
-    return;
+    return false;
   }
   const generation = state.requestGeneration;
   const isCurrent = () =>
@@ -115,14 +116,17 @@ export async function saveAgentFile(
       if (!Object.hasOwn(state.agentFileDrafts, name) || state.agentFileDrafts[name] === content) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
+      return true;
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = String(err);
+      state.agentFilesError = formatUiError(err);
     }
+    return false;
   } finally {
     if (isCurrent()) {
       state.agentFileSaving = false;
     }
   }
+  return false;
 }

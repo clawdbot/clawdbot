@@ -68,11 +68,16 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       maxChars?: number;
     };
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-    const requestedAgentId = resolveRequestedChatAgentId({
+    const requestedAgent = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: sessionKey,
       agentId: agentIdOverride,
     });
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
     const { cfg, storePath, entry } = loadGatewaySessionEntryReadOnly(
       sessionKey,

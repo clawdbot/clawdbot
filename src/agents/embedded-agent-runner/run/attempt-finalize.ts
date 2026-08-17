@@ -3,13 +3,13 @@
  * It may assume stream execution and transcript writes are settled.
  */
 
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -278,6 +278,7 @@ export async function completeEmbeddedAttemptAfterTurn(
             withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
             config: attempt.config,
             agentId: runtime.sessionAgentId,
+            contextEngineAgentId: attempt.contextEngineAgentId,
           }),
         sessionManager: transcript.sessionManager,
         config: attempt.config,

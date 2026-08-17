@@ -634,7 +634,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
-  it("bounds stalled microphone appends and aborts every owner on stop", async () => {
+  it("fails visibly when stalled microphone appends reach the ownership cap", async () => {
     const onStatus = vi.fn();
     const client = createClient();
     let activeAppends = 0;
@@ -673,7 +673,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
     expect(appendCalls).toHaveLength(4);
     expect(peakActiveAppends).toBe(4);
-    expect(activeAppends).toBe(4);
     expect(new Set(appendSignals).size).toBe(1);
     expect(
       appendCalls.every(
@@ -681,14 +680,15 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       ),
     ).toBe(true);
 
-    transport.stop();
-    transport.stop();
     await Promise.resolve();
 
     expect(activeAppends).toBe(0);
     expect(appendSignals.every((signal) => signal.aborted)).toBe(true);
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-    expect(onStatus).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime Talk audio input fell behind");
+
+    transport.stop();
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
   it("preserves accepted microphone frame order", async () => {

@@ -64,6 +64,12 @@ export const projectProofArtifactDir = path.join(
   "control-ui-e2e",
   "project-registry",
 );
+const environmentMetadataProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "environment-metadata",
+);
 
 export async function prepareProjectUiProof() {
   if (captureUiProofEnabled) {
@@ -158,6 +164,19 @@ export async function captureProjectUiProof(page: Page, fileName: string) {
   });
 }
 
+export async function captureEnvironmentMetadataUiProof(page: Page) {
+  const proofName = process.env.OPENCLAW_ENVIRONMENT_METADATA_PROOF;
+  if (proofName !== "before" && proofName !== "after") {
+    return;
+  }
+  await mkdir(environmentMetadataProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(environmentMetadataProofArtifactDir, `${proofName}.png`),
+  });
+}
+
 export async function pastePng(target: Locator, count = 1) {
   await target.evaluate(
     (element, { base64, fileCount }) => {
@@ -216,7 +235,7 @@ export async function waitForCommittedChatRoute(page: Page) {
 }
 
 export async function choosePackagesFolder(page: Page) {
-  await page.locator("#new-session-place-trigger").click();
+  await page.locator("#new-session-project-trigger").click();
   await page.getByRole("button", { name: "Browse folders" }).click();
   await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
   await page.getByRole("button", { name: "Use this folder" }).click();

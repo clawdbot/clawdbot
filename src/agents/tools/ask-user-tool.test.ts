@@ -104,6 +104,26 @@ describe("ask_user normalization", () => {
 });
 
 describe("ask_user prompt delivery", () => {
+  it("reserves duplicate bare keys independently per agent", () => {
+    const questions = normalizeAskUserParams(validArgs).questions;
+    const research = reserveAskUserPromptDelivery({
+      toolCallId: "call-research",
+      sessionKey: "global",
+      agentId: "research",
+      questions,
+    });
+    const ops = reserveAskUserPromptDelivery({
+      toolCallId: "call-ops",
+      sessionKey: "global",
+      agentId: "ops",
+      questions,
+    });
+
+    expect(research).toBeDefined();
+    expect(ops).toBeDefined();
+    expect(research?.questionId).not.toBe(ops?.questionId);
+  });
+
   it("uses the Gateway record when the executor has isolated runtime state", async () => {
     const questions = normalizeAskUserParams(validArgs).questions;
     const reservation = reserveAskUserPromptDelivery({

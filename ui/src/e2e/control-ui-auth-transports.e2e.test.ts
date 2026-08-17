@@ -16,6 +16,7 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.js";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -470,7 +471,7 @@ async function createBrowserPage(
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  page.setDefaultTimeout(15_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   const evidenceStartIndex = proxy.evidence.length;
   const response = await page.goto(withGatewayUrl(baseUrl, gatewayUrl), {
     timeout: controlUiSettleTimeoutMs,

@@ -3,6 +3,7 @@ import type { Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -94,7 +95,7 @@ function resolvePreparedAgentSnapshot(
     ...(agentId ? { agentId } : {}),
     agentDir: resolvedAgentDir,
     config: cfg ?? {},
-    inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
   };
   const published = getPreparedModelRuntimeSnapshot({
     ...base,
@@ -121,7 +122,11 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(
+    cfg,
+    options?.workspaceDir,
+    options?.agentId,
+  );
   const preparedSnapshot =
     !options?.authStorage || !options?.modelRegistry
       ? resolvePreparedAgentSnapshot(
@@ -193,7 +198,11 @@ export async function resolveModelAsync(
   modelRegistry: ModelRegistry;
 }> {
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(
+    cfg,
+    options?.workspaceDir,
+    options?.agentId,
+  );
   const emptyDiscoveryStores =
     options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyAgentDiscoveryStores()
@@ -215,7 +224,7 @@ export async function resolveModelAsync(
           ...(options?.agentId ? { agentId: options.agentId } : {}),
           agentDir: resolvedAgentDir,
           config: cfg ?? {},
-          inheritedAuthDir: resolveDefaultAgentDir(cfg ?? {}),
+          inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
           ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
         })
       : undefined);

@@ -327,19 +327,19 @@ suite.define(() => {
         key: "agent:main:research",
       });
 
-      // Selecting a visible row must not reshuffle the list: the highlight
-      // moves while every row keeps its slot. (The mocked gateway keeps
-      // returning the same list, so the archived row stays visible here.)
-      const researchLink = sidebarResearch.locator("a").first();
-      await researchLink.click();
+      // The confirmed archive wins over the mocked Gateway's stale active row,
+      // while selecting another visible row keeps the remaining order stable.
+      await sidebarResearch.waitFor({ state: "detached" });
+      const migrationLink = sidebarMigration.locator("a").first();
+      await migrationLink.click();
       await expect
         .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath("agent:main:research"));
-      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
+        .toBe(controlUiSessionPath("agent:main:migration"));
+      await expect.poll(rowNames).toEqual(["Release planning", "Data migration"]);
       await expect
         .poll(() =>
           chatRows
-            .filter({ hasText: "Research notes" })
+            .filter({ hasText: "Data migration" })
             .first()
             .evaluate((row) => row.classList.contains("sidebar-recent-session--active")),
         )
@@ -855,9 +855,10 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-session-dropped-into-group.png");
 
       const ungrouped = page.locator('[data-session-section="ungrouped"]');
+      const ungroupedHead = ungrouped.locator(":scope > .sidebar-recent-sessions__head");
       await gamma
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-11"]')
-        .dragTo(ungrouped);
+        .dragTo(ungroupedHead, { targetPosition: { x: 4, y: 2 } });
       const ungroupedPatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:session-11" && params.category === null,

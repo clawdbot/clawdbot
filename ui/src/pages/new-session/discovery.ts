@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { RuntimeTargetIssue } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -25,19 +27,67 @@ export type DraftNode = {
   connected: boolean;
   canExec: boolean;
   canBrowse: boolean;
+  issues?: RuntimeTargetIssue[];
 };
 
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
+  trust?: "persistent" | "disposable";
+  machines?: DraftMachineOption[];
+};
+
+export type DraftMachineOption = {
+  id: string;
+  label: string;
+  description?: string;
+  default?: boolean;
 };
 
 export type DraftEnvironment = {
   id: string;
   type: "local" | "node" | "worker";
+  platform?: string;
+  sessionHost?: boolean;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
+  trust?: "persistent" | "disposable";
+  capabilities?: string[];
+  issues?: RuntimeTargetIssue[];
 };
 
 export type BrowserTarget = { nodeId: string; label: string };
+
+export function draftNodeUpdateIssue(node: DraftNode): RuntimeTargetIssue | undefined {
+  return node.issues?.find((issue) => issue.code === "update-required");
+}
+
+export function isDraftNodeSessionEligible(node: DraftNode): boolean {
+  return node.canExec && node.connected && draftNodeUpdateIssue(node) === undefined;
+}
+
+function normalizeTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefined {
+  const issues = (Array.isArray(value) ? value : []).flatMap<RuntimeTargetIssue>((raw) => {
+    if (!isRecord(raw)) {
+      return [];
+    }
+    return raw.code === "update-required" &&
+      raw.action === "update-and-reconnect" &&
+      raw.updateCommand === "openclaw update" &&
+      raw.headlessReconnectCommand === "openclaw node restart"
+      ? [raw as RuntimeTargetIssue]
+      : [];
+  });
+  return issues.length > 0 ? issues : undefined;
+}
 
 export function readDraftNodes(value: unknown): DraftNode[] {
   const rawNodes = Array.isArray(value) ? value : [];
@@ -55,6 +105,7 @@ export function readDraftNodes(value: unknown): DraftNode[] {
         remoteIp?: unknown;
         connected?: unknown;
         commands?: unknown;
+        issues?: unknown;
       };
       const nodeId = normalizeOptionalString(node.nodeId);
       const commands = Array.isArray(node.commands)
@@ -64,7 +115,8 @@ export function readDraftNodes(value: unknown): DraftNode[] {
         return [];
       }
       const connected = node.connected === true;
-      const canExec = connected && commands.includes("system.run");
+      const canExec = commands.includes("system.run");
+      const issues = readRuntimeTargetIssues(node.issues);
       return [
         {
           nodeId,
@@ -75,7 +127,8 @@ export function readDraftNodes(value: unknown): DraftNode[] {
           remoteIp: normalizeOptionalString(node.remoteIp),
           connected,
           canExec,
-          canBrowse: canExec && commands.includes("fs.listDir"),
+          canBrowse: connected && canExec && commands.includes("fs.listDir"),
+          ...(issues ? { issues } : {}),
         },
       ];
     })
@@ -95,15 +148,44 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       const profile = raw as {
         id?: unknown;
         providerId?: unknown;
+        trust?: unknown;
+        machines?: unknown;
       };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
       if (!id || !providerId) {
         return [];
       }
-      return [{ id, providerId }];
+      const trust: DraftCloudProfile["trust"] =
+        profile.trust === "persistent" || profile.trust === "disposable"
+          ? profile.trust
+          : undefined;
+      const machines = readDraftMachineOptions(profile.machines);
+      return [{ id, providerId, trust, ...(machines.length > 0 ? { machines } : {}) }];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
+  const options = new Map<string, DraftMachineOption>();
+  for (const raw of (Array.isArray(value) ? value : []).slice(0, 32)) {
+    if (!isRecord(raw)) {
+      continue;
+    }
+    const id = normalizeOptionalString(raw.id);
+    const label = normalizeOptionalString(raw.label);
+    if (!id || id.length > 128 || !label || label.length > 128 || options.has(id)) {
+      continue;
+    }
+    const description = normalizeOptionalString(raw.description);
+    options.set(id, {
+      id,
+      label,
+      ...(description && description.length <= 512 ? { description } : {}),
+      ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
+    });
+  }
+  return [...options.values()];
 }
 
 export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
@@ -115,13 +197,49 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const environment = raw as {
         id?: unknown;
         type?: unknown;
+        platform?: unknown;
+        sessionHost?: unknown;
+        lastConnectedAtMs?: unknown;
+        lastDisconnectedAtMs?: unknown;
+        lastSeenAtMs?: unknown;
+        lastSeenReason?: unknown;
+        trust?: unknown;
+        capabilities?: unknown;
+        issues?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
       if (!id || (type !== "local" && type !== "node" && type !== "worker")) {
         return [];
       }
-      return [{ id, type }];
+      const platform = normalizeOptionalString(environment.platform);
+      const trust: DraftEnvironment["trust"] =
+        environment.trust === "persistent" || environment.trust === "disposable"
+          ? environment.trust
+          : undefined;
+      const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
+      const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
+      const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
+      const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
+      const issues = readRuntimeTargetIssues(environment.issues);
+      return [
+        {
+          id,
+          type,
+          ...(platform ? { platform } : {}),
+          ...(typeof environment.sessionHost === "boolean"
+            ? { sessionHost: environment.sessionHost }
+            : {}),
+          ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
+          ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
+          ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),
+          ...(lastSeenReason ? { lastSeenReason } : {}),
+          ...(trust ? { trust } : {}),
+          ...(capabilities ? { capabilities } : {}),
+          ...(issues ? { issues } : {}),
+        },
+      ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

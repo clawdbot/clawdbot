@@ -376,9 +376,139 @@ describe("createClackPrompter", () => {
 
     await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
     expect(clackMocks.cancel).not.toHaveBeenCalled();
-    expect(clackMocks.text).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
+    const signal = clackMocks.text.mock.calls[0]?.[0].signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "ordinary",
+      run: () => createClackPrompter().confirm({ message: "Continue?" }),
+      mock: clackMocks.confirm,
+    },
+    {
+      label: "navigation-aware",
+      run: () =>
+        createClackPrompter().select({
+          message: "Pick",
+          options: [{ value: "one", label: "One" }],
+          navigation: { canGoBack: true, canGoForward: false },
+        }),
+      mock: navigationPromptMocks.selectWithNavigationFooter,
+    },
+  ])("turns stdin EOF into wizard cancellation for $label prompts", async ({ run, mock }) => {
+    const initialEndListeners = process.stdin.listenerCount("end");
+    const initialKeypressListeners = process.stdin.listenerCount("keypress");
+    mock.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<symbol>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+        }),
     );
+    clackMocks.isCancel.mockReturnValueOnce(true);
+
+    const prompt = run();
+    await Promise.resolve();
+    process.stdin.emit("end");
+
+    await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+    expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+    expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+  });
+
+  it("lets Clack own Ctrl-D finalization before the wrapper aborts", async () => {
+    const initialEndListeners = process.stdin.listenerCount("end");
+    const initialKeypressListeners = process.stdin.listenerCount("keypress");
+    const finalize = vi.fn();
+    const restoreRawMode = vi.fn();
+    const writeNewline = vi.fn();
+
+    clackMocks.confirm.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<symbol>((resolve) => {
+          const finish = () => {
+            finalize();
+            restoreRawMode(false);
+            writeNewline("\n");
+            process.stdin.off("keypress", onClackKeypress);
+            resolve(Symbol("clack:cancel"));
+          };
+          const onClackKeypress = (input: string | undefined) => {
+            if (input === "\x04") {
+              finish();
+            }
+          };
+          process.stdin.on("keypress", onClackKeypress);
+          signal?.addEventListener("abort", finish, { once: true });
+        }),
+    );
+    clackMocks.isCancel.mockReturnValueOnce(true);
+
+    const prompt = createClackPrompter().confirm({ message: "Continue?" });
+    await Promise.resolve();
+    process.stdin.emit("keypress", "\x04", { ctrl: true, name: "d" });
+
+    await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(restoreRawMode).toHaveBeenCalledOnce();
+    expect(writeNewline).toHaveBeenCalledOnce();
+    expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+    expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+  });
+
+  it("lets Clack settle final piped input before the stdin end fallback", async () => {
+    const initialEndListeners = process.stdin.listenerCount("end");
+    const initialKeypressListeners = process.stdin.listenerCount("keypress");
+    const finalize = vi.fn();
+    const restoreRawMode = vi.fn();
+    const writeNewline = vi.fn();
+    const cleanup = vi.fn();
+
+    clackMocks.confirm.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<boolean>((resolve) => {
+          const finish = () => {
+            finalize();
+            restoreRawMode(false);
+            writeNewline("\n");
+            cleanup();
+          };
+          const onEnd = () => {
+            finish();
+            resolve(true);
+          };
+          process.stdin.once("end", onEnd);
+          signal?.addEventListener("abort", finish, { once: true });
+        }),
+    );
+
+    const prompt = createClackPrompter().confirm({ message: "Continue?" });
+    await Promise.resolve();
+    process.stdin.emit("data", "y\n");
+    process.stdin.emit("end");
+
+    await expect(prompt).resolves.toBe(true);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(restoreRawMode).toHaveBeenCalledOnce();
+    expect(writeNewline).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+    expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+  });
+
+  it("keeps Ctrl-C cancellation on Clack's canonical path", async () => {
+    clackMocks.confirm.mockResolvedValue(Symbol("clack:cancel"));
+    clackMocks.isCancel.mockReturnValueOnce(true);
+
+    await expect(createClackPrompter().confirm({ message: "Continue?" })).rejects.toBeInstanceOf(
+      WizardCancelledError,
+    );
+
+    expect(clackMocks.cancel).toHaveBeenCalledOnce();
   });
 
   it("rejects navigation after Clack resolves an aborted prompt", async () => {
@@ -420,7 +550,7 @@ describe("createClackPrompter", () => {
     expect(navigationPromptMocks.textWithNavigationFooter).toHaveBeenCalledWith(
       expect.objectContaining({
         navigation: { canGoBack: false, canGoForward: false },
-        signal: undefined,
+        signal: expect.any(AbortSignal),
       }),
     );
   });

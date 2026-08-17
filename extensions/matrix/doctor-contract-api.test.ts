@@ -765,7 +765,7 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
-  it("records an empty legacy scan and then skips historical databases", async () => {
+  it("records an empty legacy scan silently and then skips historical databases", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
     const params = createMigrationParams(stateDir);
@@ -773,10 +773,10 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
       preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
     });
+    // Fresh installs scan nothing: the durable receipt is recorded (proven by
+    // the historical-database skip below) without a user-visible change line.
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
-      changes: [
-        "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 0 JSON roots scanned)",
-      ],
+      changes: [],
       warnings: [],
     });
     const lateDatabasePath = path.join(

@@ -3,7 +3,7 @@ import type { EnvironmentsListResult } from "../../../../packages/gateway-protoc
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
+import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
 import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
 
 export async function requestPlaceCatalog(
@@ -21,6 +21,7 @@ type SessionMenuItemOptions = {
   label: string;
   icon?: unknown;
   sub?: string;
+  facts?: readonly string[];
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -45,9 +46,33 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         : nothing}
       <span class="session-menu__text">${params.label}</span>
       ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
+      ${params.facts?.length
+        ? html`<span class="new-session-page__menu-facts">
+            ${params.facts.map(
+              (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+            )}
+          </span>`
+        : nothing}
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
+    </button>
+  `;
+}
+
+export function renderConnectMachineMenuItem(params: { disabled: boolean; onSelect: () => void }) {
+  return html`
+    <div class="session-menu__separator" role="separator"></div>
+    <button
+      type="button"
+      class="session-menu__item new-session-page__connect-machine"
+      data-value="connect-machine"
+      aria-pressed="false"
+      ?disabled=${params.disabled}
+      @click=${params.onSelect}
+    >
+      <span class="session-menu__icon" aria-hidden="true">${icons.link}</span>
+      <span class="session-menu__text">${t("newSession.connectMachine")}</span>
     </button>
   `;
 }
@@ -67,6 +92,12 @@ export function renderCloudProfileMenuItems(params: {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
         icon: params.icon,
+        facts:
+          profile.trust === "disposable"
+            ? [t("newSession.environmentDisposable")]
+            : profile.trust === "persistent"
+              ? [t("newSession.environmentPersistent")]
+              : undefined,
         checked: params.selectedId === profile.id,
         disabled: params.disabled,
         title:
@@ -74,6 +105,28 @@ export function renderCloudProfileMenuItems(params: {
             ? params.disabledReason
             : t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
+      },
+      params.submitting,
+    ),
+  );
+}
+
+export function renderCloudMachineMenuItems(params: {
+  machines: readonly DraftMachineOption[];
+  selectedId: string;
+  submitting: boolean;
+  onSelect: (machineId: string) => void;
+}) {
+  return params.machines.map((machine) =>
+    renderSessionMenuItem(
+      {
+        value: `machine:${machine.id}`,
+        label: machine.label,
+        sub: machine.description,
+        facts: machine.default ? [t("newSession.machineDefault")] : undefined,
+        checked: params.selectedId === machine.id,
+        keepOpen: true,
+        onSelect: () => params.onSelect(machine.id),
       },
       params.submitting,
     ),

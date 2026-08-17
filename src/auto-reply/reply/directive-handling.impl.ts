@@ -1,6 +1,5 @@
 /** Applies directive-only command state changes without running the agent. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
@@ -9,7 +8,6 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -54,9 +52,9 @@ import {
   resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
+import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import type { ReasoningLevel, ThinkLevel } from "./directives.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 /** Handles inline directives that can be acknowledged without a model turn. */
 export async function handleDirectiveOnly(
@@ -110,20 +108,8 @@ export async function handleDirectiveOnly(
       "hasTraceDirective",
     );
   }
-  const activeAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const agentDir = resolveAgentDir(params.cfg, activeAgentId);
-  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
-    cfg: params.cfg,
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-  });
-  const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: runtimePolicySessionKey,
-  }).sandboxed;
+  const { activeAgentId, agentDir, runtimePolicySessionKey, runtimeIsSandboxed } =
+    resolveDirectiveRuntimeContext(params);
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0

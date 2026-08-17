@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Control UI startup settings resolve native auth handoff and URL parameters.
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
@@ -5,7 +6,6 @@ import {
   type ControlUiBootstrapProfileHint,
 } from "../../../src/gateway/control-ui-contract.js";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import type { UiSettings } from "./settings.ts";
 
 type ApplicationStartupLocation = {

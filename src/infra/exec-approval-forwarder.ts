@@ -181,6 +181,7 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
 
 function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): ExecApprovalRequest {
   return {
+    approvalKind: "exec",
     id: SYNTHETIC_APPROVAL_REQUEST_ID,
     request: {
       command: "",

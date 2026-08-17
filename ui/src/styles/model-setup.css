@@ -433,6 +433,7 @@
 
 .model-setup-wizard {
   display: grid;
+  min-width: 0;
   max-height: min(720px, calc(100dvh - 48px));
   overflow: hidden;
   border: 1px solid var(--border);
@@ -453,6 +454,8 @@
 
 .model-setup-wizard__body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 14px;
   overflow: auto;
 }

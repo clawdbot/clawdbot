@@ -4,11 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 
@@ -42,7 +44,20 @@ const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const createAgentHarnessHostCapabilitiesMock = vi.fn();
+const closeAgentHarnessHostCapabilitiesMock = vi.fn();
+const agentHarnessHostCapabilitiesMock: AgentHarnessHostCapabilities = Object.freeze({
+  kind: "agent-harness-host-capability",
+  version: 1,
+  assertActive: vi.fn(),
+  bindToolSurface: vi.fn((tools) => tools),
+  runBeforeToolCall: vi.fn(),
+  requestApproval: vi.fn(),
+  waitForApproval: vi.fn(),
+});
+const listSessionEntriesCoreMock = vi.fn();
+const loadSessionEntryMock = vi.fn();
 const loadTranscriptEventsMock = vi.fn();
+const builtInOpenClawHarnesses = new WeakSet<object>();
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => false);
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
 const resolveProviderEntryApiKeyProfileReferenceMock = vi.fn((_params?: unknown): unknown => ({
@@ -203,17 +218,30 @@ vi.mock("./harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
-vi.mock("./harness/host-capability.js", async () => {
-  const actual = await vi.importActual<typeof import("./harness/host-capability.js")>(
-    "./harness/host-capability.js",
-  );
+// Selection and host-capability owner suites execute the embedded runner and capability surface.
+// BTW only needs their identities while it verifies side-question orchestration.
+vi.mock("./harness/builtin-openclaw.js", () => ({
+  createOpenClawAgentHarness: (): AgentHarness => {
+    const harness: AgentHarness = {
+      id: "openclaw",
+      label: "OpenClaw embedded agent",
+      supports: () => ({ supported: true, priority: 0 }),
+      runAttempt: vi.fn(),
+    };
+    builtInOpenClawHarnesses.add(harness);
+    return harness;
+  },
+  isBuiltInOpenClawAgentHarness: (harness: AgentHarness) => builtInOpenClawHarnesses.has(harness),
+}));
+
+vi.mock("./harness/host-capability.js", () => {
   return {
-    ...actual,
-    createAgentHarnessHostCapabilities: (
-      params: Parameters<typeof actual.createAgentHarnessHostCapabilities>[0],
-    ) => {
+    createAgentHarnessHostCapabilities: (params: unknown) => {
       createAgentHarnessHostCapabilitiesMock(params);
-      return actual.createAgentHarnessHostCapabilities(params);
+      return {
+        capabilities: agentHarnessHostCapabilitiesMock,
+        close: closeAgentHarnessHostCapabilitiesMock,
+      };
     },
   };
 });
@@ -236,6 +264,52 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
 }));
 
+// Provider ownership and public-surface loading have dedicated owner suites. BTW stubs those
+// boundaries so its orchestration tests do not rediscover every plugin.
+vi.mock("../plugins/providers.js", () => ({
+  resolveProviderRefOwnership: () => ({ status: "unowned" as const }),
+}));
+
+vi.mock("../plugins/provider-policy-surface.js", () => ({
+  // Provider route policy has dedicated adapter and OpenAI owner suites. BTW needs only a
+  // deterministic route fixture so orchestration tests do not load plugin public surfaces.
+  resolveDirectBundledProviderPolicySurface: (provider: string) => {
+    if (provider.trim().toLowerCase() !== "openai") {
+      return null;
+    }
+    return {
+      normalizeModelCatalogId: ({ modelId }: { modelId: string }) => modelId,
+      resolveModelRoutes: ({
+        requestTransportOverrides = "none",
+      }: ProviderResolveModelRoutesContext) => {
+        const compatibleIds =
+          requestTransportOverrides === "none" ? ["openclaw", "codex"] : ["openclaw"];
+        return {
+          kind: "routes" as const,
+          defaultRuntimeId: requestTransportOverrides === "none" ? "codex" : "openclaw",
+          routes: [
+            {
+              api: "openai-responses" as const,
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key" as const,
+              requestTransportOverrides,
+              runtimePolicy: { compatibleIds },
+            },
+            {
+              api: "openai-chatgpt-responses" as const,
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              authRequirement: "subscription" as const,
+              requestTransportOverrides,
+              runtimePolicy: { compatibleIds },
+            },
+          ],
+        };
+      },
+    };
+  },
+  resolveTrustedExternalProviderPolicySurface: () => null,
+}));
+
 vi.mock("./provider-stream.js", () => ({
   registerProviderStreamForModel: (...args: unknown[]) =>
     registerProviderStreamForModelMock(...args),
@@ -256,15 +330,11 @@ vi.mock("../logging/diagnostic.js", () => ({
   },
 }));
 
-vi.mock("../config/sessions/session-accessor.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-    "../config/sessions/session-accessor.js",
-  );
-  return {
-    ...actual,
-    loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
-  };
-});
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesCoreMock(...args),
+  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+  loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
+}));
 
 const { runBtwSideQuestion } = await import("./btw.js");
 const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
@@ -626,6 +696,11 @@ describe("runBtwSideQuestion", () => {
     diagDebugMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset();
     createAgentHarnessHostCapabilitiesMock.mockReset();
+    closeAgentHarnessHostCapabilitiesMock.mockReset();
+    listSessionEntriesCoreMock.mockReset();
+    listSessionEntriesCoreMock.mockReturnValue([]);
+    loadSessionEntryMock.mockReset();
+    loadSessionEntryMock.mockReturnValue(undefined);
     loadTranscriptEventsMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
@@ -849,6 +924,8 @@ describe("runBtwSideQuestion", () => {
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
+      authorityRunId: "btw-side-authority",
+      opts: { runId: "parent-correlation" },
       sandboxSessionKey: "agent:main:runtime-policy",
       agentAccountId: "account-1",
       groupId: "group-1",
@@ -882,12 +959,28 @@ describe("runBtwSideQuestion", () => {
         senderName: "Rosita",
         senderUsername: "rosita",
         senderE164: "+15550001",
+        opts: { runId: "btw-side-authority" },
         runtimeModel: expect.objectContaining({
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
         }),
       }),
     );
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toHaveProperty(
+      "hostCapabilities",
+      agentHarnessHostCapabilitiesMock,
+    );
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: expect.objectContaining({
+          admittedRunContext: expect.objectContaining({
+            operationalRunInstance: expect.objectContaining({ runId: "btw-side-authority" }),
+          }),
+          runId: "btw-side-authority",
+        }),
+      }),
+    );
+    expect(closeAgentHarnessHostCapabilitiesMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "openai",
       "gpt-5.5",
@@ -900,6 +993,13 @@ describe("runBtwSideQuestion", () => {
           inlineProviderModels: [],
         }),
       }),
+    );
+    const preparedModelRuntime = (
+      mockArg(resolveModelAsyncMock, 0, 4) as { preparedModelRuntime?: unknown }
+    ).preparedModelRuntime;
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toHaveProperty(
+      "preparedModelRuntime",
+      preparedModelRuntime,
     );
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
@@ -1191,55 +1291,7 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
-  it("keeps a model-locked session on its persisted harness for BTW", async () => {
-    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Locked Codex answer." });
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex test harness",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(),
-      runSideQuestion: codexSideQuestionMock,
-    });
-
-    const result = await runSideQuestion({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
-      sessionEntry: createSessionEntry({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-      }),
-      authorityRunId: "btw-side-authority",
-      opts: { runId: "parent-correlation" },
-    });
-
-    expect(result).toEqual({ text: "Locked Codex answer." });
-    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
-    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({
-      opts: { runId: "btw-side-authority" },
-    });
-    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempt: expect.objectContaining({ runId: "btw-side-authority" }),
-      }),
-    );
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentHarnessId: "codex" }),
-    );
-    expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ agentHarnessRuntimeOverride: expect.anything() }),
-    );
-    expect(streamSimpleMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
-  });
-
-  it("uses registry ownership rather than declared harness metadata for BTW approvals", async () => {
+  it("uses registry ownership and closes host capabilities when a BTW hook rejects", async () => {
     registerAgentHarness(
       {
         id: "spoofed",
@@ -1247,16 +1299,17 @@ describe("runBtwSideQuestion", () => {
         pluginId: "codex",
         supports: () => ({ supported: true, priority: 100 }),
         runAttempt: vi.fn(),
-        runSideQuestion: vi.fn().mockResolvedValue({ text: "Registry-owned answer." }),
+        runSideQuestion: vi.fn().mockRejectedValue(new Error("side question failed")),
       },
       { ownerPluginId: "actual-owner" },
     );
 
-    await expect(runSideQuestion()).resolves.toEqual({ text: "Registry-owned answer." });
+    await expect(runSideQuestion()).rejects.toThrow("side question failed");
 
     expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
       expect.objectContaining({ pluginId: "actual-owner" }),
     );
+    expect(closeAgentHarnessHostCapabilitiesMock).toHaveBeenCalledOnce();
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -1394,34 +1447,6 @@ describe("runBtwSideQuestion", () => {
       messageProvider: "telegram",
       groupId: "deny-room",
       senderId: "restricted-sender",
-    });
-
-    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
-    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
-  });
-
-  it("prepares a narrow global policy before calling a plugin side-question hook", async () => {
-    const codexSideQuestionMock = registerCodexSideQuestionHarness();
-    mockOpenAIPlatformProfile();
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-    });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    });
-
-    await runSideQuestion({
-      cfg: { tools: { allow: ["message"] } } as never,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionKey: DEFAULT_SESSION_KEY,
     });
 
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
@@ -2509,6 +2534,37 @@ describe("runBtwSideQuestion", () => {
     });
     expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+  });
+
+  it("rejects a supplied session key that disagrees with an incomplete SQLite marker target", async () => {
+    const markerStorePath = "/tmp/marker-sessions.sqlite";
+    listSessionEntriesCoreMock.mockReturnValue([
+      {
+        sessionKey: "agent:main:matching",
+        entry: createSessionEntry(),
+      },
+    ]);
+    loadSessionEntryMock.mockReturnValue(createSessionEntry({ sessionId: "different-session" }));
+
+    await expect(
+      runMathSideQuestion({
+        sessionEntry: createSessionEntry({
+          sessionFile: `sqlite:main:session-1:${markerStorePath}`,
+        }),
+        storePath: undefined,
+      }),
+    ).rejects.toThrow("No active session context.");
+
+    expect(listSessionEntriesCoreMock).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: markerStorePath,
+    });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: markerStorePath,
+    });
+    expect(loadTranscriptEventsMock).not.toHaveBeenCalled();
   });
 
   it("falls back when the active run snapshot leaf no longer exists", async () => {

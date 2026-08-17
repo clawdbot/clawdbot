@@ -70,7 +70,8 @@
             "cli": {
               "flags": "--use-env",
               "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL"
-            }
+            },
+            "envVars": ["BUZZ_PRIVATE_KEY"]
           }
         ]
       }

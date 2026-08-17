@@ -25,6 +25,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
 const MIN_MULTICHUNK_RESTORE_BYTES = 2 * 1024 * 1024;
+const COMPACTION_FIXTURE_ROWS = 12;
+const COMPACTION_PAYLOAD_BYTES = 256 * 1024;
+const VACUUM_PROOF_ROWS = 64;
 
 function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
@@ -187,7 +190,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
-    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=7");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=5");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
@@ -197,8 +200,8 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(result.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     expect(result.stdout).not.toContain("=missing");
     const firstReport = JSON.parse(fs.readFileSync(output, "utf8")) as ReliabilityReport;
-    expect(firstReport.concurrentRestoresVerified).toBe(4);
-    expect(firstReport.restoresVerified).toBe(7);
+    expect(firstReport.concurrentRestoresVerified).toBe(2);
+    expect(firstReport.restoresVerified).toBe(5);
     expect(
       firstReport.crashRecoveryProof.exit.code !== null ||
         firstReport.crashRecoveryProof.exit.signal !== null,
@@ -256,7 +259,9 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.transactionProof.heldRows).toBeGreaterThan(0);
     expect(firstReport.transactionProof.visibleAfterRestore).toBe(false);
     expect(firstReport.writer.rowsCommitted).toBeGreaterThan(0);
-    expect(firstReport.maintenanceProof.bloatBytes).toBeGreaterThan(0);
+    expect(firstReport.maintenanceProof.bloatBytes).toBe(
+      VACUUM_PROOF_ROWS * COMPACTION_PAYLOAD_BYTES,
+    );
     expect(firstReport.maintenanceProof.compaction.autoVacuum.after).toBe(2);
     expect(firstReport.maintenanceProof.compaction.freelistPages.before).toBeGreaterThan(0);
     expect(firstReport.maintenanceProof.compaction.freelistPages.after).toBe(0);
@@ -276,6 +281,11 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.maintenanceProof.vacuumInterruption.payloadAfterRecovery).toEqual(
       firstReport.maintenanceProof.vacuumInterruption.payloadBeforeKill,
     );
+    expect(firstReport.maintenanceProof.vacuumInterruption.payloadBeforeKill).toEqual({
+      bytes: VACUUM_PROOF_ROWS * COMPACTION_PAYLOAD_BYTES,
+      idSum: (VACUUM_PROOF_ROWS * (VACUUM_PROOF_ROWS + 1)) / 2,
+      rows: VACUUM_PROOF_ROWS,
+    });
     expect(firstReport.maintenanceProof.vacuumInterruption.stateAfterRecovery).toEqual(
       firstReport.maintenanceProof.vacuumInterruption.stateBeforeKill,
     );
@@ -342,6 +352,11 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.maintenanceProof.repositoryInterruption.pending.payload).toEqual(
       firstReport.maintenanceProof.repositoryInterruption.afterCommit.payload,
     );
+    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending.payload).toEqual({
+      bytes: COMPACTION_FIXTURE_ROWS * COMPACTION_PAYLOAD_BYTES,
+      idSum: (COMPACTION_FIXTURE_ROWS * (COMPACTION_FIXTURE_ROWS + 1)) / 2,
+      rows: COMPACTION_FIXTURE_ROWS,
+    });
     expect(firstReport.maintenanceProof.restoreInterruption.snapshotBytes).toBeGreaterThan(
       MIN_MULTICHUNK_RESTORE_BYTES,
     );
@@ -365,7 +380,11 @@ describe("scripts/bench-sqlite-reliability", () => {
     ).toEqual(firstReport.maintenanceProof.postCompact.state);
     expect(
       firstReport.maintenanceProof.restoreInterruption.beforePublish.payloadAfterRecovery,
-    ).toEqual(firstReport.maintenanceProof.vacuumInterruption.payloadBeforeKill);
+    ).toEqual({
+      bytes: COMPACTION_FIXTURE_ROWS * COMPACTION_PAYLOAD_BYTES,
+      idSum: (COMPACTION_FIXTURE_ROWS * (COMPACTION_FIXTURE_ROWS + 1)) / 2,
+      rows: COMPACTION_FIXTURE_ROWS,
+    });
     expect(firstReport.maintenanceProof.restoreInterruption.afterPublish).toMatchObject({
       existingTargetPreserved: true,
       recoveryVerified: true,

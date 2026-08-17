@@ -18,6 +18,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
+import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
 import * as telegramRequestTimeouts from "./request-timeouts.js";
 
 describe("Telegram supergroup ingress with a stalled Bot API response body", () => {
@@ -94,6 +95,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     };
     const params: RegisterTelegramHandlerParams = {
       accountId: "default",
+      ownerAgentId: "main",
       bot,
       cfg: {},
       mediaMaxBytes: 1,
@@ -111,20 +113,34 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
     };
     const authorizeInboundMessage = vi.fn<
       ReturnType<typeof createTelegramHandlerAuthorization>["authorizeInboundMessage"]
-    >(async (inbound) => ({
-      allowed: true as const,
-      effectiveDmAllow: emptyAllow,
-      context: {
-        cfg: {},
-        telegramCfg: {},
-        allowFrom: [],
-        dmPolicy: "open" as const,
-        threadSpec: inbound.isGroup ? ({ scope: "none" } as const) : ({ scope: "dm" } as const),
-        storeAllowFrom: [],
-        effectiveGroupAllow: emptyAllow,
-        hasGroupAllowOverride: false,
-      },
-    }));
+    >(async (inbound) => {
+      const resolver = createTelegramIngressResolver({ accountId: "default" });
+      return {
+        allowed: true as const,
+        resolveChannelIngress: async (contextBinding) =>
+          await resolver.message({
+            subject: createTelegramIngressSubject(inbound.senderId),
+            conversation: {
+              kind: inbound.isGroup ? "group" : "direct",
+              id: String(inbound.chatId),
+            },
+            contextBinding,
+            dmPolicy: "open",
+            groupPolicy: "open",
+          }),
+        effectiveDmAllow: emptyAllow,
+        context: {
+          cfg: {},
+          telegramCfg: {},
+          allowFrom: [],
+          dmPolicy: "open" as const,
+          threadSpec: inbound.isGroup ? ({ scope: "none" } as const) : ({ scope: "dm" } as const),
+          storeAllowFrom: [],
+          effectiveGroupAllow: emptyAllow,
+          hasGroupAllowOverride: false,
+        },
+      };
+    });
     const authorization = {
       ...createTelegramHandlerAuthorization(params),
       authorizeInboundMessage,

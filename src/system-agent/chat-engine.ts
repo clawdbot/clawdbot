@@ -51,6 +51,8 @@ export type SystemAgentChatEngineOptions = {
   surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   operatorApprovalOnly?: boolean;
+  /** Host-recorded origin for delegated create-agent proposals. */
+  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {
@@ -138,7 +140,12 @@ export class SystemAgentChatEngine {
   }
 
   seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
-    this.history.push(...turns.map((turn) => ({ ...turn })));
+    this.history.push(
+      ...turns.map((turn) => ({
+        ...turn,
+        text: turn.role === "user" ? redactSensitiveCommandText(turn.text) : turn.text,
+      })),
+    );
   }
 
   historyLength(): number {

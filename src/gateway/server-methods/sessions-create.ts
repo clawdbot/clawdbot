@@ -11,7 +11,7 @@ import {
   missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
@@ -27,10 +27,13 @@ import {
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
+import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
-import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
+import {
+  buildDashboardSessionKey,
+  createGatewaySession,
+  resolveSessionCreateModelSelection as resolveCreateTitleEntry,
+} from "../session-create-service.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
@@ -42,6 +45,7 @@ import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { registerCreatedSessionCategory } from "./session-create-category.js";
 import { captureCreatedSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
   resolveSessionCreateInitialTurn,
@@ -54,45 +58,67 @@ import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+  "sessions.create": async ({
+    req,
+    params,
+    respond,
+    context,
+    client,
+    isWebchatConnect,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
     }
     const p = params;
+    const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
+    const requestedModel = normalizeOptionalString(p.model);
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const commitGuard =
+      authority.commitGuard || sessionMutationAuthorization
+        ? () => {
+            authority.commitGuard?.();
+            sessionMutationAuthorization?.assertCurrent();
+          }
+        : undefined;
     const catalogId = normalizeOptionalString(p.catalogId);
-    if (catalogId && p.model) {
+    const catalogConflict = p.model ? "model" : p.key ? "key" : undefined;
+    if (catalogId && catalogConflict) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include model"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.create catalogId cannot include ${catalogConflict}`,
+        ),
       );
       return;
     }
-    if (catalogId && p.key) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create catalogId cannot include key"),
-      );
+    const explicitlyRequestedKey = normalizeOptionalString(p.key);
+    const explicitlyRequestedAgentId = normalizeOptionalString(p.agentId);
+    // An omitted key means the selected agent's main alias, not the compatibility owner's alias.
+    const agentSelectionKey =
+      explicitlyRequestedKey ??
+      (explicitlyRequestedAgentId
+        ? `agent:${normalizeAgentId(explicitlyRequestedAgentId)}:main`
+        : "main");
+    const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
+      cfg,
+      agentSelectionKey,
+      explicitlyRequestedAgentId,
+      { allowUnconfiguredExplicitAgent: true },
+    );
+    if (!explicitlyRequestedAgent.ok) {
+      respond(false, undefined, explicitlyRequestedAgent.error);
       return;
     }
     const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
     const catalogAgentId = catalogId
       ? normalizeAgentId(
-          normalizeOptionalString(p.agentId) ??
-            parseAgentSessionKey(catalogRequestedKey)?.agentId ??
-            resolveDefaultAgentId(cfg),
+          parseAgentSessionKey(catalogRequestedKey)?.agentId ?? explicitlyRequestedAgent.agentId,
         )
       : undefined;
-    const catalogRequestedAgent = catalogAgentId
-      ? resolveRequestedGlobalAgentId(cfg, catalogRequestedKey, catalogAgentId)
-      : undefined;
-    if (catalogRequestedAgent && !catalogRequestedAgent.ok) {
-      respond(false, undefined, catalogRequestedAgent.error);
-      return;
-    }
     const catalogTarget =
       catalogId && catalogAgentId
         ? resolveRegisteredCatalogCreateTarget(catalogId, catalogAgentId, cfg)
@@ -191,6 +217,30 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const explicitSessionLabel = normalizeOptionalString(p.label);
+    const titleAgentId = normalizeAgentId(explicitlyRequestedAgent.agentId);
+    const shouldPrepareWorktreeTitle =
+      p.worktree === true && !requestedWorktreeName && !explicitSessionLabel;
+    const deferWorktreeTitle =
+      shouldPrepareWorktreeTitle && Boolean(parentSessionKey) && !catalogTarget && !requestedModel;
+    const worktreeTitleParams = shouldPrepareWorktreeTitle
+      ? {
+          cfg,
+          agentId: titleAgentId,
+          userMessage: initialMessage ?? "",
+          attachments: initialAttachments,
+          onError: (error: unknown) =>
+            sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
+        }
+      : undefined;
+    // Known routes start before repository resolution; inherited routes wait for parent validation.
+    let worktreeTitle =
+      worktreeTitleParams && !deferWorktreeTitle
+        ? prepareWorktreeSessionTitle({
+            ...worktreeTitleParams,
+            entry: resolveCreateTitleEntry(cfg, titleAgentId, catalogTarget?.target ?? p.model),
+          })
+        : undefined;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
       const project = resolveProjectRegistry(cfg, requestedProjectId);
@@ -223,16 +273,20 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
     }
     let sessionKey = p.key;
-    let sessionAgentId = catalogAgentId ?? p.agentId;
+    let sessionAgentId =
+      catalogAgentId ??
+      explicitlyRequestedAgent.agentId ??
+      p.agentId ??
+      parseAgentSessionKey(explicitlyRequestedKey)?.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
-    let prepareLifecycle: PrepareGatewaySessionLifecycle | undefined;
+    let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
     if (sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true)) {
       const targetAgentId = normalizeAgentId(
         sessionAgentId ??
           parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-          resolveDefaultAgentId(cfg),
+          explicitlyRequestedAgent.agentId,
       );
       const targetSessionKey = sessionKey ?? `agent:${targetAgentId}:dashboard:pending`;
       const targetRuntime = resolveSandboxRuntimeStatus({
@@ -264,22 +318,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (p.worktree === true) {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
-      const explicitKey = normalizeOptionalString(p.key);
-      const requestedKey = explicitKey ?? "global";
-      const requestedAgent = resolveRequestedGlobalAgentId(cfg, requestedKey, p.agentId);
-      if (!requestedAgent.ok) {
-        respond(false, undefined, requestedAgent.error);
-        return;
-      }
+      const explicitKey = explicitlyRequestedKey;
       const agentId = normalizeAgentId(
-        requestedAgent.agentId ??
+        explicitlyRequestedAgent.agentId ??
           normalizeOptionalString(p.agentId) ??
-          parseAgentSessionKey(requestedKey)?.agentId ??
-          resolveDefaultAgentId(cfg),
+          parseAgentSessionKey(explicitKey)?.agentId,
       );
       let targetKey = explicitKey;
       let preservesUnspecifiedKey = false;
-      const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
       if (
         !targetKey &&
         parentSessionKey &&
@@ -287,12 +333,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadGatewaySessionEntryReadOnly(
-          parentSessionKey,
-          requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
-        );
+        const parentRequestedAgent = resolveRequestedGlobalAgentId(cfg, parentSessionKey, agentId);
+        if (!parentRequestedAgent.ok) {
+          respond(false, undefined, parentRequestedAgent.error);
+          return;
+        }
+        const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+          agentId: parentRequestedAgent.agentId,
+        });
         const parentAgentId = normalizeAgentId(
-          requestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
+          parentRequestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
         );
         if (
           parent.entry?.sessionId &&
@@ -337,6 +387,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       prepareLifecycle = async (lifecycleTarget) => {
         try {
+          if (deferWorktreeTitle && worktreeTitleParams) {
+            worktreeTitle = prepareWorktreeSessionTitle({
+              ...worktreeTitleParams,
+              entry: lifecycleTarget.titleModelSelection,
+            });
+          }
           const boundId = normalizeOptionalString(lifecycleTarget.entry?.worktree?.id);
           let existing = boundId ? managedWorktrees.findLiveById(boundId) : undefined;
           if (
@@ -379,23 +435,20 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             }
             sessionWorktree = existing;
           } else {
+            const generatedTitle = await worktreeTitle?.generated;
             sessionWorktree = await managedWorktrees.create({
               repoRoot: workspace,
               ownerKind: "session",
               ownerId: lifecycleTarget.key,
               name: requestedWorktreeName,
               suggestedName: slugifyWorktreeTitle(
-                normalizeOptionalString(p.label) ??
-                  buildDashboardSessionTitleSource({
-                    message: initialMessage ?? "",
-                    attachments: initialAttachments,
-                  }),
+                explicitSessionLabel ?? generatedTitle ?? worktreeTitle?.source ?? "",
               ),
               baseRef: requestedWorktreeBaseRef,
               // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
               // admin-only so this write-scoped path cannot execute gated repo scripts.
               runSetupScript: scopes.includes(ADMIN_SCOPE),
-              ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+              ...(commitGuard ? { commitGuard } : {}),
             });
             provisioned = true;
           }
@@ -458,7 +511,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (
       sessionCreation.inheritedToolPolicy &&
       spawnActorSessionKey &&
-      normalizeOptionalString(p.parentSessionKey) !== spawnActorSessionKey
+      parentSessionKey !== spawnActorSessionKey
     ) {
       respond(
         false,
@@ -474,7 +527,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const modelCatalogAgentId = normalizeAgentId(
       sessionAgentId ??
         parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-        resolveDefaultAgentId(cfg),
+        explicitlyRequestedAgent.agentId,
     );
     if (!authority.ensureActive()) {
       return;
@@ -484,14 +537,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
-      ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
+      category: p.category,
+      ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
       visibility: p.visibility,
       allowExistingModelSelection,
-      parentSessionKey: p.parentSessionKey,
+      parentSessionKey,
       spawnDepth: p.spawnDepth,
       spawnToolPolicy:
         sessionCreation.via === "spawn" && sessionCreation.inheritedToolPolicy
@@ -515,6 +569,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // A plain New Chat with no cwd must not inherit the prior session cwd.
       clearSpawnedCwd: p.worktree !== true && !sessionCwd,
       fork: p.fork,
+      forkFrom: p.forkFrom,
       succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
@@ -523,12 +578,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
-      ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+      ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
         // Session persistence already committed under the guard. Closure after
         // that point may suppress follow-on work, but cannot roll back the session.
         if (!authority.hasActive()) {
           return;
+        }
+        if (await worktreeTitle?.persist(agentId, entry, key, storePath)) {
+          emitSessionsChanged(context, { sessionKey: key, agentId, reason: "chat.title" });
         }
         await captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
         if (hasInitialTurn) {
@@ -550,7 +608,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             req,
             params: {
               sessionKey: key,
-              ...(key === "global" ? { agentId } : {}),
+              agentId,
               message: initialMessage ?? "",
               idempotencyKey: randomUUID(),
               ...(initialAttachments ? { attachments: initialAttachments } : {}),
@@ -577,6 +635,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
+    registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     if (created.resetExisting) {
       await captureCreatedSessionDiffBaseline({
         key: created.key,
@@ -616,7 +675,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       emitSessionsChanged(context, {
         sessionKey: created.key,
-        ...(created.key === "global" ? { agentId: created.agentId } : {}),
+        agentId: created.agentId,
         reason: "new",
       });
       return;
@@ -647,13 +706,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     );
     emitSessionsChanged(context, {
       sessionKey: created.key,
-      ...(created.key === "global" ? { agentId: created.agentId } : {}),
+      agentId: created.agentId,
       reason: "create",
     });
     if (runStarted) {
       emitSessionsChanged(context, {
         sessionKey: created.key,
-        ...(created.key === "global" ? { agentId: created.agentId } : {}),
+        agentId: created.agentId,
         reason: "send",
       });
     }

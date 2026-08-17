@@ -188,7 +188,7 @@ vi.mock("../../agents/thinking-runtime.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: (value: string) => value,
+  normalizeAgentId: vi.fn((value: string) => value),
 }));
 
 vi.mock("../commands-text-routing.js", () => ({

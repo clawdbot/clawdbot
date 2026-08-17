@@ -376,6 +376,8 @@ final class NodeAppModel {
         self.operatorConnected
     }
 
+    private(set) var isDesktopObserveAvailable: Bool = false
+
     private(set) var hasOperatorAdminScope: Bool = false
 
     var gatewayServerName: String?
@@ -4491,6 +4493,10 @@ extension NodeAppModel {
             }
         }
         self.setOperatorConnected(true)
+        await self.refreshDesktopObserveAvailability(
+            stableID: stableID,
+            routeGeneration: routeGeneration)
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
         self.clearOperatorGatewayConnectionProblemIfCurrent()
         GatewayDiagnostics.log(
             "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
@@ -5245,6 +5251,9 @@ extension NodeAppModel {
     func setOperatorConnected(_ connected: Bool) {
         let changed = self.operatorConnected != connected
         self.operatorConnected = connected
+        if !connected {
+            self.isDesktopObserveAvailable = false
+        }
         self.operatorStatusText = connected ? "Connected" : "Offline"
         self.refreshOperatorAdminScopeFromStore()
         guard connected else {
@@ -5274,6 +5283,24 @@ extension NodeAppModel {
             guard changed else { return }
             await self.syncWatchAppSnapshot(reason: "operator_online")
         }
+    }
+
+    private func refreshDesktopObserveAvailability(stableID: String, routeGeneration: UInt64) async {
+        // Advertised methods belong to one admitted operator route. Never let a
+        // reconnect publish support learned from the socket it replaced.
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              let route = await self.operatorGateway.currentRoute(ifGatewayID: stableID)
+        else {
+            self.isDesktopObserveAvailable = false
+            return
+        }
+        let supported = await self.operatorGateway.supportsServerMethod(
+            "desktop.observe",
+            ifCurrentRoute: route) == true
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
+        else { return }
+        self.isDesktopObserveAvailable = supported
     }
 
     func refreshOperatorAdminScopeFromStore() {

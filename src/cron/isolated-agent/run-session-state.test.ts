@@ -214,6 +214,7 @@ describe("createPersistCronSessionEntry", () => {
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "work",
       },
+      scheduledToolCallerOrigin: { kind: "local" },
       persistSessionEntry,
     });
 
@@ -226,6 +227,15 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
     expect(store[runSessionKey]?.forkSource).toBeUndefined();
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
+      kind: "local",
+    });
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",
       createdActor: { type: "system" },
@@ -239,12 +249,6 @@ describe("createPersistCronSessionEntry", () => {
         phase: "running",
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "work",
-        },
       },
     });
 

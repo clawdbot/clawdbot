@@ -1,5 +1,6 @@
 // Doctor warnings and repairs for redundant bundled plugin load path aliases.
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -11,7 +12,6 @@ import {
 } from "../../../plugins/bundled-load-path-aliases.js";
 import { resolveBundledPluginSources } from "../../../plugins/bundled-sources.js";
 import { resolveUserPath } from "../../../utils.js";
-import { asObjectRecord } from "./object.js";
 
 type BundledPluginLoadPathHit = {
   pluginId: string;
@@ -37,8 +37,8 @@ export function scanBundledPluginLoadPathMigrations(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): BundledPluginLoadPathHit[] {
-  const plugins = asObjectRecord(cfg.plugins);
-  const load = asObjectRecord(plugins?.load);
+  const plugins = asNullableRecord(cfg.plugins);
+  const load = asNullableRecord(plugins?.load);
   const rawPaths = Array.isArray(load?.paths) ? load.paths : [];
   if (rawPaths.length === 0) {
     return [];

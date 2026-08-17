@@ -50,6 +50,7 @@ const RECEIPT = {
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
   ...RECEIPT,
+  tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/worker-bundle.tgz",
 };
@@ -437,7 +438,9 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
     runActivationBarrier: async ({ activate }) => activate(),
-    runReclaimBarrier: async ({ reclaim }) => await reclaim(localWorkspace),
+    runMoveBarrier: async ({ begin }) => begin(),
+    resolveMoveDestination: async () => undefined,
+    runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(localWorkspace, begin()),
     resolveWorkspacePath: async () => localWorkspace,
     reportWorkspaceResultConflict: async () => {},
     resolveWorkspaceResultConflict: async () => undefined,
@@ -448,6 +451,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     sessionKey: SESSION_KEY,
     agentId: "main",
     profileId: PROFILE_ID,
+    executionMode: "worker-turn",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
   expect(runner.starts).toHaveLength(1);

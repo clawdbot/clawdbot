@@ -107,6 +107,50 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("does not promise update fields the curated Updates page cannot edit", () => {
+    const updateSchema = {
+      type: "object",
+      properties: {
+        update: {
+          type: "object",
+          properties: {
+            channel: { type: "string", title: "Update Channel" },
+            checkOnStart: { type: "boolean", title: "Update Check on Start" },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "update.channel": { advanced: false },
+      "update.checkOnStart": { advanced: false },
+    };
+
+    // checkOnStart renders nowhere on the Updates page (curated rows only)
+    // and the Advanced page excludes the scoped update section — a search hit
+    // would dead-end. The curated fields still match.
+    expect(
+      findSettingsSearchBlocks({
+        query: "check on start",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "update channel",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "updates",
+        search: "?section=update",
+      }),
+    ]);
+  });
+
   it("routes moved static blocks to their dedicated pages", () => {
     const security = findSettingsSearchBlocks({
       query: "exec policy",

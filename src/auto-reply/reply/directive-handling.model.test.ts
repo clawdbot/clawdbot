@@ -5,11 +5,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "../../plugins/provider-thinking.types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
 
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
@@ -25,6 +26,13 @@ const modelsCommandMock = vi.hoisted(() => ({
 }));
 const stickyModelMock = vi.hoisted(() => ({
   persistBestEffort: vi.fn(),
+}));
+const pluginPolicyMock = vi.hoisted(() => ({
+  channels: new Map<string, Pick<ChannelPlugin, "id" | "commands">>(),
+  thinkingProfiles: new Map<
+    string,
+    (context: ProviderDefaultThinkingPolicyContext) => ProviderThinkingProfile | null | undefined
+  >(),
 }));
 
 function defaultModelsCommandReply() {
@@ -235,6 +243,14 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => provider,
 }));
 
+vi.mock("../../agents/cli-backends.js", () => ({
+  isCliRuntimeModelBackendForProvider: () => false,
+  listCliRuntimeModelBackendBindings: () => [],
+  listCliRuntimeProviderIds: () => [],
+  resolveCliRuntimeCanonicalProvider: () => undefined,
+  resolveCliRuntimeModelBackendBinding: () => undefined,
+}));
+
 vi.mock("../../agents/harness/selection.js", () => ({
   selectAgentHarness: () => ({ id: "openclaw" }),
   resolveAgentHarnessPolicy: ({
@@ -280,6 +296,20 @@ vi.mock("../../agents/runtime-plan/auth.js", () => ({
   }),
 }));
 
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (id: string) => pluginPolicyMock.channels.get(id),
+}));
+
+vi.mock("../../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: ({
+    provider,
+    context,
+  }: {
+    provider: string;
+    context: ProviderDefaultThinkingPolicyContext;
+  }) => pluginPolicyMock.thinkingProfiles.get(provider)?.(context),
+}));
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -295,14 +325,10 @@ import {
   type InternalHookEvent,
 } from "../../hooks/internal-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
-let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
 let createModelVisibilityPolicy: typeof import("../../agents/model-visibility-policy.js").createModelVisibilityPolicy;
 let buildModelAliasIndex: typeof import("../../agents/model-selection.js").buildModelAliasIndex;
@@ -312,7 +338,6 @@ let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.j
 let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
 
 beforeAll(async () => {
-  ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
   ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
   ({ createModelVisibilityPolicy } = await import("../../agents/model-visibility-policy.js"));
@@ -417,14 +442,22 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   };
 }
 
-function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
-  const registry = createEmptyPluginRegistry();
-  registry.providers = providers.map((provider) => ({
-    pluginId: "test",
-    provider,
-    source: "test",
-  }));
-  setActivePluginRegistry(registry);
+function setDirectiveTestProviders(
+  providers: Array<{
+    id: string;
+    label?: string;
+    auth?: unknown[];
+    resolveThinkingProfile?: (
+      context: ProviderDefaultThinkingPolicyContext,
+    ) => ProviderThinkingProfile | null | undefined;
+  }>,
+): void {
+  pluginPolicyMock.thinkingProfiles.clear();
+  for (const provider of providers) {
+    if (provider.resolveThinkingProfile) {
+      pluginPolicyMock.thinkingProfiles.set(provider.id, provider.resolveThinkingProfile);
+    }
+  }
 }
 
 function setOpenAiRuntimeScopedUltraProvider(): void {
@@ -449,17 +482,8 @@ function setOpenAiRuntimeScopedUltraProvider(): void {
 
 beforeEach(() => {
   vi.useRealTimers();
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
-    resolveRuntimeCliBackends: () => [],
-  });
   setDirectiveTestProviders([]);
+  pluginPolicyMock.channels.clear();
   modelsCommandMock.resolveModelsCommandReply
     .mockReset()
     .mockResolvedValue(defaultModelsCommandReply());
@@ -480,8 +504,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
+  pluginPolicyMock.channels.clear();
   clearRuntimeAuthProfileStoreSnapshots();
   clearInternalHooks();
 });
@@ -877,20 +901,12 @@ describe("/model chat UX", () => {
   );
 
   it("includes the thinking level in channel-specific model summaries", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "test",
-        plugin: {
-          id: "telegram",
-          commands: {
-            buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
-          },
-        },
-        source: "test",
+    pluginPolicyMock.channels.set("telegram", {
+      id: "telegram",
+      commands: {
+        buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
       },
-    ] as never;
-    setActivePluginRegistry(registry);
+    });
 
     const reply = await resolveModelInfoReply({ surface: "telegram" });
 
@@ -1696,14 +1712,7 @@ describe("/model chat UX", () => {
           contextTokens: 272_000,
         },
       ],
-      cfg: {
-        ...baseConfig(),
-        agents: {
-          defaults: {
-            contextTokens: 1_000_000,
-          },
-        },
-      } as OpenClawConfig,
+      cfg: baseConfig() as OpenClawConfig,
     });
 
     expect(persisted.contextTokens).toBe(272_000);
@@ -2252,6 +2261,24 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "opencode",
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels:
+            modelId === "claude-opus-4-7"
+              ? [
+                  { id: "off" },
+                  { id: "minimal" },
+                  { id: "low" },
+                  { id: "medium" },
+                  { id: "high" },
+                  { id: "xhigh" },
+                ]
+              : [{ id: "off" }],
+        }),
+      },
+    ]);
     const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
 
     const result = await runHandleCommand("/model opencode/claude-opus-4-7", {
@@ -2654,10 +2681,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.thinkingLevel).toBe("medium");
   });
 
-  it.each([
-    ["openai", "gpt-5.5"],
-    ["openai", "gpt-5.5"],
-  ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
+  it("accepts xhigh when the catalog marks reasoning support", async () => {
+    const provider = "openai";
+    const model = "gpt-5.5";
     setDirectiveTestProviders([
       {
         id: provider,

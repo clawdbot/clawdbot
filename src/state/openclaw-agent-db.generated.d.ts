@@ -194,6 +194,18 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface MessageToolRunOutcomes {
+  agent_id: string;
+  id: Generated<number>;
+  model: string;
+  occurred_at: number;
+  outcome: string;
+  provider: string;
+  run_id: string;
+  run_status: string;
+  session_key: string;
+}
+
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -271,6 +283,22 @@ export interface SessionTranscriptActiveEvents {
   event_seq: number;
   message_position: number | null;
   session_id: string;
+}
+
+export interface SessionTranscriptArchives {
+  archive_blob: Uint8Array;
+  archive_name: string;
+  archive_sha256: string;
+  created_at: number;
+  encoding: string;
+  generation: string;
+  last_publish_attempt_at: number | null;
+  last_publish_error: string | null;
+  publish_attempts: Generated<number>;
+  published_at: number | null;
+  reason: string;
+  session_id: string;
+  session_key: string;
 }
 
 export interface SessionTranscriptFts {
@@ -443,6 +471,7 @@ export interface DB {
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
   session_key_contract: SessionKeyContract;
@@ -450,6 +479,7 @@ export interface DB {
   session_nodes: SessionNodes;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
+  session_transcript_archives: SessionTranscriptArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;

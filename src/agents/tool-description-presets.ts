@@ -16,6 +16,19 @@ export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answe
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 
+export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
+  return sessionsSpawnAvailable
+    ? 'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.'
+    : "List configured agent ids with name/model/runtime metadata that can be used as subagent spawn targets.";
+}
+
+export function describeAgentsWaitTool(sessionsSpawnAvailable: boolean): string {
+  const targets = sessionsSpawnAvailable
+    ? "collector subagents started by sessions_spawn collect=true"
+    : "collector subagent runs";
+  return `Wait for ${targets}. Accepts many run ids; returns once any completes (completed results incl. structured output, plus pending ids), or on timeoutSeconds.`;
+}
+
 // Mirrors plugin-sdk SessionToolsVisibility; kept local because importing that
 // module here would close an agents<->plugin-sdk madge cycle. Call sites pass
 // the policy union, so a new mode fails compilation at every consumer.
@@ -26,7 +39,7 @@ type SessionVisibilityScope = "self" | "tree" | "agent" | "all";
 // prose cannot drift from the session-visibility checker (openclaw#114797).
 const SESSION_VISIBILITY_SCOPE_COPY = {
   self: "current session only",
-  tree: "current session + own spawn subtree; reads also cover any watched same-agent group sessions",
+  tree: "current session + own spawn subtree; the main session sees all sessions of its agent",
   agent: "all sessions of this agent",
   all: "all sessions, cross-agent per tools.agentToAgent",
 } satisfies Record<SessionVisibilityScope, string>;
@@ -35,8 +48,7 @@ export function describeSessionVisibilityScope(
   visibility: SessionVisibilityScope,
   options?: { spawnRestricted?: boolean },
 ): string {
-  // Sandboxed sessions under the "spawned" clamp list/read only spawned rows,
-  // so the tree watched-read clause would promise reads that context denies.
+  // Sandboxed sessions under the "spawned" clamp list/read only spawned rows.
   if (options?.spawnRestricted && visibility === "tree") {
     return "current session + own spawn subtree (sandbox: spawned sessions only)";
   }
@@ -73,7 +85,7 @@ export function describeSessionsSendTool(): string {
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
-    "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target.",
+    "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
     "Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");

@@ -8,6 +8,7 @@ import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -42,11 +43,16 @@ class DebugPage extends OpenClawLightDomElement {
   );
   private callEpoch = 0;
   private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
+  private diagnosticsAgentId: string | null = null;
   private readonly diagnosticsTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
-      client ? loadGatewayDiagnostics(client, signal) : initialState,
+    args: () =>
+      [
+        this.gateway.connected ? this.gateway.client : null,
+        this.context?.agentSelection.state.selectedId ?? null,
+      ] as const,
+    task: ([client, agentId], { signal }) =>
+      client ? loadGatewayDiagnostics(client, agentId, signal) : initialState,
     onComplete: (result) => {
       this.diagnosticsTaskActiveClient = null;
       this.debugDiagnosticsError = null;
@@ -57,7 +63,7 @@ class DebugPage extends OpenClawLightDomElement {
     },
     onError: (error) => {
       this.diagnosticsTaskActiveClient = null;
-      this.debugDiagnosticsError = String(error);
+      this.debugDiagnosticsError = formatUiError(error);
     },
   });
   private readonly gateway = new GatewayPageController(this, {
@@ -72,7 +78,7 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugDiagnosticsError = null;
     },
     invalidateRequests: () => {
-      void this.diagnosticsTask.run([null]);
+      void this.diagnosticsTask.run([null, null]);
       this.diagnosticsTaskActiveClient = null;
       this.callEpoch += 1;
     },
@@ -81,18 +87,35 @@ class DebugPage extends OpenClawLightDomElement {
       this.ensureInitialDebug();
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribeEventLog(notify),
-    (gateway) => {
-      this.eventLog = gateway.eventLog;
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribeEventLog(notify),
+      (gateway) => {
+        this.eventLog = gateway.eventLog;
+      },
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      (selection) => {
+        const agentId = selection.state.selectedId;
+        if (agentId === this.diagnosticsAgentId) {
+          return;
+        }
+        this.diagnosticsAgentId = agentId;
+        this.debugModels = [];
+        void this.diagnosticsTask.run([null, null]);
+        this.diagnosticsTaskActiveClient = null;
+        void this.loadDiagnostics();
+      },
+    );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    void this.diagnosticsTask.run([null]);
+    void this.diagnosticsTask.run([null, null]);
     this.diagnosticsTaskActiveClient = null;
+    this.diagnosticsAgentId = null;
     this.callEpoch += 1;
     super.disconnectedCallback();
   }
@@ -123,7 +146,7 @@ class DebugPage extends OpenClawLightDomElement {
       return Promise.resolve();
     }
     this.diagnosticsTaskActiveClient = client;
-    return this.diagnosticsTask.run([client]);
+    return this.diagnosticsTask.run([client, this.context.agentSelection.state.selectedId]);
   }
 
   private async callDebugMethod() {
@@ -151,7 +174,7 @@ class DebugPage extends OpenClawLightDomElement {
       }
     } catch (err) {
       if (isCurrent()) {
-        this.debugCallError = String(err);
+        this.debugCallError = formatUiError(err);
       }
     }
   }

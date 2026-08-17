@@ -8,83 +8,120 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
+import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
+import {
+  adversarialResolved,
+  escapeHeavyResolved,
+  expectExactResolvedAcknowledgement,
+  expectOmittedResolvedAcknowledgement,
+  expectedResolvedOmission,
+} from "./sessions-tool.test-helpers.js";
 
-const overlongUnicode = (unit: string, maxLength: number) => `${unit.repeat(maxLength - 1)}🦞tail`;
-
-const adversarialResolved = {
-  modelProvider: overlongUnicode("界", 48),
-  model: overlongUnicode("模", 96),
-  agentRuntime: {
-    id: overlongUnicode("運", 48),
-    fallback: "openclaw" as const,
-    source: "session-key" as const,
-  },
-  thinkingLevel: overlongUnicode("考", 16),
-  thinkingLevels: Array.from({ length: 12 }, (_, index) => ({
-    id: `${index}:${overlongUnicode("識", 12)}`,
-    label: `${index}:${overlongUnicode("思", 16)}`,
-  })),
-};
-
-const escapedControlText = "\0".repeat(10_000);
-const escapeHeavyResolved = {
-  modelProvider: escapedControlText,
-  model: escapedControlText,
-  agentRuntime: {
-    id: escapedControlText,
-    fallback: "none" as const,
-    source: "provider" as const,
-  },
-  thinkingLevel: escapedControlText,
-  thinkingLevels: Array.from({ length: 12 }, (_, index) => ({
-    id: `${index}:${escapedControlText}`,
-    label: `${index}:${escapedControlText}`,
-  })),
-};
-
-const expectedResolvedOmission = {
-  reason: "response_budget_exceeded",
-} as const;
-
-function expectExactResolvedAcknowledgement(
-  result: {
-    content: Array<{ type: string; text?: string }>;
-    details: unknown;
-  },
-  expectedResolved: unknown,
-) {
-  expect((result.details as { resolved?: unknown }).resolved).toEqual(expectedResolved);
-  const text = result.content[0]?.text ?? "";
-  expect(JSON.parse(text)).toEqual(result.details);
-  expect(text).not.toContain('"entry"');
-  expect(text).not.toContain('"path"');
-  expect(text).not.toContain("skillsSnapshot");
-  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
-}
-
-function expectOmittedResolvedAcknowledgement(result: {
-  content: Array<{ type: string; text?: string }>;
-  details: unknown;
-}) {
-  expect(result.details).toMatchObject({ resolvedOmitted: expectedResolvedOmission });
-  expect((result.details as { resolved?: unknown }).resolved).toBeUndefined();
-  const text = result.content[0]?.text ?? "";
-  expect(JSON.parse(text)).toEqual(result.details);
-  expect(text).not.toContain('"entry"');
-  expect(text).not.toContain('"path"');
-  expect(text).not.toContain("skillsSnapshot");
-  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
-}
+type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
 describe("sessions tool", () => {
-  it("uses the core owner gate", () => {
-    expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
+  it("carries the persisted fixed-store owner for a bare patch key", async () => {
+    const callGateway = vi.fn().mockResolvedValue({});
+    const tool = createSessionsTool({
+      agentSessionKey: "global",
+      config: {
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway,
+    });
+
+    await tool.execute("owned-patch", { action: "patch", label: "Ops" });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: { key: "global", agentId: "ops", label: "Ops" },
+    });
   });
+
+  it("resolves current under the requester instead of the persisted bare-row owner", async () => {
+    const requests: AgentToolGatewayRequest[] = [];
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: AgentToolGatewayRequest,
+    ) => {
+      requests.push(request);
+      return { ok: true } as T;
+    };
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway,
+    });
+
+    await tool.execute("research-current", {
+      action: "patch",
+      sessionKey: "current",
+      label: "Research",
+    });
+
+    expect(requests).toContainEqual({
+      method: "sessions.patch",
+      params: { key: "agent:research:main", label: "Research" },
+    });
+    expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
+  });
+
+  it.each(["patch", "reset", "delete"] as const)(
+    "does not treat another agent's bare global row as self for %s",
+    async (action) => {
+      const requests: AgentToolGatewayRequest[] = [];
+      const callGateway: AgentToolGatewayRequestCaller = async <T>(
+        request: AgentToolGatewayRequest,
+      ) => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          return { agentId: "ops", key: "global" } as T;
+        }
+        throw new Error(`unexpected gateway mutation: ${request.method}`);
+      };
+      const tool = createSessionsTool({
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "research",
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        },
+        callGateway,
+      });
+
+      await expect(
+        tool.execute(`foreign-global-${action}`, {
+          action,
+          sessionKey: "2fb701ef-6425-4c48-9b6f-5a170aa2477e",
+          ...(action === "patch" ? { label: "Ops" } : {}),
+        }),
+      ).rejects.toThrow("Session status visibility is restricted");
+      expect(requests).toContainEqual(expect.objectContaining({ method: "sessions.resolve" }));
+      expect(
+        requests.some((request) =>
+          ["sessions.patch", "sessions.reset", "sessions.delete"].includes(request.method),
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("cannot patch an incognito session through the cross-session tool", async () => {
     const sessionKey = "agent:main:dashboard:incognito-private";
@@ -120,6 +157,12 @@ describe("sessions tool", () => {
         },
         deleteTranscript: { type: "boolean" },
         label: { type: "string", description: expect.stringContaining("Empty string clears") },
+        icon: {
+          type: "string",
+          description: expect.stringContaining(
+            "named icon: braces, book, monitor, bot, kanban, coins",
+          ),
+        },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
           type: "string",
@@ -904,7 +947,7 @@ describe("sessions tool", () => {
     });
   });
 
-  it("patches and clears title, status, attention, and archive state", async () => {
+  it("patches and clears title, icon, status, attention, and archive state", async () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -916,12 +959,13 @@ describe("sessions tool", () => {
     await tool.execute("declare", {
       action: "patch",
       label: "Waiting on staging",
+      icon: "🦞",
       statusNote: "Blocked: need the staging password",
       attention: "key",
       ttlMinutes: 45,
       archived: true,
     });
-    await tool.execute("clear", { action: "patch", label: "", attention: "clear" });
+    await tool.execute("clear", { action: "patch", label: "", icon: "", attention: "clear" });
 
     expect(callGateway.mock.calls).toEqual([
       [
@@ -930,6 +974,7 @@ describe("sessions tool", () => {
           params: {
             key: "agent:main:main",
             label: "Waiting on staging",
+            icon: "🦞",
             statusNote: "Blocked: need the staging password",
             attention: "key",
             ttlMinutes: 45,
@@ -941,7 +986,7 @@ describe("sessions tool", () => {
       [
         {
           method: "sessions.patch",
-          params: { key: "agent:main:main", label: null, attention: null },
+          params: { key: "agent:main:main", label: null, icon: null, attention: null },
         },
       ],
     ]);
@@ -961,10 +1006,10 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("denies patch targets outside the caller session tree", async () => {
+  it("denies patch targets outside a non-main caller's session tree", async () => {
     const callGateway = vi.fn(async () => ({ sessions: [] }));
     const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:main:dashboard:caller",
       callGateway: callGateway as never,
     });
 
@@ -972,6 +1017,7 @@ describe("sessions tool", () => {
       tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
+        expectedSessionId: "other-session",
         archived: true,
       }),
     ).rejects.toThrow("Session status visibility is restricted");

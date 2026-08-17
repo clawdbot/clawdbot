@@ -13,7 +13,6 @@ import {
   collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
-  collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   fetchRegistryJson,
@@ -907,77 +906,6 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
   });
 });
 
-describe("collectInstalledPluginSdkZodArtifactErrors", () => {
-  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
-    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
-    try {
-      run(packageRoot);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  }
-
-  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
-    const filePath = join(packageRoot, ...relativePath.split("/"));
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, contents, "utf8");
-  }
-
-  it("requires the plugin-sdk zod artifact", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
-      ]);
-    });
-  });
-
-  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
-      );
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package plugin SDK zod artifact must be self-contained but dist/plugin-sdk/zod.js imports zod.",
-      ]);
-    });
-  });
-
-  it("rejects plugin-sdk zod artifacts when a reachable local chunk imports zod", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'export { z } from "../zod-D2c0iocA.js";\n',
-      );
-      writeInstalledFile(
-        packageRoot,
-        "dist/zod-D2c0iocA.js",
-        'import * as zodCore from "zod/v4/core";\nexport const z = zodCore;\n',
-      );
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package plugin SDK zod artifact must be self-contained but dist/zod-D2c0iocA.js imports zod/v4/core.",
-      ]);
-    });
-  });
-
-  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'export { z } from "../zod-D2c0iocA.js";\n',
-      );
-      writeInstalledFile(packageRoot, "dist/zod-D2c0iocA.js", "export const z = {};\n");
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
-    });
-  });
-});
-
 describe("normalizeInstalledBinaryVersion", () => {
   it("accepts decorated CLI version output", () => {
     expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8 (9ece252)")).toBe("2026.4.8");
@@ -1252,7 +1180,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("refuses unbounded root dist dependency scans", () => {
+  it("excludes bundled extension modules from root dist dependency scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1260,10 +1188,16 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
+      writeFileSync(join(packageRoot, "dist", "root-runtime.js"), 'import "root-only";\n', "utf8");
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "runtime-api.js"),
+        'import "extension-only";\n',
+        "utf8",
+      );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        "installed package root is missing declared runtime dependency 'root-only' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

@@ -10,11 +10,7 @@ import {
   normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-  normalizeModelCatalogProviderId,
-} from "./model-catalog-refs.js";
+import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 import {
   MODEL_CATALOG_APIS,
   MODEL_CATALOG_THINKING_LEVELS,
@@ -39,6 +35,7 @@ import {
   type ModelCatalogVercelGatewayRouting,
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 // Normalizes raw provider model catalogs into stable rows for lookup and merging.
 
@@ -83,7 +80,7 @@ function normalizeSafeRecordKey(value: unknown): string {
 function normalizeOwnedProviderSet(providers: ReadonlySet<string>): ReadonlySet<string> {
   const normalized = new Set<string>();
   for (const provider of providers) {
-    const providerId = normalizeModelCatalogProviderId(provider);
+    const providerId = normalizeProviderId(provider);
     if (providerId) {
       normalized.add(providerId);
     }
@@ -552,7 +549,7 @@ function normalizeModelCatalogProviders(
   }
   const providers: Record<string, ModelCatalogProvider> = {};
   for (const [rawProviderId, rawProvider] of Object.entries(value)) {
-    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    const providerId = normalizeProviderId(rawProviderId);
     if (!providerId || !ownedProviders.has(providerId)) {
       continue;
     }
@@ -573,13 +570,11 @@ function normalizeModelCatalogAliases(
   }
   const aliases: Record<string, ModelCatalogAlias> = {};
   for (const [rawAlias, rawTarget] of Object.entries(value)) {
-    const alias = normalizeModelCatalogProviderId(rawAlias);
+    const alias = normalizeProviderId(rawAlias);
     if (!alias || !isRecord(rawTarget)) {
       continue;
     }
-    const provider = normalizeModelCatalogProviderId(
-      normalizeOptionalString(rawTarget.provider) ?? "",
-    );
+    const provider = normalizeProviderId(normalizeOptionalString(rawTarget.provider) ?? "");
     if (!provider || !ownedProviders.has(provider)) {
       continue;
     }
@@ -603,7 +598,7 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
     if (!isRecord(entry)) {
       continue;
     }
-    const provider = normalizeModelCatalogProviderId(normalizeOptionalString(entry.provider) ?? "");
+    const provider = normalizeProviderId(normalizeOptionalString(entry.provider) ?? "");
     const model = normalizeOptionalString(entry.model) ?? "";
     if (!provider || !model) {
       continue;
@@ -642,7 +637,7 @@ function normalizeModelCatalogDiscovery(
   }
   const discovery: Record<string, ModelCatalogDiscovery> = {};
   for (const [rawProviderId, rawMode] of Object.entries(value)) {
-    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    const providerId = normalizeProviderId(rawProviderId);
     const mode = normalizeOptionalString(rawMode) ?? "";
     if (providerId && ownedProviders.has(providerId) && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
       discovery[providerId] = mode as ModelCatalogDiscovery;
@@ -681,7 +676,7 @@ export function normalizeModelCatalogProviderRows(params: {
   providerCatalog: ModelCatalogProvider;
   source: ModelCatalogSource;
 }): NormalizedModelCatalogRow[] {
-  const provider = normalizeModelCatalogProviderId(params.provider);
+  const provider = normalizeProviderId(params.provider);
   if (!provider || !Array.isArray(params.providerCatalog.models)) {
     return [];
   }

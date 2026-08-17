@@ -1,4 +1,5 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -295,9 +296,7 @@ async function agentCommandInternal(
             throw error;
           }
           log.warn(
-            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${coerceErrorMessage(error)}`,
           );
         }
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -388,9 +387,7 @@ async function agentCommandInternal(
           }
         } catch (error) {
           log.warn(
-            `session diff baseline capture failed; continuing without attribution filtering: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
           );
         }
       }
@@ -540,11 +537,7 @@ async function agentCommandInternal(
         } catch (error) {
           // Cleanup remains best-effort so a terminal SQLite write failure does
           // not replace the completed model-run result; the DB layer warns too.
-          log.warn(
-            `failed to remove model-run SQLite session: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
         }
       }
     }
@@ -580,9 +573,7 @@ async function agentCommandInternal(
         }
       } catch (error) {
         log.warn(
-          `failed to clear restart recovery delivery context for ${sessionKey}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `failed to clear restart recovery delivery context for ${sessionKey}: ${coerceErrorMessage(error)}`,
         );
       }
     }
@@ -600,6 +591,7 @@ async function agentCommandWithAdmissionIngress(
     opts,
     runtime,
     deps,
+    operatorAuthority: admissionIngress.kind === "local-cli",
     run: async (prepared, resolvedDeps) =>
       await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
   });
@@ -638,6 +630,7 @@ async function agentCommandFromIngressInternal(
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    let preparedAgentDir: string | undefined;
     const result = await runWithAgentCommandRecoveryOwner({
       lifecycleGeneration,
       mode: "claim",
@@ -648,8 +641,9 @@ async function agentCommandFromIngressInternal(
       },
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
-      run: async (prepared) =>
-        await withAgentPluginRegistry({
+      run: async (prepared) => {
+        preparedAgentDir = prepared.agentDir;
+        return await withAgentPluginRegistry({
           config: prepared.cfg,
           workspaceDir: prepared.workspaceDir,
           run: async () =>
@@ -660,11 +654,12 @@ async function agentCommandFromIngressInternal(
               runtime,
               deps,
             ),
-        }),
+        });
+      },
     });
 
-    if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
+    if (result && preparedAgentDir) {
+      emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
     }
 
     return result;

@@ -8,13 +8,13 @@ type StringOptions = {
 };
 
 type ConsumedFlag<T extends Record<string, unknown>> = {
-  flag?: string;
+  flag: string;
   nextIndex: number;
   repeatable?: boolean;
   apply(target: T): void;
 };
 
-type FlagSpec<T extends Record<string, unknown>> = {
+export type FlagSpec<T extends Record<string, unknown>> = {
   consume(argv: readonly string[], index: number, args: T): ConsumedFlag<T> | null;
 };
 
@@ -40,6 +40,8 @@ export function classifyBoundedUnsignedDecimal(
   max: number,
 ): BoundedUnsignedDecimalResult;
 export function parsePermissiveBooleanToken(value: unknown): boolean | undefined;
+export function isOpenEndedTruthyValue(value: string | undefined): boolean;
+export function isStrictAffirmativeValue(value: string | undefined): boolean;
 export function stringFlag<T extends Record<string, unknown>>(
   flag: string,
   key: string,

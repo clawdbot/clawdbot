@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
@@ -14,7 +17,14 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => (
 
 vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
 
-import { prepareEmbeddedAttemptSetup, resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
+import {
+  installEmbeddedAttemptContextGuards,
+  prepareEmbeddedAttemptSetup,
+  resolveAttemptWorkspaceSandbox,
+} from "./attempt-setup.js";
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
@@ -41,6 +51,59 @@ describe("prepareEmbeddedAttemptSetup", () => {
 
     expect(setup.defaultAgentId).toBe("main");
     expect(setup.sessionAgentId).toBe("marketing");
+  });
+
+  it("hydrates recent history media from the prepared session agent workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-history-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const agent = {} as {
+      transformContext?: (messages: unknown[], signal?: AbortSignal) => Promise<unknown[]>;
+    };
+    const settingsManager = { getBlockImages: () => false };
+    const guards = installEmbeddedAttemptContextGuards({
+      activeSession: { agent, settingsManager } as never,
+      agentDir: workspaceDir,
+      attempt: {
+        config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
+        contextTokenBudget: 32_000,
+        model: { input: ["text", "image"] },
+        modelId: "gpt-5.4",
+        provider: "openai",
+      } as unknown as EmbeddedRunAttemptParams,
+      computerContextEpoch: { value: 0 },
+      dropThinkingBlocksForEstimate: false,
+      effectiveCwd: workspaceDir,
+      effectiveFsWorkspaceOnly: false,
+      effectiveWorkspace: workspaceDir,
+      getPrePromptMessageCount: () => 0,
+      getPromptCache: () => undefined,
+      getPromptCacheRetention: () => undefined,
+      getSystemPrompt: () => "",
+      isOpenAIResponsesApi: false,
+      repairToolUseResultPairing: false,
+      sessionAgentId: "marketing",
+      sessionManager: {} as never,
+      settingsManager: settingsManager as never,
+    });
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "describe" }] }),
+      [{ path: imagePath, contentType: "image/png" }],
+    );
+
+    try {
+      if (!agent.transformContext) {
+        throw new Error("expected installed history transform");
+      }
+      const replay = await agent.transformContext([message]);
+      expect((replay[0] as { content?: unknown }).content).toEqual([
+        { type: "text", text: "describe" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      guards.remove();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("passes the resolved skill snapshot into sandbox synchronization", async () => {

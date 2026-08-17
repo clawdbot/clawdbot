@@ -14,12 +14,14 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  clearAllCliSessions,
   clearCliSession,
   getCliSessionBinding,
   setCliSessionBinding,
   setCliSessionId,
 } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
@@ -47,7 +49,7 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
-  contextTokensOverride?: number;
+  agentDir: string;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -66,8 +68,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
-   * them with the model used by this run. Used for heartbeat turns so the
-   * heartbeat model does not "bleed" into the main session's perceived state.
+   * them with the model used by this run. Used for turn-local fallback and
+   * heartbeat runs so their model does not bleed into the session selection.
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
@@ -112,7 +114,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
           cfg,
           provider: providerUsed,
           model: modelUsed,
-          contextTokensOverride: params.contextTokensOverride,
           fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);
@@ -146,9 +147,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
   }
   if (preserveRuntimeModel) {
-    // Keep the pre-existing runtime model and context window so a background
-    // heartbeat turn using a different model does not bleed into the main
-    // session's perceived state.
+    // Keep the pre-existing runtime model and context window so a turn-local
+    // model does not bleed into the session's perceived selection.
     if (entry.model) {
       // Prior runtime model exists: preserve its contextTokens. When missing,
       // leave contextTokens unset rather than falling back to the heartbeat
@@ -219,6 +219,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
           provider: providerUsed,
           model: modelUsed,
           config: cfg,
+          agentDir: params.agentDir,
         }),
       }),
     );
@@ -493,7 +494,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
-  provider: string;
+  compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
@@ -501,19 +502,21 @@ export async function recordCliCompactionInStore(params: {
   newSessionId?: string;
   expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
+  const { compactionKind, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
   }
 
   const next = { ...entry };
-  clearCliSession(next, provider);
+  // A shared-history rewrite invalidates every binding; native compaction preserves its session.
+  if (compactionKind === "context-engine") {
+    clearAllCliSessions(next);
+  }
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
   const newSessionId = normalizeOptionalString(params.newSessionId);
-  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  if (sessionIdChanged && newSessionId) {
+  if (newSessionId && newSessionId !== entry.sessionId) {
     delete (next as { sessionFile?: unknown }).sessionFile;
     next.sessionId = newSessionId;
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
@@ -523,21 +526,17 @@ export async function recordCliCompactionInStore(params: {
   }
   const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
+  next.inputTokens = undefined;
+  next.outputTokens = undefined;
+  next.cacheRead = undefined;
+  next.cacheWrite = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
     next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    next.inputTokens = undefined;
-    next.outputTokens = undefined;
-    next.cacheRead = undefined;
-    next.cacheWrite = undefined;
   } else {
     next.totalTokensFresh = false;
     next.totalTokensVersion = undefined;
-    next.inputTokens = undefined;
-    next.outputTokens = undefined;
-    next.cacheRead = undefined;
-    next.cacheWrite = undefined;
   }
 
   const persisted = await patchSessionEntryCore(

@@ -16,6 +16,7 @@ import {
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
+  tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
@@ -45,6 +46,7 @@ import {
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -56,6 +58,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
 
@@ -91,7 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  doctor: () =>
+    import("./server-methods/doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
   worktrees: () =>
@@ -126,6 +130,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
   projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
+  portals: () => import("./server-methods/portals.js").then((module) => module.portalHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
@@ -150,6 +155,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-create": () =>
     import("./server-methods/sessions-create.js").then((module) => module.sessionCreateHandlers),
+  "sessions-recover": () =>
+    import("./server-methods/sessions-recover.js").then((module) => module.sessionRecoverHandlers),
   "sessions-delete": () =>
     import("./server-methods/sessions-delete.js").then((module) => module.sessionDeleteHandlers),
   "sessions-dispatch": () =>
@@ -405,6 +412,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   "context" | "isWebchatConnect"
 > & {
   methodRegistry: GatewayMethodRegistry;
+  requestParams?: unknown;
   reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
 };
 
@@ -448,7 +456,12 @@ export async function runWithGatewayRequestEnvelope<T>(
     // Preparation must stay protected even before it owns the root admission that it closes.
     return await options.reject(preAdmissionRateLimitError);
   }
-  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  const rootWorkAdmission =
+    tryBeginGatewayRootWorkAdmission() ??
+    (method === "gateway.restart.request" &&
+    isTargetedNonSafeGatewayRestartRequest(options.requestParams)
+      ? tryBeginGatewayPreparedRestartRootWorkAdmission()
+      : null);
   if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
     return await options.reject(
       errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
@@ -509,6 +522,10 @@ export async function runWithGatewayRequestEnvelope<T>(
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         return await options.reject(error.error);
+      }
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        return await options.reject(staleInstall.error);
       }
       throw error;
     }
@@ -573,6 +590,7 @@ export async function handleGatewayRequest(
     context,
     isWebchatConnect,
     methodRegistry,
+    requestParams: req.params,
     reject: (error) => respond(false, undefined, error),
   });
 }

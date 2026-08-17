@@ -7,10 +7,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
@@ -22,14 +22,15 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
+import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
   type ChatRunPlanSnapshot,
   type ChatRunState,
 } from "./server-chat-state.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
   resolveSessionSubscriptionKeys,
@@ -504,22 +505,6 @@ export type ChatAbortOps = {
   onRunAborted?: (runId: string) => void;
 };
 
-type TrackedChatRunAbortOps = {
-  chatAbortControllers: ChatAbortOps["chatAbortControllers"];
-  chatRunState: ChatAbortOps["chatRunState"];
-  removeChatRun: ChatAbortOps["removeChatRun"];
-  agentRunSeq: ChatAbortOps["agentRunSeq"];
-  broadcast: ChatAbortOps["broadcast"];
-  nodeSendToSession: ChatAbortOps["nodeSendToSession"];
-};
-
-export function abortTrackedChatRunById(
-  ops: TrackedChatRunAbortOps,
-  params: Parameters<typeof abortChatRunById>[1],
-) {
-  return abortChatRunById(ops, params);
-}
-
 function resolveChatAbortDeliverySessionKeys(
   ops: ChatAbortOps,
   sessionKey: string,
@@ -553,12 +538,13 @@ function broadcastChatAborted(
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
   const errorMessage = readToolValidationErrorSummary(params.errorMessage);
+  const explicitAgentId = normalizeActiveAgentId(params.agentId);
   const defaultGlobalAgentId =
-    sessionKey === "global" ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops)) : undefined;
+    sessionKey === "global" && !explicitAgentId
+      ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops))
+      : undefined;
   const payloadAgentId =
-    sessionKey === "global"
-      ? (normalizeActiveAgentId(params.agentId) ?? defaultGlobalAgentId)
-      : normalizeActiveAgentId(params.agentId);
+    sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
   const payload = {
     runId,
     sessionKey,
@@ -584,7 +570,11 @@ function broadcastChatAborted(
 
 function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   const cfg = ops.getRuntimeConfig?.();
-  return cfg ? resolveDefaultAgentId(cfg) : undefined;
+  if (!cfg) {
+    return undefined;
+  }
+  const resolved = resolveRequestedSessionAgentId(cfg, "global");
+  return resolved.ok ? resolved.agentId : undefined;
 }
 
 export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEntry): boolean {
@@ -734,18 +724,24 @@ export function abortChatRunsForProvider(
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
   const agentId = normalizeActiveAgentId(params.agentId);
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   if (!providerId) {
     return { runIds: [] };
   }
+  const compatibilityOwnerAgentId = agentId && tryResolveLegacyCompatibilityAgentId(params.cfg);
   const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
-    const entryAgentId = normalizeActiveAgentId(
-      entry.agentId ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? defaultAgentId,
-    );
+    if (
+      normalizeProviderIdForActiveRun(entry.authProviderId) !== providerId &&
+      normalizeProviderIdForActiveRun(entry.providerId) !== providerId
+    ) {
+      return false;
+    }
     return (
-      (!agentId || entryAgentId === agentId) &&
-      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-        normalizeProviderIdForActiveRun(entry.providerId) === providerId)
+      !agentId ||
+      resolveChatRunOwnerAgentId({
+        agentId: entry.agentId,
+        sessionKey: entry.sessionKey,
+        defaultAgentId: compatibilityOwnerAgentId,
+      }) === agentId
     );
   });
   const runIds: string[] = [];

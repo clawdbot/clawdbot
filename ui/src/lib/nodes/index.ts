@@ -1,9 +1,9 @@
-// Shared Nodes operations used by the Control UI page and Gateway event hooks.
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
-import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
@@ -12,6 +12,21 @@ import {
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
+// Shared Nodes operations used by the Control UI page and Gateway event hooks.
+import { formatUiError } from "../format-error.ts";
+
+// @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
+// secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
+// device identity keeps working there — the signing key is the one credential
+// that never crosses the wire — while secure contexts pay no startup bytes.
+const loadPureSha2 = () => import("@noble/hashes/sha2.js");
+const subtleSha512Async = hashes.sha512Async;
+hashes.sha512Async = async (message: Uint8Array) => {
+  if (globalThis.crypto?.subtle && subtleSha512Async) {
+    return await subtleSha512Async(message);
+  }
+  return Uint8Array.from((await loadPureSha2()).sha512(message));
+};
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -230,7 +245,7 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
     }
   } catch (err) {
     if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -262,7 +277,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
     }
   } catch (err) {
     if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -284,7 +299,7 @@ export async function approveDevicePairing(state: DevicesState, requestId: strin
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   }
 }
@@ -302,7 +317,7 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   }
 }
@@ -351,7 +366,7 @@ export async function removeInventoryEntry(state: InventoryState, entry: Invento
     await removeInventoryEntryRpc(client, entry);
     await reloadInventory(state);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
@@ -368,7 +383,7 @@ export async function removeStaleInventoryEntries(
     try {
       await removeInventoryEntryRpc(client, entry);
     } catch (err) {
-      failures.push(`${entry.name}: ${String(err)}`);
+      failures.push(`${entry.name}: ${formatUiError(err)}`);
     }
   }
   await reloadInventory(
@@ -389,7 +404,7 @@ export async function approveNodePairingRequest(state: InventoryState, requestId
     await state.client.request("node.pair.approve", { requestId });
     await reloadInventory(state);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
@@ -401,15 +416,91 @@ export async function rejectNodePairingRequest(state: InventoryState, requestId:
     await state.client.request("node.pair.reject", { requestId });
     await reloadInventory(state);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
-/** Returns the rotated token for the owning page to reveal; the Gateway never resends it. */
+/**
+ * How a rotation ended, for the owning page to report. The Gateway echoes the bearer
+ * token only to a device rotating its own token, so a cross-device rotation is a real
+ * outcome with no secret to show rather than a failure.
+ */
+type RotatedDeviceTokenOutcome =
+  | { delivery: "in-band"; token: string }
+  | { delivery: "withheld-cross-device" };
+
+/**
+ * The Gateway echoes back the raw request `deviceId` and the stored `role`, so a returned
+ * grant is compared on the same trim normalization the device-auth store applies
+ * (`normalizeDeviceAuthRole`) rather than by raw equality.
+ */
+function matchesRequestedGrant(value: unknown, requested: string): boolean {
+  return typeof value === "string" && value.trim().length > 0 && value.trim() === requested.trim();
+}
+
+/**
+ * Parses the raw `device.token.rotate` payload, which reaches this client unvalidated:
+ * the browser Gateway client resolves `frame.payload` directly, so the registered result
+ * schema never runs here. Only `DeviceTokenRotateResultSchema`'s shapes are accepted —
+ * a complete envelope for the requested grant, a token that is absent or a non-empty string,
+ * and `tokenDelivery` paired with the secret. Anything else describes a rotation whose
+ * outcome is unknown, and both dialogs would lie about it: one claims a credential arrived,
+ * the other that the device re-credentials on its own. The old token is dead either way, so
+ * the operator gets the error and the recovery step. Gateways released before `tokenDelivery`
+ * omit only that field; they still return the rest of the result they rotated.
+ */
+function classifyRotationOutcome(
+  payload: unknown,
+  requested: { deviceId: string; role: string },
+): RotatedDeviceTokenOutcome {
+  const result = isRecord(payload) ? payload : undefined;
+  const scopes = result?.scopes;
+  const rotatedAtMs = result?.rotatedAtMs;
+  // `scopes` and `rotatedAtMs` are required by the result schema, and the grant has to be the
+  // one this page asked to rotate: a reply naming another device or role says nothing about
+  // this request, so reporting it would tell the operator a credential they still hold was
+  // replaced.
+  const identified =
+    matchesRequestedGrant(result?.deviceId, requested.deviceId) &&
+    matchesRequestedGrant(result?.role, requested.role) &&
+    Array.isArray(scopes) &&
+    scopes.every((scope: unknown) => typeof scope === "string" && scope.length > 0) &&
+    typeof rotatedAtMs === "number" &&
+    Number.isInteger(rotatedAtMs) &&
+    rotatedAtMs >= 0;
+  // An absent token and a present-but-invalid one are different answers: the schema bounds
+  // `token` to a non-empty string, so `token: ""` is a malformed envelope rather than a
+  // rotation that withheld the secret.
+  const rawToken = result?.token;
+  const token = typeof rawToken === "string" && rawToken.length > 0 ? rawToken : undefined;
+  const tokenAbsent = rawToken === undefined;
+  const delivery = result?.tokenDelivery;
+  if (identified) {
+    if (delivery === undefined) {
+      if (token) {
+        return { delivery: "in-band", token };
+      }
+      if (tokenAbsent) {
+        return { delivery: "withheld-cross-device" };
+      }
+    }
+    if (delivery === "in-band" && token) {
+      return { delivery: "in-band", token };
+    }
+    if (delivery === "withheld-cross-device" && tokenAbsent) {
+      return { delivery: "withheld-cross-device" };
+    }
+  }
+  throw new Error(
+    `Rotation returned an unusable result (tokenDelivery=${JSON.stringify(delivery)}, token ${token ? "present" : tokenAbsent ? "absent" : "malformed"}). The previous token no longer works; pair the device again if it does not reconnect.`,
+  );
+}
+
+/** Rotates a device token and returns what the Gateway did with the replacement. */
 export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
-): Promise<string | null> {
+): Promise<RotatedDeviceTokenOutcome | null> {
   const client = state.client;
   if (!client || !state.connected) {
     return null;
@@ -422,18 +513,19 @@ export async function rotateDeviceToken(
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;
+      tokenDelivery?: string;
     }>("device.token.rotate", requestParams);
-    const token = res?.token ?? null;
+    const outcome = classifyRotationOutcome(res, requestParams);
     // A retired epoch stops every state write below, but never the return: the previous
     // credential is already dead on the server, so discarding this response would leave
     // the operator locked out with no way to ask for the replacement again.
     if (!isCurrentNodesRequest(state, client, generation)) {
-      return token;
+      return outcome;
     }
-    if (token) {
+    if (outcome.delivery === "in-band") {
       const identity = await loadOrCreateDeviceIdentity();
       if (!isCurrentNodesRequest(state, client, generation)) {
-        return token;
+        return outcome;
       }
       const role = res.role ?? params.role;
       if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
@@ -441,16 +533,16 @@ export async function rotateDeviceToken(
           deviceId: identity.deviceId,
           gatewayUrl,
           role,
-          token,
+          token: outcome.token,
           scopes: res.scopes ?? params.scopes ?? [],
         });
       }
     }
     await loadDevices(state);
-    return token;
+    return outcome;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
     return null;
   }
@@ -487,7 +579,7 @@ export async function revokeDeviceToken(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   }
 }
@@ -538,7 +630,7 @@ export async function loadExecApprovals(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -602,7 +694,7 @@ export async function saveExecApprovals(
     await loadExecApprovals(state, target);
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -818,8 +910,14 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", publicKey.slice().buffer);
-  return bytesToHex(new Uint8Array(hash));
+  // Prefer the platform digest where the context provides it; the pure-JS
+  // fallback keeps identity working on plain-HTTP origins without subtle.
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
+    return bytesToHex(new Uint8Array(hash));
+  }
+  return bytesToHex((await loadPureSha2()).sha256(publicKey));
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
@@ -833,25 +931,10 @@ async function generateIdentity(): Promise<DeviceIdentity> {
   };
 }
 
-/**
- * Synchronous identity probe for render gating: reads the stored device id
- * without creating, repairing, or fingerprint-verifying an identity, so a
- * "do we hold credentials?" check stays side-effect free before connect().
- */
-export function peekStoredDeviceIdentityId(): string | null {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as StoredIdentity;
-    return parsed?.version === 1 && typeof parsed.deviceId === "string" && parsed.deviceId
-      ? parsed.deviceId
-      : null;
-  } catch {
-    return null;
-  }
-}
+// Storage-blocked pages (for example private browsing) must still present one
+// stable device per page lifetime; minting a fresh key on every reconnect
+// would raise a new unpaired request each time and never retain approval.
+let sessionDeviceIdentity: DeviceIdentity | null = null;
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
@@ -889,6 +972,9 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     // Invalid local identity is replaced below.
   }
 
+  if (sessionDeviceIdentity) {
+    return sessionDeviceIdentity;
+  }
   const identity = await generateIdentity();
   const stored: StoredIdentity = {
     version: 1,
@@ -897,7 +983,12 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     privateKey: identity.privateKey,
     createdAtMs: Date.now(),
   };
-  storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(stored));
+  try {
+    storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // A write-rejecting store still gets the in-memory identity below.
+  }
+  sessionDeviceIdentity = identity;
   return identity;
 }
 

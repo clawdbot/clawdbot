@@ -72,8 +72,8 @@ import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../confi
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { redactSecrets } from "../logging/redact.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { resolveRuntimeThinkingProfile } from "../plugins/provider-runtime.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
+import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
@@ -723,7 +723,7 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -752,7 +752,7 @@ function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -1711,7 +1711,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (id) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel("openai", id),
             reasoning: true,
@@ -1726,7 +1725,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("preserves exact max for max-capable GPT-5.6 metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: {
           ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
           reasoning: true,
@@ -1740,14 +1738,12 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("fails exact-proof levels instead of silently clamping them", () => {
     expect(() =>
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "max",
       }),
     ).toThrow(/does not advertise max|clamps max/u);
     expect(() =>
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "ultra",
       }),
@@ -1757,7 +1753,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: {
           ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
@@ -1778,7 +1773,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("does not let provider profiles override model-level thinking support", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "high",
       }),
@@ -1790,7 +1784,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (provider) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel(provider, "grok-4.5"),
             reasoning: true,
@@ -1814,7 +1807,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (provider) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
             reasoning: true,
@@ -2456,7 +2448,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -4223,7 +4215,7 @@ function parseExplicitLiveModelRef(
     const rawModelId = trimmed.slice(slash + 1).trim();
     const modelId =
       provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
-        ? normalizeGoogleModelId(rawModelId)
+        ? normalizeGooglePreviewModelId(rawModelId)
         : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
@@ -4269,7 +4261,6 @@ function resolveExplicitLiveModelCandidates(params: {
 }
 
 function resolveGatewayLiveModelThinkingLevel(params: {
-  cfg: OpenClawConfig;
   model: Model;
   requestedLevel: string;
 }): string {
@@ -4278,9 +4269,8 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
-  const profile = resolveRuntimeThinkingProfile({
+  const profile = resolveEffectiveThinkingProfile({
     provider: model.provider,
-    config: params.cfg,
     context: {
       provider: model.provider,
       modelId: model.id,
@@ -4744,7 +4734,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       const skippedBeforeModel = skippedCount;
       const wireObservationStart = ultraWireCapture?.observations.length ?? 0;
       const thinkingLevel = resolveGatewayLiveModelThinkingLevel({
-        cfg: params.cfg,
         model,
         requestedLevel: params.thinkingLevel,
       });

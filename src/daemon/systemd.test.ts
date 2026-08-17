@@ -126,11 +126,11 @@ const createExecFileError = (
   return err;
 };
 
-const createWritableStreamMock = () => {
-  const write = vi.fn();
+const createWritableStreamMock = (write = vi.fn()) => {
+  const stdout = { write };
   return {
     write,
-    stdout: { write } as unknown as NodeJS.WritableStream,
+    stdout: stdout as typeof stdout & NodeJS.WritableStream,
   };
 };
 
@@ -1009,6 +1009,64 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
+  it("reports a missing unit without surfacing routine systemctl stderr", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const detail = "Unit openclaw-gateway.service could not be found.";
+        cb(createExecFileError(detail, { stderr: detail }), "", detail);
+      });
+
+    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+      status: "stopped",
+      missingUnit: true,
+    });
+  });
+
+  it("keeps unexpected systemctl failures visible", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const detail = "Permission denied while reading systemd state";
+        cb(createExecFileError(detail, { stderr: detail }), "", detail);
+      });
+
+    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+      status: "unknown",
+      detail: "Permission denied while reading systemd state",
+      missingUnit: false,
+    });
+  });
+
+  it("does not call an installed unit missing when systemd disagrees with its definition", async () => {
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
+      if (pathLikeToString(pathArg) === "/etc/systemd/system/openclaw-gateway.service") {
+        return;
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const detail = "Unit openclaw-gateway.service could not be found.";
+      cb(createExecFileError(detail, { stderr: detail }), "", detail);
+    });
+
+    try {
+      await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+        status: "unknown",
+        detail: "Unit openclaw-gateway.service could not be found.",
+        missingUnit: false,
+      });
+    } finally {
+      accessSpy.mockRestore();
+    }
+  });
+
   it("parses Result and the restart counter for crash-loop give-up detection", async () => {
     // Real systemd 249 give-up shape: a crash-looped unit keeps Result=exit-code
     // (start-limit-hit never overwrites an exec failure), so the counter reaching
@@ -1515,7 +1573,7 @@ describe("stageSystemdService", () => {
       await expect(
         stageSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "gateway", "run"],
           workingDirectory: "/tmp",
           environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -1543,7 +1601,7 @@ describe("stageSystemdService", () => {
       await expect(
         stageSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "gateway", "run"],
           workingDirectory: "/tmp",
           environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -1567,7 +1625,7 @@ describe("stageSystemdService", () => {
       await expect(
         stageSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "gateway", "run"],
           workingDirectory: "/tmp",
           environment: { OPENCLAW_GATEWAY_TOKEN: "new-token" },
@@ -1590,7 +1648,7 @@ describe("stageSystemdService", () => {
       await expect(
         stageSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "gateway", "run"],
           workingDirectory: "/tmp",
           environment: {
@@ -1630,7 +1688,7 @@ describe("stageSystemdService", () => {
       await expect(
         stageSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "gateway", "run"],
           workingDirectory: "/tmp",
           environment: {
@@ -1664,7 +1722,7 @@ describe("stageSystemdService", () => {
       mockSystemctlStatusOk();
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -1689,7 +1747,7 @@ describe("stageSystemdService", () => {
       await expect(
         installSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "gateway", "run"],
           workingDirectory: "/tmp",
           environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -1714,7 +1772,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -1760,7 +1818,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: [wrapperPath, "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -1828,7 +1886,7 @@ describe("stageSystemdService", () => {
       mockSystemctlStatusOk();
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         ...plan,
       });
 
@@ -1854,7 +1912,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -1908,7 +1966,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -1951,7 +2009,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -1984,7 +2042,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -2025,7 +2083,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -2067,7 +2125,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -2103,7 +2161,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         // Staging manages OPENCLAW_GATEWAY_TOKEN inline; OPENCLAW_SERVICE_MANAGED_ENV_KEYS
@@ -2150,7 +2208,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -2182,7 +2240,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { LLM_API_KEY: "new-value" },
@@ -2213,7 +2271,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -2245,7 +2303,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -2272,7 +2330,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -2306,7 +2364,7 @@ describe("stageSystemdService", () => {
 
       await stageSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "gateway", "run"],
         workingDirectory: "/tmp",
         environment: { OPENCLAW_GATEWAY_PORT: "18789" },
@@ -2376,7 +2434,7 @@ describe("systemd service install and uninstall", () => {
 
       await installSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         description: "OpenClaw Node Host",
@@ -2428,7 +2486,7 @@ describe("systemd service install and uninstall", () => {
 
       await installSystemdService({
         env,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -2473,7 +2531,7 @@ describe("systemd service install and uninstall", () => {
 
       await installSystemdService({
         env: installEnv,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -2519,7 +2577,7 @@ describe("systemd service install and uninstall", () => {
 
       await installSystemdService({
         env: installEnv,
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
         environment: {
@@ -2559,7 +2617,7 @@ describe("systemd service install and uninstall", () => {
       await expect(
         installSystemdService({
           env,
-          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          stdout: createWritableStreamMock().stdout,
           programArguments: ["/usr/bin/openclaw", "node", "run"],
           workingDirectory: "/tmp",
           environment: {
@@ -3013,7 +3071,7 @@ describe("systemd service control", () => {
 
     await expect(
       startSystemdService({
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         env: { HOME: TEST_MANAGED_HOME },
       }),
     ).rejects.toThrow("same-name system ownership");
@@ -3042,7 +3100,7 @@ describe("systemd service control", () => {
 
     await expect(
       startSystemdService({
-        stdout: { write } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock(write).stdout,
         env: {},
         onMutation,
       }),
@@ -3095,7 +3153,7 @@ describe("systemd service control", () => {
       });
     const write = vi.fn();
     const onMutation = vi.fn();
-    const stdout = { write } as unknown as NodeJS.WritableStream;
+    const { stdout } = createWritableStreamMock(write);
 
     await stopSystemdService({ stdout, env: {}, onMutation });
 
@@ -3119,11 +3177,10 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     const onMutation = vi.fn();
-    const stdout = {
-      write: vi.fn(() => {
-        throw new Error("output failed");
-      }),
-    } as unknown as NodeJS.WritableStream;
+    const write = vi.fn(() => {
+      throw new Error("output failed");
+    });
+    const { stdout } = createWritableStreamMock(write);
 
     await expect(stopSystemdService({ stdout, env: {}, onMutation })).rejects.toThrow(
       "output failed",
@@ -3147,7 +3204,7 @@ describe("systemd service control", () => {
       });
 
     await stopSystemdService({
-      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      stdout: createWritableStreamMock().stdout,
       env: {},
     });
   });
@@ -3184,7 +3241,7 @@ describe("systemd service control", () => {
 
     await expect(
       stopSystemdService({
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
@@ -3204,7 +3261,7 @@ describe("systemd service control", () => {
 
     await expect(
       stopSystemdService({
-        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        stdout: createWritableStreamMock().stdout,
         env: { USER: "", LOGNAME: "" },
       }),
     ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");

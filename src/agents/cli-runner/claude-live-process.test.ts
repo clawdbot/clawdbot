@@ -31,11 +31,6 @@ import { executePreparedCliRun } from "./execute.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
@@ -167,6 +162,9 @@ describe("Claude live process", () => {
           ]);
           return;
         }
+        if (parsed.type !== "user") {
+          throw new Error(`unexpected live stdin ${parsed.type}`);
+        }
         userTurn += 1;
         emit([
           { type: "system", subtype: "init", session_id: "live-dynamic-prompt" },
@@ -209,6 +207,11 @@ describe("Claude live process", () => {
       "control_request",
       "user",
     ]);
+    const userMessages = live.writes
+      .map((entry) => JSON.parse(entry) as { type: string; message?: { content?: string } })
+      .filter((entry) => entry.type === "user")
+      .map((entry) => entry.message?.content);
+    expect(userMessages).toEqual(["first", "second"]);
   });
 
   it("answers Claude live control_request can_use_tool with deny when the user rejects approval", async () => {

@@ -4,9 +4,12 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import type { SessionMenuActionKind } from "../../../components/session-menu.ts";
 import "./chat-header-session-menu.ts";
-import type { HeaderMenuAction, HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
+import type {
+  HeaderMenuAction,
+  HeaderMenuActionKind,
+  HeaderMenuQuickAction,
+} from "./chat-header-session-menu.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -46,8 +49,9 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
-    actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
+    actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
+    forkFromLastCompleted?: boolean;
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
@@ -71,6 +75,7 @@ async function mountMenu(
       .layoutActions=${options.layoutActions ?? []}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
+      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
@@ -119,7 +124,14 @@ describe("chat header session menu", () => {
       menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
     ).map(itemLabel);
 
-    expect(labels).toEqual(["Rename…", "View", "Fork", "Archive session", "Delete…"]);
+    expect(labels).toEqual([
+      "Rename…",
+      "View",
+      "Fork",
+      "Continue in terminal…",
+      "Archive session",
+      "Delete…",
+    ]);
     expect(
       menu.querySelector(".chat-header-session-menu__trigger")?.getAttribute("aria-label"),
     ).toBe("Actions for Test session");
@@ -285,6 +297,35 @@ describe("chat header session menu", () => {
     dropdown?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true }),
     );
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("names the stable fork boundary for an active session", async () => {
+    const menu = await mountMenu({ forkFromLastCompleted: true });
+
+    expect(item(menu, "Fork from last completed message")).toBeDefined();
+  });
+
+  it("emits terminal continuation only while the current Gateway is connected", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const connected = await mountMenu({ onAction });
+
+    expect(item(connected, "Continue in terminal…").disabled).toBe(false);
+    const dropdown = connected.querySelector("wa-dropdown") as HTMLElement & { open: boolean };
+    dropdown.open = true;
+    select(connected, "continue-in-terminal");
+    expect(dropdown.open).toBe(false);
+    expect(onAction).toHaveBeenCalledWith({ kind: "continue-in-terminal" });
+
+    const disconnected = await mountMenu({
+      actionDisabledReasons: { "continue-in-terminal": "Gateway disconnected." },
+      onAction,
+    });
+    const disabledAction = item(disconnected, "Continue in terminal…");
+    expect(disabledAction.disabled).toBe(true);
+    expect(disabledAction.getAttribute("title")).toBe("Gateway disconnected.");
+    onAction.mockClear();
+    select(disconnected, "continue-in-terminal");
     expect(onAction).not.toHaveBeenCalled();
   });
 });

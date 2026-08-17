@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import {
   captureWsEvent,
@@ -324,7 +324,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           direction: "local",
           kind: "error",
           flowId: this.flowId,
-          errorText: error instanceof Error ? error.message : String(error),
+          errorText: coerceErrorMessage(error),
           meta: {
             provider: "openai",
             capability: "realtime-voice",
@@ -462,6 +462,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     const auth = await requireOpenAIRealtimePlatformAuth({
       configuredApiKey: this.config.apiKey,
       cfg: this.config.cfg,
+      agentId: this.config.agentId,
     });
     return this.resolveApiKeyConnectionParams(auth.value, model);
   }

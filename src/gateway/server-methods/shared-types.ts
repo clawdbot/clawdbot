@@ -24,15 +24,19 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import type {
+  AgentRuntimeIdentity,
+  AgentRuntimeApprovalAuthorityValidator,
+} from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
   ChannelRuntimeSnapshot,
@@ -50,7 +54,10 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
-import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type {
+  WorkerPlacementDiskSpaceReader,
+  WorkerSessionPlacementReader,
+} from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
@@ -67,6 +74,11 @@ import type { TrustedSessionCreation } from "./session-creation-provenance.js";
  * Shared gateway request types used by every server-method module.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+/** Trusted in-process spawn control plane that already owns this run's task row.
+    Gateway CLI tracking only covers runs nobody else records, so a marked run
+    must never get a second row. */
+export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
@@ -90,10 +102,6 @@ export type GatewayClient = {
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
-  /** Temporary legacy migration session closed when normal enforcement resumes. */
-  isControlUiDeviceAuthMigrationSession?: boolean;
-  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
-  isControlUiDeviceAuthMigration?: boolean;
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
@@ -108,7 +116,7 @@ export type GatewayClient = {
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
-    agentRunTracking?: "plugin_subagent";
+    agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
@@ -188,11 +196,14 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
+  gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
+  scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
   /** Cancels durable approvals owned by one actively aborted run. */
   cancelRunBoundApprovals?: (runId: string) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
@@ -241,13 +252,6 @@ type GatewayKernelContext = {
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -276,6 +280,7 @@ type GatewayKernelContext = {
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
 type GatewayTransportContext = {
+  portalService?: GatewayPortalService;
   getMcpAppSandboxPort?: () => number | undefined;
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
@@ -339,9 +344,13 @@ type GatewayResidentBridgeContext = {
   }) => Promise<HealthSummary>;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
+  /** Gateway-host desktop acquisition and observation; present only after enabled startup. */
+  hostDesktopService?: import("../desktop/host-source.js").HostDesktopService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;
+  /** Process-local health samples fenced to the exact active placement owner. */
+  workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "./lib/string-coerce.ts";
 
 export type NavigationRouteId = RouteId;
 
@@ -26,6 +26,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "activity",
   "plugins",
   "apps",
+  "portals",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -181,7 +182,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "talk", "devices"],
+    routes: ["connection", "channels", "communications", "talk", "devices", "cloud-workers"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
@@ -222,6 +223,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
   apps: "layoutGrid",
+  portals: "monitor",
   approvals: "badgeCheck",
   workboard: "kanban",
   worktrees: "folder",
@@ -235,6 +237,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   plugins: "puzzle",
   "skill-workshop": "wrench",
   devices: "monitorSmartphone",
+  "cloud-workers": "server",
   chat: "messageSquare",
   dashboard: "layoutDashboard",
   dashboards: "layoutDashboard",
@@ -330,6 +333,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
+  portals: { titleKey: "tabs.portals", subtitleKey: "subtitles.portals" },
   approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
@@ -346,6 +350,10 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.skillWorkshop",
   },
   devices: { titleKey: "tabs.devices", subtitleKey: "subtitles.devices" },
+  "cloud-workers": {
+    titleKey: "tabs.cloudWorkers",
+    subtitleKey: "subtitles.cloudWorkers",
+  },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },

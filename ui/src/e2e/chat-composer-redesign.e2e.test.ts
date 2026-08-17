@@ -1,10 +1,6 @@
 // Control UI E2E tests cover the redesigned chat composer.
 import { expect, it } from "vitest";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  navigateToControlUiSession,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -53,6 +49,9 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
+        expect(menuBox.x).toBeGreaterThanOrEqual(12);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(655);
+        expect(menuBox.width).toBeGreaterThanOrEqual(642);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
@@ -88,6 +87,13 @@ suite.define(() => {
           },
         ],
         methodResponses: {
+          "config.get": {
+            config: { ui: { prefs: { chatFollowUpMode: "steer" } } },
+            hash: "composer-redesign-config",
+            issues: [],
+            raw: JSON.stringify({ ui: { prefs: { chatFollowUpMode: "steer" } } }),
+            valid: true,
+          },
           "models.authStatus": {
             ts: Date.now(),
             providers: [
@@ -157,12 +163,11 @@ suite.define(() => {
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
+      const microphonePickerShell = page.locator(".chat-talk-input-picker");
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      const modelRequests = await gateway.getRequests("models.list");
-      expect(modelRequests).toHaveLength(1);
-      expect(modelRequests[0]?.params).toEqual({ view: "configured" });
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
@@ -173,6 +178,9 @@ suite.define(() => {
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
+      const emptySend = page.getByRole("button", { name: "Write a message to send." });
+      await expect.poll(() => emptySend.isVisible()).toBe(true);
+      await expect.poll(() => emptySend.isDisabled()).toBe(true);
       await expect
         .poll(() => page.getByRole("button", { name: "Start video talk" }).count())
         .toBe(0);
@@ -226,6 +234,7 @@ suite.define(() => {
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
@@ -457,9 +466,17 @@ suite.define(() => {
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
+      await textarea.fill("Steer this queued follow-up");
+      const followUp = page.getByRole("button", {
+        name: /^(Queue message|Steer into the active run)$/,
+      });
+      await expect.poll(() => followUp.isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".chat-send-btn--stop").count()).toBe(0);
+
+      await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
-      await stop.click();
+      await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
         runId,
@@ -471,10 +488,23 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
-      await expect.poll(() => page.getByRole("button", { name: "Send message" }).count()).toBe(0);
+      await expect.poll(() => emptySend.isVisible()).toBe(true);
+      await expect.poll(() => emptySend.isDisabled()).toBe(true);
 
       await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);
+      expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(0);
+      // Resize re-layout is async; wait for the header controls to adopt the
+      // mobile width before sampling one-shot bounding boxes below.
+      await expect
+        .poll(async () => {
+          const settled = await settings.boundingBox();
+          return settled ? settled.x + settled.width : Number.POSITIVE_INFINITY;
+        })
+        .toBeLessThanOrEqual(393);
       const [mobileAttachBox, mobileModelBox, mobileSettingsBox, mobileContextBox, mobileVoiceBox] =
         await Promise.all([
           attach.boundingBox(),
@@ -538,6 +568,9 @@ suite.define(() => {
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
       await model.click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
+        .toBe(true);
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
@@ -554,310 +587,23 @@ suite.define(() => {
       await page.setViewportSize({ width: 1280, height: 900 });
       await gateway.setOnline(false);
       await expect.poll(() => voice.isDisabled()).toBe(true);
+      await page.mouse.move(0, 0);
+      await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
       await expect
-        .poll(async () => {
-          const [voiceBackground, pickerBackground] = await Promise.all([
-            voice.evaluate((node) => getComputedStyle(node).backgroundColor),
-            microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor),
-          ]);
-          return voiceBackground === pickerBackground;
-        })
-        .toBe(true);
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await composerShell.screenshot({
-          animations: "disabled",
-          path: `${artifactDir}/voice-picker-disabled-background.png`,
-        });
-      }
-    });
-  });
-
-  it("refreshes the configured usable catalog after advertised chat metadata", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        agentModel: "openai/gpt-5.3-codex-spark",
-        models: [
-          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-          {
-            id: "gpt-5.3-codex-spark",
-            name: "GPT-5.3 Codex Spark",
-            provider: "codex",
-            available: false,
-          },
-        ],
-        methodResponses: {
-          "chat.startup": {
-            agentsList: {
-              agents: [{ id: "main", name: "OpenClaw" }],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
-            messages: [],
-            sessionId: "control-ui-e2e-session",
-            thinkingLevel: null,
-          },
-          "chat.metadata": {
-            commands: [],
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-              {
-                id: "gpt-5.3-codex-spark",
-                name: "GPT-5.3 Codex Spark",
-                provider: "codex",
-                available: false,
-              },
-            ],
-          },
-          "sessions.list": {
-            count: 1,
-            defaults: {
-              contextTokens: 200_000,
-              model: "gpt-5.3-codex-spark",
-              modelProvider: "openai",
-            },
-            path: "",
-            sessions: [
-              {
-                contextTokens: 200_000,
-                displayName: "Main",
-                hasActiveRun: false,
-                key: "main",
-                kind: "direct",
-                label: "Main",
-                model: "gpt-5.5",
-                modelProvider: "openai",
-                status: "done",
-                totalTokens: 0,
-                updatedAt: Date.now(),
-              },
-            ],
-            ts: Date.now(),
-          },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.metadata");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
-
-      const composer = page.locator(".agent-chat__input");
-      const providers = composer.locator("[data-chat-model-provider]");
-      await expect
-        .poll(async () => (await providers.allTextContents()).map((label) => label.trim()))
-        .toEqual(["OpenAI"]);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
-        .toContain("GPT-5.5");
-      await expect
-        .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
         .toBe(0);
-      // The advertised default is unavailable, so no usable catalog row is
-      // marked as the default and no synthetic empty row is introduced.
-      await expect.poll(() => composer.locator('[data-chat-model-default="true"]').count()).toBe(0);
-      await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
-    });
-  });
+      await expect.poll(() => voice.evaluate((node) => getComputedStyle(node).opacity)).toBe("0.4");
 
-  it("loads agent-scoped startup models when the route switches sessions", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const workModel = {
-        id: "work-model",
-        name: "Work Model",
-        provider: "openai",
-        available: true,
-      };
-      const otherModel = {
-        id: "other-model",
-        name: "Other Model",
-        provider: "anthropic",
-        available: true,
-      };
-      const startupResponse = (sessionId: string, model: typeof workModel) => ({
-        agentsList: {
-          agents: [
-            { id: "work", name: "Work" },
-            { id: "other", name: "Other" },
-          ],
-          defaultId: "work",
-          mainKey: "main",
-          scope: "agent",
-        },
-        messages: [],
-        metadata: { commands: [], models: [model] },
-        sessionId,
-        thinkingLevel: null,
-      });
-      const gateway = await installMockGateway(page, {
-        defaultAgentId: "work",
-        sessionKey: "agent:work:main",
-        methodResponses: {
-          "chat.startup": {
-            cases: [
-              {
-                match: { sessionKey: "agent:work:main" },
-                response: startupResponse("work-session", workModel),
-              },
-              {
-                match: { sessionKey: "agent:other:main" },
-                response: startupResponse("other-session", otherModel),
-              },
-            ],
-          },
-          "models.list": {
-            cases: [
-              {
-                match: { agentId: "other", view: "configured" },
-                response: { models: [otherModel] },
-              },
-            ],
-          },
-          "sessions.list": {
-            count: 2,
-            defaults: {
-              contextTokens: 200_000,
-              model: "other-model",
-              modelProvider: "anthropic",
-            },
-            path: "",
-            sessions: [
-              {
-                key: "agent:work:main",
-                kind: "direct",
-                model: "work-model",
-                modelProvider: "openai",
-                status: "done",
-                updatedAt: Date.now(),
-              },
-              {
-                key: "agent:other:main",
-                kind: "direct",
-                model: "other-model",
-                modelProvider: "anthropic",
-                status: "done",
-                updatedAt: Date.now(),
-              },
-            ],
-            ts: Date.now(),
-          },
-        },
-        models: [workModel],
-      });
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
-      await gateway.waitForRequest("chat.startup");
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-
-      const activeComposer = () =>
-        page.locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input');
+      await voice.hover();
       await expect
-        .poll(() =>
-          activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
-        )
-        .toBe(1);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
-      ]);
-
-      await navigateToControlUiSession(page, "agent:other:main");
-      const startupRequests = await gateway.getRequests("chat.startup");
-      expect(
-        startupRequests.filter(
-          (request) =>
-            (request.params as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:other:main",
-        ),
-      ).toHaveLength(1);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(20);
       await expect
-        .poll(() =>
-          activeComposer().locator('[data-chat-model-option="anthropic/other-model"]').count(),
-        )
-        .toBe(1);
-      await expect
-        .poll(() =>
-          activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
-        )
-        .toBe(0);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { view: "configured" } }),
-        expect.objectContaining({ params: { agentId: "other", view: "configured" } }),
-      ]);
-    });
-  });
-
-  it("does not request unscoped models when chat metadata is unavailable", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-        methodResponses: {
-          connect: {
-            auth: {
-              deviceToken: "e2e-device-token",
-              role: "operator",
-              scopes: [
-                "operator.admin",
-                "operator.read",
-                "operator.write",
-                "operator.approvals",
-                "operator.pairing",
-              ],
-            },
-            features: { events: [], methods: ["chat.startup"] },
-            protocol: 4,
-            server: { connId: "control-ui-e2e", version: "e2e" },
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "main",
-                mainKey: "main",
-                mainSessionKey: "agent:work:main",
-                scope: "agent",
-              },
-            },
-            type: "hello-ok",
-          },
-          "chat.startup": {
-            agentsList: {
-              agents: [{ id: "work", name: "Work" }],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
-            messages: [],
-            sessionId: "control-ui-e2e-session",
-            thinkingLevel: null,
-          },
-          "models.list": {
-            cases: [
-              {
-                match: { agentId: "work", view: "configured" },
-                response: { models: [] },
-              },
-            ],
-          },
-        },
-      });
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
-      const startupRequest = await gateway.waitForRequest("chat.startup");
-      expect(startupRequest.params).toEqual(
-        expect.objectContaining({ sessionKey: "agent:work:main" }),
-      );
-      for (const request of await gateway.getRequests("chat.startup")) {
-        expect(request.params).toEqual(expect.objectContaining({ sessionKey: "agent:work:main" }));
-      }
-
-      const composer = page.locator(".agent-chat__input");
-      await expect
-        .poll(async () =>
-          (await composer.locator("[data-chat-model-option]").allTextContents()).join(" "),
-        )
-        .not.toContain("GPT Default");
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({ params: { agentId: "work", view: "configured" } }),
-      ]);
+        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
+        .toBe("1");
+      await microphonePicker.click();
+      await expect.poll(() => microphonePicker.getAttribute("aria-expanded")).toBe("true");
+      await expect.poll(() => page.locator(".chat-talk-input-picker[open]").count()).toBe(1);
     });
   });
 });

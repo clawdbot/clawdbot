@@ -26,7 +26,7 @@ function createFakeRfb() {
     constructor(
       readonly target: HTMLElement,
       readonly channel: string | WebSocket,
-      readonly options?: { credentials?: { password: string } },
+      readonly options?: { credentials?: { username?: string; password?: string } },
     ) {
       super();
       instances.push(this);
@@ -52,7 +52,7 @@ describe("DesktopClient", () => {
     await client.connect({
       gatewayUrl,
       wsUrl: "/desktop/observe?token=abc",
-      password: "secret",
+      credentials: { password: "secret" },
       viewOnly: true,
       target,
     });
@@ -66,20 +66,39 @@ describe("DesktopClient", () => {
     const { Rfb, instances } = createFakeRfb();
     const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
+    const target = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    const onKeyDown = vi.fn();
+    canvas.addEventListener("keydown", onKeyDown);
+    target.append(canvas);
 
     const handle = await client.connect({
       gatewayUrl: "ws://control.example.test",
       wsUrl: "/desktop/observe",
-      password: "secret",
+      credentials: { username: "operator", password: "secret" },
       background: "rgb(8, 8, 8)",
       viewOnly: false,
-      target: document.createElement("div"),
+      scaleViewport: false,
+      target,
     });
 
     expect(instances[0]?.background).toBe("rgb(8, 8, 8)");
     expect(instances[0]?.viewOnly).toBe(false);
+    expect(instances[0]?.scaleViewport).toBe(false);
+    expect(instances[0]?.options).toEqual({
+      credentials: { username: "operator", password: "secret" },
+    });
+
+    handle.setScaleViewport?.(true);
     expect(instances[0]?.scaleViewport).toBe(true);
-    expect(instances[0]?.options).toEqual({ credentials: { password: "secret" } });
+    handle.sendKeyboardEvent?.(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
+    expect(onKeyDown).toHaveBeenCalledOnce();
+    expect((onKeyDown.mock.calls[0]?.[0] as KeyboardEvent | undefined)?.key).toBe("k");
+    handle.sendText?.("m");
+    handle.sendBackspace?.();
+    expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
+      ["k", "m", "Backspace"],
+    );
 
     handle.disconnect();
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();

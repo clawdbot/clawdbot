@@ -1,5 +1,10 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isReservedSessionRest,
+  normalizeControlUiBasePath,
+  parseShortSessionRef,
+} from "./grammar.js";
 
 export type ControlUiSessionPathTarget =
   | { namespace: "chat" | "dashboard"; kind: "main"; agentId: string }
@@ -22,14 +27,6 @@ export type ControlUiSessionPathTarget =
       sessionKey: string;
       slugCandidate?: string;
     };
-
-const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
-const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "sessions"]);
-
-function normalizeBasePath(basePath: string): string {
-  const trimmed = basePath.trim().replace(/^\/+|\/+$/gu, "");
-  return trimmed ? `/${trimmed}` : "";
-}
 
 function normalizePath(path: string): string {
   const trimmed = path.trim();
@@ -54,14 +51,6 @@ function decodePathSegment(segment: string): string | null {
   }
 }
 
-function isReservedSessionRest(rest: string, mainKey: string | undefined): boolean {
-  const normalized = rest.toLowerCase();
-  return (
-    FIXED_RESERVED_SESSION_RESTS.has(normalized) ||
-    normalized === (normalizeNullableString(mainKey)?.toLowerCase() ?? "main")
-  );
-}
-
 function literalSessionKey(agentId: string, restSegments: readonly string[]): string | null {
   const normalizedAgentId = normalizeNullableString(agentId);
   if (!normalizedAgentId || restSegments.length === 0 || restSegments.some((segment) => !segment)) {
@@ -77,7 +66,7 @@ export function parseControlUiSessionPath(
 ): ControlUiSessionPathTarget | null {
   const normalizedPath = normalizePath(pathname);
   for (const namespace of ["chat", "dashboard"] as const) {
-    const prefix = `${normalizeBasePath(basePath)}/${namespace}/`;
+    const prefix = `${normalizeControlUiBasePath(basePath)}/${namespace}/`;
     if (!normalizedPath.startsWith(prefix)) {
       continue;
     }
@@ -110,14 +99,11 @@ export function parseControlUiSessionPath(
     if (isReservedSessionRest(segment, mainKey)) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    const shortId = segment.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase();
-    if (!shortId) {
+    const shortRef = parseShortSessionRef(segment);
+    if (!shortRef) {
       return { namespace, kind: "literal", agentId, sessionKey, slugCandidate: segment };
     }
-    const slugHint = segment.slice(0, segment.length - shortId.length).replace(/-+$/u, "");
-    return slugHint
-      ? { namespace, kind: "short", agentId, shortId, slugHint }
-      : { namespace, kind: "short", agentId, shortId };
+    return { namespace, kind: "short", agentId, ...shortRef };
   }
   return null;
 }

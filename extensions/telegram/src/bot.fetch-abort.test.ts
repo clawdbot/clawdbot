@@ -1,7 +1,7 @@
 // Telegram tests cover bot.fetch abort plugin behavior.
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { isTelegramPollingNetworkError } from "./network-errors.js";
+import { isTelegramPollingNetworkError, TelegramRequestNotStartedError } from "./network-errors.js";
 
 const { botCtorSpy, telegramBotDepsForTest } =
   await import("./bot.create-telegram-bot.test-harness.js");
@@ -357,6 +357,36 @@ describe("createTelegramBot fetch abort", () => {
     expect(cancelMisdirectedBody).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["without fallback", false],
+    ["after one fallback", true],
+  ])(
+    "rejects a terminal actual 421 %s and cancels every response body",
+    async (_name, fallback) => {
+      const cancelBodies = Array.from({ length: fallback ? 2 : 1 }, () => vi.fn());
+      const fetchSpy = vi.fn();
+      for (const cancel of cancelBodies) {
+        fetchSpy.mockResolvedValueOnce(
+          new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 421 }),
+        );
+      }
+      const forceFallback = fallback ? vi.fn(() => true) : undefined;
+      const { clientFetch } = createWrappedTelegramClientFetchWithTransport({
+        fetch: fetchSpy as typeof fetch,
+        ...(forceFallback ? { forceFallback } : {}),
+      });
+
+      await expect(
+        clientFetch("https://api.telegram.org/bot123456:ABC/sendMessage"),
+      ).rejects.toBeInstanceOf(TelegramRequestNotStartedError);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(cancelBodies.length);
+      for (const cancel of cancelBodies) {
+        expect(cancel).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("retries Telegram 421 fetch errors after forcing transport fallback", async () => {
     const forceFallback = vi.fn(() => true);
     const fetchSpy = vi
@@ -374,6 +404,22 @@ describe("createTelegramBot fetch abort", () => {
     expect((result as Response).status).toBe(200);
     expect(forceFallback).toHaveBeenCalledWith("misdirected-request");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a thrown 421-shaped edge error distinct from request-not-started custody", async () => {
+    const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
+    const forceFallback = vi.fn(() => false);
+    const fetchSpy = vi.fn().mockRejectedValue(edgeError);
+    const { clientFetch } = createWrappedTelegramClientFetchWithTransport({
+      fetch: fetchSpy as typeof fetch,
+      forceFallback,
+    });
+
+    await expect(clientFetch("https://api.telegram.org/bot123456:ABC/sendMessage")).rejects.toBe(
+      edgeError,
+    );
+    expect(edgeError).not.toBeInstanceOf(TelegramRequestNotStartedError);
+    expect(forceFallback).toHaveBeenCalledWith("misdirected-request");
   });
 
   it("preserves the original fetch error when tagging cannot attach metadata", async () => {

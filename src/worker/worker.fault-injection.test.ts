@@ -14,7 +14,8 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection.js";
+import { WorkerAdmissionError } from "./worker-connection-contract.js";
+import { WorkerConnectionStoppedError } from "./worker-connection.js";
 import {
   ComposedGatewayHarness,
   ENVIRONMENT_ID,
@@ -30,6 +31,10 @@ import { runWorkerDescriptor } from "./worker.runtime.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const REPLACEMENT_CREDENTIAL = ["worker", "replacement", "fixture"].join("-");
 const MODEL_REF = { provider: "fake", model: "fault-model" } as const;
+const TERMINAL_EVENT = {
+  kind: "lifecycle" as const,
+  payload: { phase: "finishing" as const, startedAt: 1, endedAt: 2 },
+};
 
 function transcriptMessage(text: string) {
   return {
@@ -81,6 +86,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       createDescriptor: (options) => harness.createDescriptor(options),
       requestParams: (method) => harness.requestParams(method),
       sessionTarget: harness.sessionTarget,
+      settleRun: (runId) => harness.settleRun(runId),
       setOutcome: (outcome) => {
         harness.providerPlan = { kind: "immediate", text: "roundtrip", outcome };
       },
@@ -93,7 +99,6 @@ describe("cloud worker milestone 2 fault injection", () => {
   ] as const)(
     "does not pace provider preview production on a delayed first request %s",
     async (_label, previewStage) => {
-      harness.enablePlacement(RUN_ID);
       const nextProviderDelta = createDeferred();
       const providerProduced = createDeferred();
       const previewGate = harness.addLiveEventGate(previewStage, "preview");
@@ -122,16 +127,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         ).toHaveLength(2),
       );
       expect(settled).toBe(false);
-      expect(harness.placementWrites.filter((write) => write.liveSeq !== undefined)).toEqual([]);
       expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeNull();
 
       previewGate.release.resolve();
       await finishingGate.entered.promise;
       expect(settled).toBe(false);
       expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
-      expect(harness.placementWrites.filter((write) => write.liveSeq !== undefined)).toHaveLength(
-        1,
-      );
       expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
       expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
         { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
@@ -179,13 +180,13 @@ describe("cloud worker milestone 2 fault injection", () => {
       transcriptMessage("partitioned user"),
       { ...doneMessage("partitioned reply"), timestamp: 2 },
     ]);
-    const live = ["one", "two", "three"].map((delta) =>
-      current.live.emit(RUN_ID, {
+    for (const delta of ["one", "two", "three"]) {
+      current.live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: delta, delta },
-      }),
-    );
-    await expect(Promise.all(live)).resolves.toHaveLength(3);
+      });
+    }
+    await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
 
     const transcriptRequests = harness.requestParams("worker.transcript.commit");
     expect(transcriptRequests).toHaveLength(2);
@@ -198,14 +199,14 @@ describe("cloud worker milestone 2 fault injection", () => {
       harness
         .requestParams("worker.live-event")
         .map((request) => (request as WorkerLiveEventParams).seq),
-    ).toEqual([1, 2, 3, 1, 2, 3]);
+    ).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
     const transcript = SessionManager.open(harness.sessionTarget).getEntries();
     expect(transcript).toHaveLength(2);
     expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
     expect(SessionManager.open(harness.sessionTarget).getLeafId()).toBe(committed.newLeafId);
   });
 
-  it("recovers durable state across gateway restart and renumbers a lost live window", async () => {
+  it("fences restart-inherited authority and recovers durable state on a fresh claim", async () => {
     const current = harness.createClients();
     clients.push(current);
     const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
@@ -221,56 +222,90 @@ describe("cloud worker milestone 2 fault injection", () => {
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: true });
     await current.connection.start();
 
-    await current.live.emit(RUN_ID, {
+    current.live.enqueuePreview(RUN_ID, {
       kind: "assistant",
       payload: { text: "acked", delta: "acked" },
     });
+    await vi.waitFor(() => expect(harness.liveDeltas).toEqual(["acked"]));
     const inference = current.inference.start(inferenceRequest(harness.epoch, "restart-turn"));
     await providerStarted.promise;
     const commit = current.transcript.commit([transcriptMessage("restart transcript")]);
+    const fencedCommit = expect(commit).rejects.toMatchObject({
+      name: "WorkerAdmissionError",
+      reason: "placement-mismatch",
+    });
+    const fencedInference = expect(inference).rejects.toMatchObject({
+      name: "WorkerAdmissionError",
+      reason: "placement-mismatch",
+    });
     await commitEntered.promise;
-    const liveTail = ["tail-a", "tail-b"].map((delta) =>
-      current.live.emit(RUN_ID, {
+    for (const delta of ["tail-a", "tail-b"]) {
+      current.live.enqueuePreview(RUN_ID, {
         kind: "assistant",
         payload: { text: delta, delta },
-      }),
-    );
-    // The restart fault fires when the gated commit response drains; make sure the
-    // pre-restart tail-a live request reached the gateway first or the lost-window
-    // replay assertion below becomes timing-dependent.
+      });
+    }
+    // Pin one live request in the pre-restart window before the commit response
+    // triggers restart, so recovery proves that stale tail cannot retain authority.
     await vi.waitFor(() =>
       expect(harness.requestParams("worker.live-event").length).toBeGreaterThanOrEqual(3),
     );
     commitRelease.resolve();
 
-    await expect(commit).resolves.toMatchObject({ entryIds: [expect.any(String)] });
-    await expect(inference).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    await expect(Promise.all(liveTail)).resolves.toHaveLength(2);
+    await fencedCommit;
+    await fencedInference;
+    await expect(current.connection.waitForExit()).resolves.toMatchObject({
+      kind: "failed",
+      error: expect.objectContaining({
+        name: WorkerAdmissionError.name,
+        reason: "placement-mismatch",
+      }),
+    });
     expect(harness.providerCalls).toBe(1);
     expect(harness.replacementProviderCalls).toBe(0);
-    expect(harness.admissions.at(-1)).toMatchObject({
+    const staleIdentity = harness.admissions.at(-1);
+    expect(staleIdentity).toMatchObject({
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: harness.epoch,
       sessionId: SESSION_ID,
+      turnClaim: {
+        runId: RUN_ID,
+        owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: harness.epoch },
+      },
     });
-    expect(harness.liveDeltas).toEqual(["acked", "tail-a", "tail-b"]);
+    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
+
+    const recoveryRunId = "restart-recovery-run";
+    const oldEpoch = harness.epoch;
+    const freshEpoch = harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, recoveryRunId);
+    expect(freshEpoch).toBeGreaterThan(oldEpoch);
+    providerRelease.resolve(doneOutcome("late stale provider result"));
+    const fresh = harness.createClients({
+      admissionProof: REPLACEMENT_CREDENTIAL,
+      epoch: freshEpoch,
+      runId: recoveryRunId,
+    });
+    clients.push(fresh);
+    await fresh.connection.start();
+    fresh.live.enqueuePreview(recoveryRunId, {
+      kind: "assistant",
+      payload: { text: "recovered", delta: "recovered" },
+    });
+    await expect(fresh.live.emitTerminal(recoveryRunId, TERMINAL_EVENT)).resolves.toBeUndefined();
+    const freshIdentity = harness.admissions.at(-1);
+    expect(freshIdentity?.turnClaim).toMatchObject({
+      runId: recoveryRunId,
+      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: freshEpoch },
+    });
+    expect(freshIdentity?.turnClaim?.claimId).not.toBe(staleIdentity?.turnClaim?.claimId);
+    expect(harness.liveDeltas[0]).toBe("acked");
+    expect(harness.liveDeltas.filter((delta) => delta === "recovered")).toEqual(["recovered"]);
     const liveRequests = harness.requestParams("worker.live-event").map((request) => {
       const live = request as WorkerLiveEventParams;
-      return [live.seq, live.lastAckedSeq];
+      return [live.runId, live.seq, live.lastAckedSeq];
     });
-    // Pre-restart prefix is deterministic (the waitFor above pins tail-a's send).
-    expect(liveRequests.slice(0, 3)).toEqual([
-      [1, 0],
-      [2, 1],
-      [3, 1],
-    ]);
-    // Whether tail-a's ack beats the socket teardown is a legitimate race, so the
-    // exact retry trace varies; what must hold is that the cleared window forced a
-    // resync replay renumbered from the fresh ack state.
-    expect(liveRequests.length).toBeGreaterThanOrEqual(5);
-    expect(liveRequests.slice(3)).toContainEqual([1, 0]);
-    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
-    providerRelease.resolve(doneOutcome("late stale provider result"));
+    expect(liveRequests).toContainEqual([recoveryRunId, 1, 0]);
+    harness.settleRun(recoveryRunId);
   });
 
   it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
@@ -282,20 +317,23 @@ describe("cloud worker milestone 2 fault injection", () => {
     const pendingStarted = createDeferred();
     harness.providerPlan = { kind: "pending", release: pendingRelease, started: pendingStarted };
     const oldInference = old.inference.start(inferenceRequest(harness.epoch, "handoff-old"));
-    const oldInferenceRejected = expect(oldInference).rejects.toBeInstanceOf(WorkerFencedError);
+    const oldInferenceSettled = expect(oldInference).resolves.toMatchObject({
+      type: "error",
+      reason: "session-not-attached",
+    });
     await pendingStarted.promise;
 
     const oldEpoch = harness.epoch;
-    const newEpoch = harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL);
+    const newEpoch = harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, "fresh-run");
     expect(newEpoch).toBeGreaterThan(oldEpoch);
     const rejected = old.transcript.commit([transcriptMessage("late old owner")]);
     await expect(rejected).rejects.toMatchObject({
       name: "WorkerTranscriptCommitError",
-      reason: "credential-replaced",
+      reason: "placement-mismatch",
     });
-    await expect(old.connection.waitForExit()).resolves.toMatchObject({ kind: "fenced" });
+    await expect(old.connection.waitForExit()).resolves.toMatchObject({ kind: "failed" });
     pendingRelease.resolve(doneOutcome("stale paid output"));
-    await oldInferenceRejected;
+    await oldInferenceSettled;
 
     harness.providerPlan = { kind: "immediate", text: "new owner reply" };
     // Milestone-3 admission binds the worker to a single run; the fresh owner
@@ -308,6 +346,10 @@ describe("cloud worker milestone 2 fault injection", () => {
     });
     clients.push(fresh);
     await fresh.connection.start();
+    expect(harness.admissions.at(-1)?.turnClaim).toMatchObject({
+      runId: "fresh-run",
+      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: newEpoch },
+    });
     await expect(
       fresh.inference.start({
         ...inferenceRequest(newEpoch, "handoff-new"),
@@ -376,20 +418,20 @@ describe("cloud worker milestone 2 fault injection", () => {
     try {
       await current.connection.start();
 
-      await expect(
-        Promise.all(
-          ["one", "two"].map((delta) =>
-            current.live.emit(RUN_ID, { kind: "assistant", payload: { text: delta, delta } }),
-          ),
-        ),
-      ).resolves.toHaveLength(2);
+      for (const delta of ["one", "two"]) {
+        current.live.enqueuePreview(RUN_ID, {
+          kind: "assistant",
+          payload: { text: delta, delta },
+        });
+      }
+      await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
 
       expect(harness.liveDeltas).toEqual(["one", "two"]);
       expect(
         harness
           .requestParams("worker.live-event")
           .map((request) => (request as WorkerLiveEventParams).seq),
-      ).toEqual([1, 2]);
+      ).toEqual([1, 2, 3]);
       expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
     } finally {
       clearAgentRunContext(RUN_ID);

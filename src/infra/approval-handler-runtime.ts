@@ -23,11 +23,11 @@ import type {
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
 import { createChannelNativeApprovalRuntime } from "./approval-native-runtime.js";
+import { normalizeApprovalRequest } from "./approval-types.js";
 import {
   buildExpiredApprovalView,
   buildPendingApprovalView,
   buildResolvedApprovalView,
-  resolveApprovalRequestKind,
 } from "./approval-view-model.js";
 import type {
   ExpiredApprovalView,
@@ -458,7 +458,10 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   const log = createSubsystemLogger(params.label);
   const activeEntries = new Map<string, ActiveApprovalEntries>();
   let stopped = false;
-  const resolveApprovalKind = nativeRuntime.resolveApprovalKind ?? resolveApprovalRequestKind;
+  const resolveApprovalKind = (request: ApprovalRequest): ChannelApprovalKind => {
+    const normalizedRequest = normalizeApprovalRequest(request);
+    return nativeRuntime.resolveApprovalKind?.(normalizedRequest) ?? normalizedRequest.approvalKind;
+  };
   const baseContext: ChannelApprovalCapabilityHandlerContext = {
     cfg: params.cfg,
     accountId: params.accountId,

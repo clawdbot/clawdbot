@@ -8,18 +8,8 @@ import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
 import type { QaSuiteRoundTripProbe } from "../../extensions/qa-lab/src/suite-round-trip.ts";
-
-function isTruthyNpmTelegramEnvValue(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function splitCsv(value: string | undefined) {
-  return (value ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
+import { normalizeCsvOrLooseStringList } from "../../packages/normalization-core/src/string-normalization.ts";
+import { isStrictAffirmativeValue } from "../lib/arg-utils.mts";
 
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, name: string) {
   const raw = env[name]?.trim();
@@ -89,7 +79,7 @@ function resolvePackageConfigMutation(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function resolveRttOptions(env: NodeJS.ProcessEnv, selectedScenarioIds: readonly string[] = []) {
-  const explicitCheckIds = splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS);
+  const explicitCheckIds = normalizeCsvOrLooseStringList(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS);
   const checkIds = explicitCheckIds.length > 0 ? explicitCheckIds : [DEFAULT_RTT_CHECK_ID];
   const unknownCheckIds = checkIds.filter((checkId) => checkId !== DEFAULT_RTT_CHECK_ID);
   if (unknownCheckIds.length > 0) {
@@ -147,7 +137,7 @@ async function shouldFailPackageTelegramRun(
   result: { summaryPath: string },
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  if (isTruthyNpmTelegramEnvValue(env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES)) {
+  if (isStrictAffirmativeValue(env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES)) {
     return false;
   }
   const { readQaSuiteFailedOrSkippedScenarioCountFromFile } =
@@ -204,7 +194,7 @@ async function main() {
 
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
   const outputDir = resolvePackageTelegramOutputDir(process.env, repoRoot);
-  const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
+  const scenarioIds = normalizeCsvOrLooseStringList(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
   const providerMode =
     (process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE as QaProviderMode | undefined) ??
     DEFAULT_QA_LIVE_PROVIDER_MODE;
@@ -224,7 +214,7 @@ async function main() {
     providerMode,
     primaryModel,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
-    fastMode: isTruthyNpmTelegramEnvValue(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
+    fastMode: isStrictAffirmativeValue(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds,
     resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
     roundTripProbe: createRoundTripProbe(rttOptions),

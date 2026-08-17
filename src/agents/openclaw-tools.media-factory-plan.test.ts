@@ -6,10 +6,10 @@ import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -245,7 +245,7 @@ describe("optional media tool factory planning", () => {
         pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
       })
     ).map((tool) => tool.name);
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
     vi.unstubAllEnvs();
@@ -257,7 +257,7 @@ describe("optional media tool factory planning", () => {
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
     vi.unstubAllEnvs();
@@ -637,7 +637,7 @@ describe("optional media tool factory planning", () => {
 
   it("defers PDF model resolution from the tool-prep hot path", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, []);
+    installSnapshot(config, createImageAndPdfPlugins());
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
 
     const tools = await createOpenClawToolsForTest({

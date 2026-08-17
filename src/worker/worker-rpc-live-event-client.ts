@@ -1,26 +1,12 @@
-import type {
-  WorkerLiveEvent,
-  WorkerLiveEventResult,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   type WorkerConnection,
   WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
 } from "./worker-connection.js";
-import type { LiveResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
-
-class WorkerLiveEventError extends Error {
-  constructor(readonly response: LiveResponseError) {
-    super(response.message);
-    this.name = "WorkerLiveEventError";
-  }
-
-  get reason(): LiveResponseError["details"]["reason"] {
-    return this.response.details.reason;
-  }
-}
 
 type WorkerLiveEventClientOptions = {
   runEpoch: number;
@@ -36,22 +22,12 @@ type BufferedLiveEvent = {
   // Claim the old send high-water once so the Gateway clears speculative
   // preview gaps before an authoritative terminal retry is renumbered.
   resyncFromSeq?: number;
-  resolve: (result: WorkerLiveEventResult) => void;
-  reject: (error: Error) => void;
+  completion?: Deferred;
 };
 
 // Keep worker requests below the Gateway's 16-frame ingress ceiling while allowing
 // preview delivery to advance independently of any one cumulative ACK.
 const MAX_IN_FLIGHT = 8;
-
-function isTerminalEvent(event: WorkerLiveEvent): boolean {
-  return (
-    event.kind === "lifecycle" &&
-    (event.payload.phase === "finishing" ||
-      event.payload.phase === "end" ||
-      event.payload.phase === "error")
-  );
-}
 
 export class WorkerLiveEventClient {
   private readonly buffered: BufferedLiveEvent[] = [];
@@ -65,6 +41,7 @@ export class WorkerLiveEventClient {
   // A preview may fail before finishing is enqueued; retain its send high-water
   // so that later terminal delivery still clears the resulting sequence gap.
   private terminalResyncFromSeq: number | undefined;
+  private previewDegraded = false;
   private disposed = false;
 
   constructor(
@@ -88,32 +65,48 @@ export class WorkerLiveEventClient {
     ];
   }
 
-  emit(runId: string, event: WorkerLiveEvent): Promise<WorkerLiveEventResult> {
-    if (this.disposed) {
-      return Promise.reject(new Error("worker live-event client disposed"));
+  enqueuePreview(runId: string, event: WorkerLiveEvent): boolean {
+    if (this.disposed || this.previewDegraded || isTerminalConnection(this.connection)) {
+      return false;
     }
-    if (
-      !isTerminalEvent(event) &&
-      this.buffered.length >= (this.options.maxBufferedEvents ?? 1_024)
-    ) {
-      return Promise.reject(new Error("worker live-event buffer capacity exceeded"));
+    if (this.buffered.length >= (this.options.maxBufferedEvents ?? 1_024)) {
+      this.degradePreviews();
+      return false;
     }
-    return new Promise((resolve, reject) => {
-      const terminalResyncFromSeq = isTerminalEvent(event) ? this.terminalResyncFromSeq : undefined;
-      if (terminalResyncFromSeq !== undefined) {
-        this.terminalResyncFromSeq = undefined;
-      }
+    try {
       this.buffered.push({
         seq: this.nextSeqValue,
         runId,
         event: structuredClone(event),
-        ...(terminalResyncFromSeq === undefined ? {} : { resyncFromSeq: terminalResyncFromSeq }),
-        resolve,
-        reject,
       });
-      this.nextSeqValue += 1;
-      this.pump();
+    } catch {
+      this.degradePreviews();
+      return false;
+    }
+    this.nextSeqValue += 1;
+    this.pump();
+    return true;
+  }
+
+  emitTerminal(runId: string, event: WorkerLiveEvent): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(new Error("worker live-event client disposed"));
+    }
+    const completion = createDeferredCore();
+    const terminalResyncFromSeq = this.terminalResyncFromSeq;
+    if (terminalResyncFromSeq !== undefined) {
+      this.terminalResyncFromSeq = undefined;
+    }
+    this.buffered.push({
+      seq: this.nextSeqValue,
+      runId,
+      event: structuredClone(event),
+      ...(terminalResyncFromSeq === undefined ? {} : { resyncFromSeq: terminalResyncFromSeq }),
+      completion,
     });
+    this.nextSeqValue += 1;
+    this.pump();
+    return completion.promise;
   }
 
   dispose(): void {
@@ -144,17 +137,15 @@ export class WorkerLiveEventClient {
       this.inFlight.add(entry);
       void this.send(entry);
     }
-    if (
-      this.inFlight.size === 0 &&
-      this.buffered.length > 0 &&
-      this.buffered.every((entry) => entry.blockedAck === this.ackedSeqValue)
-    ) {
+    if (this.inFlight.size === 0 && this.buffered[0]?.blockedAck === this.ackedSeqValue) {
       const head = this.buffered[0]!;
-      this.rejectAll(
+      this.handleFailure(
+        head,
         new Error(
           `worker live-event acknowledgement did not advance (seq=${head.seq} runId=${head.runId} ackedSeq=${this.ackedSeqValue} buffered=${this.buffered.length} runEpoch=${this.options.runEpoch})`,
         ),
       );
+      this.pump();
     }
   }
 
@@ -205,7 +196,7 @@ export class WorkerLiveEventClient {
         return;
       }
       fenceForOwnershipError(this.connection, response.error);
-      throw new WorkerLiveEventError(response.error);
+      throw new Error(response.error.message);
     } catch (error) {
       if (
         error instanceof WorkerConnectionInterruptedError &&
@@ -214,11 +205,7 @@ export class WorkerLiveEventClient {
         return;
       }
       const failure = error instanceof Error ? error : new Error(String(error));
-      if (!isTerminalEvent(entry.event) && !isTerminalConnection(this.connection)) {
-        this.recoverTerminalAfterPreviewFailure(failure);
-        return;
-      }
-      this.rejectAll(failure);
+      this.handleFailure(entry, failure);
     } finally {
       this.inFlight.delete(entry);
       this.pump();
@@ -227,13 +214,13 @@ export class WorkerLiveEventClient {
 
   private ackThrough(ackedSeq: number): void {
     this.ackedSeqValue = Math.max(this.ackedSeqValue, ackedSeq);
-    while (true) {
-      const entry = this.buffered[0];
-      if (!entry || entry.seq > this.ackedSeqValue) {
-        return;
-      }
-      this.buffered.shift();
-      entry.resolve({ ackedSeq: this.ackedSeqValue });
+    const pendingIndex = this.buffered.findIndex((entry) => entry.seq > this.ackedSeqValue);
+    const acknowledged = this.buffered.splice(
+      0,
+      pendingIndex < 0 ? this.buffered.length : pendingIndex,
+    );
+    for (const entry of acknowledged) {
+      entry.completion?.resolve();
     }
   }
 
@@ -259,29 +246,33 @@ export class WorkerLiveEventClient {
     this.maxSentSeqValue = ackedSeq;
   }
 
-  private recoverTerminalAfterPreviewFailure(error: Error): void {
+  private handleFailure(entry: BufferedLiveEvent, error: Error): void {
+    if (!entry.completion && !isTerminalConnection(this.connection)) {
+      this.degradePreviews();
+    } else {
+      this.rejectAll(error);
+    }
+  }
+
+  private degradePreviews(): void {
+    this.previewDegraded = true;
     this.replayGeneration += 1;
     this.lastResync = undefined;
     const resyncFromSeq = Math.max(this.terminalResyncFromSeq ?? 0, this.maxSentSeqValue);
-    const buffered = this.buffered.splice(0);
-    let terminalRetained = false;
-    for (const entry of buffered) {
-      if (isTerminalEvent(entry.event)) {
-        delete entry.blockedAck;
-        entry.resyncFromSeq = resyncFromSeq;
-        this.buffered.push(entry);
-        terminalRetained = true;
-      } else {
-        entry.reject(error);
-      }
+    const terminal = this.buffered.find((entry) => entry.completion);
+    this.buffered.length = 0;
+    if (terminal) {
+      delete terminal.blockedAck;
+      terminal.resyncFromSeq = resyncFromSeq;
+      this.buffered.push(terminal);
     }
-    this.terminalResyncFromSeq = terminalRetained ? undefined : resyncFromSeq;
+    this.terminalResyncFromSeq = terminal ? undefined : resyncFromSeq;
   }
 
   private rejectAll(error: Error): void {
     const buffered = this.buffered.splice(0);
     for (const entry of buffered) {
-      entry.reject(error);
+      entry.completion?.reject(error);
     }
   }
 }

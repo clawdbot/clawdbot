@@ -1,4 +1,5 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -11,8 +12,6 @@ import {
   type SecretRefSource,
 } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { hasErrnoCode } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -515,14 +514,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
   if (stdin) {
     raw = await readStdinText();
   } else {
-    try {
-      raw = readConfigMutationFileSync(file as string, "--file");
-    } catch (err) {
-      if (hasErrnoCode(err, "ENOENT")) {
-        throw new Error(`--file not found: ${file}`, { cause: err });
-      }
-      throw err;
-    }
+    raw = readConfigMutationFileSync(file as string, "--file");
   }
   try {
     return JSON5.parse(raw);

@@ -140,7 +140,7 @@ function registerGoogleRealtimeVoiceProvider() {
 }
 
 describeLive("google plugin live", () => {
-  it.each(["gemini-3.6-flash", "gemini-3.5-flash-lite"])(
+  it.each(["gemini-3.7-flash", "gemini-3.5-flash-lite"])(
     "discovers and completes through %s",
     async (modelId) => {
       const provider = await buildGoogleLiveCatalogProvider({

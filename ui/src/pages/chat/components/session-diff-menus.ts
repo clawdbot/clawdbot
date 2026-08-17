@@ -32,6 +32,7 @@ export type SessionDiffMenuData =
       trigger: HTMLElement;
       active: SessionDiffScope;
       result: SessionsDiffResult;
+      placement?: "top-start" | "bottom-start";
     }
   | {
       kind: "sync";
@@ -281,7 +282,7 @@ class SessionDiffMenu extends OpenClawLightDomElement {
     if (!menu) {
       return nothing;
     }
-    const placement = menu.kind === "scope" ? "top-start" : "bottom-end";
+    const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
     const width = menu.kind === "sync" ? 360 : menu.kind === "scope" ? 340 : 240;
     const menuLabel =
       menu.kind === "file"

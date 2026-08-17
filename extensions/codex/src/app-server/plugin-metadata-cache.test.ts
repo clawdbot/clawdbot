@@ -128,6 +128,103 @@ describe("Codex plugin metadata cache", () => {
     expect(cache.read("runtime-b", "installed", { cwds: ["/workspace/a"] })).toBe(otherRuntime);
   });
 
+  it("keeps repository-scoped and remote-kind plugin catalogs separate", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi.fn(async (_method: "plugin/list", params: v2.PluginListParams) =>
+      pluginList(
+        params.marketplaceKinds?.includes("shared-with-me")
+          ? "workspace-shared-with-me"
+          : `repo-${params.cwds?.[0] ?? "home"}`,
+        "security-review",
+      ),
+    );
+
+    const workspaceA = await cache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams: { cwds: ["/workspace/a"] },
+      request,
+    });
+    const workspaceB = await cache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams: { cwds: ["/workspace/b"] },
+      request,
+    });
+    const shared = await cache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams: { cwds: ["/workspace/a"], marketplaceKinds: ["shared-with-me"] },
+      request,
+    });
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(cache.read("runtime", "curated-global", { cwds: ["/workspace/a"] })).toBe(workspaceA);
+    expect(cache.read("runtime", "curated-global", { cwds: ["/workspace/b"] })).toBe(workspaceB);
+    expect(
+      cache.read("runtime", "curated-global", {
+        cwds: ["/workspace/a"],
+        marketplaceKinds: ["shared-with-me"],
+      }),
+    ).toBe(shared);
+  });
+
+  it("isolates partial catalog snapshots by the marketplace being resolved", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi
+      .fn<() => Promise<v2.PluginListResponse>>()
+      .mockResolvedValueOnce(pluginList("company-tools", "security-review"))
+      .mockResolvedValueOnce(pluginList("openai-curated-remote", "calendar"));
+    const requestParams = { cwds: ["/workspace/a"] };
+
+    const company = await cache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams,
+      catalogScope: "company-tools",
+      request,
+    });
+    const curated = await cache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams,
+      request,
+    });
+
+    expect(company.response.marketplaces[0]?.name).toBe("company-tools");
+    expect(curated.response.marketplaces[0]?.name).toBe("openai-curated-remote");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(cache.read("runtime", "curated-global", requestParams, "company-tools")).toBe(company);
+    expect(cache.read("runtime", "curated-global", requestParams)).toBe(curated);
+  });
+
+  it("coalesces equivalent order-independent plugin catalog kinds", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi.fn(async () => pluginList("workspace-directory", "calendar"));
+    const first = await cache.load({
+      appCacheKey: "runtime",
+      queryKind: "curated-global",
+      requestParams: {
+        cwds: ["/workspace/a"],
+        marketplaceKinds: ["shared-with-me", "workspace-directory", "shared-with-me"],
+      },
+      request,
+    });
+
+    await expect(
+      cache.load({
+        appCacheKey: "runtime",
+        queryKind: "curated-global",
+        requestParams: {
+          cwds: ["/workspace/a"],
+          marketplaceKinds: ["workspace-directory", "shared-with-me"],
+        },
+        request,
+      }),
+    ).resolves.toBe(first);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces omitted and null installed-plugin scope as the same upstream query", async () => {
     const cache = new CodexPluginMetadataCache();
     const request = vi.fn(async () => installedPlugins("openai-curated-remote", "calendar"));

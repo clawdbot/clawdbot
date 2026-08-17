@@ -8,6 +8,7 @@ import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
@@ -15,6 +16,8 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
@@ -1845,9 +1848,10 @@ describe("image tool implicit imageModel config", () => {
       testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
 
       const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool.label).toBe("View Image");
+      expect(tool.label).toBe("Inspect Image");
       expect(tool.catalogMode).toBe("direct-only");
-      expect(tool.description).toContain("direct visual inspection");
+      expect(tool.description).toContain("private model context");
+      expect(tool.description).toContain("Does not display, attach, or send");
 
       const result = await tool.execute("native-image", {
         prompt: "Read the screenshot error.",
@@ -1861,7 +1865,10 @@ describe("image tool implicit imageModel config", () => {
       ).content;
 
       expect(content).toEqual([
-        { type: "text", text: "Loaded 1 image for direct visual inspection." },
+        {
+          type: "text",
+          text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
+        },
         expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
       ]);
       expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
@@ -3143,6 +3150,103 @@ describe("image compression policy", () => {
   afterEach(() => {
     imageProviderHarness.reset();
     testing.setProviderDepsForTest();
+  });
+
+  it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
+    const provider = "prepared-image-provider";
+    const model = "prepared-image-model";
+    const cfg = {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "https://prepared-image.example.test/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: model,
+                name: "Prepared image model",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const createSnapshot = (runtimeAugment: boolean) => {
+      const plugin = {
+        id: "prepared-image-plugin",
+        enabledByDefault: true,
+        channels: [],
+        providers: [provider],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        origin: "bundled",
+        rootDir: "/fake/prepared-image-plugin",
+        source: "/fake/prepared-image-plugin/index.js",
+        manifestPath: "/fake/prepared-image-plugin/openclaw.plugin.json",
+        modelCatalog: {
+          runtimeAugment,
+          providers: {
+            [provider]: {
+              baseUrl: "https://prepared-image.example.test/v1",
+              api: "openai-completions",
+              models: [{ id: model, name: "Prepared image model" }],
+            },
+          },
+        },
+      } satisfies PluginManifestRecord;
+      return createPluginMetadataSnapshot({
+        config: cfg,
+        manifestRegistry: { plugins: [plugin], diagnostics: [] },
+      });
+    };
+    const preparedSnapshot = createSnapshot(false);
+    const currentSnapshot = createSnapshot(true);
+    const hookModes: Array<boolean | undefined> = [];
+    installImageUnderstandingProviderDeps([], {
+      resolveModelAsync: async (resolvedProvider, resolvedModel, _agentDir, _cfg, options) => {
+        hookModes.push(options?.skipProviderRuntimeHooks);
+        return {
+          model: {
+            id: resolvedModel,
+            provider: resolvedProvider,
+            input: ["text", "image"],
+            mediaInput: {
+              image: options?.skipProviderRuntimeHooks
+                ? { maxBytes: 1_000_000 }
+                : { maxSidePx: 4096 },
+            },
+          } as never,
+          authStorage: {} as never,
+          modelRegistry: {} as never,
+        };
+      },
+    });
+    const currentLease = installTemporaryCurrentPluginMetadataSnapshot(currentSnapshot, {
+      config: cfg,
+    });
+
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg,
+          imageModelConfig: { primary: `${provider}/${model}` },
+          imageCount: 1,
+          metadataSnapshot: preparedSnapshot,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [{ maxBytes: 1_000_000 }],
+      });
+      expect(hookModes).toEqual([true]);
+    } finally {
+      currentLease.release();
+    }
   });
 
   it("derives model metadata, quality preference, and image count from config", async () => {

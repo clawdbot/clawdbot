@@ -702,64 +702,36 @@ describe("gateway server chat", () => {
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
-      const reqId = "chat-img";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: reqId,
-          method: "chat.send",
-          params: {
-            sessionKey: "main",
-            message: "see image",
-            idempotencyKey: "idem-img",
-            attachments: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/png",
-                  data: pngB64,
-                },
-              },
-            ],
+      const imgRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: "idem-img",
+        attachments: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: pngB64,
+            },
           },
-        }),
-      );
-
-      const imgRes = await onceMessage(
-        ws,
-        (o) => o.type === "res" && o.id === reqId,
-        CHAT_RESPONSE_TIMEOUT_MS,
-      );
+        ],
+      });
       expect(imgRes.ok).toBe(true);
       expectStringRunId(imgRes.payload);
-      const reqIdOnly = "chat-img-only";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: reqIdOnly,
-          method: "chat.send",
-          params: {
-            sessionKey: "main",
-            message: "",
-            idempotencyKey: "idem-img-only",
-            attachments: [
-              {
-                type: "image",
-                mimeType: "image/png",
-                fileName: "dot.png",
-                content: `data:image/png;base64,${pngB64}`,
-              },
-            ],
+      const imgOnlyRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "",
+        idempotencyKey: "idem-img-only",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: `data:image/png;base64,${pngB64}`,
           },
-        }),
-      );
-
-      const imgOnlyRes = await onceMessage(
-        ws,
-        (o) => o.type === "res" && o.id === reqIdOnly,
-        CHAT_RESPONSE_TIMEOUT_MS,
-      );
+        ],
+      });
       expect(imgOnlyRes.ok).toBe(true);
       expectStringRunId(imgOnlyRes.payload);
 
@@ -907,12 +879,12 @@ describe("gateway server chat", () => {
       const rejectDispatch = createDeferred();
       const releasePersistence = createDeferred();
       let dispatchStarted = false;
-      let persistenceEntered = false;
+      const persistenceEntered = createDeferred();
       const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
       const persistSpy = vi
         .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
         .mockImplementation(async (params) => {
-          persistenceEntered = true;
+          persistenceEntered.resolve();
           await releasePersistence.promise;
           await persistLifecycleEvent(params);
         });
@@ -953,9 +925,7 @@ describe("gateway server chat", () => {
           markGatewayRestartDraining();
           rejectDispatch.resolve();
           await errorPromise;
-          await waitForFast(() => {
-            expect(persistenceEntered).toBe(true);
-          });
+          await persistenceEntered.promise;
           expect(getActiveGatewayRootWorkCount()).toBe(1);
           releasePersistence.resolve();
           const changed = await sessionChangedPromise;

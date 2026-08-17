@@ -32,4 +32,13 @@ describe("reply runtime public progress contracts", () => {
       Promise<ProgressResult> | ProgressResult
     >();
   });
+
+  it("exports the snapshotted commentary delivery gate", () => {
+    expectTypeOf<GetReplyOptions["commentaryPayloadsEnabled"]>().toEqualTypeOf<
+      boolean | undefined
+    >();
+    expectTypeOf<
+      Exclude<GetReplyOptions["shouldDeliverCommentaryPayloads"], undefined>
+    >().returns.toEqualTypeOf<boolean>();
+  });
 });

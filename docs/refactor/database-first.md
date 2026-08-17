@@ -202,7 +202,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new file-era runtime stores. The current global schema is version `6`, and
+- No new file-era runtime stores. The current global schema is version `7`, and
   the current per-agent schema is version `17`; older supported databases move
   through the bounded forward migrations listed in
   [Database schemas](/reference/database-schemas).
@@ -309,7 +309,7 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The global SQLite schema is at `user_version = 6`. The per-agent schema is at
+- The global SQLite schema is at `user_version = 7`. The per-agent schema is at
   version `17`; their openers apply bounded forward migrations from supported
   older schemas. File-to-database import remains in Doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
@@ -320,7 +320,7 @@ The branch already has a real shared SQLite base:
   `auth_profile_stores`, `auth_profile_state`,
   `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
-  `sandbox_registry_entries`, `cron_jobs`, `commitments`,
+  `sandbox_registry_entries`, `cron_jobs`,
   `delivery_queue_entries`, `model_capability_cache`,
   `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
   `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
@@ -348,7 +348,7 @@ The branch already has a real shared SQLite base:
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
   schema version, timestamps, and agent id for agent databases. The global DB
-  currently uses `user_version = 6`; per-agent DBs use version `17`.
+  currently uses `user_version = 7`; per-agent DBs use version `17`.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -1112,10 +1112,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   sharded JSON registry files and removes successful sources. Runtime reads use
   the typed row columns as source of truth; `entry_json` is only a replay/debug
   copy.
-- The retired `commitments` table remains in the shared schema only until an
-  approved schema-version migration can drop it. Runtime no longer reads or
-  writes commitment rows. Doctor leaves retained rows and the legacy
-  `commitments.json` source untouched.
+- Shared schema version 7 validates and removes the exact retired `commitments`
+  table and discards its inert rows. Unknown same-named tables or indexes are
+  preserved and the migration is refused. Runtime no longer reads or writes
+  commitment state. Doctor leaves the legacy `commitments.json` source untouched.
 - Web Push subscriptions and the generated VAPID identity now use typed shared
   `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
   expiry cleanup, and first-use key generation use row-level SQLite
@@ -1536,7 +1536,6 @@ config_health_entries(config_path, last_known_good_json, last_promoted_good_json
 sandbox_registry_entries(registry_kind, container_name, session_key, backend_id, runtime_label, image, created_at_ms, last_used_at_ms, config_label_kind, config_hash, cdp_port, no_vnc_port, entry_json, updated_at)
 cron_jobs(store_key, job_id, name, description, enabled, delete_after_run, created_at_ms, agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms, anchor_ms, at, stagger_ms, session_target, wake_mode, payload_kind, payload_message, payload_model, payload_fallbacks_json, payload_thinking, payload_timeout_seconds, payload_allow_unsafe_external_content, payload_external_content_source_json, payload_light_context, payload_tools_allow_json, delivery_mode, delivery_channel, delivery_to, delivery_thread_id, delivery_account_id, delivery_best_effort, failure_delivery_mode, failure_delivery_channel, failure_delivery_to, failure_delivery_account_id, failure_alert_disabled, failure_alert_after, failure_alert_channel, failure_alert_to, failure_alert_cooldown_ms, failure_alert_include_skipped, failure_alert_mode, failure_alert_account_id, next_run_at_ms, running_at_ms, last_run_at_ms, last_run_status, last_error, last_duration_ms, consecutive_errors, consecutive_skipped, schedule_error_count, last_delivery_status, last_delivery_error, last_delivered, last_failure_alert_at_ms, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at)
 delivery_queue_entries(queue_name, id, status, entry_kind, session_key, channel, target, account_id, retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at)
-commitments(id, agent_id, session_key, channel, account_id, recipient_id, thread_id, sender_id, kind, sensitivity, source, status, reason, suggested_text, dedupe_key, confidence, due_earliest_ms, due_latest_ms, due_timezone, source_message_id, source_run_id, created_at_ms, updated_at_ms, attempts, last_attempt_at_ms, sent_at_ms, dismissed_at_ms, snoozed_until_ms, expired_at_ms, record_json)
 migration_runs(id, started_at, finished_at, status, report_json)
 migration_sources(source_key, migration_kind, source_path, target_table, source_sha256, source_size_bytes, source_record_count, last_run_id, status, imported_at, removed_source, report_json)
 backup_runs(id, created_at, archive_path, status, manifest_json)
@@ -1638,8 +1637,8 @@ Move these into the global database:
 - Host and Apple device identity/auth, push, update check, OpenRouter model
   cache, installed plugin index, and app-server bindings. Android device auth
   remains app-local in `SecurePrefs`.
-- Retired commitment rows and the legacy `commitments.json` source stay inert
-  until an approved retention and schema-version migration removes them.
+- Shared schema version 7 discards retired commitment rows and removes their
+  table. The legacy `commitments.json` source stays inert and untouched.
 - Device/node pairing and bootstrap records now use typed SQLite tables
 - Device-pair notification subscribers and delivered-request markers now use the
   shared SQLite plugin-state table instead of `device-pair-notify.json`.
@@ -1895,7 +1894,7 @@ Backups remain one archive file:
   creation integrity check.
 - Restore copies snapshots back to their target paths without rewriting their
   recorded schema versions. The normal database open then applies bounded
-  forward migrations to the current global version `6` or per-agent version
+  forward migrations to the current global version `7` or per-agent version
   `17` when required.
 
 ### Phase 6: Worker Runtime
@@ -1949,7 +1948,7 @@ status.
 Restore should rebuild the global database and agent database files from the
 archive snapshots without rewriting their recorded schema versions. Normal
 database open applies bounded forward migrations to the current global version
-`6` or per-agent version `17`. Doctor remains the only owner of file-to-database
+`7` or per-agent version `17`. Doctor remains the only owner of file-to-database
 import. The restore command validates the archive first, then replaces each
 manifest asset from the verified extracted payload.
 
@@ -1957,7 +1956,7 @@ manifest asset from the verified extracted payload.
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - The global schema now uses `user_version = 6`; per-agent DBs use version
+   - The global schema now uses `user_version = 7`; per-agent DBs use version
      `17`, with bounded forward migrations from supported older versions.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 

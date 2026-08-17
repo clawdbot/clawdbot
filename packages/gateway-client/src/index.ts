@@ -9,4 +9,5 @@ export * from "./gateway-origin-scope.js";
 export * from "./readiness.js";
 export * from "./session-projection.js";
 export * from "./session-subscriptions.js";
+export * from "./scope-upgrade.js";
 export * from "./timeouts.js";

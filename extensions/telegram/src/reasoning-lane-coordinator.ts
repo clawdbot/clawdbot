@@ -1,8 +1,11 @@
 // Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  findCodeRegions,
+  isInsideCode,
+  stripReasoningTagsFromText,
+} from "openclaw/plugin-sdk/text-chunking";
 import type {
   TelegramBufferedFinalAnswer,
   TelegramReasoningStepState,
@@ -29,11 +32,13 @@ const REASONING_TAG_PREFIXES = [
   "<think",
   "<thinking",
   "<thought",
+  "<internal",
   "<antthinking",
   "<mm:think",
   "</think",
   "</thinking",
   "</thought",
+  "</internal",
   "</antthinking",
   "</mm:think",
 ];
@@ -116,11 +121,13 @@ export function splitTelegramReasoningText(
 
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  const reasoningText = taggedReasoning || strippedAnswer;
+  if (!reasoningText) {
+    return {};
+  }
 
   return {
-    reasoningText: markReasoningMessage(
-      formatReasoningMessage(taggedReasoning || strippedAnswer || text),
-    ),
+    reasoningText: markReasoningMessage(formatReasoningMessage(reasoningText)),
   };
 }
 

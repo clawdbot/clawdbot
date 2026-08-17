@@ -35,7 +35,9 @@ const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unkno
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const clearOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const loadDeviceAuthTokenReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
+const loadOriginDeviceTokenReadOnlyMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
@@ -191,7 +193,10 @@ vi.mock("../infra/device-auth-store.js", async () => {
   return {
     ...actual,
     loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
+    loadDeviceAuthTokenReadOnly: (...args: unknown[]) => loadDeviceAuthTokenReadOnlyMock(...args),
     loadOriginDeviceToken: (...args: unknown[]) => loadOriginDeviceTokenMock(...args),
+    loadOriginDeviceTokenReadOnly: (...args: unknown[]) =>
+      loadOriginDeviceTokenReadOnlyMock(...args),
     storeDeviceAuthToken: (...args: unknown[]) => storeDeviceAuthTokenMock(...args),
     storeOriginDeviceToken: (...args: unknown[]) => storeOriginDeviceTokenMock(...args),
     clearDeviceAuthToken: (...args: unknown[]) => clearDeviceAuthTokenMock(...args),
@@ -745,6 +750,7 @@ describe("GatewayClient close handling", () => {
         phase: "pre-hello",
         socketOpened: false,
         transportValidated: false,
+        connectRequestSent: false,
         transientPreHelloCleanClose: false,
       },
     );
@@ -768,6 +774,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -785,6 +792,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -813,6 +821,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -831,6 +840,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -895,6 +905,7 @@ describe("GatewayClient close handling", () => {
         phase: "pre-hello",
         socketOpened: true,
         transportValidated: true,
+        connectRequestSent: true,
         transientPreHelloCleanClose: true,
       });
 
@@ -981,12 +992,14 @@ describe("GatewayClient close handling", () => {
         phase: "pre-hello",
         socketOpened: true,
         transportValidated: true,
+        connectRequestSent: true,
         transientPreHelloCleanClose: true,
       });
       expect(onClose).toHaveBeenNthCalledWith(2, 1000, "", {
         phase: "pre-hello",
         socketOpened: true,
         transportValidated: true,
+        connectRequestSent: true,
         transientPreHelloCleanClose: true,
       });
       expect(onConnectError).toHaveBeenCalledOnce();
@@ -1106,6 +1119,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -1153,12 +1167,14 @@ describe("GatewayClient message dispatch", () => {
 
 describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockReset();
     clearOriginDeviceTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
+    loadDeviceAuthTokenReadOnlyMock.mockReset();
     loadOriginDeviceTokenMock.mockReset();
+    loadOriginDeviceTokenReadOnlyMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
     storeOriginDeviceTokenMock.mockReset();
     readLoggingConfigMock.mockReset();
@@ -1174,6 +1190,7 @@ describe("GatewayClient connect auth payload", () => {
       maxProtocol?: number;
       scopes?: string[];
       client?: {
+        id?: string;
         mode?: string;
         platform?: string;
       };
@@ -1209,6 +1226,13 @@ describe("GatewayClient connect auth payload", () => {
 
   function connectRequestFrom(ws: MockWebSocket) {
     return parseConnectRequest(ws);
+  }
+
+  async function advanceToNextReconnect(): Promise<MockWebSocket> {
+    const previousCount = wsInstances.length;
+    await vi.advanceTimersToNextTimerAsync();
+    expect(wsInstances).toHaveLength(previousCount + 1);
+    return getLatestWs();
   }
 
   type ProtocolCompatibilityOptions = Pick<
@@ -1391,8 +1415,7 @@ describe("GatewayClient connect auth payload", () => {
         { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
         "protocol mismatch",
       );
-      await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-      const legacyWs = getLatestWs();
+      const legacyWs = await advanceToNextReconnect();
       legacyWs.emitOpen();
       emitConnectChallenge(legacyWs, "nonce-v3");
       const legacyConnect = connectRequestFrom(legacyWs);
@@ -1444,8 +1467,7 @@ describe("GatewayClient connect auth payload", () => {
       { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const v3Ws = getLatestWs();
+    const v3Ws = await advanceToNextReconnect();
     v3Ws.emitOpen();
     emitConnectChallenge(v3Ws, "nonce-v3-initial");
     const v3Connect = connectRequestFrom(v3Ws);
@@ -1453,8 +1475,7 @@ describe("GatewayClient connect auth payload", () => {
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
 
     v3Ws.emitClose(1012, "gateway restarting after upgrade");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(2), { timeout: 3_000 });
-    const upgradedProbeWs = getLatestWs();
+    const upgradedProbeWs = await advanceToNextReconnect();
     upgradedProbeWs.emitOpen();
     emitConnectChallenge(upgradedProbeWs, "nonce-v3-upgraded");
     const upgradedProbeConnect = connectRequestFrom(upgradedProbeWs);
@@ -1469,9 +1490,8 @@ describe("GatewayClient connect auth payload", () => {
       "protocol mismatch",
     );
 
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
+    const currentReconnectWs = await advanceToNextReconnect();
     expect(onHelloOk).toHaveBeenCalledOnce();
-    const currentReconnectWs = getLatestWs();
     currentReconnectWs.emitOpen();
     emitConnectChallenge(currentReconnectWs, "nonce-v4-upgraded");
     const currentReconnect = connectRequestFrom(currentReconnectWs);
@@ -1484,8 +1504,7 @@ describe("GatewayClient connect auth payload", () => {
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledTimes(2));
 
     currentReconnectWs.emitClose(1012, "gateway rolled back");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(4), { timeout: 3_000 });
-    const rolledBackProbeWs = getLatestWs();
+    const rolledBackProbeWs = await advanceToNextReconnect();
     rolledBackProbeWs.emitOpen();
     emitConnectChallenge(rolledBackProbeWs, "nonce-v4-rolled-back");
     const rolledBackProbeConnect = connectRequestFrom(rolledBackProbeWs);
@@ -1499,8 +1518,7 @@ describe("GatewayClient connect auth payload", () => {
       { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(5), { timeout: 3_000 });
-    const rolledBackLegacyWs = getLatestWs();
+    const rolledBackLegacyWs = await advanceToNextReconnect();
     rolledBackLegacyWs.emitOpen();
     emitConnectChallenge(rolledBackLegacyWs, "nonce-v3-rolled-back");
     expect(connectRequestFrom(rolledBackLegacyWs).params).toMatchObject({
@@ -1551,8 +1569,7 @@ describe("GatewayClient connect auth payload", () => {
       { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const v3Ws = getLatestWs();
+    const v3Ws = await advanceToNextReconnect();
     v3Ws.emitOpen();
     emitConnectChallenge(v3Ws, "nonce-v3-ready");
     const v3Connect = connectRequestFrom(v3Ws);
@@ -1560,8 +1577,7 @@ describe("GatewayClient connect auth payload", () => {
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
 
     v3Ws.emitClose(1012, "gateway upgrading");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(2), { timeout: 3_000 });
-    const v3UpgradeProbeWs = getLatestWs();
+    const v3UpgradeProbeWs = await advanceToNextReconnect();
     v3UpgradeProbeWs.emitOpen();
     emitConnectChallenge(v3UpgradeProbeWs, "nonce-v3-upgrade-probe");
     const v3UpgradeProbe = connectRequestFrom(v3UpgradeProbeWs);
@@ -1572,8 +1588,7 @@ describe("GatewayClient connect auth payload", () => {
       "protocol mismatch",
     );
 
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
-    const v4Ws = getLatestWs();
+    const v4Ws = await advanceToNextReconnect();
     v4Ws.emitOpen();
     emitConnectChallenge(v4Ws, "nonce-v4-before-rollback");
     const v4Connect = connectRequestFrom(v4Ws);
@@ -1584,8 +1599,7 @@ describe("GatewayClient connect auth payload", () => {
       "protocol mismatch",
     );
 
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(4), { timeout: 3_000 });
-    const recoveredV3Ws = getLatestWs();
+    const recoveredV3Ws = await advanceToNextReconnect();
     recoveredV3Ws.emitOpen();
     emitConnectChallenge(recoveredV3Ws, "nonce-v3-after-rollback");
     expect(connectRequestFrom(recoveredV3Ws).params).toMatchObject({
@@ -1870,8 +1884,7 @@ describe("GatewayClient connect auth payload", () => {
       params.failureDetails,
       params.failureMessage,
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const ws = getLatestWs();
+    const ws = await advanceToNextReconnect();
     ws.emitOpen();
     emitConnectChallenge(ws, "nonce-2");
     return connectFrameFrom(ws);
@@ -1950,6 +1963,46 @@ describe("GatewayClient connect auth payload", () => {
     expect(connectFrameFrom(secondWs).deviceToken).toBeUndefined();
     expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
     second.stop();
+  });
+
+  it("keeps read-only origin auth loads and hello tokens off writable host callbacks", async () => {
+    loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
+      token: "stored-origin-token",
+      scopes: ["operator.read"],
+    });
+    const client = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://one.example/rpc",
+      sharedStateMode: "read-only",
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-origin-token",
+      deviceToken: "stored-origin-token",
+    });
+    expect(loadOriginDeviceTokenReadOnlyMock).toHaveBeenCalledOnce();
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: {
+            role: "operator",
+            scopes: ["operator.admin"],
+            deviceToken: "issued-origin-token",
+          },
+        },
+      }),
+    );
+
+    await waitForFast(() => expect(ws.lastClose).toBeNull());
+    expect(storeOriginDeviceTokenMock).not.toHaveBeenCalled();
+    expect(clearOriginDeviceTokenMock).not.toHaveBeenCalled();
+    client.stop();
   });
 
   it("keeps explicit shared auth ahead of origin-scoped auth across reconnects", async () => {
@@ -2401,6 +2454,65 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("emits only the signed bootstrap credential in a preferred node-host connect frame", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stale-device-token" });
+    const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
+    const client = createClientWithIdentity("device-pairing-bootstrap", vi.fn(), {
+      token: "shared-token",
+      bootstrapToken: "bootstrap-token",
+      password: "shared-password", // pragma: allowlist secret
+      preferBootstrapToken: true,
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      scopes: [],
+      hostDeps: { signDevicePayload },
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params?.client).toMatchObject({
+      id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    expect(connect.params?.auth).toEqual({ bootstrapToken: "bootstrap-token" });
+    expect(signDevicePayload.mock.calls[0]?.[1]?.split("|")[7]).toBe("bootstrap-token");
+    client.stop();
+  });
+
+  it("prefers a paired bootstrap token once, then reconnects with stored device auth", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stale-device-token" });
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      bootstrapToken: "bootstrap-token",
+      password: "shared-password", // pragma: allowlist secret
+      preferBootstrapToken: true,
+      onHelloOk,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expect(connectFrameFrom(ws)).toMatchObject({ bootstrapToken: "bootstrap-token" });
+    expect(connectFrameFrom(ws).token).toBeUndefined();
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "issued-device-token" });
+    emitHelloOk(ws, connect.id);
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
+    ws.emitClose(1006, "socket lost");
+    const reconnect = await advanceToNextReconnect();
+    reconnect.emitOpen();
+    emitConnectChallenge(reconnect, "nonce-reconnect");
+    expect(connectFrameFrom(reconnect)).toMatchObject({
+      token: "issued-device-token",
+      deviceToken: "issued-device-token",
+    });
+    expect(connectFrameFrom(reconnect).password).toBeUndefined();
+    expect(connectFrameFrom(reconnect).bootstrapToken).toBeUndefined();
+    client.stop();
+  });
+
   it("prefers explicit deviceToken over stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",
@@ -2600,6 +2712,7 @@ describe("GatewayClient connect auth payload", () => {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: false,
     });
   });

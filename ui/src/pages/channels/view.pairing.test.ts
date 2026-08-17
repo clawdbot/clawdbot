@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
@@ -107,12 +107,30 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
   };
 }
 
+// Rendered prompts mount <openclaw-modal-dialog> into document.body; leaked
+// containers keep an open dialog alive and poison later dialog-owning test
+// files in the same worker.
+const renderedContainers: HTMLDivElement[] = [];
+
+afterEach(() => {
+  for (const container of renderedContainers.splice(0)) {
+    container.remove();
+  }
+});
+
 function renderInto(template: unknown): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
+  renderedContainers.push(container);
   render(template as never, container);
   return container;
 }
+
+// These render into the shared document, so a missing teardown leaks pairing
+// dialogs into whichever suite the worker runs next.
+afterEach(() => {
+  document.body.replaceChildren();
+});
 
 describe("channel DM access request views", () => {
   it("renders pending senders without exposing the pairing code", () => {
@@ -166,10 +184,43 @@ describe("channel DM access request views", () => {
     expect(errorContainer.querySelector(".callout")).toBeNull();
   });
 
-  it("uses settings controls for both pairing filters", () => {
-    const container = renderInto(renderChannelPairingQueue(createProps()));
+  it("uses the channel picker and clears the account filter when the channel changes", () => {
+    const onPairingFilterChange = vi.fn();
+    const base = createProps();
+    const container = renderInto(
+      renderChannelPairingQueue(
+        createProps({
+          pairingChannelFilter: "whatsapp",
+          pairingAccountFilter: "personal",
+          pairingSnapshot: {
+            ...base.pairingSnapshot!,
+            accounts: [
+              ...base.pairingSnapshot!.accounts,
+              {
+                channel: "telegram",
+                channelLabel: "Telegram",
+                accountId: "work",
+                accountLabel: "Work",
+                notifySupported: true,
+              },
+            ],
+          },
+          onPairingFilterChange,
+        }),
+      ),
+    );
 
-    expect(container.querySelectorAll("select.settings-select")).toHaveLength(2);
+    const selects = container.querySelectorAll<HTMLElement & { value: string }>("wa-select");
+    const channel = selects.item(0);
+    const account = selects.item(1);
+    expect(channel?.querySelector('wa-option[value="whatsapp"] img')).not.toBeNull();
+    expect(selects).toHaveLength(2);
+    expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
+    expect(account.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("personal");
+    Object.defineProperty(channel, "value", { configurable: true, value: "telegram" });
+    channel.dispatchEvent(new Event("change", { bubbles: true }));
+    Reflect.deleteProperty(channel, "value");
+    expect(onPairingFilterChange).toHaveBeenCalledWith("telegram", null);
   });
 
   it("disables every request action while one mutation is active", () => {

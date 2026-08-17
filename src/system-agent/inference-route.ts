@@ -1,10 +1,9 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentEntries,
-  resolveDefaultAgentId,
+  resolveSystemAgentTargetAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import {
@@ -31,19 +30,6 @@ export type SystemAgentConfiguredRoute = {
       agentHarnessRuntimeOverride?: string;
     }
 );
-
-export function resolveSystemAgentTargetAgentId(
-  config: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  const configuredAgentId =
-    normalizeOptionalString(requestedAgentId) ??
-    normalizeOptionalString(config.agents?.defaults?.systemAgent?.agentId);
-  if (configuredAgentId) {
-    return normalizeAgentId(configuredAgentId);
-  }
-  return normalizeAgentId(resolveDefaultAgentId(config));
-}
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -276,16 +262,10 @@ export async function projectInferenceRoute(
     const { runConfig: _runConfig, ...routeWithoutConfig } = route;
     projectedRoute = routeWithoutConfig;
   }
-  const explicitDefaultIds = requestedAgentId
-    ? [routeAgentId]
-    : list.filter((entry) => entry.default).map((entry) => normalizeAgentId(entry.id));
   return {
     route: projectedRoute,
     defaultSelection: {
-      explicitIds: explicitDefaultIds,
-      ...(!requestedAgentId && explicitDefaultIds.length === 0 && list[0]?.id
-        ? { fallbackId: normalizeAgentId(list[0].id) }
-        : {}),
+      explicitIds: [routeAgentId],
     },
     auth: {
       profiles: authProfiles,

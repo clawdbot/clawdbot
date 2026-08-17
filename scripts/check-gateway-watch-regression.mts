@@ -14,6 +14,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
+import { parseStrictNonNegativeDecimal as readNonNegativeInteger } from "./lib/numeric-options.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveBuildRequirement } from "./run-node.mts";
 
@@ -52,7 +53,6 @@ const WATCH_GATEWAY_SKIP_ENV = {
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 export const WATCH_LOG_FAILURE_TAIL_CHARS = 12_000;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
-const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 
 type WatchOptions = typeof DEFAULTS;
@@ -202,21 +202,6 @@ export function updateWatchBuildDetection(
     triggered,
     reason: state.reason ?? reason,
   };
-}
-
-/**
- * Parses a safe non-negative integer CLI value.
- */
-export function readNonNegativeInteger(value: unknown, label: string): number {
-  const raw = String(value).trim();
-  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${label} must be a safe integer`);
-  }
-  return parsed;
 }
 
 /**

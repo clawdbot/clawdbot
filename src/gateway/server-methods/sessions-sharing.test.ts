@@ -121,6 +121,42 @@ async function call(
 }
 
 describe("session sharing handlers", () => {
+  it("admits bare fixed-store keys only through their persisted owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared-sessions.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: "global", storePath },
+        { sessionId: "session-ops-global", updatedAt: 1, visibility: "shared" },
+      );
+      const ownedConfig = {
+        session: { scope: "global", store: storePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+
+      expect(
+        await call("session.members.list", { sessionKey: "global" }, context(vi.fn(), ownedConfig)),
+      ).toMatchObject([[true, { sessionKey: "global", role: "owner" }, undefined]]);
+
+      const ownerlessConfig = {
+        ...ownedConfig,
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const rejected = await call(
+        "session.members.list",
+        { sessionKey: "global" },
+        context(vi.fn(), ownerlessConfig),
+      );
+      expect(rejected[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
+      });
+    });
+  });
+
   it("keeps hidden incognito rows from changing non-owner list path metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const incognitoKey = "agent:main:dashboard:incognito-private";

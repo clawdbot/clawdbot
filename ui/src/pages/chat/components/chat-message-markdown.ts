@@ -7,8 +7,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
@@ -52,16 +54,19 @@ export function detectJson(text: string): { parsed: unknown; pretty: string } | 
 /** Build a short summary label for collapsed JSON (type + key count or array length). */
 export function jsonSummaryLabel(parsed: unknown): string {
   if (Array.isArray(parsed)) {
-    return `Array (${parsed.length} item${parsed.length === 1 ? "" : "s"})`;
+    return t(
+      parsed.length === 1 ? "chat.codeBlock.jsonArrayItem" : "chat.codeBlock.jsonArrayItems",
+      { count: String(parsed.length) },
+    );
   }
   if (parsed && typeof parsed === "object") {
     const keys = Object.keys(parsed as Record<string, unknown>);
     if (keys.length <= 4) {
       return `{ ${keys.join(", ")} }`;
     }
-    return `Object (${keys.length} keys)`;
+    return t("chat.codeBlock.jsonObjectKeys", { count: String(keys.length) });
   }
-  return "JSON";
+  return t("chat.codeBlock.jsonBadge");
 }
 
 export type MessageActionDetails = {
@@ -229,12 +234,11 @@ export function renderUserMessageMarkdown(
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  const visibleMarkdown = expanded ? markdown : preview;
   return html`
     <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
       <div class="chat-message-disclosure__content">
-        ${expanded
-          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-          : html`<div class="chat-message-disclosure__preview">${preview}</div>`}
+        ${renderMarkdownText(visibleMarkdown, opts.isStreaming, markdownRenderOptions)}
       </div>
       <button
         class="chat-message-disclosure__toggle"
@@ -251,6 +255,8 @@ export function renderUserMessageMarkdown(
 export type AssistantMessageDisclosure = {
   expanded: boolean;
   markdown?: string;
+  /** Set when automatic full-message retries exhausted; invoking re-enters the loader. */
+  onRetryFullMessage?: () => void;
 };
 
 export function renderAssistantMessageMarkdown(
@@ -265,7 +271,25 @@ export function renderAssistantMessageMarkdown(
   const renderOptions = disclosure?.expanded
     ? { ...markdownRenderOptions, mode: "document" as const }
     : markdownRenderOptions;
-  return renderMarkdownText(markdown, isStreaming, renderOptions);
+  const text = renderMarkdownText(markdown, isStreaming, renderOptions);
+  if (!disclosure?.onRetryFullMessage) {
+    return text;
+  }
+  // Exhausted automatic retries must not leave a silent truncated preview:
+  // name the failure and offer a manual re-entry into the loader.
+  return html`
+    ${text}
+    <div class="chat-message-load-error">
+      ${t("chat.messages.fullContentLoadExhausted")}
+      <button
+        type="button"
+        class="chat-message-load-error__retry"
+        @click=${disclosure.onRetryFullMessage}
+      >
+        ${t("common.retry")}
+      </button>
+    </div>
+  `;
 }
 
 export function renderMarkdownText(

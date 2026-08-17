@@ -19,6 +19,19 @@
   gap: 9px;
 }
 
+.workboard-automation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  text-decoration: none;
+}
+
+.workboard-automation-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
 .workboard-board-glyph--header {
   width: 28px;
   height: 28px;
@@ -39,9 +52,6 @@
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-}
-
-.workboard-toolbar {
   padding: 9px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 56%, transparent);
   border-radius: 8px;
@@ -428,39 +438,6 @@
     inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
 }
 
-.workboard-select__option {
-  color: var(--text);
-}
-
-.workboard-select [slot="start"] {
-  display: inline-flex;
-  align-items: center;
-}
-
-.workboard-select__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 650;
-}
-
-.workboard-select__copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.workboard-select__description {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: normal;
-}
-
 .workboard-field--wide {
   grid-column: 1 / -1;
 }
@@ -642,7 +619,7 @@
   gap: 9px;
   box-shadow:
     0 1px 0 color-mix(in srgb, white 3%, transparent) inset,
-    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+    0 8px 22px color-mix(in srgb, black 18%, transparent);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
@@ -668,7 +645,7 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, var(--bg) 16%);
   box-shadow:
     0 1px 0 color-mix(in srgb, white 4%, transparent) inset,
-    0 12px 28px color-mix(in srgb, #000 24%, transparent);
+    0 12px 28px color-mix(in srgb, black 24%, transparent);
   transform: translateY(-1px);
 }
 
@@ -688,7 +665,7 @@
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--workboard-health-highlight-color) 42%, transparent),
     0 0 0 4px color-mix(in srgb, var(--workboard-health-highlight-color) 14%, transparent),
-    0 12px 30px color-mix(in srgb, #000 26%, transparent);
+    0 12px 30px color-mix(in srgb, black 26%, transparent);
 }
 
 .workboard-card--health-highlight-running {
@@ -706,13 +683,6 @@
   --workboard-health-highlight-color: var(--warn);
 }
 
-.workboard-card--health-highlight::before {
-  background: var(--workboard-health-highlight-color);
-  inset: -1px auto -1px -1px;
-  width: 5px;
-  border-radius: 8px 0 0 8px;
-}
-
 .workboard-card--busy {
   opacity: 0.62;
 }
@@ -726,7 +696,7 @@
   border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
-    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+    0 8px 22px color-mix(in srgb, black 18%, transparent);
   transform: scale(0.985);
   cursor: grabbing;
 }
@@ -1231,6 +1201,9 @@
 
 .workboard-card--health-highlight::before {
   background: var(--workboard-health-highlight-color);
+  inset: -1px auto -1px -1px;
+  width: 5px;
+  border-radius: 8px 0 0 8px;
   box-shadow: 1px 0 0 color-mix(in srgb, var(--workboard-health-highlight-color) 52%, transparent);
 }
 
@@ -1526,7 +1499,7 @@ openclaw-workboard-card-dashboard {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
   .workboard-draft {
     width: 100%;
     height: 100dvh;

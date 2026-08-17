@@ -686,6 +686,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+  ownerAgentId?: string;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -737,8 +738,16 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
-  const recordMessageId = (messageId: number) =>
+  const recordMessageId = (messageId: number) => {
+    if (params.accountId || params.ownerAgentId) {
+      recordSentMessage(params.chatId, messageId, params.cfg, {
+        accountId: params.accountId,
+        agentId: params.ownerAgentId,
+      });
+      return;
+    }
     recordSentMessage(params.chatId, messageId, params.cfg);
+  };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];

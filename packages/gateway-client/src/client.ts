@@ -18,15 +18,11 @@ import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
-import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
-import { isWssUrl } from "@openclaw/net-policy/url-protocol";
-import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
   normalizeFingerprint,
   normalizeGatewayErrorText,
-  parseGatewayIpAddress,
-  parseHostForAddressChecks,
 } from "./client-address-utils.js";
 import {
   buildGatewayConnectAuth,
@@ -56,6 +52,11 @@ import {
   resolveSafeTimeoutDelayMs,
 } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
+import {
+  GatewayWebSocketTransportConfigurationError,
+  isGatewayLoopbackHost,
+  resolveGatewayWebSocketTransport,
+} from "./websocket-transport.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -127,91 +128,6 @@ function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayCli
   ) as Required<GatewayClientHostDeps>;
 }
 
-const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
-  "loopback",
-  "private",
-  "linkLocal",
-  "carrierGradeNat",
-]);
-
-const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<string>([
-  "loopback",
-  "linkLocal",
-  "uniqueLocal",
-  "deprecatedSiteLocal",
-]);
-
-function isPrivateOrLoopbackIpAddress(address: ParsedIpAddress): boolean {
-  const ranges =
-    address.kind() === "ipv4" ? PRIVATE_OR_LOOPBACK_IPV4_RANGES : PRIVATE_OR_LOOPBACK_IPV6_RANGES;
-  return ranges.has(address.range());
-}
-
-function isLoopbackHost(host: string): boolean {
-  const parsed = parseHostForAddressChecks(host);
-  if (!parsed) {
-    return false;
-  }
-  if (parsed.isLocalhost) {
-    return true;
-  }
-  return isLoopbackIpAddress(parsed.unbracketedHost);
-}
-
-function isPrivateOrLoopbackHost(host: string): boolean {
-  const parsed = parseHostForAddressChecks(host);
-  if (!parsed) {
-    return false;
-  }
-  if (parsed.isLocalhost) {
-    return true;
-  }
-  const address = parseGatewayIpAddress(parsed.unbracketedHost);
-  if (!address) {
-    return false;
-  }
-  return isPrivateOrLoopbackIpAddress(address);
-}
-
-function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
-  if (isPrivateOrLoopbackHost(hostname)) {
-    return true;
-  }
-  const normalized = hostname.toLowerCase().trim().replace(/\.+$/, "");
-  // Plain ws:// is still useful for local discovery and Tailnet names. Public
-  // hostnames must use wss:// unless the caller opts into the private break-glass.
-  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
-}
-
-function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boolean }): boolean {
-  try {
-    const url = new URL(rawUrl);
-    const protocol =
-      url.protocol === "https:" ? "wss:" : url.protocol === "http:" ? "ws:" : url.protocol;
-    if (protocol === "wss:") {
-      return true;
-    }
-    if (protocol !== "ws:") {
-      return false;
-    }
-    if (isLoopbackHost(url.hostname) || isTrustedPlaintextWebSocketHost(url.hostname)) {
-      return true;
-    }
-    if (options?.allowPrivateWs === true) {
-      const hostForIpCheck =
-        url.hostname.startsWith("[") && url.hostname.endsWith("]")
-          ? url.hostname.slice(1, -1)
-          : url.hostname;
-      return (
-        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === undefined
-      );
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
 export type GatewayClientRequestOptions = GatewayProtocolRequestOptions;
 
 type AssembledConnect = {
@@ -222,10 +138,6 @@ type AssembledConnect = {
   storedScopes: string[] | undefined;
   storedToken: string | undefined;
   usingStoredDeviceToken: boolean | undefined;
-};
-
-type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
-  checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
 };
 
 const DEFAULT_GATEWAY_CLIENT_URL = "ws://127.0.0.1:18789";
@@ -285,6 +197,7 @@ export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
   socketOpened: boolean;
   transportValidated: boolean;
+  connectRequestSent?: boolean;
   transientPreHelloCleanClose: boolean;
   connectError?: Error;
 };
@@ -298,9 +211,7 @@ export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTime
   }
 }
 
-class GatewayClientSocketFactoryConfigurationError extends Error {}
-
-class GatewayClientTransportPolicyError extends GatewayClientSocketFactoryConfigurationError {}
+class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
 const GATEWAY_CONNECT_ASSEMBLY_ERROR = Symbol("gateway.connectAssemblyError");
 
@@ -337,6 +248,8 @@ export type GatewayClientOptions = {
   requestTimeoutMs?: number;
   token?: string;
   bootstrapToken?: string;
+  /** Prefer one setup credential for the first successful device-auth exchange. */
+  preferBootstrapToken?: boolean;
   deviceToken?: string;
   password?: string;
   approvalRuntimeToken?: string;
@@ -345,6 +258,7 @@ export type GatewayClientOptions = {
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
+  clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
   mode?: GatewayClientMode;
@@ -352,6 +266,9 @@ export type GatewayClientOptions = {
   scopes?: string[];
   caps?: string[];
   commands?: string[];
+  computerUse?: ConnectParams["computerUse"];
+  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
+  workerRuns?: ConnectParams["workerRuns"];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   env?: NodeJS.ProcessEnv;
@@ -364,6 +281,8 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+  /** Report retryable startup closes for clients that present connection progress. */
+  notifyOnStartupRetry?: boolean;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -528,7 +447,7 @@ export class GatewayClient {
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: this.requestTimeoutMs,
       shouldRetrySocketFactoryError: (error) =>
-        !(error instanceof GatewayClientSocketFactoryConfigurationError) &&
+        !(error instanceof GatewayWebSocketTransportConfigurationError) &&
         !(error instanceof SyntaxError) &&
         !(error instanceof TypeError) &&
         !(error instanceof RangeError),
@@ -545,11 +464,20 @@ export class GatewayClient {
     };
   }
 
-  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+  updateNodeManifest(manifest: {
+    caps: string[];
+    commands: string[];
+    computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
+    workerRuns?: ConnectParams["workerRuns"];
+  }): void {
     this.opts = {
       ...this.opts,
       caps: [...manifest.caps],
       commands: [...manifest.commands],
+      computerUse:
+        manifest.computerUse === undefined ? undefined : structuredClone(manifest.computerUse),
+      workerRuns: manifest.workerRuns ? structuredClone(manifest.workerRuns) : undefined,
     };
     // Node command declarations are connect metadata. Reconnect so the Gateway
     // can reconcile approval before dispatching a newly available command.
@@ -567,72 +495,26 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
-    const usesTls = isWssUrl(url);
-    if (this.opts.tlsFingerprint && !usesTls) {
-      throw new GatewayClientSocketFactoryConfigurationError(
-        "gateway tls fingerprint requires wss:// gateway url",
-      );
-    }
-
-    const allowPrivateWs =
-      (this.opts.env ?? process.env).OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
     // Block plaintext before device-token lookup. Credentials may be loaded from
     // host storage later in sendConnect(), and chat payloads are sensitive too.
-    if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
-      // Safe hostname extraction - avoid throwing on malformed URLs in error path
-      let displayHost = url;
-      try {
-        displayHost = new URL(url).hostname || url;
-      } catch {
-        // Use raw URL if parsing fails
-      }
-      throw new GatewayClientSocketFactoryConfigurationError(
-        `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
-          "Both credentials and chat data would be exposed to network interception. " +
-          "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
-          "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
-          (allowPrivateWs
-            ? ""
-            : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1. ") +
-          "Run `openclaw doctor --fix` for guidance.",
-      );
-    }
-    // Allow node screen snapshots and other large responses.
-    this.deps.beforeConnect();
-    // Challenge timeout arms only after `open`. Bound the opening handshake so a
-    // peer that accepts TCP without upgrading cannot hang createSocket forever.
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       env: this.opts.env,
       configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
     });
-    const wsOptions: FingerprintCheckingClientOptions = {
-      maxPayload: 25 * 1024 * 1024,
-      handshakeTimeout: handshakeTimeoutMs,
-      ...(this.opts.origin ? { origin: this.opts.origin } : {}),
-    };
-    if (usesTls && this.opts.tlsFingerprint) {
-      wsOptions.rejectUnauthorized = false;
-      wsOptions.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {
-        const fingerprintValue =
-          typeof cert === "object" && cert && "fingerprint256" in cert
-            ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
-            : "";
-        const fingerprint = this.deps.normalizeTlsFingerprint(
-          typeof fingerprintValue === "string" ? fingerprintValue : "",
-        );
-        const expected = this.deps.normalizeTlsFingerprint(this.opts.tlsFingerprint ?? "");
-        if (!expected) {
-          return undefined;
-        }
-        if (!fingerprint) {
-          return new Error("Missing server TLS fingerprint");
-        }
-        if (fingerprint !== expected) {
-          return new Error("Server TLS fingerprint mismatch");
-        }
-        return undefined;
-      };
-    }
+    const transport = resolveGatewayWebSocketTransport({
+      url,
+      tlsFingerprint: this.opts.tlsFingerprint,
+      env: this.opts.env,
+      normalizeTlsFingerprint: this.deps.normalizeTlsFingerprint,
+      options: {
+        // Allow node screen snapshots and other large responses. The challenge
+        // timer starts after open, so separately bound the HTTP upgrade here.
+        maxPayload: 25 * 1024 * 1024,
+        handshakeTimeout: handshakeTimeoutMs,
+        ...(this.opts.origin ? { origin: this.opts.origin } : {}),
+      },
+    });
+    this.deps.beforeConnect();
     let ws: WebSocket;
     // Managed proxies can intercept local traffic; the host owns the bypass
     // lifecycle and must remove it immediately after the socket is created.
@@ -645,7 +527,7 @@ export class GatewayClient {
       );
     }
     try {
-      ws = new WebSocket(url, wsOptions as ClientOptions);
+      ws = new WebSocket(url, transport.options);
       ws.binaryType = "nodebuffer";
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));
@@ -657,13 +539,11 @@ export class GatewayClient {
     let upgradeError: GatewayClientRequestError | undefined;
     ws.on("open", () => {
       handlers.open();
-      if (usesTls && this.opts.tlsFingerprint) {
-        const tlsError = this.validateTlsFingerprint();
-        if (tlsError) {
-          handlers.error(tlsError);
-          ws.close(1008, tlsError.message);
-          return;
-        }
+      const tlsError = transport.validateSocket(ws);
+      if (tlsError) {
+        handlers.error(tlsError);
+        ws.close(1008, tlsError.message);
+        return;
       }
       this.transportValidated = true;
     });
@@ -885,6 +765,7 @@ export class GatewayClient {
           id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
+          buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
           mode: clientMode,
@@ -892,6 +773,8 @@ export class GatewayClient {
         },
         caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
         commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
+        computerUse: useLegacyNodeProtocolEnvelope ? undefined : this.opts.computerUse,
+        workerRuns: useLegacyNodeProtocolEnvelope ? undefined : this.opts.workerRuns,
         permissions:
           this.opts.permissions && typeof this.opts.permissions === "object"
             ? this.opts.permissions
@@ -1037,6 +920,13 @@ export class GatewayClient {
         env: this.opts.env,
       });
     }
+    if (this.opts.preferBootstrapToken) {
+      // The setup credential is single-use; reconnects must use the stored device token.
+      this.opts.token = undefined;
+      this.opts.bootstrapToken = undefined;
+      this.opts.password = undefined;
+      this.opts.preferBootstrapToken = false;
+    }
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
     if (reconnectWithCurrentNodeProtocol) {
@@ -1172,7 +1062,7 @@ export class GatewayClient {
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,
-        notify: false,
+        notify: this.opts.notifyOnStartupRetry === true,
         reconnectDelayMs: context.connectFailure.reconnectDelayMs,
       };
     }
@@ -1219,6 +1109,7 @@ export class GatewayClient {
       phase: context.helloReceived ? "post-hello" : "pre-hello",
       socketOpened: context.socketOpened,
       transportValidated: this.transportValidated,
+      connectRequestSent: context.connectRequestSent,
       transientPreHelloCleanClose:
         !context.helloReceived && context.code === 1000 && context.reason === "",
       ...(context.connectFailure?.error ? { connectError: context.connectFailure.error } : {}),
@@ -1316,7 +1207,7 @@ export class GatewayClient {
           : parsed.protocol === "http:"
             ? "ws:"
             : parsed.protocol;
-      if (isLoopbackHost(parsed.hostname)) {
+      if (isGatewayLoopbackHost(parsed.hostname)) {
         return true;
       }
       return protocol === "wss:" && Boolean(this.opts.tlsFingerprint?.trim());
@@ -1336,6 +1227,7 @@ export class GatewayClient {
     return selectGatewayConnectAuth({
       token: this.opts.token,
       bootstrapToken: this.opts.bootstrapToken,
+      preferBootstrapToken: this.opts.preferBootstrapToken,
       deviceToken: this.opts.deviceToken,
       password: this.opts.password,
       approvalRuntimeToken: this.approvalRuntimeTokenCompatibilityDisabled
@@ -1385,33 +1277,6 @@ export class GatewayClient {
         this.protocol.closeSocket(4000, "tick timeout");
       }
     }, interval);
-  }
-
-  private validateTlsFingerprint(): Error | null {
-    if (!this.opts.tlsFingerprint || !this.ws) {
-      return null;
-    }
-    const expected = this.deps.normalizeTlsFingerprint(this.opts.tlsFingerprint);
-    if (!expected) {
-      return new Error("gateway tls fingerprint missing");
-    }
-    const socket = (
-      this.ws as WebSocket & {
-        _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
-      }
-    )["_socket"];
-    if (!socket || typeof socket.getPeerCertificate !== "function") {
-      return new Error("gateway tls fingerprint unavailable");
-    }
-    const cert = socket.getPeerCertificate();
-    const fingerprint = this.deps.normalizeTlsFingerprint(cert?.fingerprint256 ?? "");
-    if (!fingerprint) {
-      return new Error("gateway tls fingerprint unavailable");
-    }
-    if (fingerprint !== expected) {
-      return new Error("gateway tls fingerprint mismatch");
-    }
-    return null;
   }
 
   async request<T = Record<string, unknown>>(

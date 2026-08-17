@@ -195,6 +195,21 @@ export const LAB_FEATURES = [
     restartHint: () => t("labsPage.restartRequired"),
   },
   {
+    id: "hostDesktop",
+    title: () => t("labsPage.hostDesktop.title"),
+    description: () => t("labsPage.hostDesktop.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
+    configPath: ["desktop", "host", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
+    restartHint: () => t("labsPage.restartRequired"),
+  },
+  {
     id: "workerDesktop",
     title: () => t("labsPage.workerDesktop.title"),
     description: () => t("labsPage.workerDesktop.description"),

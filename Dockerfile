@@ -221,12 +221,26 @@ WORKDIR /app
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+# Apply current Debian point-release security fixes even when the pinned base
+# digest predates them, without waiting for a base-digest refresh.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl git hostname lsof openssl procps python3 tini && \
     update-ca-certificates
+
+# Keep npm as an operator-facing capability while replacing the base image's
+# bundled CLI dependency tree with the current release. The published package
+# omits its dev tools, so hide their metadata during the script-free refresh.
+RUN npm install --global npm@latest && \
+    npm_dir="$(npm root --global)/npm" && \
+    cp "$npm_dir/package.json" /tmp/npm-package.json && \
+    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const packageJson = JSON.parse(fs.readFileSync(file, "utf8")); delete packageJson.devDependencies; fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);' "$npm_dir/package.json" && \
+    npm update --prefix "$npm_dir" --omit=dev --ignore-scripts --no-audit --no-fund && \
+    mv /tmp/npm-package.json "$npm_dir/package.json" && \
+    npm cache clean --force
 
 RUN chown node:node /app
 

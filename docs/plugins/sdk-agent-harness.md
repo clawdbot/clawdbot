@@ -56,11 +56,13 @@ does not set this flag.
 Harnesses with an independently managed native surface can also declare
 `conversationToolPolicySafeDenyTools` using canonical OpenClaw tool names. Core
 preserves the native surface only when every expanded deny is a known core tool
-in that audited safe list. Finite allowlists, undeclared or unknown tool names,
-wildcards, and groups containing any undeclared name remain native-surface
-restrictions. Omit the list to retain the conservative behavior where every
-explicit restriction isolates the native surface. Because omissions fail
-closed, new tools cannot silently relax the policy boundary.
+in that audited safe list and passes the matching names in
+`params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
+native equivalents for those names. Finite allowlists, undeclared or unknown
+tool names, wildcards, and groups containing any undeclared name remain
+native-surface restrictions. Omit the list to retain the conservative behavior
+where every explicit restriction isolates the native surface. Because omissions
+fail closed, new tools cannot silently relax the policy boundary.
 
 Omit the declaration when any native capability can bypass those layers.
 OpenClaw then visibly rejects explicitly restricted turns before invoking the
@@ -131,9 +133,16 @@ Two secret-free provider-owned facts describe the selected route:
 
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.
+Add `fallbackRuntime: "openclaw"` only when the built-in runtime can reproduce
+the exact prepared request without dropping authored behavior. Core then uses
+that fallback for explicit and persisted selections as well as multi-route
+retry sets. Leave it absent for provider, route, or authentication failures
+that must remain fail-closed.
+
 When auth preparation yields multiple retry routes, one harness must support
 all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
-own the full set; an explicit or persisted plugin selection fails closed.
+own the full set; an explicit or persisted plugin selection fails closed unless
+the plugin declares the lossless OpenClaw fallback.
 
 ## Register a harness
 

@@ -72,6 +72,7 @@ const runtime = {
 };
 const view = {
   viewId: "mcp-app-view",
+  agentId: "main",
   sessionId: runtime.sessionId,
   runtime,
   serverName: "demo",

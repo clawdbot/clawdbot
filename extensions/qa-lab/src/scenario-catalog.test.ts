@@ -239,13 +239,16 @@ describe("qa scenario catalog", () => {
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "active-memory-preprompt-recall",
+      "channel-participant-identity-inspection",
       "cron-model-created-explicit-authority",
       "cron-model-created-one-shot-recurring",
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
       "matrix-restart-resume",
+      "message-delivery-decision-inspection",
       "qa-channel-reconnect-dedupe",
       "remember-across-conversations",
+      "remember-across-reset-private",
       "slack-restart-resume",
       "subagent-stale-child-links",
       "telegram-repeated-command-authorization",
@@ -1017,11 +1020,19 @@ describe("qa scenario catalog", () => {
   });
 
   it("keeps portable thread relation flows on channels with native thread semantics", () => {
-    for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
+    const expectations = [
+      {
+        scenarioId: "thread-follow-up",
+        channels: ["qa-channel", "buzz", "slack", "matrix"],
+      },
+      { scenarioId: "thread-isolation", channels: ["qa-channel", "slack", "matrix"] },
+    ];
+
+    for (const { scenarioId, channels } of expectations) {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
 
       expect(scenario.execution.channel, scenarioId).toBeUndefined();
-      expect(scenario.execution.channels, scenarioId).toEqual(["qa-channel", "slack", "matrix"]);
+      expect(scenario.execution.channels, scenarioId).toEqual(channels);
     }
   });
 

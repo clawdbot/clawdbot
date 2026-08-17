@@ -1,10 +1,4 @@
-export * from "./clawhub-trust-error-details.js";
-export * from "./system-agent-error-details.js";
-export {
-  isMcpAppViewExpiredError,
-  readMissingScopeError,
-  readMissingScopeErrorDetails,
-} from "./gateway-error-details.js";
+export * from "./error-details.js";
 export * from "./session-agent-status.js";
 export * from "./terminal-validators.js";
 export {
@@ -17,15 +11,6 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type {
-  GatewayErrorDetails,
-  McpAppViewExpiredErrorDetails,
-  MissingScopeErrorDetails,
-  UserPrefsLimitExceededErrorDetails,
-  ProjectCloneErrorDetails,
-  ProjectCloneFailureCause,
-  WizardNotFoundErrorDetails,
-} from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
@@ -48,6 +33,7 @@ export type {
   SecretsStoreMutationResult,
   SecretsStoreSetParams,
 } from "./schema/secrets.js";
+export * from "./schema/portals.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -74,11 +60,6 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
-  GatewayErrorDetailsSchema,
-  MissingScopeErrorDetailsSchema,
-  UserPrefsLimitExceededErrorDetailsSchema,
-  ProjectCloneErrorDetailsSchema,
-  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -106,6 +87,7 @@ export {
   WorkerTranscriptCommitResponseFrameSchema,
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
+  WORKER_BUNDLE_PREWARM_VERSION,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -143,6 +125,10 @@ export {
   WorkerDesktopObserveResultSchema,
   WorkerDesktopLaunchParamsSchema,
   WorkerDesktopLaunchResultSchema,
+  DesktopSourceSchema,
+  DesktopObserveParamsSchema,
+  DesktopObserveResultSchema,
+  DesktopLaunchParamsSchema,
   SystemInfoParamsSchema,
   SystemInfoResultSchema,
   StateVersionSchema,
@@ -294,10 +280,23 @@ export {
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsRecoverParamsSchema,
+  SessionsRecoverResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
   SessionsReclaimParamsSchema,
+  SessionsReclaimResultPlacementSchema,
   SessionsReclaimResultSchema,
+  SessionMoveExpectedSourceSchema,
+  SessionMoveGatewayTargetSchema,
+  SessionMoveProfileTargetSchema,
+  SessionMoveDeviceTargetSchema,
+  SessionMoveTargetSchema,
+  SessionPlacementMoveSchema,
+  SessionsMoveParamsSchema,
+  SessionMovePlacementStateSchema,
+  SessionMovePlacementSchema,
+  SessionsMoveResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -310,10 +309,15 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionGroupSchema,
+  SessionGroupDefaultsSchema,
   SessionsGroupsListParamsSchema,
   SessionsGroupsListResultSchema,
+  SessionsGroupsDefaultsParamsSchema,
+  SessionsGroupsDefaultsResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionsGroupsUpdateParamsSchema,
+  SessionsGroupsUpdateResultSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,
@@ -671,11 +675,6 @@ export {
   FsDirEntrySchema,
   FsListDirParamsSchema,
   FsListDirResultSchema,
-  ErrorCodes,
-  buildMissingScopeErrorDetails,
-  GatewayErrorDetailCodes,
-  errorShape,
-  missingScopeErrorShape,
 } from "./schema-modules.js";
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -684,18 +683,4 @@ export {
   PROTOCOL_VERSION,
 } from "./version.js";
 export type * from "./schema-types.js";
-
-// Local structural result keeps this package independent of core session types.
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: Record<string, unknown>;
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: import("./schema/agents-models-skills.js").GatewayAgentRuntime;
-    thinkingLevel?: string;
-    thinkingLevels?: Array<{ id: string; label: string }>;
-  };
-};
+export type { SessionsPatchResult } from "./sessions-patch-result.js";

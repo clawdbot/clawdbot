@@ -27,6 +27,8 @@ describe("chat pane session hydration", () => {
     } as unknown as SessionCapability;
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions });
+    state.assistantAgentId = "main";
+    state.sessionKey = "agent:work:current";
     pane.context.gateway.snapshot.hello = {
       features: {
         methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "session.discussion.info"],
@@ -65,6 +67,9 @@ describe("chat pane session hydration", () => {
       "sessions.companion.state",
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ]);
+    expect(
+      request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
+    ).toEqual({ sessionKey: state.sessionKey, agentId: "work" });
     expect(complete).toHaveBeenCalledOnce();
   });
 

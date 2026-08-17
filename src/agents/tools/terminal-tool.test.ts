@@ -13,8 +13,14 @@ import {
 import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createTerminalTool } from "./terminal-tool.js";
+
+const callInProcessGatewayTool = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+
+vi.mock("./in-process-gateway.js", () => ({
+  callInProcessGatewayTool,
+  getInProcessGatewayToolContext: vi.fn(),
+}));
 
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 
@@ -78,6 +84,7 @@ function makeContext(manager: TerminalSessionManager) {
 describe("terminal tool", () => {
   beforeEach(() => {
     resetAgentRunRegistryForTest();
+    callInProcessGatewayTool.mockClear();
   });
 
   it("uses a flat action enum and the owner-only core gate", () => {
@@ -90,17 +97,17 @@ describe("terminal tool", () => {
         },
       },
     });
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+    expect(schema.properties).not.toHaveProperty("show");
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("terminal");
   });
 
-  it("opens, shows, reads, writes, resizes, lists, and closes its terminal", async () => {
+  it("opens in the background, reads, writes, resizes, lists, and closes its terminal", async () => {
     const backend = makeBackend();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const callGateway = vi.fn(async () => ({ ok: true })) as InProcessGatewayCaller;
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:main",
-      callGateway,
       getGatewayContext: () => makeContext(manager),
     });
     expect(tool.outputSchema).toBeDefined();
@@ -112,15 +119,7 @@ describe("terminal tool", () => {
     expect(Value.Check(tool.outputSchema!, opened.details)).toBe(true);
     const sessionId = (opened.details as { sessionId: string }).sessionId;
     expect(backend.writes).toEqual(["echo ready\r"]);
-    expect(callGateway).toHaveBeenCalledWith("ui.command", {
-      command: {
-        kind: "panel",
-        panel: "terminal",
-        open: true,
-        terminalSessionId: sessionId,
-      },
-      sessionKey: "agent:main:main",
-    });
+    expect(callInProcessGatewayTool).not.toHaveBeenCalled();
 
     backend.emitData("\u001b[31mready\u001b[0m\r\n");
     const read = await tool.execute("read", { action: "read", sessionId });
@@ -167,7 +166,7 @@ describe("terminal tool", () => {
       spawn: async () => backends.shift() ?? makeBackend(),
     });
     const agentSessionKey = "agent:main:shared-task-session";
-    const lookupTaskByRunId = vi.fn(async (runId: string) =>
+    const lookupTaskByRunIdForChildSession = vi.fn(async (runId: string) =>
       runId === "conversation-run"
         ? undefined
         : {
@@ -181,20 +180,60 @@ describe("terminal tool", () => {
         agentId: "main",
         agentSessionKey,
         runId,
-        lookupTaskByRunId,
+        lookupTaskByRunIdForChildSession,
         getGatewayContext: () => makeContext(manager),
       });
 
-    await createTaskTool("run-1").execute("open", { action: "open", show: false });
-    await createTaskTool("run-2").execute("open", { action: "open", show: false });
-    await createTaskTool("conversation-run").execute("open", { action: "open", show: false });
+    await createTaskTool("run-1").execute("open", { action: "open" });
+    await createTaskTool("run-2").execute("open", { action: "open" });
+    await createTaskTool("conversation-run").execute("open", { action: "open" });
 
-    expect(lookupTaskByRunId.mock.calls).toEqual([["run-1"], ["run-2"], ["conversation-run"]]);
+    expect(lookupTaskByRunIdForChildSession.mock.calls).toEqual([
+      ["run-1", agentSessionKey],
+      ["run-2", agentSessionKey],
+      ["conversation-run", agentSessionKey],
+    ]);
     expect(manager.closeAgentSessions("task-1")).toBe(1);
     expect(firstBackend.killed).toBe(true);
     expect(secondBackend.killed).toBe(false);
     expect(persistentBackend.killed).toBe(false);
-    expect(manager.listAgent(agentSessionKey)).toHaveLength(2);
+    expect(manager.listAgent(agentSessionKey, "main")).toHaveLength(2);
+  });
+
+  it("binds the matching child session when task run ids collide", async () => {
+    const backend = makeBackend();
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
+    const agentSessionKey = "agent:main:shared-run-task-2";
+    const tasks = [
+      {
+        taskId: "task-1",
+        status: "running" as const,
+        childSessionKey: "agent:main:shared-run-task-1",
+      },
+      {
+        taskId: "task-2",
+        status: "running" as const,
+        childSessionKey: agentSessionKey,
+      },
+    ];
+    const lookupTaskByRunIdForChildSession = vi.fn(
+      async (_runId: string, childSessionKey: string) =>
+        tasks.find((task) => task.childSessionKey === childSessionKey),
+    );
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey,
+      runId: "shared-run",
+      lookupTaskByRunIdForChildSession,
+      getGatewayContext: () => makeContext(manager),
+    });
+
+    await tool.execute("open", { action: "open" });
+
+    expect(lookupTaskByRunIdForChildSession).toHaveBeenCalledWith("shared-run", agentSessionKey);
+    expect(manager.closeAgentSessions("task-2")).toBe(1);
+    expect(manager.closeAgentSessions("task-1")).toBe(0);
+    expect(backend.killed).toBe(true);
   });
 
   it("maps a cron agent run to its detached task before terminal lookup", async () => {
@@ -211,7 +250,7 @@ describe("terminal tool", () => {
       throw new Error("expected cron agent run claim");
     }
     expect(bindAgentRunTaskRunId("cron-agent-run", claimId, "detached-task-run")).toBe(true);
-    const lookupTaskByRunId = vi.fn(async () => ({
+    const lookupTaskByRunIdForChildSession = vi.fn(async () => ({
       taskId: "cron-task",
       status: "running" as const,
       childSessionKey: agentSessionKey,
@@ -220,14 +259,17 @@ describe("terminal tool", () => {
       agentId: "main",
       agentSessionKey,
       runId: "cron-agent-run",
-      lookupTaskByRunId,
+      lookupTaskByRunIdForChildSession,
       getGatewayContext: () => makeContext(manager),
     });
 
     try {
-      await tool.execute("open", { action: "open", show: false });
+      await tool.execute("open", { action: "open" });
 
-      expect(lookupTaskByRunId).toHaveBeenCalledWith("detached-task-run");
+      expect(lookupTaskByRunIdForChildSession).toHaveBeenCalledWith(
+        "detached-task-run",
+        agentSessionKey,
+      );
       expect(manager.closeAgentSessions("cron-task")).toBe(1);
       expect(backend.killed).toBe(true);
     } finally {
@@ -245,7 +287,7 @@ describe("terminal tool", () => {
       agentId: "main",
       agentSessionKey: "agent:main:completed-task",
       runId: "completed-run",
-      lookupTaskByRunId: vi.fn(async () => ({
+      lookupTaskByRunIdForChildSession: vi.fn(async () => ({
         taskId: "task-completed",
         status: "succeeded" as const,
         childSessionKey: "agent:main:completed-task",
@@ -253,7 +295,7 @@ describe("terminal tool", () => {
       getGatewayContext: () => makeContext(manager),
     });
 
-    await expect(tool.execute("open", { action: "open", show: false })).rejects.toThrow(
+    await expect(tool.execute("open", { action: "open" })).rejects.toThrow(
       "terminal task already ended",
     );
     expect(spawn).not.toHaveBeenCalled();
@@ -282,6 +324,26 @@ describe("terminal tool", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("preserves an explicit-owner launch failure", async () => {
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      getGatewayContext: () => ({
+        terminalSessions: manager,
+        isTerminalEnabled: () => true,
+        resolveTerminalLaunchPolicy: () => ({
+          ok: false,
+          block: { kind: "owner-required", message: "select an agent explicitly" },
+        }),
+      }),
+    });
+
+    await expect(tool.execute("open", { action: "open" })).rejects.toThrow(
+      "select an agent explicitly",
+    );
+  });
+
   it("does not open while the terminal surface is disabled", async () => {
     const spawn = vi.fn(async () => makeBackend());
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn });
@@ -307,9 +369,6 @@ describe("terminal tool", () => {
       getGatewayContext: () => makeContext(manager),
     });
 
-    await expect(tool.execute("open", { action: "open", show: "yes" })).rejects.toThrow(
-      "show must be boolean",
-    );
     await expect(tool.execute("open", { action: "open", command: 42 })).rejects.toThrow(
       "command must be string",
     );

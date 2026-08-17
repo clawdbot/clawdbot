@@ -23,6 +23,7 @@ import {
   saveCronQuarantinedJobs,
   saveCronStore,
 } from "./store.js";
+import { saveCronJobsStoreWithTransactionHooks } from "./store/transaction-hooks.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -378,6 +379,27 @@ describe("cron store", () => {
       ]);
     } finally {
       database.exec("DROP TRIGGER fail_cron_quarantine_update");
+    }
+  });
+
+  it("runs post-commit hooks only after the cron write commits", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("post-commit-hook", true);
+    const afterCommit = vi.fn();
+    await saveCronJobsStoreWithTransactionHooks(storePath, store, undefined, { afterCommit });
+    expect(afterCommit).toHaveBeenCalledOnce();
+
+    const database = openOpenClawStateDatabase().db;
+    database.exec(
+      "CREATE TEMP TRIGGER reject_cron_post_commit BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
+    );
+    try {
+      await expect(
+        saveCronJobsStoreWithTransactionHooks(storePath, store, undefined, { afterCommit }),
+      ).rejects.toThrow("cron update rejected");
+      expect(afterCommit).toHaveBeenCalledOnce();
+    } finally {
+      database.exec("DROP TRIGGER reject_cron_post_commit");
     }
   });
 

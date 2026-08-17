@@ -1,10 +1,11 @@
 // Commander registration for gateway status, health, diagnostics, discovery, and run commands.
 import { formatByteSize } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
@@ -115,6 +116,7 @@ function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TI
 async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
+    sharedStateMode: "read-only",
   });
 }
 
@@ -151,7 +153,7 @@ async function runGatewayCommand(
         return;
       }
     }
-    const message = String(err);
+    const message = formatErrorMessage(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);
     defaultRuntime.exit(1);
   }
@@ -695,14 +697,12 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             try {
               result = await callGatewayCli("health", rpcOpts);
             } catch (error) {
-              const [{ emitReachableGatewayAuthDiagnostic }, { readBestEffortConfig }] =
-                await Promise.all([
-                  (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
-                  loadConfigModule(),
-                ]);
+              const { emitReachableGatewayAuthDiagnostic, readBestEffortHealthConfig } = await (
+                deps.loadGatewayHealthModule ?? loadGatewayHealthModule
+              )();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: rpcOpts.config ?? (await readBestEffortConfig()),
+                config: rpcOpts.config ?? (await readBestEffortHealthConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,

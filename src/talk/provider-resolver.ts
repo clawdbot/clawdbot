@@ -84,6 +84,7 @@ export function isRealtimeVoiceProviderConfigured(params: {
   }
   return params.provider.isConfigured({
     cfg: params.cfg,
+    agentId: params.agentId,
     providerConfig: params.providerConfig,
   });
 }

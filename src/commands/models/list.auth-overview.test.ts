@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { withEnv } from "../../test-utils/env.js";
-import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+import {
+  formatProviderAuthProfileCounts,
+  resolveProviderAuthOverview,
+} from "./list.auth-overview.js";
 
 const persistedStores = vi.hoisted(() => new Map<string, { profiles: Record<string, unknown> }>());
 
@@ -293,5 +296,16 @@ describe("resolveProviderAuthOverview", () => {
         skipSetupProviderFallback: true,
       }),
     );
+  });
+});
+
+describe("formatProviderAuthProfileCounts", () => {
+  it("renders the exact count line and survives console secret redaction", async () => {
+    const { redactSensitiveText } = await import("../../logging/redact.js");
+    const line = formatProviderAuthProfileCounts({ count: 2, oauth: 1, token: 1, apiKey: 0 });
+    expect(line).toBe("2 (1 oauth, 1 token, 0 api-key)");
+    // Regression: `token=1, api_key=0)` matched the console redactor's
+    // key=value secret patterns and printed as `token=*** api_key=*** |`.
+    expect(redactSensitiveText(`profiles=${line}`)).toBe(`profiles=${line}`);
   });
 });

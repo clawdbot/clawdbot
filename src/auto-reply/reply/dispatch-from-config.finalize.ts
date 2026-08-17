@@ -31,6 +31,9 @@ type ExecuteDispatchReadyState = Extract<
   { status: "ready" }
 >["state"];
 
+export const needsTtsFallback = (clean: boolean, visible: string, fallback?: string) =>
+  clean && !visible.trim() && Boolean(fallback?.trim());
+
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     cfg,
@@ -233,6 +236,19 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           });
           queuedFinal = finalReply.queuedFinal || queuedFinal;
           routedFinalCount += finalReply.routedFinalCount;
+        } else if (
+          needsTtsFallback(
+            Boolean(state.cleanBlockTtsDirectiveText),
+            cleanDeferredFinalText(deferredTtsTextPending),
+            ttsSyntheticReply.text,
+          )
+        ) {
+          const finalReply = await state.sendFinalPayload(ttsSyntheticReply, {
+            abortSignal: getDispatchAbortSignal(),
+            skipTts: true,
+          });
+          queuedFinal = finalReply.queuedFinal || queuedFinal;
+          routedFinalCount += finalReply.routedFinalCount;
         }
       } catch (err) {
         if (isDispatchReplyOperationAbortedError(err)) {
@@ -367,6 +383,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
       : {}),
     ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
+    ...(replyAdmission?.status === "accepted" ? { deferredToActiveRun: replyAdmission.mode } : {}),
     // Eligibility keys off settled visible delivery: a suppressed or cancelled
     // final (including the core fallback itself) leaves channel-level recovery
     // eligible, while any settled visible delivery clears it. An aborted or

@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 
 const WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
 const REAL_NPM_ENV = "OPENCLAW_OCM_REAL_NPM_BIN";
@@ -12,7 +13,6 @@ const INTERNAL_NPM_BIN_ENV = "OCM_INTERNAL_NPM_BIN";
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 const RUNTIME_BUILD_PROFILE_ENV = "OPENCLAW_OCM_RUNTIME_BUILD_PROFILE";
 const supportedRuntimeBuildProfiles = new Set(["sourcePerformance"]);
-const fullGitCommitPattern = /^[0-9a-f]{40}$/iu;
 
 type WorkspacePackage = { name: string; version: string; tarball: string };
 type WorkspacePackageSource = Omit<WorkspacePackage, "tarball"> & { dir: string };
@@ -118,18 +118,12 @@ export function resolveRuntimePackEnvironment(
     return result.status === 0 ? result.stdout.trim() : null;
   },
 ) {
-  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
-  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
-  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
-  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
-  if (commit && !fullGitCommitPattern.test(commit)) {
-    throw new Error("runtime pack commit must be a full 40-character hexadecimal SHA");
-  }
-  return {
-    ...env,
-    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
-    ...(commit ? { GIT_COMMIT: commit.toLowerCase() } : {}),
-  };
+  return resolveBuildIdentityEnvironment({
+    commitLabel: "runtime pack commit",
+    env,
+    now,
+    readGitCommit,
+  });
 }
 
 function runTar(args: string[]) {

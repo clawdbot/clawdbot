@@ -49,6 +49,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import {
@@ -1059,7 +1060,7 @@ function convertTools(
   const projection = projectOpenAITools(tools);
   return {
     projection,
-    tools: projection.tools.map((tool) => ({
+    tools: sortPromptCacheToolsByName(projection.tools).map((tool) => ({
       type: "function",
       function: {
         name: tool.name,

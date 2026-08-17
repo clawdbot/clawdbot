@@ -497,11 +497,15 @@ describe("openai transport stream", () => {
       replayContext({
         source: model,
         thinking: {
-          signature: testing.tagOpenAIResponsesReasoningReplayItem(
-            { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
-            model,
-            { authProfileId: "openai:oauth", sessionId: "session-123" },
-          ) as Record<string, unknown>,
+          signature: {
+            type: "reasoning",
+            id: "rs_prior",
+            encrypted_content: "ciphertext",
+            __openclaw_replay: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+              authProfileId: "openai:oauth",
+              sessionId: "session-123",
+            }),
+          },
         },
       }),
       { authProfileId: "openai:oauth", sessionId: "session-123" },
@@ -577,7 +581,11 @@ describe("openai transport stream", () => {
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
       }),
-    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+    ).resolves.toMatchObject({
+      stream: recoveredStream,
+      response: recoveredResponse,
+      attempt: { kind: "reasoning-stripped" },
+    });
 
     expect(create).toHaveBeenCalledTimes(2);
     const retry = create.mock.calls[1]?.[0] as typeof request;
@@ -628,7 +636,11 @@ describe("openai transport stream", () => {
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
       }),
-    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+    ).resolves.toMatchObject({
+      stream: recoveredStream,
+      response: recoveredResponse,
+      attempt: { kind: "compaction-stripped" },
+    });
 
     expect(create).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(create.mock.calls[1]?.[0])).not.toContain("reasoning-ciphertext");
@@ -809,7 +821,11 @@ describe("openai transport stream", () => {
           maxTokens: 8192,
         },
       }),
-    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+    ).resolves.toMatchObject({
+      stream: recoveredStream,
+      response: recoveredResponse,
+      attempt: { kind: "reasoning-stripped" },
+    });
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0]?.[0]).toBe(request);
