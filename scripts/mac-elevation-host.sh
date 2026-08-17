@@ -1304,6 +1304,9 @@ write_receipt() {
 
 verify_install_receipt() {
   [[ -f "$RECEIPT_PATH" && ! -L "$RECEIPT_PATH" ]] || fail "elevation install receipt not found or symlinked: $RECEIPT_PATH"
+  local verify_current_app="${1:-1}"
+  [[ "$verify_current_app" == "0" || "$verify_current_app" == "1" ]] ||
+    fail 'internal install receipt verification mode is invalid'
   local receipt_arm64_cdhash receipt_x86_64_cdhash
   INSTALL_RECEIPT_SCHEMA=""
   # Origin main shipped exactly this unversioned seven-key receipt. Numeric schemas 1 and 2
@@ -1353,19 +1356,23 @@ verify_install_receipt() {
   else
     fail 'elevation install receipt schema is invalid'
   fi
-  [[ "$(jq -r '.sourceCommit' "$RECEIPT_PATH")" == "$(plist_value "$APP_PATH" OpenClawGitCommit)" ]] ||
-    fail 'installed app source does not match the elevation install receipt'
-  [[ "$(jq -r '.peekabooCommit' "$RECEIPT_PATH")" == "$(plist_value "$APP_PATH" PeekabooSourceCommit)" ]] ||
-    fail 'installed Peekaboo source does not match the elevation install receipt'
+  if [[ "$verify_current_app" == "1" ]]; then
+    [[ "$(jq -r '.sourceCommit' "$RECEIPT_PATH")" == "$(plist_value "$APP_PATH" OpenClawGitCommit)" ]] ||
+      fail 'installed app source does not match the elevation install receipt'
+    [[ "$(jq -r '.peekabooCommit' "$RECEIPT_PATH")" == "$(plist_value "$APP_PATH" PeekabooSourceCommit)" ]] ||
+      fail 'installed Peekaboo source does not match the elevation install receipt'
+  fi
   [[ "$(jq -r '.appPath' "$RECEIPT_PATH")" == "$APP_PATH" ]] || fail 'elevation install receipt app path mismatch'
   [[ "$(jq -r '.plistPath' "$RECEIPT_PATH")" == "$PLIST_PATH" ]] || fail 'elevation install receipt plist path mismatch'
   if [[ "$INSTALL_RECEIPT_SCHEMA" != 'legacy' ]]; then
-    receipt_arm64_cdhash="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
-    receipt_x86_64_cdhash="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
-    [[ "$receipt_arm64_cdhash" == "$(codesign_value_for_arch "$APP_PATH" CDHash arm64)" ]] ||
-      fail 'installed app arm64 CDHash does not match the elevation install receipt'
-    [[ "$receipt_x86_64_cdhash" == "$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)" ]] ||
-      fail 'installed app x86_64 CDHash does not match the elevation install receipt'
+    if [[ "$verify_current_app" == "1" ]]; then
+      receipt_arm64_cdhash="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
+      receipt_x86_64_cdhash="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
+      [[ "$receipt_arm64_cdhash" == "$(codesign_value_for_arch "$APP_PATH" CDHash arm64)" ]] ||
+        fail 'installed app arm64 CDHash does not match the elevation install receipt'
+      [[ "$receipt_x86_64_cdhash" == "$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)" ]] ||
+        fail 'installed app x86_64 CDHash does not match the elevation install receipt'
+    fi
     [[ "$(jq -r '.stateDir' "$RECEIPT_PATH")" == "$STATE_DIR" ]] ||
       fail 'elevation install receipt state directory mismatch'
   fi
@@ -1990,11 +1997,14 @@ status_host() {
 }
 
 recover_host() {
-  verify_elevation_app "$APP_PATH"
-  verify_install_receipt
-  if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
+  local current_app_valid=0
+  if (verify_elevation_app "$APP_PATH") >/dev/null 2>&1; then
+    current_app_valid=1
+  fi
+  verify_install_receipt "$current_app_valid"
+  if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' || "$current_app_valid" == "0" ]]; then
     [[ -n "$ARCHIVE" && -n "$ARTIFACT_RECEIPT" && -n "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
-      fail 'legacy recovery requires the authenticated elevation archive, receipt, and receipt digest'
+      fail 'recovery requires the authenticated elevation archive, receipt, and receipt digest when the current app cannot supply a trusted rename helper'
     local recovery_helper_app
     prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
     extract_archive "$AUTHENTICATED_ARCHIVE_PATH" recovery_helper_app
@@ -2003,7 +2013,11 @@ recover_host() {
       "$AUTHENTICATED_ARCHIVE_PATH" \
       "$recovery_helper_app" \
       "${BASH_SOURCE[0]}"
-    CONFIG_PATH="$STATE_DIR/openclaw.json"
+    if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
+      CONFIG_PATH="$STATE_DIR/openclaw.json"
+    else
+      CONFIG_PATH="$(jq -r '.configPath' "$RECEIPT_PATH")"
+    fi
   else
     [[ -z "$ARCHIVE" && -z "$ARTIFACT_RECEIPT" && -z "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
       fail 'artifact helper inputs are valid only for legacy recovery'
@@ -2017,7 +2031,7 @@ recover_host() {
   ROLLBACK_ELEVATION_WAS_LOADED="$(jq -r 'if .previousPlistWasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
   ROLLBACK_INSTALL_RECEIPT="$(jq -r '.previousReceipt // empty' "$RECEIPT_PATH")"
   ROLLBACK_INSTALL_RECEIPT_SHA="$(jq -r '.previousReceiptSha256 // empty' "$RECEIPT_PATH")"
-  ROLLBACK_FAILED_SOURCE="$(plist_value "$APP_PATH" OpenClawGitCommit)"
+  ROLLBACK_FAILED_SOURCE="$(jq -r '.sourceCommit' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_SOURCE="$(jq -r '.migration.sourcePlist // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_PLIST="$(jq -r '.migration.backupPlist // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_PLIST_SHA="$(jq -r '.migration.backupSha256 // empty' "$RECEIPT_PATH")"
@@ -2107,12 +2121,15 @@ recover_host() {
   PREMUTATION_BACKUPS+=("$recovered_receipt")
   RECOVERY_CURRENT_RECEIPT="$recovered_receipt"
   RECOVERY_CURRENT_RECEIPT_SHA="$current_receipt_sha"
-  if [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" ]]; then
+  if [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" && "$current_app_valid" == "1" ]]; then
     RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
     RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
-  else
+  elif [[ "$INSTALL_RECEIPT_SCHEMA" != "legacy" ]]; then
     RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
     RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
+  else
+    RECOVERY_CURRENT_APP_CDHASH_ARM64=""
+    RECOVERY_CURRENT_APP_CDHASH_X86_64=""
   fi
   current_job_state="$(job_loaded_state "$job_domain")"
   case "$current_job_state" in

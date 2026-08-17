@@ -9,6 +9,7 @@ import OSLog
 import Security
 import SwiftUI
 
+/// Routes private maintenance commands before SwiftUI constructs or activates the application.
 @main
 enum OpenClawProcessMain {
     static func main() {

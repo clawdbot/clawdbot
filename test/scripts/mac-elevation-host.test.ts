@@ -2128,6 +2128,68 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin")(
+    "restores a verified backup when the current app is missing",
+    () => {
+      const harness = createInstallRollbackHarness({ launchdBootstrapFails: false });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const installed = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+      const installReceiptPath = path.join(harness.stateDir, "elevation-host-install.json");
+      rmSync(harness.appPath, { recursive: true });
+
+      const unauthenticated = runInstaller(
+        harness.installerPath,
+        ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
+        harness.env,
+      );
+      expect(unauthenticated.status).toBe(1);
+      expect(unauthenticated.stderr).toContain(
+        "recovery requires the authenticated elevation archive",
+      );
+      expect(existsSync(installReceiptPath)).toBe(true);
+
+      const recovered = runInstaller(
+        harness.installerPath,
+        [
+          "recover",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+        ],
+        harness.env,
+      );
+      expect(recovered.status, recovered.stderr).toBe(0);
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(installReceiptPath)).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
     "refuses recovery before mutation when process inspection tools are unavailable",
     () => {
       const harness = createInstallRollbackHarness({ launchdBootstrapFails: false });
@@ -2688,7 +2750,7 @@ describe("mac elevation host command contract", () => {
       );
       expect(unauthenticatedRecovery.status).toBe(1);
       expect(unauthenticatedRecovery.stderr).toContain(
-        "legacy recovery requires the authenticated elevation archive",
+        "recovery requires the authenticated elevation archive",
       );
       expect(readFileSync(installReceiptPath, "utf8")).toBe(firstReceipt);
 
