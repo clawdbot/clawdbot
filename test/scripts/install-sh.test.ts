@@ -1387,6 +1387,7 @@ NODE
       const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-retry-"));
       const bin = join(tmp, "bin");
       const calls = join(tmp, "calls");
+      const npmRoot = join(tmp, "lib", "node_modules");
       mkdirSync(bin, { recursive: true });
       writeNpmInstallRetryFixture(join(bin, "npm"));
 
@@ -1400,6 +1401,7 @@ NODE
             "USE_BETA=0",
             "NPM_LOGLEVEL=error",
             "NPM_SILENT_FLAG=",
+            `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
             "set +e",
             "install_openclaw",
             "status=$?",
@@ -1409,6 +1411,8 @@ NODE
             NPM_FAKE_CALLS: calls,
             NPM_FAKE_ERROR: error,
             NPM_FAKE_OUTCOME: outcome,
+            NPM_FAKE_PACKAGE_DIR: join(npmRoot, "openclaw"),
+            NPM_FAKE_ROOT: npmRoot,
           },
         );
 
@@ -1427,6 +1431,49 @@ NODE
       }
     },
   );
+
+  it("fails after retrying the exact npm spec when npm exits zero without installing OpenClaw", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-empty-success-"));
+    const bin = join(tmp, "bin");
+    const calls = join(tmp, "calls");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    mkdirSync(bin, { recursive: true });
+    writeNpmInstallRetryFixture(join(bin, "npm"));
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "OPENCLAW_VERSION=latest",
+          "USE_BETA=0",
+          "NPM_LOGLEVEL=error",
+          "NPM_SILENT_FLAG=",
+          `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
+          "install_openclaw",
+        ].join("\n"),
+        {
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_ERROR: "",
+          NPM_FAKE_OUTCOME: "success",
+          NPM_FAKE_ROOT: npmRoot,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "openclaw@latest",
+        "openclaw@latest",
+      ]);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "npm install did not produce a usable OpenClaw package",
+      );
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("openclaw@next");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
 
   it("does not emit before args when npmrc min-release-age computes a before cutoff", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-freshness-"));

@@ -2169,7 +2169,7 @@ fix_npm_permissions() {
 ensure_openclaw_bin_link() {
     local npm_root=""
     npm_root="$(npm root -g 2>/dev/null || true)"
-    if [[ -z "$npm_root" || ! -d "$npm_root/openclaw" ]]; then
+    if [[ -z "$npm_root" || ! -f "$npm_root/openclaw/dist/entry.js" ]]; then
         return 1
     fi
     local npm_bin=""
@@ -3040,15 +3040,14 @@ install_openclaw() {
     local install_spec=""
     install_spec="$(resolve_package_install_spec "${package_name}" "${OPENCLAW_VERSION}")"
 
-    if ! install_openclaw_npm "${install_spec}"; then
-        ui_warn "npm install failed; retrying"
+    if ! install_openclaw_npm "${install_spec}" || ! ensure_openclaw_bin_link; then
+        ui_warn "npm install did not produce a usable OpenClaw package; retrying"
         cleanup_npm_openclaw_paths
-        if ! install_openclaw_npm "${install_spec}"; then
+        if ! install_openclaw_npm "${install_spec}" || ! ensure_openclaw_bin_link; then
+            ui_error "npm install did not produce a usable OpenClaw package"
             return 1
         fi
     fi
-
-    ensure_openclaw_bin_link || true
 
     ui_success "OpenClaw installed"
 }

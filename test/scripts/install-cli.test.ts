@@ -42,6 +42,12 @@ function linkRequiredShellTools(bin: string) {
   }
 }
 
+function writeInstalledOpenClawEntry(nodeDir: string) {
+  const entry = join(nodeDir, "lib", "node_modules", "openclaw", "dist", "entry.js");
+  mkdirSync(join(entry, ".."), { recursive: true });
+  writeFileSync(entry, "");
+}
+
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -495,7 +501,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          "install_node() { :; }",
+          'install_node() { mkdir -p "$(node_dir)/lib/node_modules/openclaw/dist"; : > "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"; }',
           "ensure_git() { :; }",
           'npm_bin() { printf "/usr/bin/true\\n"; }',
           `refresh_gateway_service_if_loaded() { touch ${JSON.stringify(refreshLog)}; }`,
@@ -1443,6 +1449,7 @@ describe("install-cli.sh", () => {
     const nodeDir = join(tmp, "node");
     mkdirSync(bin, { recursive: true });
     mkdirSync(nodeDir, { recursive: true });
+    writeInstalledOpenClawEntry(nodeDir);
     writeFileSync(npmrc, "min-release-age=7\n");
     const fakeNpm = join(bin, "npm");
     writeFileSync(
@@ -1518,6 +1525,7 @@ describe("install-cli.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(nodeDir, { recursive: true });
+    writeInstalledOpenClawEntry(nodeDir);
     if (source === "global") {
       mkdirSync(join(prefix, "etc"), { recursive: true });
     }
@@ -1666,6 +1674,7 @@ describe("install-cli.sh", () => {
             NPM_FAKE_CALLS: calls,
             NPM_FAKE_ERROR: error,
             NPM_FAKE_OUTCOME: outcome,
+            NPM_FAKE_PACKAGE_DIR: join(nodeDir, "lib", "node_modules", "openclaw"),
           },
         );
 
@@ -1687,6 +1696,48 @@ describe("install-cli.sh", () => {
     },
   );
 
+  it("fails after retrying the exact npm spec when npm exits zero without installing OpenClaw", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-empty-success-"));
+    const fakeNpm = join(tmp, "npm");
+    const calls = join(tmp, "calls");
+    const nodeDir = join(tmp, "node");
+    const prefix = join(tmp, "prefix");
+    writeNpmInstallRetryFixture(fakeNpm);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
+          `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
+          "npm_config_has_raw_key() { return 1; }",
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "OPENCLAW_VERSION=latest",
+          "JSON=1",
+          "install_openclaw",
+        ].join("\n"),
+        {
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_ERROR: "",
+          NPM_FAKE_OUTCOME: "success",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "openclaw@latest",
+        "openclaw@latest",
+      ]);
+      expect(result.stdout).toContain("npm install did not produce a usable OpenClaw package");
+      expect(result.stdout).not.toContain('"status":"ok"');
+      expect(result.stdout).not.toContain("openclaw@next");
+      expect(existsSync(join(prefix, "bin", "openclaw"))).toBe(false);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("does not emit before args when npmrc min-release-age computes a before cutoff", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
     const prefix = join(tmp, "prefix");
@@ -1695,6 +1746,7 @@ describe("install-cli.sh", () => {
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
+    writeInstalledOpenClawEntry(join(prefix, "tools", "node-v24.15.0"));
     writeFileSync(join(home, ".npmrc"), "min-release-age=7\n");
     writeNpmFreshnessConflictFixture(join(nodeBin, "npm"), argsLog);
 
@@ -1732,6 +1784,7 @@ describe("install-cli.sh", () => {
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(project, { recursive: true });
+    writeInstalledOpenClawEntry(join(prefix, "tools", "node-v24.15.0"));
     writeFileSync(join(home, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n");
     writeFileSync(join(project, ".npmrc"), "min-release-age=7\n");
     writeNpmBeforePolicyFixture(join(nodeBin, "npm"), argsLog);
