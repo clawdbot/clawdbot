@@ -244,6 +244,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "gateway-status" },
   },
   { commandPath: ["gateway", "call"], exact: true, policy: { networkProxy: "bypass" } },
+  ...["suspend", "resume"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["gateway", subcommand],
+      exact: true,
+      policy: { configGuard: "validate", networkProxy: "bypass" },
+    }),
+  ),
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
   {

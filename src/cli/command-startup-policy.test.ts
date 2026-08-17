@@ -81,6 +81,8 @@ describe("command-startup-policy", () => {
       ["nodes", "remove"],
       ["devices", "approve"],
       ["devices", "remove"],
+      ["gateway", "suspend"],
+      ["gateway", "resume"],
     ]) {
       expect(resolvePolicy({ commandPath })).toMatchObject({
         skipConfigGuard: false,

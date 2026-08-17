@@ -23,7 +23,6 @@ import {
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
 
@@ -31,6 +30,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const activeServers = new Set<WebSocketServer>();
+const UNREACHABLE_GATEWAY_URL = "ws://127.0.0.1:9";
 
 afterEach(async () => {
   await Promise.all(
@@ -191,8 +191,6 @@ async function snapshotDirectoryContents(root: string): Promise<Record<string, s
         await visit(absolutePath);
       } else if (stat.isSymbolicLink()) {
         snapshot[relativePath] = `symlink:${await fs.readlink(absolutePath)}`;
-      } else if (name === "openclaw.sqlite") {
-        snapshot[relativePath] = "sqlite-database";
       } else {
         snapshot[relativePath] = `file:${createHash("sha256")
           .update(await fs.readFile(absolutePath))
@@ -204,32 +202,78 @@ async function snapshotDirectoryContents(root: string): Promise<Record<string, s
   return snapshot;
 }
 
-function snapshotSqliteTables(databasePath: string): Record<string, string[]> {
-  const database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(databasePath), {
-    readOnly: true,
-  });
+async function snapshotSharedStateArtifacts(stateDir: string): Promise<Record<string, string>> {
+  const sharedStateDir = path.join(stateDir, "state");
   try {
-    const tables = database
-      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
-      .all() as Array<{ name: string }>;
-    return Object.fromEntries(
-      tables.map(({ name }) => {
-        const quotedName = `"${name.replaceAll('"', '""')}"`;
-        const rows = database
-          .prepare(`SELECT * FROM ${quotedName}`)
-          .all()
-          .map((row) =>
-            JSON.stringify(row, (_key, value: unknown) =>
-              typeof value === "bigint" ? value.toString() : value,
-            ),
-          )
-          .toSorted();
-        return [name, rows];
-      }),
-    );
-  } finally {
-    database.close();
+    return await snapshotDirectoryContents(sharedStateDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    throw error;
   }
+}
+
+async function prepareUnreachableGatewayCliFixture(params: {
+  label: string;
+  seeded: boolean;
+}): Promise<{ root: string; stateDir: string; configPath: string }> {
+  const root = tempDirs.make(`openclaw-${params.label}-${params.seeded ? "seeded" : "absent"}-`);
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({
+      gateway: {
+        mode: "remote",
+        auth: { mode: "none" },
+        remote: { url: UNREACHABLE_GATEWAY_URL },
+      },
+    }),
+  );
+  if (params.seeded) {
+    const stateEnv = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
+    storeOriginDeviceToken({
+      gatewayScope: gatewayOriginScope(UNREACHABLE_GATEWAY_URL),
+      deviceId: identity.deviceId,
+      role: "operator",
+      token: "stored-device-token",
+      scopes: ["operator.admin"],
+      env: stateEnv,
+    });
+    closeOpenClawStateDatabaseForTest();
+  }
+  return { root, stateDir, configPath };
+}
+
+function expectUnreachableGatewayTransportFailure(
+  result: Awaited<ReturnType<typeof runIsolatedGatewayCli>>,
+  output: "json" | "text",
+): void {
+  expect(result).toMatchObject({ code: 1, signal: null });
+  if (output === "json") {
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: expect.stringContaining("Gateway not reachable"),
+      },
+      gateway: { url: UNREACHABLE_GATEWAY_URL },
+    });
+    return;
+  }
+  expect(result.stderr).toContain("Gateway not reachable");
+  expect(result.stderr).toContain(UNREACHABLE_GATEWAY_URL);
+  expect(result.stderr).not.toContain("gateway timeout");
 }
 
 async function runIsolatedGatewayCli(params: {
@@ -294,6 +338,55 @@ async function runIsolatedGatewayCli(params: {
 }
 
 describe("gateway-backed CLI process exit", () => {
+  it.each([
+    {
+      label: "root-health-json",
+      args: ["health", "--json", "--timeout", "250"],
+      output: "json" as const,
+    },
+    {
+      label: "gateway-health-text",
+      args: ["gateway", "health", "--timeout", "250"],
+      output: "text" as const,
+    },
+    {
+      label: "gateway-health-json",
+      args: ["gateway", "health", "--json", "--timeout", "250"],
+      output: "json" as const,
+    },
+    {
+      label: "gateway-suspend-json",
+      args: ["gateway", "suspend", "--json", "--timeout", "250"],
+      output: "json" as const,
+    },
+    {
+      label: "gateway-resume-json",
+      args: ["gateway", "resume", "suspension-1", "--json", "--timeout", "250"],
+      output: "json" as const,
+    },
+  ])(
+    "leaves shared state byte-identical after unreachable $label",
+    async ({ label, args, output }) => {
+      const absent = await prepareUnreachableGatewayCliFixture({ label, seeded: false });
+      expect(await snapshotSharedStateArtifacts(absent.stateDir)).toEqual({});
+
+      const absentResult = await runIsolatedGatewayCli({ ...absent, args });
+
+      expectUnreachableGatewayTransportFailure(absentResult, output);
+      expect(await snapshotSharedStateArtifacts(absent.stateDir)).toEqual({});
+
+      const seeded = await prepareUnreachableGatewayCliFixture({ label, seeded: true });
+      const before = await snapshotSharedStateArtifacts(seeded.stateDir);
+      expect(Object.keys(before)).toContain("openclaw.sqlite");
+
+      const seededResult = await runIsolatedGatewayCli({ ...seeded, args });
+
+      expectUnreachableGatewayTransportFailure(seededResult, output);
+      expect(await snapshotSharedStateArtifacts(seeded.stateDir)).toEqual(before);
+    },
+    60_000,
+  );
+
   it("dispatches node pairing mutations without opening the writable state database", async () => {
     const root = tempDirs.make("openclaw-node-pairing-cli-");
     const stateDir = path.join(root, "state");
@@ -350,9 +443,7 @@ describe("gateway-backed CLI process exit", () => {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     const before = await snapshotDirectoryContents(stateDir);
-    const beforeTables = snapshotSqliteTables(databasePath);
 
     const result = await runIsolatedGatewayCli({
       args: ["nodes", "approve", "request-1", "--json"],
@@ -365,7 +456,6 @@ describe("gateway-backed CLI process exit", () => {
     expect(JSON.parse(result.stdout)).toEqual({ approved: true });
     expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
     expect(await snapshotDirectoryContents(stateDir)).toEqual(before);
-    expect(snapshotSqliteTables(databasePath)).toEqual(beforeTables);
     expect(
       loadOriginDeviceTokenReadOnly({
         gatewayScope: gatewayOriginScope(gateway.url),

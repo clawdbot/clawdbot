@@ -125,6 +125,15 @@ describe("command-path-policy", () => {
     }
   });
 
+  it("keeps gateway suspension RPCs on non-observing config validation", () => {
+    for (const subcommand of ["suspend", "resume"]) {
+      expectResolvedPolicy(["gateway", subcommand], {
+        configGuard: "validate",
+        networkProxy: "bypass",
+      });
+    }
+  });
+
   it("applies exact overrides after broader channel plugin rules", () => {
     expectResolvedPolicy(["channels", "send"], {
       loadPlugins: "always",

@@ -85,6 +85,7 @@ vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  readBestEffortHealthConfig: async () => ({}),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
