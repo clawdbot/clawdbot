@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -292,6 +293,39 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
     expect(script).toContain("verify_elevation_signature");
     expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
+  });
+
+  it.each(["file", "symlink"])("rejects an elevation-host CUA driver %s before signing", (kind) => {
+    const tempRoot = tempDirs.make(`openclaw-codesign-elevation-cua-${kind}-`);
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    const resources = path.join(app, "Contents", "Resources");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(resources, { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+    const cuaDriver = path.join(resources, "cua-driver");
+    if (kind === "file") {
+      writeFileSync(cuaDriver, "driver\n");
+    } else {
+      symlinkSync("/missing/cua-driver", cuaDriver);
+    }
+    installElevationFakeCodesign(binDir);
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+        TMPDIR: tempRoot,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must not contain bundled CUA driver");
   });
 
   it("consumes complete codesign metadata under pipefail before validating authority", () => {

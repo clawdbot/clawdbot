@@ -311,6 +311,36 @@ struct MacNodeHostWorkerTests {
             workerManifest: cua) == descriptor)
     }
 
+    @Test func `elevation host never advertises a persisted CUA provider`() throws {
+        let suiteName = "MacNodeElevationHostProviderTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: computerControlEnabledKey)
+        defaults.set(ComputerControlProvider.cua.rawValue, forKey: computerControlProviderKey)
+        let provider = ComputerControlProvider.current(
+            defaults: defaults,
+            cuaAvailable: true,
+            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"]))
+        #expect(provider == .peekaboo)
+
+        let cuaDescriptor = OpenClawProtocol.AnyCodable(["provider": "cua"])
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["screen", "computer"],
+            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            computerUse: cuaDescriptor,
+            pathEnv: "/usr/bin:/bin")
+        let workerManifest = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
+        #expect(workerManifest.computerUse == nil)
+        let advertised = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+            provider: provider,
+            commands: manifest.commands,
+            workerManifest: workerManifest))
+        let data = try JSONEncoder().encode(advertised)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((object["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
+    }
+
     @Test func `stale route updates cannot replace newer worker authority`() {
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 4, currentGeneration: 4))
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 5, currentGeneration: 4))

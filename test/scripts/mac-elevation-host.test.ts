@@ -595,6 +595,12 @@ function createArtifactVerificationHarness() {
       "APP_HELPER",
       'printf helper >"$app/Contents/MacOS/openclaw-mlx-tts"',
       'chmod 755 "$app/Contents/MacOS/OpenClaw" "$app/Contents/MacOS/openclaw-mlx-tts"',
+      'case "${TEST_CUA_DRIVER_KIND:-none}" in',
+      '  file) mkdir -p "$app/Contents/Resources"; printf driver >"$app/Contents/Resources/cua-driver"; chmod 755 "$app/Contents/Resources/cua-driver" ;;',
+      '  symlink) mkdir -p "$app/Contents/Resources"; ln -s /missing/cua-driver "$app/Contents/Resources/cua-driver" ;;',
+      "  none) ;;",
+      "  *) exit 64 ;;",
+      "esac",
       "",
     ].join("\n"),
   );
@@ -1296,6 +1302,47 @@ describe("mac elevation host command contract", () => {
       expect(rejected.stderr).toContain(
         "artifact receipt does not match the authenticated release handoff digest",
       );
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rejects CUA-bearing elevation artifacts before verify or install",
+    () => {
+      const verification = createArtifactVerificationHarness();
+      const rejectedVerify = runInstaller(
+        verification.installerPath,
+        [
+          "verify",
+          "--archive",
+          verification.archivePath,
+          "--receipt",
+          verification.receiptPath,
+          ...receiptDigestArgs(verification.receiptPath),
+        ],
+        { ...verification.env, TEST_CUA_DRIVER_KIND: "file" },
+      );
+      expect(rejectedVerify.status).toBe(1);
+      expect(rejectedVerify.stderr).toContain("must not contain bundled CUA driver");
+
+      const installation = createInstallRollbackHarness();
+      const rejectedInstall = runInstaller(
+        installation.installerPath,
+        [
+          "install",
+          "--archive",
+          installation.archivePath,
+          "--receipt",
+          installation.receiptPath,
+          ...receiptDigestArgs(installation.receiptPath),
+          "--app",
+          installation.appPath,
+          "--migrate-launch-agent",
+          installation.sourcePlist,
+        ],
+        { ...installation.env, TEST_CUA_DRIVER_KIND: "symlink" },
+      );
+      expect(rejectedInstall.status).toBe(1);
+      expect(rejectedInstall.stderr).toContain("must not contain bundled CUA driver");
     },
   );
 

@@ -366,6 +366,9 @@ verify_universal_machos() {
 verify_elevation_app() {
   local app="$1"
   [[ -d "$app" && ! -L "$app" ]] || fail "elevation app not found or symlinked: $app"
+  local cua_driver="$app/Contents/Resources/cua-driver"
+  [[ ! -e "$cua_driver" && ! -L "$cua_driver" ]] ||
+    fail "elevation app must not contain bundled CUA driver: $cua_driver"
   [[ "$(plist_value "$app" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] ||
     fail "elevation app bundle id must be $EXPECTED_BUNDLE_ID"
   local source_commit peekaboo_commit
