@@ -137,6 +137,7 @@ async function cleanupCronTestRun(params: {
     testState.sessionConfig = undefined;
   }
   testState.cronEnabled = undefined;
+  testState.cronTriggersEnabled = undefined;
   if (params.prevSkipCron === undefined) {
     delete process.env.OPENCLAW_SKIP_CRON;
     return;
@@ -147,6 +148,7 @@ async function cleanupCronTestRun(params: {
 async function setupCronTestRun(params: {
   tempPrefix: string;
   cronEnabled?: boolean;
+  cronTriggersEnabled?: boolean;
   sessionConfig?: { mainKey: string };
   jobs?: unknown[];
 }): Promise<{ prevSkipCron: string | undefined; dir: string }> {
@@ -156,6 +158,7 @@ async function setupCronTestRun(params: {
   testState.cronStorePath = storePath;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
+  testState.cronTriggersEnabled = params.cronTriggersEnabled;
   if (params.jobs) {
     await saveCronStore(testState.cronStorePath, {
       version: 1,
@@ -690,6 +693,7 @@ describe("gateway server cron", () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-trigger-gate-",
       cronEnabled: false,
+      cronTriggersEnabled: false,
     });
     const cronState = await createDirectCronState();
 
