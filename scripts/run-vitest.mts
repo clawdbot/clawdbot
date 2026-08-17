@@ -82,12 +82,6 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
     DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   ],
   ["test/vitest/vitest.infra.config.ts", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
-  // Largest extension shard: silent transform/import startup was measured at
-  // ~210s on a loaded macOS host, so the 120s default kills healthy runs (#123025).
-  [
-    "test/vitest/vitest.extension-discord.config.ts",
-    DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
-  ],
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_SERVER_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
