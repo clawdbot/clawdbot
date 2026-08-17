@@ -147,6 +147,18 @@ describe("local media roots", () => {
     expect(roots).toContain(path.resolve(home, "captures"));
   });
 
+  it("skips home-relative entries that normalize back to the home directory", () => {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (!home) {
+      return;
+    }
+    // Defense in depth: a value that bypassed schema validation must not widen
+    // the allowlist to the whole home after normalization.
+    const roots = appendConfiguredMediaLocalRoots([], ["~/captures/..", "~/x/../y"]);
+    expect(roots).not.toContain(path.resolve(home));
+    expect(roots).toContain(path.resolve(home, "y"));
+  });
+
   it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-fsroot");
     const roots = withStateDir(stateDir, () =>

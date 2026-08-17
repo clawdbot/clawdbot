@@ -213,7 +213,14 @@ export const AgentDefaultsSchema = z
               return false;
             }
             if (value.startsWith("~/")) {
-              return true;
+              // Reject `~/…` values whose `..` segments collapse back to (or
+              // escape) home, e.g. `~/captures/..` normalizes to `~`.
+              const virtualExpanded = path.posix.normalize(value.replaceAll("\\", "/"));
+              return (
+                virtualExpanded !== "~" &&
+                virtualExpanded !== "~/" &&
+                virtualExpanded.startsWith("~/")
+              );
             }
             if (!path.isAbsolute(value)) {
               return false;

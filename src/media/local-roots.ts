@@ -87,6 +87,13 @@ export function appendConfiguredMediaLocalRoots(
     if (normalizedRoot === path.parse(normalizedRoot).root) {
       continue;
     }
+    // Defense in depth: `~/…/..` (or a config path that bypassed schema
+    // validation) can normalize back to the effective home directory. Never
+    // widen the allowlist to the whole home when host reads are allowed.
+    const homeDir = expandHomePrefix("~/");
+    if (!homeDir.startsWith("~") && normalizedRoot === path.resolve(homeDir)) {
+      continue;
+    }
     if (!roots.includes(normalizedRoot)) {
       roots.push(normalizedRoot);
     }
