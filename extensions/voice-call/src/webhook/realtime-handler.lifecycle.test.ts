@@ -426,6 +426,114 @@ describe("RealtimeCallHandler lifecycle", () => {
     }
   });
 
+  it("ends an idle realtime call after the media inactivity grace", async () => {
+    let resolveBridgeStarted = () => {};
+    const bridgeStarted = new Promise<void>((resolve) => {
+      resolveBridgeStarted = resolve;
+    });
+    const closeBridge = vi.fn();
+    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
+      resolveBridgeStarted();
+      return createBridge(closeBridge);
+    });
+    const { server, ws } = await connectCarrierStream(handler);
+
+    try {
+      vi.useFakeTimers();
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-inactivity", callSid: call.providerCallId },
+        }),
+      );
+      await bridgeStarted;
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
+        0,
+      );
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
+        0,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(closeBridge).toHaveBeenCalledOnce();
+      expect(processEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callId: call.callId,
+          providerCallId: call.providerCallId,
+          reason: "timeout",
+          type: "call.ended",
+        }),
+      );
+      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
+        callId: call.callId,
+        providerCallId: call.providerCallId,
+        reason: "timeout",
+      });
+    } finally {
+      vi.useRealTimers();
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
+  it("renews realtime liveness when inbound media continues", async () => {
+    let resolveBridgeStarted = () => {};
+    const bridgeStarted = new Promise<void>((resolve) => {
+      resolveBridgeStarted = resolve;
+    });
+    let resolveMediaReceived = () => {};
+    const mediaReceived = new Promise<void>((resolve) => {
+      resolveMediaReceived = resolve;
+    });
+    const sendAudio = vi.fn(() => resolveMediaReceived());
+    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
+      resolveBridgeStarted();
+      return createBridge(vi.fn(), { sendAudio });
+    });
+    const { server, ws } = await connectCarrierStream(handler);
+
+    try {
+      vi.useFakeTimers();
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-active-media", callSid: call.providerCallId },
+        }),
+      );
+      await bridgeStarted;
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: { payload: Buffer.from([0xff]).toString("base64") },
+        }),
+      );
+      await mediaReceived;
+      await vi.advanceTimersByTimeAsync(29_999);
+
+      expect(sendAudio).toHaveBeenCalledOnce();
+      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
+        0,
+      );
+      expect(hangupCall).not.toHaveBeenCalled();
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      vi.useRealTimers();
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
   it("terminates active sockets and treats server shutdown as completed", async () => {
     const bridgeClose = vi.fn();
     const createBridgeForCall = vi.fn(() => createBridge(bridgeClose));

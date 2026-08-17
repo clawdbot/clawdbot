@@ -276,6 +276,20 @@ Current runtime behavior:
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
 
+### Hangup detection
+
+Realtime calls normally end when the carrier sends a stream stop event or closes
+the media WebSocket. If an intermediary does not promptly forward that close,
+OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
+2-second grace period for media to resume, and then ends the call.
+
+For inbound Twilio numbers, also configure a Status Callback using `POST` to
+your public webhook URL with `?type=status` appended, for example
+`https://voice.example.com/voice/webhook?type=status`. Include the `completed`
+call event. OpenClaw-created outbound calls configure their callback
+automatically. The callback provides the fastest teardown signal, while stream
+close and the inactivity backstop remain independent of it.
+
 ### Tool policy
 
 `realtime.toolPolicy` controls the consult run:
