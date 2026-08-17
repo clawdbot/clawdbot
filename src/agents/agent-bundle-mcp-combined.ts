@@ -123,11 +123,18 @@ export function createCombinedSessionMcpRuntime(params: {
     const load = (async () => {
       // The combined catalog belongs to the runtime. Individual operation
       // deadlines only detach their waiters; parts keep warming shared caches.
+      let retriedAfterSupersession = false;
       while (true) {
         const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
         // A part can replace its catalog while another part is still loading.
         // Publish only a snapshot whose source identities are still current.
         if (!sourceCatalogsAreCurrent(catalogs)) {
+          if (retriedAfterSupersession) {
+            throw new Error(
+              "combined bundle-mcp catalog sources changed repeatedly while refreshing",
+            );
+          }
+          retriedAfterSupersession = true;
           continue;
         }
         if (
