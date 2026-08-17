@@ -2400,6 +2400,10 @@ openclaw-chat-session-rail {
   transition: border-color var(--duration-fast) ease;
 }
 
+.list-item-clickable {
+  text-decoration: none;
+}
+
 .list-item-clickable:hover {
   border-color: var(--border-strong);
 }
