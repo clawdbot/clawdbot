@@ -1,3 +1,4 @@
+import { totalmem } from "node:os";
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
 import {
@@ -27,6 +28,7 @@ const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
 const DEFAULT_HEAP_SIZE_LIMIT_BYTES = getHeapStatistics().heap_size_limit;
 const DEFAULT_PROCESS_MEMORY_LIMIT_BYTES = process.constrainedMemory();
+const DEFAULT_PHYSICAL_MEMORY_BYTES = totalmem();
 const DEFAULT_IS_BUN_RUNTIME = typeof process.versions.bun === "string";
 
 const log = createSubsystemLogger("gateway").child("diagnostics/memory");
@@ -56,6 +58,18 @@ function isPositiveMemoryLimit(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+function resolveProcessMemoryLimitBytes(
+  processMemoryLimitBytes: number | undefined,
+  physicalMemoryBytes: number | undefined,
+): number | undefined {
+  if (!isPositiveMemoryLimit(processMemoryLimitBytes)) {
+    return undefined;
+  }
+  return isPositiveMemoryLimit(physicalMemoryBytes)
+    ? Math.min(processMemoryLimitBytes, physicalMemoryBytes)
+    : processMemoryLimitBytes;
+}
+
 const state: DiagnosticMemoryState = {
   lastSample: null,
   lastPressureAtByKey: new Map(),
@@ -76,6 +90,7 @@ function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
   heapSizeLimitBytes?: number,
   processMemoryLimitBytes?: number,
+  physicalMemoryBytes?: number,
   isBunRuntime = false,
 ): Required<DiagnosticMemoryThresholds> {
   const hasHeapLimit = isPositiveMemoryLimit(heapSizeLimitBytes);
@@ -93,7 +108,11 @@ function resolveThresholds(
         DEFAULT_HEAP_CRITICAL_MAX_BYTES,
       )
     : DEFAULT_HEAP_CRITICAL_BYTES;
-  const hasProcessMemoryLimit = isPositiveMemoryLimit(processMemoryLimitBytes);
+  const usableProcessMemoryLimitBytes = resolveProcessMemoryLimitBytes(
+    processMemoryLimitBytes,
+    physicalMemoryBytes,
+  );
+  const hasProcessMemoryLimit = usableProcessMemoryLimitBytes !== undefined;
   // Bun's node:v8 heap limit is compatibility metadata, not an RSS process budget.
   const useBunRssCaps = isBunRuntime && hasProcessMemoryLimit;
   const useHeapForRss = !isBunRuntime && hasHeapLimit;
@@ -108,10 +127,10 @@ function resolveThresholds(
       ? heapCriticalBytes
       : DEFAULT_RSS_CRITICAL_BYTES;
   const processWarningBytes = hasProcessMemoryLimit
-    ? Math.floor(processMemoryLimitBytes * DEFAULT_HEAP_WARNING_RATIO)
+    ? Math.floor(usableProcessMemoryLimitBytes * DEFAULT_HEAP_WARNING_RATIO)
     : rssWarningBase;
   const processCriticalBytes = hasProcessMemoryLimit
-    ? Math.floor(processMemoryLimitBytes * DEFAULT_HEAP_CRITICAL_RATIO)
+    ? Math.floor(usableProcessMemoryLimitBytes * DEFAULT_HEAP_CRITICAL_RATIO)
     : rssCriticalBase;
   return {
     rssWarningBytes: thresholds?.rssWarningBytes ?? Math.min(rssWarningBase, processWarningBytes),
@@ -318,6 +337,7 @@ export function emitDiagnosticMemorySample(options?: {
   memoryUsage?: NodeJS.MemoryUsage;
   heapSizeLimitBytes?: number;
   processMemoryLimitBytes?: number;
+  physicalMemoryBytes?: number;
   isBunRuntime?: boolean;
   uptimeMs?: number;
   thresholds?: DiagnosticMemoryThresholds;
@@ -334,6 +354,7 @@ export function emitDiagnosticMemorySample(options?: {
     options?.thresholds,
     options?.heapSizeLimitBytes ?? DEFAULT_HEAP_SIZE_LIMIT_BYTES,
     options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES,
+    options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
     options?.isBunRuntime ?? DEFAULT_IS_BUN_RUNTIME,
   );
   const shouldEmitSample = options?.emitSample !== false;

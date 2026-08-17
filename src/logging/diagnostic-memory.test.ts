@@ -223,6 +223,15 @@ describe("diagnostic memory", () => {
       expectedThresholdsGiB: { warning: 2, critical: 3 },
     },
     {
+      name: "an unlimited process sentinel",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 16 * 1024 ** 3,
+      processMemoryLimitBytes: Number.MAX_SAFE_INTEGER,
+      physicalMemoryBytes: 4 * 1024 ** 3,
+      samples: [{ rssGiB: 2.1 }, { rssGiB: 3.1 }],
+      expectedThresholdsGiB: { warning: 2, critical: 3 },
+    },
+    {
       name: "Bun compatibility heap statistics",
       isBunRuntime: true,
       heapSizeLimitBytes: 280_657_920,
@@ -244,11 +253,16 @@ describe("diagnostic memory", () => {
     const gb = 1024 ** 3;
 
     for (const [index, sample] of testCase.samples.entries()) {
-      const heapUsedMiB = "heapUsedMiB" in sample ? sample.heapUsedMiB : undefined;
+      const heapUsedMiB =
+        "heapUsedMiB" in sample && typeof sample.heapUsedMiB === "number"
+          ? sample.heapUsedMiB
+          : undefined;
       emitDiagnosticMemorySample({
         now: (index + 1) * 11 * 60 * 1000,
         heapSizeLimitBytes: testCase.heapSizeLimitBytes,
         processMemoryLimitBytes: testCase.processMemoryLimitBytes,
+        physicalMemoryBytes:
+          "physicalMemoryBytes" in testCase ? testCase.physicalMemoryBytes : undefined,
         isBunRuntime: testCase.isBunRuntime,
         memoryUsage: memoryUsage({
           rss: Math.round(sample.rssGiB * gb),
