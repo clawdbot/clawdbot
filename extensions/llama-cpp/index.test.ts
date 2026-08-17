@@ -218,6 +218,35 @@ describe("llama.cpp provider plugin", () => {
     });
   });
 
+  it("routes embeddings without requiring a configured chat model", async () => {
+    const options = {
+      ...configuredOptions(),
+      local: { modelPath: "/models/custom-embedding.gguf" },
+    };
+    const provider = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    provider.models = [];
+
+    const result = await llamaCppEmbeddingProviderAdapter.create(options);
+
+    expect(mocks.ensureModel).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "/models/custom-embedding.gguf",
+        download: true,
+      }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatModelPath: undefined,
+        embeddingModelPath: "/models/model.gguf",
+      }),
+    );
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "local",
+      model: "/models/custom-embedding.gguf",
+    });
+  });
+
   it("preserves default local index identity across old and managed cache paths", () => {
     const modelCacheDir = path.join(os.tmpdir(), "managed-llama-models");
     const identity = llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({

@@ -135,12 +135,16 @@ export function buildLlamaCppProviderConfig(
     args: string[];
     healthUrl: string;
   },
+  options?: { includeDefaultModel?: boolean },
 ): ModelProviderConfig {
   const defaultModel = buildDefaultLlamaCppModel();
   const configuredModels = existing?.models ?? [];
-  const models = configuredModels.some((model) => model.id === defaultModel.id)
+  const includeDefaultModel = options?.includeDefaultModel !== false;
+  const models = !includeDefaultModel
     ? configuredModels
-    : [...configuredModels, defaultModel];
+    : configuredModels.some((model) => model.id === defaultModel.id)
+      ? configuredModels
+      : [...configuredModels, defaultModel];
   return {
     ...existing,
     baseUrl:
