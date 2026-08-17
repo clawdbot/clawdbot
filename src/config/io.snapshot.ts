@@ -71,7 +71,13 @@ export async function readConfigFileSnapshotInternal(
         parsed: {},
         sourceConfig: config,
         valid: true,
-        runtimeConfig: config,
+        // Missing config is the fresh-install default path: materialize the
+        // same runtime defaults an existing empty {} config gets, so snapshot
+        // consumers see identical out-of-box behavior either way.
+        runtimeConfig: materializeRuntimeConfig(config, "snapshot", {
+          manifestRegistry:
+            context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined,
+        }),
         hash: hashConfigRaw(null),
         issues: [],
         warnings: [],

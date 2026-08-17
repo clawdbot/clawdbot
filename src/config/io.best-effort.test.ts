@@ -227,6 +227,22 @@ describe("readBestEffortConfig", () => {
     });
   });
 
+  it("materializes fresh-install defaults when the config file is missing", async () => {
+    await withTempHome(async () => {
+      const { loadConfig } = await import("./io.runtime.js");
+
+      const snapshot = await readConfigFileSnapshot({ observe: false });
+      const loaded = loadConfig({ pin: false, skipPluginValidation: true });
+
+      expect(snapshot.exists).toBe(false);
+      // Missing config = fresh install; snapshot and load must produce the same
+      // out-of-box defaults an existing empty {} config gets (contextPruning
+      // stays provider-conditional, so compaction is the parity signal here).
+      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
+    });
+  });
+
   it("reuses valid snapshots while preserving load-time defaults", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
