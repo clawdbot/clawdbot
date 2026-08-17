@@ -102,6 +102,16 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
         if [ "$dev_wrapper_opt_in" = "1" ] && [ -n "$requested_classification" ]; then
           echo "subcommand '$requested_subcommand' is classified $requested_classification; dev-wrapper opt-in is unavailable." >&2
         fi
+        # Worktrees routinely sit on a base that predates (or carries) wrapper
+        # changes relative to main. When the canonical checkout is byte-identical
+        # to the fetched origin/main anchor, exec-ing it runs exactly the trusted
+        # anchor code; announce the substitution so it is never silent.
+        if [ -n "$anchor_wrapper_revision" ] &&
+          [ "$canonical_wrapper_revision" = "$anchor_wrapper_revision" ] &&
+          [ "$canonical_wrapper_clean" = "1" ]; then
+          echo "scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
+          exec "$canonical_self" "$@"
+        fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so
         # the working tree matches HEAD and this list matches what was rejected.

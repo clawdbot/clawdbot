@@ -1,8 +1,10 @@
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionCreatedActor,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -97,7 +99,7 @@ export type SidebarRecentSession = {
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
-  outboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
   lastMessagePreview?: string;

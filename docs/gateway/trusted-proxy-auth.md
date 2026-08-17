@@ -90,11 +90,12 @@ read_when:
 <Warning>
 **Runtime rules, in order of evaluation**
 
-1. The request's source IP must match `gateway.trustedProxies` (CIDR-aware), or it is rejected (`trusted_proxy_untrusted_source`).
-2. Loopback-source requests (`127.0.0.1`, `::1`) are rejected unless `gateway.auth.trustedProxy.allowLoopback = true` and the loopback address is also in `trustedProxies` (`trusted_proxy_loopback_source`). This check runs before header checks, so a loopback source fails this way even if required headers are also missing.
-3. Non-loopback sources that match one of the Gateway host's own local network interface addresses are rejected as a spoofing guard (`trusted_proxy_local_interface_source`). If interface discovery itself fails, the request is rejected too (`trusted_proxy_local_interface_check_failed`).
-4. `requiredHeaders` and `userHeader` must be present and non-blank.
-5. `allowUsers`, if non-empty, must include the extracted user.
+1. Proxy-shaped traffic is attributed before Gateway auth. The request's source IP must match `gateway.trustedProxies` (CIDR-aware), and its client-address headers must resolve to a non-loopback client. Otherwise Gateway-authenticated routes reject it with `proxy_attribution_required` before identity headers are accepted. Plugin-authenticated webhook routes may still handle the request, but they ignore the untrusted forwarded address and use the socket source for their own limits.
+2. The proxy must overwrite `X-Forwarded-For` with a safe chain. If `gateway.allowRealIpFallback = true`, an overwritten `X-Real-IP` is also accepted when `X-Forwarded-For` is absent. Do not enable that fallback unless the proxy removes client-supplied `X-Real-IP`.
+3. Loopback-source requests (`127.0.0.1`, `::1`) are rejected unless `gateway.auth.trustedProxy.allowLoopback = true` and the loopback address is also in `trustedProxies` (`trusted_proxy_loopback_source`). This check runs before header checks, so a loopback source fails this way even if required headers are also missing.
+4. Non-loopback sources that match one of the Gateway host's own local network interface addresses are rejected as a spoofing guard (`trusted_proxy_local_interface_source`). If interface discovery itself fails, the request is rejected too (`trusted_proxy_local_interface_check_failed`).
+5. `requiredHeaders` and `userHeader` must be present and non-blank.
+6. `allowUsers`, if non-empty, must include the extracted user.
 
 **Forwarded-header evidence overrides loopback locality for local-direct fallback.** If a request arrives on loopback but carries a `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header, that evidence disqualifies it from local-direct password fallback and device-identity gating, even though it still fails trusted-proxy auth as loopback.
 
@@ -203,12 +204,12 @@ Enabling this option delegates new browser device enrollment entirely to the rev
 
 ## Control UI pairing behavior
 
-When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, Control UI WebSocket sessions can connect without device pairing identity.
+Browsers attach a device identity on every origin, including plain HTTP, so first connects follow the standard pairing flow: automatic approval when [`deviceAutoApprove`](#automatic-device-approval) is enabled, otherwise a one-time approval on the Gateway host. When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, only Control UI sessions from browsers that cannot supply a device identity at all are admitted device-less.
 
 Scope implications:
 
 - Device-less Control UI WebSocket sessions cannot self-declare permissions. OpenClaw clears their requested scope list to `[]`, then applies any matching server-side `identityScopes` grant after proxy identity verification.
-- If methods fail with `missing scope` after a successful WebSocket connect, use HTTPS so the browser can generate device identity and complete pairing. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
 
@@ -435,6 +436,7 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **trustedProxies is minimal**: Only your actual proxy IPs, not entire subnets.
 - [ ] **Loopback proxy source is deliberate**: trusted-proxy auth fails closed for loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
+- [ ] **Client IP is attributable**: The proxy always rebuilds `X-Forwarded-For` with the original non-loopback client address.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
 - [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
@@ -537,7 +539,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
     Fix:
 
-    - For Control UI, use HTTPS so the browser can generate device identity and complete pairing.
+    - For Control UI, reload the dashboard so the browser generates device identity and completes pairing (works over HTTP too).
     - For custom automation, use device identity/pairing, the reserved direct-local `gateway-client` backend helper path, or [admin HTTP RPC](/plugins/admin-http-rpc).
     - Do not add the retired `gateway.controlUi.dangerouslyDisableDeviceAuth` key to current config; it is ignored and `openclaw doctor --fix` removes it.
 

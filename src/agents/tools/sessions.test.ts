@@ -931,7 +931,7 @@ describe("sessions_list gating", () => {
       mode: "tree",
       restricted: true,
       warning:
-        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; reads also cover any watched same-agent group sessions). Sessions outside that scope are omitted from results and count.",
+        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; the main session sees all sessions of its agent). Sessions outside that scope are omitted from results and count.",
     });
   });
 

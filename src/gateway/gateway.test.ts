@@ -319,7 +319,7 @@ describe("gateway e2e", () => {
               : undefined;
         const callerTailscaleOverride: GatewayTailscaleConfig | undefined =
           authSource === "explicit-override"
-            ? { mode: "off" as const, serviceName: "svc:startup" }
+            ? { mode: "off" as const, preserveFunnel: true }
             : undefined;
         const port = await getGatewayE2ePortBlock();
         server = await startGatewayServer(port, {
@@ -347,7 +347,7 @@ describe("gateway e2e", () => {
         } else if (callerAuthOverride && callerTailscaleOverride) {
           callerAuthOverride.token = `${overrideToken}-mutated`;
           callerAuthOverride.rateLimit!.maxAttempts = 99;
-          callerTailscaleOverride.serviceName = "svc:mutated";
+          callerTailscaleOverride.preserveFunnel = false;
         }
         const nextLoggingSource = {
           ...initialConfig,
@@ -360,7 +360,7 @@ describe("gateway e2e", () => {
         expect(getRuntimeConfig().gateway?.auth?.token).toBe(expectedToken);
         if (authSource === "explicit-override") {
           expect(getRuntimeConfig().gateway?.auth?.rateLimit?.maxAttempts).toBe(7);
-          expect(getRuntimeConfig().gateway?.tailscale?.serviceName).toBe("svc:startup");
+          expect(getRuntimeConfig().gateway?.tailscale?.preserveFunnel).toBe(true);
         }
         if (authSource === "runtime-overrides") {
           expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
@@ -835,72 +835,69 @@ module.exports = {
     },
   );
 
-  it.each([
-    { flow: "setup", exitCode: 0, status: "done" },
-    { flow: "setup", exitCode: 23, status: "error" },
-    { flow: "channels", exitCode: 0, status: "done" },
-    { flow: "channels", exitCode: 23, status: "error" },
-  ] as const)(
-    "keeps the authenticated Gateway alive after a $flow wizard exits $exitCode",
-    { timeout: GATEWAY_E2E_TIMEOUT_MS },
-    async ({ flow, exitCode, status }) => {
-      const { envSnapshot, tempHome } = await setupGatewayTempHome({
-        prefix: `openclaw-wizard-${flow}-exit-home-`,
-        minimalGateway: true,
-      });
-      const wizardToken = nextGatewayId("wiz-contained-exit");
-      const port = await getGatewayE2ePortBlock();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token: wizardToken },
-        controlUiEnabled: false,
-        wizardRunner: async (_opts, runtime, prompter) => {
-          await prompter.outro("wizard complete");
-          runtime.exit(exitCode);
-        },
-        channelWizardRunner: async (_opts, runtime, prompter) => {
-          await prompter.outro("channel wizard complete");
-          runtime.exit(exitCode);
-        },
-      });
-      const client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token: wizardToken,
-        clientDisplayName: "vitest-wizard-contained-exit",
-      });
-      // Intercept an actual host exit so the fail-first Gateway test cannot
-      // terminate its Vitest worker before reporting the regression.
-      const processExit = vi.spyOn(process, "exit").mockImplementation((code) => {
-        throw new Error(`Gateway process exit ${code}`);
-      });
+  it("contains hosted wizard exits", { timeout: GATEWAY_E2E_TIMEOUT_MS }, async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-wizard-contained-exit-home-",
+      minimalGateway: true,
+    });
+    const wizardToken = nextGatewayId("wiz-contained-exit");
+    let exitCode = 0;
+    const port = await getGatewayE2ePortBlock();
+    const server = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token: wizardToken },
+      controlUiEnabled: false,
+      wizardRunner: async (_opts, runtime, prompter) => {
+        await prompter.outro("wizard complete");
+        runtime.exit(exitCode);
+      },
+      channelWizardRunner: async (_opts, runtime, prompter) => {
+        await prompter.outro("channel wizard complete");
+        runtime.exit(exitCode);
+      },
+    });
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: wizardToken,
+    });
+    // Intercept an actual host exit so the fail-first Gateway test cannot
+    // terminate its Vitest worker before reporting the regression.
+    const processExit = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`Gateway process exit ${code}`);
+    });
 
-      try {
-        const start = await client.request<WizardStartResult>(
-          "wizard.start",
-          flow === "channels" ? { flow } : { mode: "local" },
-        );
-        expect(start).toMatchObject({ done: false, status: "running" });
-        expect(start.step?.id).toBeTruthy();
+    try {
+      for (const flow of ["setup", "channels"] as const) {
+        for (const nextExitCode of [0, 23] as const) {
+          exitCode = nextExitCode;
+          const status = exitCode === 0 ? "done" : "error";
+          const start = await client.request<WizardStartResult>(
+            "wizard.start",
+            flow === "channels" ? { flow } : { mode: "local" },
+          );
+          expect(start).toMatchObject({ done: false, status: "running" });
+          expect(start.step?.id).toBeTruthy();
 
-        const result = await client.request<WizardNextResult>("wizard.next", {
-          sessionId: start.sessionId,
-          answer: { stepId: start.step?.id, value: null },
-        });
-        expect(result).toMatchObject({ done: true, status });
-        if (exitCode !== 0) {
-          expect(result.error).toContain(String(exitCode));
+          const result = await client.request<WizardNextResult>("wizard.next", {
+            sessionId: start.sessionId,
+            answer: { stepId: start.step?.id, value: null },
+          });
+          expect(result).toMatchObject({ done: true, status });
+          if (exitCode !== 0) {
+            expect(result.error).toContain(String(exitCode));
+          }
+          expect(processExit).not.toHaveBeenCalled();
+          await expect(client.request("health", {})).resolves.toBeDefined();
         }
-        expect(processExit).not.toHaveBeenCalled();
-        await expect(client.request("health", {})).resolves.toBeDefined();
-      } finally {
-        processExit.mockRestore();
-        await disconnectGatewayClient(client);
-        await server.close({ reason: "wizard runtime isolation E2E complete" });
-        await removeGatewayTempHome(tempHome);
-        envSnapshot.restore();
       }
-    },
-  );
+    } finally {
+      processExit.mockRestore();
+      await disconnectGatewayClient(client);
+      await server.close({ reason: "wizard runtime isolation E2E complete" });
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
+  });
 
   it(
     "routes wizard.start flow channels to the channel wizard runner",

@@ -51,8 +51,8 @@ import {
 } from "./app-sidebar-session-navigation-logic.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
-import { loadStoredHiddenSessionCatalogIds } from "./app-sidebar-session-types.ts";
 import {
+  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
@@ -288,7 +288,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       highlightCurrentSession: isSessionRouteId(this.activeRouteId),
       runtimeSampledAtByRow: this.runtimeSampledAtByRow,
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
-      outboxCountForSessionKey: (sessionKey) => this.outboxCountForSession(sessionKey),
+      outboxAttentionCountForSessionKey: this.outboxAttentionCountForSession,
       hasSessionDraft: (sessionKey) => this.hasSessionDraft(sessionKey),
       resolveAttention: (row) => this.attention.resolveSessionAttention(row),
       resolveAgentStatusNote: (row) => this.attention.resolveSessionAgentStatus(row)?.note,

@@ -1,10 +1,13 @@
 // Control UI page module owns Chat queue storage and queue item cleanup.
+import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
-import { cloneChatAttachmentsMetadata } from "./attachment-payload-store.ts";
+import {
+  releaseChatAttachmentPayloads,
+  cloneChatAttachmentsMetadata,
+} from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -28,6 +31,18 @@ type ChatQueueStoreHost = {
 };
 type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
+
+export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
+  return (
+    isMovableChatQueueItem(item) &&
+    (item.sendState === undefined || item.sendState === "waiting-idle") &&
+    !item.localCommandName
+  );
+}
+
+export function steerableQueuedMessage(queue: readonly ChatQueueItem[]): ChatQueueItem | undefined {
+  return queue.toSorted(compareChatQueueOrder).find(isSteerableQueuedMessage);
+}
 
 function isProcessLiveQueueProjection(item: ChatQueueItem): boolean {
   return item.sendState === "sending" || item.sendState === "executing-command";

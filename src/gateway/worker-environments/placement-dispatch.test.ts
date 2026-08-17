@@ -55,12 +55,13 @@ describe("worker placement dispatch", () => {
       profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
     };
 
-    await harness.service.dispatch({ ...REQUEST, inheritedProfile });
+    await harness.service.dispatch({ ...REQUEST, inheritedProfile, machineClass: "beast" });
 
     expect(harness.environments.create).not.toHaveBeenCalled();
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
       { profileId: REQUEST.profileId, ...inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
+      "beast",
     );
   });
 
@@ -978,16 +979,11 @@ describe("worker placement dispatch", () => {
         ownerEpoch: harness.attached.ownerEpoch,
       },
     });
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId: harness.attached.environmentId,
-      ownerEpoch: harness.attached.ownerEpoch,
-      runId: claim.runId,
-    };
+    const binding = claim;
     placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
       placementStore.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-owner-mismatch",
         requestDigest: "digest-owner-mismatch",

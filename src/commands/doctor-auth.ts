@@ -34,6 +34,7 @@ import {
   resolveAuthStorePathForDisplay,
   resolveSharedAuthStoreOwnership,
 } from "../agents/auth-profiles/path-resolve.js";
+import { inspectPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -54,7 +55,10 @@ const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 
 /** Surface the one-time relocation while the legacy shared owner is still active. */
 export function noteSharedAuthStoreStatus(env: NodeJS.ProcessEnv = process.env): void {
-  if (resolveSharedAuthStoreOwnership(env).location !== "legacy-main") {
+  if (
+    resolveSharedAuthStoreOwnership(env).location !== "legacy-main" ||
+    inspectPersistedSharedAuthProfileStoreRaw(env).status !== "readable"
+  ) {
     return;
   }
   note(

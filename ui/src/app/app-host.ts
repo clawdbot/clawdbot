@@ -24,6 +24,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
@@ -137,7 +138,7 @@ class OpenClawShell
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
-  approvalOverlay: (HTMLElement & { show(): void }) | undefined;
+  approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   navDrawerTrigger: HTMLElement | null = null;
   // Desktop and modal navigation are two slots for the same live sidebar.
@@ -422,6 +423,12 @@ class OpenClawShell
     this.shellNavigation.selectChatSession(sessionKey, agentId);
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    if (event.event === "config.changed") {
+      const client = this.context?.gateway?.snapshot.client;
+      if (client) {
+        invalidateChatMetadataStore(client);
+      }
+    }
     this.shellGateway.handleGatewayEvent(event);
   };
 
@@ -588,6 +595,13 @@ class OpenClawShell
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    if (this.previousGatewayPhase !== "connected" && snapshot.phase === "connected") {
+      // A reconnect can retain the browser client, so object identity alone
+      // cannot keep metadata from crossing logical Gateway connections.
+      if (snapshot.client) {
+        invalidateChatMetadataStore(snapshot.client);
+      }
+    }
     this.shellGateway.synchronizeGateway(snapshot);
   }
 

@@ -60,12 +60,14 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
   typeof import("../../auto-reply/dispatch.js").dispatchInboundMessageWithProjectedDispatcher
 >[0];
+type RespondMock = ReturnType<typeof vi.fn<RespondFn>>;
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
 const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-5.6-sol" } as const;
@@ -871,7 +873,7 @@ function mockCallAt(
   return calls[normalizedIndex];
 }
 
-function lastRespondCall(respond: ReturnType<typeof vi.fn>) {
+function lastRespondCall(respond: RespondMock) {
   return mockCallAt(respond, -1) as
     | [boolean, Record<string, any> | undefined, Record<string, any> | undefined]
     | undefined;
@@ -892,13 +894,13 @@ function responseErrorMessage(error: unknown): string {
 }
 
 function lastBroadcastPayload(context: ChatContext): Record<string, any> | undefined {
-  const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
+  const chatCall = mockCallAt(context.broadcast, -1);
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 function lastNodeSendCall(context: ChatContext) {
-  return mockCallAt(context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>, -1) as
+  return mockCallAt(context.nodeSendToSession, -1) as
     | [string, string, Record<string, any>]
     | undefined;
 }
@@ -999,27 +1001,10 @@ function createScopedCliClient(
   };
 }
 
-function createChatContext(): Pick<
-  GatewayRequestContext,
-  | "broadcast"
-  | "nodeSendToSession"
-  | "agentRunSeq"
-  | "chatAbortControllers"
-  | "chatQueuedTurns"
-  | "chatRunState"
-  | "addChatRun"
-  | "removeChatRun"
-  | "dedupe"
-  | "loadGatewayModelCatalog"
-  | "registerToolEventRecipient"
-  | "getRuntimeConfig"
-  | "broadcastToConnIds"
-  | "getSessionEventSubscriberConnIds"
-  | "logGateway"
-> {
-  return {
-    broadcast: vi.fn() as unknown as GatewayRequestContext["broadcast"],
-    nodeSendToSession: vi.fn() as unknown as GatewayRequestContext["nodeSendToSession"],
+function createChatContext() {
+  const context = {
+    broadcast: vi.fn<GatewayRequestContext["broadcast"]>(),
+    nodeSendToSession: vi.fn<GatewayRequestContext["nodeSendToSession"]>(),
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
@@ -1052,15 +1037,16 @@ function createChatContext(): Pick<
           mainKey: mockState.mainSessionKey,
         },
       }) as never,
-    registerToolEventRecipient: vi.fn(),
-    broadcastToConnIds: vi.fn(),
+    registerToolEventRecipient: vi.fn<GatewayRequestContext["registerToolEventRecipient"]>(),
+    broadcastToConnIds: vi.fn<GatewayRequestContext["broadcastToConnIds"]>(),
     getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
     logGateway: {
-      warn: vi.fn(),
-      debug: vi.fn(),
-      error: vi.fn(),
-    } as unknown as GatewayRequestContext["logGateway"],
+      warn: vi.fn<GatewayRequestContext["logGateway"]["warn"]>(),
+      debug: vi.fn<GatewayRequestContext["logGateway"]["debug"]>(),
+      error: vi.fn<GatewayRequestContext["logGateway"]["error"]>(),
+    },
   };
+  return context as typeof context & GatewayRequestContext;
 }
 
 type ChatContext = ReturnType<typeof createChatContext>;
@@ -1084,7 +1070,7 @@ async function createReadyChatTranscript(prefix: string) {
 
 function createChatRequestFixture() {
   const context = createChatContext();
-  const respond = vi.fn();
+  const respond = vi.fn<RespondFn>();
   return {
     context,
     respond,
@@ -1100,7 +1086,7 @@ function createChatRequestFixture() {
         req: {} as never,
         client: null as never,
         isWebchatConnect: () => false,
-        context: context as GatewayRequestContext,
+        context,
       }),
   };
 }
@@ -1163,7 +1149,7 @@ function expectManagedAudioBlock(
 
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
-  respond: ReturnType<typeof vi.fn>;
+  respond: RespondFn;
   idempotencyKey: string;
   message?: string;
   sessionKey?: string;
@@ -1198,13 +1184,11 @@ async function runNonStreamingChatSend(params: {
       ...sendParams,
       ...params.requestParams,
     },
-    respond: params.respond as unknown as Parameters<
-      (typeof chatHandlers)["chat.send"]
-    >[0]["respond"],
+    respond: params.respond,
     req: {} as never,
     client: (params.client ?? null) as never,
     isWebchatConnect: () => false,
-    context: params.context as GatewayRequestContext,
+    context: params.context,
   });
 
   const waitFor =
@@ -1225,12 +1209,10 @@ async function runNonStreamingChatSend(params: {
   }
 
   await waitForAssertion(() => {
-    expect(
-      (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
-    ).toBe(1);
+    expect(params.context.broadcast.mock.calls.length).toBe(1);
   });
 
-  const chatCall = mockCallAt(params.context.broadcast as unknown as ReturnType<typeof vi.fn>, 0);
+  const chatCall = mockCallAt(params.context.broadcast, 0);
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1] as Record<string, any> | undefined;
 }
@@ -1899,7 +1881,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             },
           } as never,
           isWebchatConnect: () => false,
-          context: context as GatewayRequestContext,
+          context,
         },
         async () => {
           original.complete();
@@ -2299,7 +2281,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
     expect(mockState.lastMessageInjectionAttempted).toBe(true);
     expect(readPersistedUserMessages()).toHaveLength(1);
-    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+    const broadcasts = context.broadcast.mock.calls.map(
       ([, payload]) => payload as Record<string, unknown>,
     );
     expect(broadcasts.filter((payload) => payload.state === "error")).toEqual([]);
@@ -2558,7 +2540,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(successorCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);
     expect(
-      (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+      context.broadcast.mock.calls.filter(
         ([, payload]) => (payload as { state?: unknown }).state === "error",
       ),
     ).toEqual([]);
@@ -2628,7 +2610,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(staleCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);
     expect(
-      (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+      context.broadcast.mock.calls.filter(
         ([, payload]) => (payload as { state?: unknown }).state === "error",
       ),
     ).toEqual([]);
@@ -2657,11 +2639,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      expect(
-        (context.broadcastToConnIds as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
-      ).toBe(1);
+      expect(context.broadcastToConnIds.mock.calls.length).toBe(1);
     });
-    const call = mockCallAt(context.broadcastToConnIds as unknown as ReturnType<typeof vi.fn>, 0);
+    const call = mockCallAt(context.broadcastToConnIds, 0);
     const payload = call?.[1] as { ts?: unknown } | undefined;
     expect(call?.[0]).toBe("sessions.changed");
     expect(call?.[2]).toEqual(new Set(["conn-1"]));
@@ -2696,7 +2676,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(context.dedupe.get("chat:idem-command-session-metadata-error")?.ok).toBe(false);
     });
-    const call = mockCallAt(context.broadcastToConnIds as unknown as ReturnType<typeof vi.fn>, 0);
+    const call = mockCallAt(context.broadcastToConnIds, 0);
     expect(call?.[0]).toBe("sessions.changed");
     expect(call?.[1]).toMatchObject({
       sessionKey: "agent:main:main",
@@ -2963,7 +2943,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const register = context.registerToolEventRecipient;
     expect(register).toHaveBeenCalledWith("run-current", "conn-1");
     expect(register).toHaveBeenCalledWith("run-same-session", "conn-1");
     expect(register).not.toHaveBeenCalledWith("run-other-session", "conn-1");
@@ -3005,7 +2985,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const register = context.registerToolEventRecipient;
     expect(register).toHaveBeenCalledWith("run-current-global", "conn-global");
     expect(register).toHaveBeenCalledWith("run-default-global", "conn-global");
     expect(register).not.toHaveBeenCalledWith("run-work-global", "conn-global");
@@ -3048,7 +3028,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const register = context.registerToolEventRecipient;
     expect(register).toHaveBeenCalledWith("run-current-work-global", "conn-work");
     expect(register).toHaveBeenCalledWith("run-work-global", "conn-work");
     expect(register).not.toHaveBeenCalledWith("run-default-global", "conn-work");
@@ -3191,7 +3171,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null,
       isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      context,
     });
 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
@@ -3219,7 +3199,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null,
       isWebchatConnect: () => false,
-      context: createChatContext() as GatewayRequestContext,
+      context: createChatContext(),
     });
 
     expect(lastRespondCall(respond)?.[1]).toMatchObject({
@@ -3242,7 +3222,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const register = context.registerToolEventRecipient;
     expect(register).not.toHaveBeenCalled();
   });
 
@@ -3694,7 +3674,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Model set to openai/gpt-5.5 for this session.");
-    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    expect(context.broadcast.mock.calls).toHaveLength(1);
     expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
     expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
   });
@@ -3724,7 +3704,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "dedupe",
     });
 
-    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toStrictEqual([]);
+    expect(context.broadcast.mock.calls).toStrictEqual([]);
     expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
     expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
   });
@@ -4418,9 +4398,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "final",
     });
     expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
-    const errorBroadcasts = (
-      context.broadcast as unknown as ReturnType<typeof vi.fn>
-    ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "error");
+    const errorBroadcasts = context.broadcast.mock.calls.filter(
+      ([, payload]) => (payload as { state?: unknown })?.state === "error",
+    );
     expect(errorBroadcasts).toStrictEqual([]);
     const dedupe = context.dedupe.get("chat:idem-agent-source-reply-error");
     expect(dedupe?.ok).toBe(true);
@@ -4465,7 +4445,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "dedupe",
     });
 
-    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+    const broadcasts = context.broadcast.mock.calls.map(
       ([, payload]) => payload as Record<string, unknown>,
     );
     expect(broadcasts).toHaveLength(1);
@@ -4515,9 +4495,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       errorMessage,
     });
     expect(broadcast).not.toHaveProperty("message");
-    const finalBroadcasts = (
-      context.broadcast as unknown as ReturnType<typeof vi.fn>
-    ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "final");
+    const finalBroadcasts = context.broadcast.mock.calls.filter(
+      ([, payload]) => (payload as { state?: unknown })?.state === "final",
+    );
     expect(finalBroadcasts).toStrictEqual([]);
   });
 
@@ -4528,7 +4508,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-agent-returned-error-");
     const errorMessage = agentStarted
       ? "LLM idle timeout (120s): no response from model"
-      : "Worker must bootstrap the current build before continuing";
+      : STALE_WORKER_BUILD_REASON;
     mockState.triggerAgentRunStart = agentStarted;
     mockState.dispatchedReplies = [
       {
@@ -5168,7 +5148,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         req: {} as never,
         client: null as never,
         isWebchatConnect: () => false,
-        context: context as GatewayRequestContext,
+        context,
       });
       await waitForAssertion(() => expect(mockState.loadSessionEntryCalls).toHaveLength(1));
       mockState.sessionEntry = { archivedAt: Date.now() };
@@ -5257,7 +5237,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      context,
     });
 
     const response = lastRespondCall(respond);
@@ -5285,7 +5265,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      context,
     });
 
     const response = lastRespondCall(respond);
@@ -5308,7 +5288,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(respond).toHaveBeenCalled();
-    const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
+    const chatCall = mockCallAt(context.broadcast, -1);
     expect(chatCall?.[0]).toBe("chat");
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });
@@ -5928,9 +5908,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       timestamp: expect.any(Number),
       idempotencyKey: "idem-user-transcript-agent-run:user",
     });
-    const finalBroadcast = (
-      context.broadcast as unknown as ReturnType<typeof vi.fn>
-    ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
+    const finalBroadcast = context.broadcast.mock.calls.find(
+      (call) =>
+        call[0] === "chat" && (call[1] as { state?: unknown } | undefined)?.state === "final",
+    )?.[1];
     expect(finalBroadcast).toBeUndefined();
   });
 
@@ -6310,11 +6291,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitForCompletion: false,
     });
 
-    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+    expect(context.broadcast.mock.calls.length).toBe(0);
     releaseSave();
 
     await waitForAssertion(() => {
-      expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      expect(context.broadcast.mock.calls.length).toBe(1);
       const userUpdate = findUserUpdate();
       if (userUpdate?.message === undefined) {
         throw new Error("Expected streamed user transcript update message");
@@ -6881,10 +6862,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(responseErrorMessage(error)).toMatch(/ENOSPC|non-image attachments/i);
-    const unavailableLogCall = mockCallAt(
-      context.logGateway.error as unknown as ReturnType<typeof vi.fn>,
-      0,
-    ) as [string, Record<string, string>] | undefined;
+    const unavailableLogCall = mockCallAt(context.logGateway.error, 0) as
+      | [string, Record<string, string>]
+      | undefined;
     expect(unavailableLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
     expect(unavailableLogCall?.[1].consoleMessage).toContain(
       "chat.send attachment parse/stage failed: MediaOffloadError",
@@ -6924,8 +6904,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(response?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(response?.[2]?.message).toContain("attachment broken.png: invalid base64 content");
     expect(getAgentRunContext("idem-chat-send-attachment-parse-stack")).toBeUndefined();
-    const parseLogCall = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
-      .calls[0] as [string, Record<string, string>] | undefined;
+    const parseLogCall = context.logGateway.error.mock.calls[0] as
+      | [string, Record<string, string>]
+      | undefined;
     expect(parseLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
     expect(parseLogCall?.[1].consoleMessage).toContain(
       "chat.send attachment parse/stage failed: Error: attachment broken.png",
@@ -6933,8 +6914,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(parseLogCall?.[1].error).toContain(
       "Error: attachment broken.png: invalid base64 content",
     );
-    const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[1] as { error?: string } | undefined;
+    const logMeta = context.logGateway.error.mock.calls[0]?.[1] as { error?: string } | undefined;
     expect(logMeta?.error).toContain("\n    at ");
   });
 

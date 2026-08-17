@@ -56,9 +56,9 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
-import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
+  resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";

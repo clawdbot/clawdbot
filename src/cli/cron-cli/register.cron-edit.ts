@@ -18,6 +18,7 @@ import {
 } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
   applyExistingCronSchedulePatch,
@@ -55,8 +56,7 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("edit")
+    createCronOutputCommand(cron, "edit")
       .description("Edit an automation (patch fields)")
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")

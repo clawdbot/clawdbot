@@ -4,7 +4,10 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
-import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
+import {
+  isProtocolRecord,
+  normalizeOptionalProtocolString,
+} from "./protocol-value-normalization.js";
 
 function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -223,7 +226,7 @@ export function resolveDeviceAuthConnectErrorDetailCode(
 
 /** Reads a non-empty detail code from an untrusted error details payload. */
 export function readConnectErrorDetailCode(details: unknown): string | null {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return null;
   }
   const code = (details as { code?: unknown }).code;
@@ -232,7 +235,11 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
 
 /** Read the exact target artifact from an untrusted reload-required rejection. */
 export function readControlUiBuildMismatchId(details: unknown): string | null {
-  if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
+  const code = readConnectErrorDetailCode(details);
+  if (
+    code !== ConnectErrorDetailCodes.PROTOCOL_MISMATCH &&
+    code !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH
+  ) {
     return null;
   }
   const raw = details as { gatewayBuildId?: unknown; reloadRequired?: unknown };
@@ -245,7 +252,7 @@ export function readControlUiBuildMismatchId(details: unknown): string | null {
 
 /** Extracts normalized retry advice from untrusted connect-error details. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return {};
   }
   const raw = details as {
@@ -402,7 +409,7 @@ export function readPairingConnectErrorDetails(
   if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return null;
   }
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return null;
   }
   const raw = details as {

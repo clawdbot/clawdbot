@@ -242,7 +242,7 @@
     },
     "sessionScope": {
       "label": "Session Scope",
-      "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
+      "help": "Use per-phone to preserve caller memory, per-call to isolate every call, or main to share the configured agent's main session."
     },
     "responseModel": {
       "label": "Response Model",
@@ -933,7 +933,7 @@
       },
       "sessionScope": {
         "type": "string",
-        "enum": ["per-phone", "per-call"]
+        "enum": ["per-phone", "per-call", "main"]
       },
       "responseModel": {
         "type": "string"

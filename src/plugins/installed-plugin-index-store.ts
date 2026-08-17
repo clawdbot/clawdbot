@@ -33,19 +33,15 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 import {
-  diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-  loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
-  type InstalledPluginIndexRefreshReason,
-  type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
@@ -55,16 +51,6 @@ export {
   resolveLegacyInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
-
-/** Freshness state for the persisted installed plugin index. */
-type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
-
-export type InstalledPluginIndexStoreInspection = {
-  state: InstalledPluginIndexStoreState;
-  refreshReasons: readonly InstalledPluginIndexRefreshReason[];
-  persisted: InstalledPluginIndex | null;
-  current: InstalledPluginIndex;
-};
 
 export type InstalledPluginIndexWriteLease = {
   assertOwnedInTransaction(database: DatabaseSync): void;
@@ -561,33 +547,6 @@ function refreshPersistedPolicyState(
         enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
       }).enabled,
     })),
-  };
-}
-
-export async function inspectPersistedInstalledPluginIndex(
-  params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
-): Promise<InstalledPluginIndexStoreInspection> {
-  const persisted = await readPersistedInstalledPluginIndex(params);
-  const current = loadInstalledPluginIndex({
-    ...params,
-    installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
-  });
-  if (!persisted) {
-    return {
-      state: "missing",
-      refreshReasons: ["missing"],
-      persisted: null,
-      current,
-    };
-  }
-
-  const refreshReasons = diffInstalledPluginIndexInvalidationReasons(persisted, current);
-  return {
-    state: refreshReasons.length > 0 ? "stale" : "fresh",
-    refreshReasons,
-    persisted,
-    current,
   };
 }
 

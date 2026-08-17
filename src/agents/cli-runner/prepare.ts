@@ -31,8 +31,8 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
+  CliBackendConfig,
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
@@ -90,8 +90,8 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import {
+  resolvePromptBuildHookResult,
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
 } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";

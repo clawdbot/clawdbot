@@ -927,7 +927,7 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("2.0.0");
 
     mockPackageInstallStatus(tempDir);
-    primeNpmChannelTag("latest", "0.0.1");
+    primeNpmChannelTag(isBetaTag(VERSION) ? "beta" : "latest", "0.0.1");
     vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
       mode: "npm",
@@ -5451,7 +5451,9 @@ describe("update-cli", () => {
     expect(postCoreSpawn?.[1]).toEqual([entryPath, "update", "--no-restart", "--yes"]);
     expect(postCoreSpawn?.[2].stdio).toBe("inherit");
     expect(postCoreSpawn?.[2].env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
-    expect(postCoreSpawn?.[2].env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe("stable");
+    expect(postCoreSpawn?.[2].env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe(
+      isBetaTag(VERSION) ? "beta" : "stable",
+    );
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(getLogOutput()).not.toContain("already-current");
   });

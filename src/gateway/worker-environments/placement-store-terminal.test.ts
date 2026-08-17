@@ -143,7 +143,7 @@ describe("worker placement terminal persistence", () => {
 
   it("atomically fails a pending result and preserves its bounded reason across restart", () => {
     advanceToActive();
-    const { active, claim, pending } = pendingResult();
+    const { claim, pending } = pendingResult();
     const closedClaims: WorkerSessionTurnClaim[] = [];
     const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
       closedClaims.push(closedClaim);
@@ -154,7 +154,7 @@ describe("worker placement terminal persistence", () => {
     const failed = store.failWorkspaceResultAndReleaseTurn(pending, new Error(disappearance));
     expect(failed).toMatchObject({
       state: "failed",
-      generation: active.generation + 3,
+      generation: claim.placementGeneration + 3,
       turnClaim: null,
       terminalAtMs: 2_000,
     });
@@ -175,17 +175,12 @@ describe("worker placement terminal persistence", () => {
 
   it("does not fail a pending result while its session operation is running", () => {
     advanceToActive();
-    const { active, claim, pending } = pendingResult();
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      runId: claim.runId,
-    };
+    const { claim, pending } = pendingResult();
+    const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
       store.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-pending-send",
         requestDigest: "digest-pending-send",

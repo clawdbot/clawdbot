@@ -15,6 +15,8 @@ vi.mock("../gateway-rpc.js", async () => {
   };
 });
 
+const { isCronMachineOutput } = await import("./output-mode.js");
+const { registerCronCli } = await import("./register.js");
 const { registerCronSimpleCommands } = await import("./register.cron-simple.js");
 const originalStderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
 
@@ -64,6 +66,60 @@ function restoreStderrIsTTY(): void {
     Reflect.deleteProperty(process.stderr, "isTTY");
   }
 }
+
+function createRegisteredCronCommand(): Command {
+  const program = new Command().name("openclaw");
+  registerCronCli(program);
+  const cron = program.commands.find((command) => command.name() === "cron");
+  if (!cron) {
+    throw new Error("cron command was not registered");
+  }
+  return cron;
+}
+
+describe("cron machine-output help", () => {
+  it.each([
+    { name: "status", aliases: [] },
+    { name: "add", aliases: ["create"] },
+    { name: "rm", aliases: ["remove", "delete"] },
+    { name: "enable", aliases: [] },
+    { name: "disable", aliases: [] },
+    { name: "get", aliases: [] },
+    { name: "runs", aliases: [] },
+    { name: "run", aliases: [] },
+    { name: "edit", aliases: [] },
+  ])("documents $name as always-JSON machine output", ({ name, aliases }) => {
+    const command = createRegisteredCronCommand().commands.find((candidate) =>
+      [candidate.name(), ...candidate.aliases()].includes(name),
+    );
+    const jsonOption = command?.options.find((option) => option.long === "--json");
+
+    expect(command?.aliases()).toEqual(aliases);
+    expect(jsonOption?.description).toBe(
+      "Explicit machine-output spelling (command results are JSON by default)",
+    );
+    expect(jsonOption?.defaultValue).toBeUndefined();
+    for (const commandName of [name, ...aliases]) {
+      expect(isCronMachineOutput(["node", "openclaw", "cron", commandName])).toBe(true);
+    }
+  });
+
+  it("keeps registered command output declarations aligned with early stdout routing", () => {
+    const cron = createRegisteredCronCommand();
+    for (const command of cron.commands) {
+      const jsonOption = command.options.find((option) => option.long === "--json");
+      const alwaysJson =
+        jsonOption?.description ===
+        "Explicit machine-output spelling (command results are JSON by default)";
+      const reservesMachineOutput = command.name() === "scratch" || alwaysJson;
+      for (const commandName of [command.name(), ...command.aliases()]) {
+        expect(isCronMachineOutput(["node", "openclaw", "cron", commandName]), commandName).toBe(
+          reservesMachineOutput,
+        );
+      }
+    }
+  });
+});
 
 describe("cron show pagination guard (regression for #83856)", () => {
   beforeEach(() => {

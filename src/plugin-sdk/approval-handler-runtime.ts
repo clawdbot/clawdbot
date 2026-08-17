@@ -1,6 +1,19 @@
 /**
  * Runtime SDK subpath for approval handler adapters and approval view text helpers.
  */
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import type {
+  ExpiredApprovalView,
+  ResolvedApprovalView,
+} from "../infra/approval-view-model.types.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
+import {
+  buildPluginApprovalExpiredMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "../infra/plugin-approvals.js";
+import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
@@ -32,19 +45,6 @@ export {
   type ResolvedApprovalView,
 } from "../infra/approval-handler-runtime.js";
 export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import type {
-  ExpiredApprovalView,
-  ResolvedApprovalView,
-} from "../infra/approval-view-model.types.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import {
-  buildPluginApprovalExpiredMessage,
-  buildPluginApprovalResolvedMessage,
-  type PluginApprovalRequest,
-  type PluginApprovalResolved,
-} from "../infra/plugin-approvals.js";
-import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;

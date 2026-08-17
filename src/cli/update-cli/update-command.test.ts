@@ -309,11 +309,13 @@ describe("resolvePostInstallDoctorEnv", () => {
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
+        OPENCLAW_SYSTEMD_UNIT: "wrong.service",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
         OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
         OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
       },
     });
 
@@ -324,6 +326,7 @@ describe("resolvePostInstallDoctorEnv", () => {
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
     );
     expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
   });
 
   it("keeps the caller env when no managed service env is available", () => {
@@ -367,6 +370,7 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     const env = resolveOwnedManagedUpdateEnv({
       processEnv: {
         HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
         OPENCLAW_PROFILE: "personal",
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
         OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
@@ -374,6 +378,7 @@ describe("resolveUpdatedInstallCommandEnv", () => {
       },
       serviceEnv: {
         HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
         OPENCLAW_PROFILE: "personal",
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
         OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
@@ -383,6 +388,7 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     });
 
     expect(env.HOME).toBe("/home/operator");
+    expect(env.OPENCLAW_HOME).toBeUndefined();
     expect(env.OPENCLAW_PROFILE).toBeUndefined();
     expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
     expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();

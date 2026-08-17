@@ -6,7 +6,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -15,12 +14,17 @@ import {
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  prepareGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type GatewayIngressAttribution,
+  type VerifiedTailscaleIngressIdentity,
+} from "./ingress-attribution.js";
+import {
   isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
   resolveRequestClientIp,
   isTrustedProxyAddress,
-  resolveClientIp,
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
@@ -29,8 +33,6 @@ export {
   resolveGatewayAuth,
   type ResolvedGatewayAuth,
 } from "./auth-resolve.js";
-export { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
-
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
@@ -68,7 +70,8 @@ type AuthorizeGatewayConnectParams = {
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
   trustedProxies?: string[];
-  tailscaleWhois?: TailscaleWhoisLookup;
+  tailscaleWhois?: Parameters<typeof prepareGatewayIngressAttribution>[0]["tailscaleWhois"];
+  ingressAttribution?: GatewayIngressAttribution;
   /**
    * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
    * WS Control UI enables it intentionally for tokenless trusted-host login.
@@ -80,6 +83,8 @@ type AuthorizeGatewayConnectParams = {
   clientIp?: string;
   /** Optional limiter scope; defaults to shared-secret auth scope. */
   rateLimitScope?: string;
+  /** Let an owner with credential fallbacks record the shared-secret failure after all fallbacks fail. */
+  deferRateLimitFailure?: boolean;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
   /** Optional browser-origin policy for HTTP requests that require Origin checks. */
@@ -92,20 +97,16 @@ type AuthorizeGatewayConnectParams = {
   };
 };
 
-type VerifiedTailscaleIdentity = {
-  login: string;
-  name: string;
-  profilePic?: string;
-};
-
-type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
+type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
 
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
   limiter?: AuthRateLimiter;
-  ip?: string;
+  subject?: string;
   rateLimitScope: string;
   localDirect: boolean;
+  resetOnSuccess: boolean;
+  ingressAttribution?: GatewayIngressAttribution;
 };
 
 function resolveGatewayAuthRequestContext(
@@ -113,17 +114,29 @@ function resolveGatewayAuthRequestContext(
 ): GatewayAuthRequestContext {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
-  const ip =
-    params.clientIp ??
+  const attributed =
+    params.ingressAttribution?.kind === "unattributable-proxy"
+      ? undefined
+      : params.ingressAttribution;
+  const fallbackIp =
+    attributed?.clientIp ??
     resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
+  const localDirect = attributed
+    ? attributed.kind === "direct-local"
+    : isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true);
 
   return {
     authSurface,
     limiter: params.rateLimiter,
-    ip,
+    subject:
+      attributed && !localDirect
+        ? attributed.rateLimit.subject.key
+        : (params.clientIp ?? attributed?.rateLimit.subject.key ?? fallbackIp),
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-    localDirect: isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true),
+    localDirect,
+    resetOnSuccess: attributed?.rateLimit.resetOnSuccess ?? true,
+    ingressAttribution: params.ingressAttribution,
   };
 }
 
@@ -133,94 +146,8 @@ function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean 
   );
 }
 
-function normalizeLogin(login: string): string {
-  return normalizeLowercaseStringOrEmpty(login);
-}
-
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
-}
-
-const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
-
-function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
-  if (!req) {
-    return undefined;
-  }
-  return resolveClientIp({
-    remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
-  });
-}
-
-function getTailscaleUser(req?: IncomingMessage): VerifiedTailscaleIdentity | null {
-  if (!req) {
-    return null;
-  }
-  const login = normalizeOptionalString(req.headers["tailscale-user-login"]);
-  if (!login) {
-    return null;
-  }
-  const nameRaw = req.headers["tailscale-user-name"];
-  const profilePic = req.headers["tailscale-user-profile-pic"];
-  const name = normalizeOptionalString(nameRaw) ?? login;
-  return {
-    login,
-    name,
-    profilePic: normalizeOptionalString(profilePic),
-  };
-}
-
-function hasTailscaleProxyHeaders(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
-  return Boolean(
-    req.headers["x-forwarded-for"] &&
-    req.headers["x-forwarded-proto"] &&
-    req.headers["x-forwarded-host"],
-  );
-}
-
-function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
-  return isLoopbackAddress(req.socket?.remoteAddress) && hasTailscaleProxyHeaders(req);
-}
-
-async function resolveVerifiedTailscaleUser(params: {
-  req?: IncomingMessage;
-  tailscaleWhois: TailscaleWhoisLookup;
-}): Promise<{ ok: true; user: VerifiedTailscaleIdentity } | { ok: false; reason: string }> {
-  const { req, tailscaleWhois } = params;
-  const tailscaleUser = getTailscaleUser(req);
-  if (!tailscaleUser) {
-    return { ok: false, reason: "tailscale_user_missing" };
-  }
-  if (!isTailscaleProxyRequest(req)) {
-    return { ok: false, reason: "tailscale_proxy_missing" };
-  }
-  const clientIp = resolveTailscaleClientIp(req);
-  if (!clientIp) {
-    return { ok: false, reason: "tailscale_whois_failed" };
-  }
-  const whois = await tailscaleWhois(clientIp);
-  if (!whois?.login) {
-    return { ok: false, reason: "tailscale_whois_failed" };
-  }
-  if (normalizeLogin(whois.login) !== normalizeLogin(tailscaleUser.login)) {
-    return { ok: false, reason: "tailscale_user_mismatch" };
-  }
-  return {
-    ok: true,
-    user: {
-      login: whois.login,
-      name: whois.name ?? tailscaleUser.name,
-      profilePic: tailscaleUser.profilePic,
-    },
-  };
 }
 
 /** Validate that the selected gateway auth mode has the required resolved credentials/config. */
@@ -385,6 +312,8 @@ async function authorizeTokenAuth(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
+  resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
@@ -396,10 +325,14 @@ async function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
     return { ok: false, reason: "token_mismatch" };
   }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
+  if (params.resetOnSuccess !== false) {
+    params.limiter?.reset(params.ip, params.rateLimitScope);
+  }
   return { ok: true, method: "token" };
 }
 
@@ -409,6 +342,8 @@ async function authorizePasswordAuth(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
+  resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
@@ -418,10 +353,14 @@ async function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
     return { ok: false, reason: "password_mismatch" };
   }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
+  if (params.resetOnSuccess !== false) {
+    params.limiter?.reset(params.ip, params.rateLimitScope);
+  }
   return { ok: true, method: "password" };
 }
 
@@ -450,47 +389,90 @@ async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;
-  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
-    resolveGatewayAuthRequestContext(params);
+  if (auth.mode === "trusted-proxy") {
+    if (!auth.trustedProxy) {
+      return { ok: false, reason: "trusted_proxy_config_missing" };
+    }
+    if (!params.trustedProxies || params.trustedProxies.length === 0) {
+      return { ok: false, reason: "trusted_proxy_no_proxies_configured" };
+    }
+  }
+  const ingressAttribution =
+    params.ingressAttribution ??
+    (params.req
+      ? prepareGatewayIngressAttribution({
+          req: params.req,
+          trustedProxies: params.trustedProxies,
+          allowRealIpFallback: params.allowRealIpFallback,
+          tailscaleWhois: params.tailscaleWhois,
+        })
+      : undefined);
+  if (ingressAttribution?.kind === "unattributable-proxy") {
+    return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+  }
+  const preparedParams = ingressAttribution ? { ...params, ingressAttribution } : params;
+  const { authSurface, limiter, subject, rateLimitScope } =
+    resolveGatewayAuthRequestContext(preparedParams);
 
-  // Keep the limiter strict on the async Tailscale branch by serializing
+  // Keep the limiter strict on the async Serve WhoIs branch by serializing
   // attempts for the same {scope, ip} key across the pre-check and failure write.
   if (
     limiter &&
     shouldAllowTailscaleHeaderAuth(authSurface) &&
     auth.allowTailscale &&
-    !localDirect
+    ingressAttribution?.kind === "tailscale-serve"
   ) {
     return await withSerializedRateLimitAttempt({
-      ip,
+      ip: subject,
       scope: rateLimitScope,
-      run: async () => await authorizeGatewayConnectCore(params),
+      run: async () => await authorizeGatewayConnectCore(preparedParams),
     });
   }
 
-  return await authorizeGatewayConnectCore(params);
+  return await authorizeGatewayConnectCore(preparedParams);
 }
 
 async function authorizeGatewayConnectCore(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
-  const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
-    resolveGatewayAuthRequestContext(params);
+  const {
+    authSurface,
+    limiter,
+    subject,
+    rateLimitScope,
+    localDirect,
+    resetOnSuccess,
+    ingressAttribution,
+  } = resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
+
+  if (
+    authSurface === "http-user-profile-avatar" &&
+    auth.allowTailscale &&
+    !localDirect &&
+    !explicitSharedSecretAuth
+  ) {
+    // Reject cross-origin ambient avatar requests before the Tailscale WhoIs
+    // lookup. Explicit shared-secret auth is not subject to this browser gate.
+    const originResult = authorizeHttpBrowserOrigin({
+      authSurface,
+      browserOriginPolicy: params.browserOriginPolicy,
+      isLocalClient: localDirect,
+      reason: "origin_not_allowed",
+      requireSameOriginFetchWithoutOrigin: true,
+      allowWildcardOrigin: false,
+    });
+    if (originResult) {
+      return originResult;
+    }
+  }
 
   if (auth.mode === "trusted-proxy") {
-    // Same-host reverse proxies may forward identity headers without a full
-    // forwarded chain; keep those on the trusted-proxy path so allowUsers and
-    // requiredHeaders still apply.
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
     }
-    if (!trustedProxies || trustedProxies.length === 0) {
-      return { ok: false, reason: "trusted_proxy_no_proxies_configured" };
-    }
-
     const result = authorizeTrustedProxy({
       req,
       trustedProxies,
@@ -498,6 +480,9 @@ async function authorizeGatewayConnectCore(
     });
 
     if ("user" in result) {
+      if (ingressAttribution?.kind !== "trusted-proxy") {
+        return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+      }
       const originResult = authorizeTrustedProxyBrowserOrigin({
         authSurface,
         browserOriginPolicy: params.browserOriginPolicy,
@@ -508,7 +493,7 @@ async function authorizeGatewayConnectCore(
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     if (localDirect && auth.password && connectAuth?.password) {
-      const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+      const rateLimitResult = rejectIfRateLimited({ limiter, ip: subject, rateLimitScope });
       if (rateLimitResult) {
         return rateLimitResult;
       }
@@ -516,8 +501,10 @@ async function authorizeGatewayConnectCore(
         authPassword: auth.password,
         connectPassword: connectAuth.password,
         limiter,
-        ip,
+        ip: subject,
         rateLimitScope,
+        deferRateLimitFailure: params.deferRateLimitFailure,
+        resetOnSuccess,
       });
     }
     return { ok: false, reason: result.reason };
@@ -536,46 +523,29 @@ async function authorizeGatewayConnectCore(
     return { ok: true, method: "none" };
   }
 
-  const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
-  if (rateLimitResult) {
-    return rateLimitResult;
-  }
-
-  if (
+  const canAttemptTailscaleHeaderAuth =
     allowTailscaleHeaderAuth &&
     auth.allowTailscale &&
     !localDirect &&
-    !hasExplicitSharedSecretAuth(connectAuth)
-  ) {
-    if (authSurface === "http-user-profile-avatar") {
-      // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
-      // their source. Ambient identity accepts that omission only for same-origin loads,
-      // and wildcard CORS never grants ambient identity.
-      const originResult = authorizeHttpBrowserOrigin({
-        authSurface,
-        browserOriginPolicy: params.browserOriginPolicy,
-        isLocalClient: localDirect,
-        reason: "origin_not_allowed",
-        requireSameOriginFetchWithoutOrigin: true,
-        allowWildcardOrigin: false,
-      });
-      if (originResult) {
-        return originResult;
-      }
-    }
-    const tailscaleCheck = await resolveVerifiedTailscaleUser({
-      req,
-      tailscaleWhois,
-    });
-    if (tailscaleCheck.ok) {
-      limiter?.reset(ip, rateLimitScope);
+    ingressAttribution?.kind === "tailscale-serve" &&
+    !explicitSharedSecretAuth;
+
+  if (canAttemptTailscaleHeaderAuth) {
+    const verifiedTailscaleUser = await ingressAttribution.verifyIdentity();
+    if (verifiedTailscaleUser) {
+      limiter?.reset(subject, rateLimitScope);
       return {
         ok: true,
         method: "tailscale",
-        user: tailscaleCheck.user.login,
-        tailscaleIdentity: tailscaleCheck.user,
+        user: verifiedTailscaleUser.login,
+        tailscaleIdentity: verifiedTailscaleUser,
       };
     }
+  }
+
+  const rateLimitResult = rejectIfRateLimited({ limiter, ip: subject, rateLimitScope });
+  if (rateLimitResult) {
+    return rateLimitResult;
   }
 
   if (auth.mode === "token") {
@@ -583,8 +553,10 @@ async function authorizeGatewayConnectCore(
       authToken: auth.token,
       connectToken: connectAuth?.token,
       limiter,
-      ip,
+      ip: subject,
       rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
+      resetOnSuccess,
     });
   }
 
@@ -593,12 +565,14 @@ async function authorizeGatewayConnectCore(
       authPassword: auth.password,
       connectPassword: connectAuth?.password,
       limiter,
-      ip,
+      ip: subject,
       rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
+      resetOnSuccess,
     });
   }
 
-  await limiter?.recordFailureAndDelay(ip, rateLimitScope);
+  await limiter?.recordFailureAndDelay(subject, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }
 

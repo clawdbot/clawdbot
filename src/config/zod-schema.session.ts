@@ -46,13 +46,9 @@ export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
     dmScope: z
-      .union([
-        z.literal("main"),
-        z.literal("per-peer"),
-        z.literal("per-channel-peer"),
-        z.literal("per-account-channel-peer"),
-      ])
+      .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
+    groupScope: z.enum(["main", "per-group"]).optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     reset: SessionResetConfigSchema.optional(),

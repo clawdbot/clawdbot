@@ -3,10 +3,10 @@ import {
   DEFAULT_ACCOUNT_ID,
   splitSetupEntries,
   createSetupTranslator,
+  type ChannelSetupWizard,
   type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   resolveDefaultWhatsAppAccountId,

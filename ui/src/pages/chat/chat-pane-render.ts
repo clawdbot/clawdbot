@@ -28,10 +28,9 @@ import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
-  companionRailTemplate,
-  discussionPanelTemplate,
-  embeddedSurfaceTemplates,
-  sidePanelHeaderActions,
+  sidebarPanelActions,
+  sidebarPanelDefinitions,
+  sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
 import {
   createChatPaneSessionActionCallbacks,
@@ -68,7 +67,6 @@ import {
   renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarPanelTemplates } from "./components/chat-sidebar-region-types.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -282,6 +280,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const attachmentReads = this.chatState.attachmentReads;
     const attachmentReadSignal = attachmentReads.readSignal;
+    const historyHasMore = catalogKey
+      ? Boolean(this.catalogCursor)
+      : state.chatHistoryPagination.hasMore;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
@@ -333,9 +334,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onGatewayQuestionSkip: (id) => cancelQuestionPrompt(this.questionPromptState, id),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
-        catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
+        historyHasMore || this.loadingOlder
           ? {
+              hasMore: historyHasMore,
               loading: this.loadingOlder,
+              onShowEarlier: () => void this.showEarlierMessages(),
             }
           : undefined,
       toolMessages: catalogKey ? [] : state.chatToolMessages,
@@ -447,6 +450,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       // A dismissed open PR still exists, so the row must not offer a duplicate.
       pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
       pullRequestsExpanded: this.sessionPullRequestsExpanded,
+      onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       onExpandPullRequests: () => {
         this.sessionPullRequestsExpanded = true;
         this.requestUpdate();
@@ -519,12 +523,15 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.requestUpdate?.();
       },
       onRemoveAttachment: this.removeBrowserAnnotation,
-      onSend: () =>
+      onSend: (followUpModeOverride) =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)
           : suggestionViewer
             ? void this.addCurrentSessionSuggestion()
-            : void state.handleSendChat(),
+            : void state.handleSendChat(
+                undefined,
+                followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+              ),
       onCompact: sessionActionCallbacks.onCompact,
       // Checkpoint deep-link carries the archived filter so the row stays findable.
       onOpenSessionCheckpoints: () => {
@@ -576,7 +583,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
       onRewindMessage: sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
-      onNewSession: () => void this.createSession(),
       onClearHistory: sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,
       currentAgentId,
@@ -623,49 +629,45 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
-    const panelTemplates: SidebarPanelTemplates = {
+    const panelDefinitions = sidebarPanelDefinitions({
+      state,
+      agentId: currentAgentId,
+      desktopAvailable,
+      hasBoard: board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
-      companion: companionRailTemplate({
-        state,
-        digest: observerDigest ?? null,
-        activeRunId: observerRunId ?? null,
-        startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
-        lastReadAt: selectedSession?.lastReadAt,
-        pullRequests: this.sessionPullRequests,
-        companion: companionThread,
-        onSubmit: (question) => void this.submitSessionCompanionQuestion(question),
-        onDraftChange: (draft) =>
-          this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
-        onVisibilityChange: this.setSessionObserverVisibility,
-      }),
-      ...embeddedSurfaceTemplates({
-        state,
-        agentId: currentAgentId,
-        desktopAvailable,
-      }),
-      ...(state.sidebarContent
-        ? {
-            detail: renderChatDetailSlot({
-              backgroundTasks,
-              chat: props,
-              content: state.sidebarContent,
-              fullMessageLoader,
-              host: state,
-              layout: sidebarLayout,
-              transcript: this.taskSidebarTranscript,
-            }),
-          }
-        : {}),
-      ...discussionPanelTemplate(discussion, this.connectionGeneration),
-    };
-    const availableSlots = availableSidebarSlots({
-      state,
-      desktopAvailable,
-      hasDiscussion: discussion !== null,
-      hasBoard: board.hasBoard,
+      detail: state.sidebarContent
+        ? renderChatDetailSlot({
+            backgroundTasks,
+            chat: props,
+            content: state.sidebarContent,
+            fullMessageLoader,
+            host: state,
+            layout: sidebarLayout,
+            transcript: this.taskSidebarTranscript,
+          })
+        : null,
+      digest: observerDigest ?? null,
+      activeRunId: observerRunId ?? null,
+      startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+      lastReadAt: selectedSession?.lastReadAt,
+      pullRequests: this.sessionPullRequests,
+      companion: companionThread,
+      onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+      onCompanionDraftChange: (draft) =>
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
+      onCompanionVisibilityChange: this.setSessionObserverVisibility,
+      connected: state.connected,
+      pendingQuestion: companionThread.pendingQuestion,
+      onClearCompanion: () => void this.clearSessionCompanion(),
+      discussion,
+      discussionOpenUrl: discussion?.openUrl ?? null,
+      discussionSourceGeneration: this.connectionGeneration,
     });
+    const availableSlots = availableSidebarSlots(panelDefinitions);
+    const panelTemplates = sidebarPanelTemplates(panelDefinitions);
+    const panelActions = sidebarPanelActions(panelDefinitions);
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
@@ -680,12 +682,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         setPanelOpen: (open) => this.setChatSidePanelOpen(open),
       }),
       layout: sidebarLayout,
-      panelActions: sidePanelHeaderActions({
-        connected: state.connected,
-        pendingQuestion: companionThread.pendingQuestion,
-        discussionOpenUrl: discussion?.openUrl ?? null,
-        onClearCompanion: () => void this.clearSessionCompanion(),
-      }),
+      panelDefinitions,
+      panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
       primary,

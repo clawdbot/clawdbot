@@ -3,10 +3,16 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   renderCloudProfileMenuItems,
+  renderCloudMachineMenuItems,
   renderConnectMachineMenuItem,
   renderSessionMenuItem,
 } from "./cloud-target.ts";
-import type { DraftCloudProfile, DraftEnvironment, DraftNode } from "./discovery.ts";
+import type {
+  DraftCloudProfile,
+  DraftEnvironment,
+  DraftMachineOption,
+  DraftNode,
+} from "./discovery.ts";
 import { draftNodeUpdateIssue, isDraftNodeSessionEligible } from "./discovery.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { resolvePlacePickerSections } from "./place-picker-sections.ts";
@@ -17,6 +23,8 @@ type WhereChipState = Readonly<{
   deviceNodes: readonly DraftNode[];
   deviceFacts: ReadonlyMap<string, readonly string[]>;
   cloudProfiles: readonly DraftCloudProfile[];
+  cloudMachines: readonly DraftMachineOption[];
+  selectedMachineId: string;
 }>;
 
 function nodeUpdateIssueCopy(node: DraftNode): string | undefined {
@@ -34,6 +42,7 @@ export function resolveWhereChip(params: {
   environments: readonly DraftEnvironment[] | null;
   cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
+  machineClass?: string;
   execNode: string;
 }): WhereChipState {
   const sections = resolvePlacePickerSections(params);
@@ -42,9 +51,21 @@ export function resolveWhereChip(params: {
     (candidate) => candidate.id === params.cloudProfileId,
   );
   if (params.cloudProfileId) {
+    const cloudMachines = profile?.machines ?? [];
+    const defaultMachine = cloudMachines.find((machine) => machine.default === true);
+    const selectedMachine = params.machineClass
+      ? cloudMachines.find((machine) => machine.id === params.machineClass)
+      : defaultMachine;
     return {
       kind: "cloud",
-      label: profile?.id ?? params.cloudProfileId,
+      label: params.machineClass
+        ? t("newSession.cloudWorkerMachine", {
+            profile: profile?.id ?? params.cloudProfileId,
+            machine: selectedMachine?.label ?? params.machineClass,
+          })
+        : (profile?.id ?? params.cloudProfileId),
+      cloudMachines,
+      selectedMachineId: selectedMachine?.id ?? "",
       ...sections,
     };
   }
@@ -52,16 +73,25 @@ export function resolveWhereChip(params: {
     return {
       kind: "node",
       label: node?.displayName ?? params.execNode,
+      cloudMachines: [],
+      selectedMachineId: "",
       ...sections,
     };
   }
-  return { kind: "local", label: t("newSession.local"), ...sections };
+  return {
+    kind: "local",
+    label: t("newSession.local"),
+    cloudMachines: [],
+    selectedMachineId: "",
+    ...sections,
+  };
 }
 
 export function renderWhereChip(params: {
   state: WhereChipState;
   gatewayName: string;
   cloudProfileId: string;
+  machineClass?: string;
   execNode: string;
   worktreeAvailable: boolean;
   cloudDisabledReason?: string;
@@ -76,6 +106,7 @@ export function renderWhereChip(params: {
   onPopoverAfterHide: () => void;
   onSelectExecNode: (nodeId: string) => void;
   onSelectCloudProfile: (profileId: string) => void;
+  onSelectCloudMachine?: (machineId: string) => void;
   onConnectMachine: () => void;
 }) {
   const activeNode = params.state.deviceNodes.find((node) => node.nodeId === params.execNode);
@@ -105,6 +136,7 @@ export function renderWhereChip(params: {
         title=${t("newSession.where")}
         aria-label="${t("newSession.where")}: ${params.state.label}"
         data-cloud-profile=${params.cloudProfileId || nothing}
+        data-machine-class=${params.machineClass || nothing}
         data-exec-node=${params.execNode || nothing}
         aria-haspopup="dialog"
         aria-expanded=${String(params.popoverOpen)}
@@ -191,6 +223,17 @@ export function renderWhereChip(params: {
                     params.submitting,
                   )
                 : nothing}
+            `
+          : nothing}
+        ${params.state.kind === "cloud" && params.state.cloudMachines.length > 0
+          ? html`
+              <div class="new-session-page__menu-title">${t("newSession.machine")}</div>
+              ${renderCloudMachineMenuItems({
+                machines: params.state.cloudMachines,
+                selectedId: params.state.selectedMachineId,
+                submitting: params.submitting,
+                onSelect: params.onSelectCloudMachine ?? (() => undefined),
+              })}
             `
           : nothing}
         ${params.isAdmin

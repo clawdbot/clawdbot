@@ -14,6 +14,8 @@ import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
+} from "../../../infra/device-pairing-approval.js";
+import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
   listApprovedPairedDeviceRoles,

@@ -534,11 +534,15 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Built-in tool profiles that expose this plugin tool by default. */
+  profiles?: PluginManifestToolProfile[];
   /** Tool execution is safe to repeat after an incomplete model turn. */
   replaySafe?: boolean;
   /** Tool execution can change durable state and failed attempts must remain visible. */
   sideEffecting?: boolean;
 };
+
+export type PluginManifestToolProfile = "minimal" | "coding" | "messaging" | "full";
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */

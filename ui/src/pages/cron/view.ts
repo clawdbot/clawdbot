@@ -10,8 +10,11 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
 import type {
+  ChannelUiMetaEntry,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
   CronRunsStatusValue,

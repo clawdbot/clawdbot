@@ -634,7 +634,7 @@ Rotation checklist (token/password): generate/set a new secret (`gateway.auth.to
 
 ### Tailscale Serve identity headers
 
-When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header - this only triggers for loopback requests carrying `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by Tailscale. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
+When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. This only triggers on OpenClaw's dedicated managed-Tailscale listener and requires `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`; headers on the ordinary Gateway listener do not establish Serve provenance. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
 
 HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`) do not use Tailscale identity-header auth - they follow the gateway's configured HTTP auth mode.
 
@@ -649,6 +649,16 @@ See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 ### Reverse proxy configuration
 
 Set `gateway.trustedProxies` for proper forwarded-client IP handling behind nginx/Caddy/Traefik/etc. When the Gateway detects proxy headers from an address **not** in `trustedProxies`, it will not treat the connection as local; if gateway auth is disabled, that connection is rejected. This prevents proxied connections from appearing to come from localhost and receiving automatic trust.
+
+With token or password auth, an unconfigured same-host loopback proxy is
+rejected on Gateway-authenticated routes because OpenClaw cannot attribute its
+forwarded client headers. HTTP requests receive `403` with
+`proxy_attribution_required`; WebSocket auth fails with guidance to configure
+`gateway.trustedProxies`. Plugin-authenticated webhook routes retain their own
+signature or credential checks and ignore untrusted forwarded claims.
+Configure `trustedProxies` narrowly and make the proxy overwrite or safely
+rebuild forwarded headers; see [Rate
+limiting](/gateway/security/rate-limiting#unconfigured-same-host-reverse-proxies).
 
 `trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it fails closed on loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
 
@@ -680,7 +690,7 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 - OpenClaw's gateway is local/loopback first. If you terminate TLS at a reverse proxy, set HSTS there.
 - If the gateway itself terminates HTTPS, `gateway.http.securityHeaders.strictTransportSecurity` emits the HSTS header from OpenClaw responses.
 - Non-loopback Control UI deployments require `gateway.controlUi.allowedOrigins` by default; `allowedOrigins: ["*"]` is an explicit allow-all policy, not a hardened default - avoid it outside tightly controlled local testing.
-- Failed authentication from loopback is never locked out, so a local CLI cannot be denied before its credentials are checked. Wrong credentials are still tracked and progressively delayed (bounded delay, one shared timer per key); successful authentication resets the failure history. This raises the cost of repeated guessing from one loopback source; it is not a defense against an attacker who can already open many parallel loopback connections, because credentials are compared before the failure response is delayed. Loopback reachability is a trust boundary in its own right - see [Node pairing](/gateway/pairing#silent-local-pairing).
+- Failed authentication from loopback is never locked out, so a local CLI cannot be denied before its credentials are checked. Wrong credentials are still tracked and progressively delayed (bounded delay, one shared timer per key); successful authentication resets only the matching credential-class history. This raises the cost of repeated guessing from one loopback source; it is not a defense against an attacker who can already open many parallel loopback connections, because credentials are compared before the failure response is delayed. Loopback reachability is a trust boundary in its own right - see [Node pairing](/gateway/pairing#silent-local-pairing).
 - Browser-origin auth failures on loopback are still rate-limited even with the general loopback exemption enabled, but the lockout key is scoped per normalized `Origin` value instead of one shared localhost bucket.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
@@ -688,11 +698,11 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 
 ### Control UI over HTTP
 
-The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
+The Control UI generates device identity with pure-JS Ed25519, so pairing works on any origin, including plain HTTP.
 
-- Token/password auth does not replace browser device identity over remote plain HTTP. Use HTTPS (for example, Tailscale Serve) or open the UI on `127.0.0.1` from the Gateway host.
+- Token/password auth does not replace browser device identity: HTTP browsers still pair with a signed device key, which never crosses the wire. Prefer HTTPS (for example, Tailscale Serve) — plaintext transport still exposes the page and the shared secret to on-path attackers.
 - `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input, now fully inert. Control UI browsers pair through the normal device flow; `openclaw doctor --fix` removes the legacy key.
-- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity. This does not extend to node-role Control UI sessions.
+- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity when the browser cannot supply one. Browsers that can mint an identity (any origin, including plain HTTP) follow the normal pairing flow instead — automatic with `deviceAutoApprove`, otherwise a one-time approval. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags
 

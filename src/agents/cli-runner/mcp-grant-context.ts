@@ -151,6 +151,7 @@ export function buildCliMcpGrantContext(params: {
       : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.run.modelHasVision,
     messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     currentChannelId,

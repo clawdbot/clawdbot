@@ -12,8 +12,8 @@ import {
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   type AgentHarnessV2,
   type AgentMessage,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {

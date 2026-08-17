@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -179,8 +180,8 @@ export async function readConfigFileSnapshotInternal(
     );
     const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
     envVarWarnings.push(
-      ...contextBudgetMigration.changes.map((message) => ({ path: "", message })),
-      ...contextBudgetMigration.warnings.map((message) => ({ path: "", message })),
+      ...contextBudgetMigration.changes,
+      ...contextBudgetMigration.warnings,
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
@@ -454,21 +455,31 @@ export async function readSourceConfigBestEffortFromContext(
   if (!deps.fs.existsSync(configPath)) {
     return {};
   }
+  // Best-effort legitimizes the fallback value, not the silence: consumers
+  // (update-channel selection, doctor lint) act on the result, so each
+  // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = parseConfigJson5(raw, deps.json5);
     if (!parsed.ok) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,
+      );
       return {};
     }
     let resolved: unknown;
     try {
       resolved = resolveConfigIncludesForRead(parsed.parsed, configPath, deps);
-    } catch {
+    } catch (err) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read skipped $include resolution: ${formatErrorMessage(err)}`,
+      );
       return coerceConfig(parsed.parsed);
     }
     const resolution = resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv);
     return coerceConfig(resolution.resolvedConfigRaw);
-  } catch {
+  } catch (err) {
+    deps.logger.warn(`Config (${configPath}): best-effort read failed: ${formatErrorMessage(err)}`);
     return {};
   }
 }

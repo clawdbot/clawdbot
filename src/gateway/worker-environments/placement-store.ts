@@ -14,6 +14,7 @@ import {
   normalizeEpoch,
   normalizeWorkerPlacementExecutionMode,
   normalizeIdentity,
+  projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
@@ -94,28 +95,6 @@ function updateTransition(
     throw new Error(`Worker session placement ${current.sessionId} changed during transition`);
   }
   return getRequired(db, current.sessionId);
-}
-
-function projectWorkerTurnClaim(
-  record: WorkerSessionPlacementRecord,
-): WorkerSessionTurnClaim | undefined {
-  const claim = record.turnClaim;
-  return claim?.owner === "worker" &&
-    record.environmentId &&
-    claim.ownerEpoch !== null &&
-    claim.ownerEpoch !== undefined
-    ? {
-        sessionId: record.sessionId,
-        claimId: claim.claimId,
-        runId: claim.runId,
-        placementGeneration: claim.generation,
-        owner: {
-          kind: "worker",
-          environmentId: record.environmentId,
-          ownerEpoch: claim.ownerEpoch,
-        },
-      }
-    : undefined;
 }
 
 export function createWorkerSessionPlacementStore(
@@ -486,7 +465,7 @@ export function createWorkerSessionPlacementStore(
         }
         return {
           record: getRequired(db, sessionId),
-          releasedClaim: releasedClaim ? projectWorkerTurnClaim(current) : undefined,
+          releasedClaim: releasedClaim ? projectWorkerSessionTurnClaim(current) : undefined,
         };
       });
       if (outcome.releasedClaim) {
@@ -570,7 +549,7 @@ export function createWorkerSessionPlacementStore(
         }
         return {
           record: getRequired(db, sessionId),
-          releasedClaim: projectWorkerTurnClaim(current),
+          releasedClaim: projectWorkerSessionTurnClaim(current),
         };
       });
       if (outcome.releasedClaim) {

@@ -194,6 +194,18 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface MessageToolRunOutcomes {
+  agent_id: string;
+  id: Generated<number>;
+  model: string;
+  occurred_at: number;
+  outcome: string;
+  provider: string;
+  run_id: string;
+  run_status: string;
+  session_key: string;
+}
+
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -459,6 +471,7 @@ export interface DB {
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
   session_key_contract: SessionKeyContract;

@@ -23,7 +23,6 @@ import {
   prepareSkillProposalDraft,
   resolveUpdateProposalDescription,
 } from "./proposal-draft.js";
-export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertExpectedRevisionHash,
@@ -42,14 +41,6 @@ import {
   withSkillProposalTargetLock,
   type PreparedSkillProposalSupportFile,
 } from "./store.js";
-import { assertWritableSkillTarget } from "./workspace-skill-read.js";
-export {
-  getSkillProposalRunProgress,
-  inspectSkillProposal,
-  listSkillProposals,
-  resolvePendingSkillProposal,
-} from "./service-query.js";
-export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 import {
   MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS,
   SKILL_WORKSHOP_SCHEMA,
@@ -63,6 +54,15 @@ import {
   type SkillProposalSupportFile,
   type SkillProposalUpdateInput,
 } from "./types.js";
+import { assertWritableSkillTarget } from "./workspace-skill-read.js";
+export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
+export {
+  getSkillProposalRunProgress,
+  inspectSkillProposal,
+  listSkillProposals,
+  resolvePendingSkillProposal,
+} from "./service-query.js";
+export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 
 type SkillWorkshopWorkspaceOptions = {
   config?: OpenClawConfig;

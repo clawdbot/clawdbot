@@ -44,6 +44,7 @@ import {
 } from "./gateway-run-argv.js";
 import {
   hasJsonOutputFlag,
+  isJsonOutputModeActive,
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
@@ -51,7 +52,6 @@ import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
-import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandNamesCore,
@@ -995,10 +995,11 @@ async function resolveUnownedCliPrimary(params: {
   return primary;
 }
 
-async function resolveUnownedCliPrimaryMessage(params: {
+async function resolveUnownedCliPrimaryError(params: {
+  argv: string[];
   primary: string;
   config: OpenClawConfig;
-}): Promise<string> {
+}): Promise<Error> {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
@@ -1008,21 +1009,18 @@ async function resolveUnownedCliPrimaryMessage(params: {
     resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
   });
   if (pluginPolicyMessage) {
-    return pluginPolicyMessage;
+    return new Error(pluginPolicyMessage);
   }
   const sanitizedPrimary = sanitizeTerminalText(params.primary);
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
       : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
-  const suggestion =
-    displayPrimary === params.primary ? formatCliCommandSuggestions(params.primary) : "";
-  return [
-    `Unknown command: openclaw ${displayPrimary}. No built-in command or plugin CLI metadata owns "${displayPrimary}".`,
-    suggestion,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const { createCliUnknownCommandError } = await import("./program/error-output.js");
+  return createCliUnknownCommandError(displayPrimary, {
+    argv: params.argv,
+    ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
+  });
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
@@ -1202,12 +1200,12 @@ async function runCliWithPreparedOutputMode(
   let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
-  const skipBestEffortConfigObservation = resolveCliStartupPolicyForArgv({
+  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
     commandPath: normalizedInvocation.commandPath,
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
-  }).skipConfigGuard;
+  });
   const useSourceOnlyBestEffortConfig =
     normalizedInvocation.primary === "update" ||
     (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
@@ -1218,7 +1216,10 @@ async function runCliWithPreparedOutputMode(
           ? configIo.readSourceConfigBestEffort()
           : configIo.readBestEffortConfig({
               ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
-              ...(skipBestEffortConfigObservation ? { observe: false } : {}),
+              ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
+              bestEffortConfigStartupPolicy.validateConfigOnly
+                ? { observe: false }
+                : {}),
               skipPluginValidation: true,
             }),
       );
@@ -1311,7 +1312,11 @@ async function runCliWithPreparedOutputMode(
     if (!bareSessionInvocation) {
       const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
       if (unownedPrimary) {
-        throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
+        throw await resolveUnownedCliPrimaryError({
+          argv: normalizedArgv,
+          primary: unownedPrimary,
+          config,
+        });
       }
     }
     await replaceStartedProxy(config?.proxy ?? undefined);
@@ -1384,9 +1389,11 @@ async function runCliWithPreparedOutputMode(
         const config = await readBestEffortCliConfig();
         const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
         if (unownedPrimary) {
-          throw new Error(
-            await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }),
-          );
+          throw await resolveUnownedCliPrimaryError({
+            argv: normalizedArgv,
+            primary: unownedPrimary,
+            config,
+          });
         }
       }
     }
@@ -1520,14 +1527,14 @@ async function runCliWithPreparedOutputMode(
       const [
         { buildProgram },
         { formatUncaughtError },
-        { formatCliFailureLines },
+        { formatCliFailureLines, formatCliJsonFailure },
         { runFatalErrorHooks },
         {
           installUnhandledRejectionHandler,
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreRuntimeTerminalState },
+        { defaultRuntime, restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1554,6 +1561,9 @@ async function runCliWithPreparedOutputMode(
             formatUncaughtError(error),
           );
           return;
+        }
+        if (isJsonOutputModeActive(normalizedArgv)) {
+          defaultRuntime.writeJson(formatCliJsonFailure(error));
         }
         for (const line of formatCliFailureLines({
           title: "OpenClaw hit an unexpected runtime error.",
@@ -1654,6 +1664,9 @@ async function runCliWithPreparedOutputMode(
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
+          throw error;
+        }
+        if (isJsonOutputModeActive(parseArgv) && error.exitCode !== 0) {
           throw error;
         }
         process.exitCode = error.exitCode;

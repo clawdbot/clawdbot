@@ -23,6 +23,7 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -109,6 +110,16 @@ function plan() {
   });
 }
 
+function turnClaim() {
+  return {
+    sessionId: "session-1",
+    claimId: "claim-1",
+    runId: "run-1",
+    placementGeneration: 4,
+    owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 2 },
+  };
+}
+
 function transport(): NodeWorkerSupervisorTransport {
   return {
     listCurrentNodes: async () => [
@@ -147,6 +158,41 @@ function workspaceTransfer(): NodeWorkspaceTransferService {
 }
 
 describe("node worker tunnel manager", () => {
+  it("revalidates the exact claim when a same-run replacement launches", async () => {
+    const record = environment();
+    let currentClaim = turnClaim();
+    const authorizations: boolean[] = [];
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
+        authorizations.push(request.isDispatchAuthorized());
+        return {
+          launchId: request.input.launchId,
+          planHash: "b".repeat(64),
+          environmentId: request.input.descriptor.admission.environmentId,
+          sessionId: request.input.descriptor.admission.sessionId,
+          ownerEpoch: request.input.descriptor.admission.ownerEpoch,
+          placementGeneration: request.input.placementGeneration,
+          runId: request.input.descriptor.assignment.runId,
+          state: "cancelled",
+          errorText: "test launch finished",
+        };
+      }),
+      validateWorkerTurn: (claim) => sameWorkerSessionTurnClaim(claim, currentClaim),
+      workspaceTransfer: workspaceTransfer(),
+    });
+    const handle = await manager.start(startRequest());
+    const staleClaim = currentClaim;
+    currentClaim = { ...staleClaim, claimId: "claim-2", placementGeneration: 5 };
+
+    await handle.launchTurn({ plan: plan(), turnClaim: staleClaim });
+    await handle.launchTurn({ plan: plan(), turnClaim: currentClaim });
+
+    expect(authorizations).toEqual([false, true]);
+  });
+
   it("projects a terminal gateway connection failure into the launch result", async () => {
     const record = environment();
     const errorText =
@@ -172,7 +218,7 @@ describe("node worker tunnel manager", () => {
     const handle = await manager.start(startRequest());
 
     await expect(
-      handle.launchTurn({ plan: plan(), placementGeneration: 4 }),
+      handle.launchTurn({ plan: plan(), turnClaim: turnClaim() }),
     ).resolves.toMatchObject({
       code: 1,
       killed: true,
@@ -557,7 +603,11 @@ describe("node worker tunnel manager", () => {
       workspaceTransfer: workspaceTransfer(),
     });
     const first = await manager.start(startRequest());
-    const launched = first.launchTurn({ plan: plan(), placementGeneration: 4, timeoutMs: 5_000 });
+    const launched = first.launchTurn({
+      plan: plan(),
+      turnClaim: turnClaim(),
+      timeoutMs: 5_000,
+    });
     await vi.waitFor(() => expect(launchNodeWorker).toHaveBeenCalledOnce());
     record.ownerEpoch = 3;
     const replacement = manager.start({ ...startRequest(), ownerEpoch: 3 });
@@ -616,7 +666,7 @@ describe("node worker tunnel manager", () => {
     const handle = await manager.start(startRequest());
     const launched = handle.launchTurn({
       plan: plan(),
-      placementGeneration: 4,
+      turnClaim: turnClaim(),
       timeoutMs: 5_000,
       onDispatchReady,
     });

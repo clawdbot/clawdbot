@@ -57,7 +57,10 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
-import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
+import {
+  readInternalToolExecutionValidation,
+  validateToolExecutionParams,
+} from "./agent-tools.execution-validation.js";
 import {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
@@ -304,6 +307,13 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         executionArgs.pop();
       }
+      const onUpdateValidation = readInternalToolExecutionValidation(onUpdate);
+      const internalValidation =
+        onUpdateValidation ?? readInternalToolExecutionValidation(executionArgs.at(-1));
+      const forwardedOnUpdate = onUpdateValidation ? undefined : onUpdate;
+      if (!onUpdateValidation && internalValidation) {
+        executionArgs.pop();
+      }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
@@ -466,6 +476,9 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
+        if (internalValidation?.toolCallId === toolCallId) {
+          await internalValidation.validate(executeParams);
+        }
         await reconcileLoopCallExecutionParams({
           ctx,
           toolName: normalizedToolName,
@@ -519,7 +532,7 @@ export function wrapToolWithBeforeToolCallHook(
             toolCallId,
             executeParams,
             signal,
-            onUpdate,
+            forwardedOnUpdate,
             ...executionArgs,
           );
         } catch (error) {

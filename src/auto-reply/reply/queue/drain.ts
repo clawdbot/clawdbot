@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";

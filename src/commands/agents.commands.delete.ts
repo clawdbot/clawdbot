@@ -28,6 +28,8 @@ import {
   prepareWorkspaceStateDeletion,
 } from "../agents/workspace-state-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
@@ -40,8 +42,7 @@ import {
   isGatewayTransportError,
 } from "../gateway/call.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -67,7 +68,7 @@ type AgentsDeleteGatewayResult = {
 
 function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, message: string): void {
   if (opts.json) {
-    writeRuntimeJson(runtime, { error: message });
+    writeRuntimeJson(runtime, formatCliJsonFailure(message));
     runtime.exit(1, { resetStream: process.stderr });
   } else {
     runtime.error(message);
@@ -202,9 +203,8 @@ export async function agentsDeleteCommand(
   }
 
   if (!opts.force) {
-    if (!process.stdin.isTTY) {
-      runtime.error("Non-interactive session. Re-run with --force.");
-      runtime.exit(1);
+    if (!isTerminalInteractive()) {
+      failAgentsDelete(opts, runtime, "Non-interactive session. Re-run with --force.");
       return;
     }
     const prompter = createClackPrompter();

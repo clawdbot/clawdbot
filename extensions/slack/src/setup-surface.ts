@@ -12,10 +12,8 @@ import {
   promptResolvedAllowFrom,
   splitSetupEntries,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup-runtime";
-import type {
-  ChannelSetupWizard,
-  ChannelSetupWizardAllowFromEntry,
+  type ChannelSetupWizard,
+  type ChannelSetupWizardAllowFromEntry,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";

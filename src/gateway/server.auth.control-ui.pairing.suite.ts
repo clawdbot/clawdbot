@@ -208,8 +208,14 @@ export function registerControlUiPairingSuite(): void {
     });
     await overwritePairedPublicKey(identity.deviceId, "mismatched-public-key");
 
-    const { server, port, prevToken } = await startControlUiServer("secret");
-    const ws2 = await openTailscaleWs(port);
+    const { server, prevToken } = await startControlUiServer("secret", {
+      tailscale: { mode: "serve" },
+    });
+    const tailscaleEndpoint = server.getTailscaleIngressEndpoint();
+    if (!tailscaleEndpoint) {
+      throw new Error("expected managed Tailscale listener");
+    }
+    const ws2 = await openTailscaleWs(tailscaleEndpoint);
     try {
       const nonce2 = await readConnectChallengeNonce(ws2);
       const mismatched = await connectReq(ws2, {
@@ -374,7 +380,8 @@ export function registerControlUiPairingSuite(): void {
 
   test("allows operator shared auth with legacy paired metadata", async () => {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-device-legacy-meta-",

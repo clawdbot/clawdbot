@@ -3,8 +3,12 @@
 // detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { CronRunLogEntry } from "../../api/types.ts";
-import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../../api/types.ts";
+import type {
+  CronRunLogEntry,
+  CronDeliveryStatus,
+  CronRunsStatusValue,
+  CronSortDir,
+} from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";

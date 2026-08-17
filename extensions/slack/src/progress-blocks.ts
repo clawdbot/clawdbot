@@ -369,7 +369,6 @@ export function buildSlackProgressCardBlocks(params: {
   toolCalls?: number;
   elapsedSeconds?: number;
   diffStat?: SlackProgressDiffStat;
-  receiptSummary?: string;
   sessionUrl?: string;
 }): (Block | KnownBlock)[] {
   const maxLineChars = resolveMaxLineChars(
@@ -388,8 +387,9 @@ export function buildSlackProgressCardBlocks(params: {
     ...(diffStat ? [diffStat] : []),
     ...(params.elapsedSeconds && params.elapsedSeconds > 0 ? [`⏱ ${params.elapsedSeconds}s`] : []),
   ].join(" · ");
-  const terminalFooter = [params.receiptSummary?.trim(), diffStat].filter(Boolean).join(" · ");
-  const footer = params.state === "working" ? workingFooter : terminalFooter;
+  // A finished card keeps only the durable diff stat. Tool-call/elapsed counters
+  // are live working state, not a receipt to leave behind in the transcript.
+  const footer = params.state === "working" ? workingFooter : diffStat;
   const icon = params.state === "working" ? "🔄" : params.state === "success" ? "✅" : "❌";
   const blocks: (Block | KnownBlock)[] = [
     {

@@ -304,6 +304,7 @@ export async function startCloudInitialTurn(
     key: string;
     agentId: string;
     profileId: string;
+    machineClass?: string;
     message: string;
     attachments?: unknown[];
     messageId?: string;
@@ -347,6 +348,7 @@ export async function startCloudInitialTurn(
         key: params.key,
         agentId: params.agentId,
         profileId: params.profileId,
+        ...(params.machineClass ? { machineClass: params.machineClass } : {}),
       });
       resolution = await resolveActivePlacement(
         client,

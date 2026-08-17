@@ -119,7 +119,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: () => void;
+  onSend: (followUpModeOverride?: "steer") => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
@@ -132,7 +132,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   queuedEdit?: ChatQueuedEditProps;
-  onNewSession: () => void;
   onClearReply?: () => void;
   onGoalCommand?: (command: string) => void;
   onGatewayQuestionChange?: () => void;

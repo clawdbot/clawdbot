@@ -262,10 +262,9 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   } catch (error) {
     const message = `Node service check failed: ${formatErrorMessage(error)}`;
     if (json) {
-      defaultRuntime.writeJson({ error: message });
-    } else {
-      defaultRuntime.error(message);
+      throw new Error(message, { cause: error });
     }
+    defaultRuntime.error(message);
     defaultRuntime.exit(1);
     return;
   }

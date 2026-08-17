@@ -39,6 +39,16 @@ function expectedClawHubInstallSpec(spec: string): string {
   }).installSpec;
 }
 
+function expectedCodexInstallSpec(): string {
+  return resolveNpmInstallSpecsForUpdateChannel({
+    spec: "@openclaw/codex",
+    updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+    officialPackageName: "@openclaw/codex",
+    coreVersion: VERSION,
+    versionBoundToCore: true,
+  }).installSpec;
+}
+
 function currentOpenClawReleaseBase(): string {
   return VERSION.replace(/-(?:alpha|beta)\.[1-9]\d*$/u, "");
 }
@@ -2332,7 +2342,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: `@openclaw/codex@${VERSION}`,
+      spec: expectedCodexInstallSpec(),
       expectedPluginId: "codex",
       trustedSourceLinkedOfficialInstall: true,
     });
@@ -2351,7 +2361,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
     expect(result.changes).toEqual([
-      `Installed missing configured plugin "codex" from @openclaw/codex@${VERSION}.`,
+      `Installed missing configured plugin "codex" from ${expectedCodexInstallSpec()}.`,
     ]);
     expect(result.warnings).toEqual([]);
     expect(result.repairedPluginIds).toEqual(["codex"]);
@@ -2394,7 +2404,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
     expect(mocks.resolveProviderInstallCatalogEntries).toHaveBeenCalled();
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: `@openclaw/codex@${VERSION}`,
+      spec: expectedCodexInstallSpec(),
       expectedPluginId: "codex",
       trustedSourceLinkedOfficialInstall: true,
     });
@@ -2410,7 +2420,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
     expect(result.changes).toEqual([
-      `Installed missing configured plugin "codex" from @openclaw/codex@${VERSION}.`,
+      `Installed missing configured plugin "codex" from ${expectedCodexInstallSpec()}.`,
     ]);
     expect(result.warnings).toStrictEqual([]);
   });
@@ -2491,13 +2501,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(mocks.resolveDirectBundledProviderPolicySurface).toHaveBeenCalledWith("openai");
     expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: `@openclaw/codex@${VERSION}`,
+      spec: expectedCodexInstallSpec(),
       expectedPluginId: "codex",
       trustedSourceLinkedOfficialInstall: true,
       mode: "update",
     });
     expect(result.changes).toEqual([
-      `Refreshed stale configured plugin "codex" from @openclaw/codex@${VERSION}.`,
+      `Refreshed stale configured plugin "codex" from ${expectedCodexInstallSpec()}.`,
     ]);
     expectRecordFields(result.records.codex, {
       source: "npm",
@@ -2796,7 +2806,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: `@openclaw/codex@${VERSION}`,
+      spec: expectedCodexInstallSpec(),
       expectedPluginId: "codex",
       trustedSourceLinkedOfficialInstall: true,
     });
@@ -2812,7 +2822,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env,
     });
     expect(result.changes).toEqual([
-      `Installed missing configured plugin "codex" from @openclaw/codex@${VERSION}.`,
+      `Installed missing configured plugin "codex" from ${expectedCodexInstallSpec()}.`,
     ]);
     expect(result.warnings).toEqual([]);
     expect(Object.keys(result.records)).toEqual(["codex"]);

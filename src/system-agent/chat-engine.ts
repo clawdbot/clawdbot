@@ -51,6 +51,8 @@ export type SystemAgentChatEngineOptions = {
   surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   operatorApprovalOnly?: boolean;
+  /** Host-recorded origin for delegated create-agent proposals. */
+  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {

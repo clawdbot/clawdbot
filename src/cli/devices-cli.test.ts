@@ -47,7 +47,13 @@ vi.mock("./progress.js", () => ({
 
 vi.mock("../infra/device-pairing.js", () => ({
   listDevicePairing: mocks.listDevicePairing,
+}));
+
+vi.mock("../infra/device-pairing-approval.js", () => ({
   approveDevicePairing: mocks.approveDevicePairing,
+}));
+
+vi.mock("../infra/device-pairing-tokens.js", () => ({
   summarizeDeviceTokens: mocks.summarizeDeviceTokens,
 }));
 

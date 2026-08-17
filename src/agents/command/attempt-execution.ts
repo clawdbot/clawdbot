@@ -487,6 +487,7 @@ export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
+  modelHasVision?: boolean;
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -922,6 +923,7 @@ export function runAgentAttempt(params: {
             prompt: cliPrompt,
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
+            modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
             model: params.modelOverride,
             thinkLevel: params.resolvedThinkLevel,
@@ -1157,6 +1159,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
+    modelHasVision: params.modelHasVision,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,

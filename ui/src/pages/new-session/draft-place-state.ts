@@ -6,8 +6,8 @@ import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import type { DraftNode } from "./discovery.ts";
-import { isDraftNodeSessionEligible, readDraftNodes } from "./discovery.ts";
+import { isDraftNodeSessionEligible, readDraftNodes, type DraftNode } from "./discovery.ts";
+import { DraftCloudMachineState, type PendingCloudPlace } from "./draft-cloud-machine-state.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
@@ -38,6 +38,7 @@ export class DraftPlaceState {
   private nodesValue: DraftNode[] = [];
   private execNodeValue = "";
   private cloudProfileIdValue = "";
+  readonly cloudMachines = new DraftCloudMachineState();
   private restoredFolderValidation: "none" | "checking" | "failed" = "none";
   private gatewayApprovedWorkspaceRoots: string[] = [];
   private agentsHydratedValue = false;
@@ -121,6 +122,10 @@ export class DraftPlaceState {
 
   get cloudProfileId(): string {
     return this.cloudProfileIdValue;
+  }
+
+  get machineClass(): string {
+    return this.cloudMachines.resolve(this.cloudProfileIdValue);
   }
 
   get agentsHydrated(): boolean {
@@ -331,6 +336,7 @@ export class DraftPlaceState {
     this.execNodeValue = "";
     this.modelControl.reset();
     this.cloudProfileIdValue = "";
+    this.cloudMachines.clear();
     this.callbacks.requestUpdate();
   }
 
@@ -362,12 +368,14 @@ export class DraftPlaceState {
     this.nodesValue = [];
     this.execNodeValue = "";
     this.cloudProfileIdValue = "";
+    this.cloudMachines.clear();
     this.callbacks.requestUpdate();
   }
 
-  applyPendingCloud(params: { agentId: string; profileId: string; cwd?: string }) {
+  applyPendingCloud(params: PendingCloudPlace) {
     this.agentIdValue = params.agentId;
     this.cloudProfileIdValue = params.profileId;
+    this.cloudMachines.applyPending(params.profileId, params.machineClass);
     this.repositoryState.forceWorktree(true);
     this.folderValue = params.cwd ?? "";
     this.folderGatewayApproved = false;

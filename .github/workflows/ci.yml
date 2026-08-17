@@ -639,9 +639,9 @@ jobs:
             runNode && !frozenTarget
               ? [
                   {
-                    check_name: "checks-fast-max-lines-ratchet",
+                    check_name: "checks-fast-baseline-ratchets",
                     runtime: "node",
-                    task: "max-lines-ratchet",
+                    task: "baseline-ratchets",
                   },
                   {
                     check_name: "checks-fast-coercion-helpers",
@@ -858,27 +858,17 @@ jobs:
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
+            // Blacksmith's Windows runner class admits exactly 2 concurrent jobs
+            // (measured on run 31865243804), so the split width is pinned to 2 on
+            // every backend. A 3rd part queues behind a finished one there, and a
+            // single lane serializes the whole 226s body onto the wall.
             checks_windows_matrix: createMatrix(
               runWindows
-                ? // Blacksmith's Windows runner class admits ~2 concurrent jobs, so a
-                  // 3-part split queues its tail behind a finished part there. Split
-                  // only where every part actually lands hosted: github mode and
-                  // dispatches (dispatch runs-on forces hosted in every mode).
-                  process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ||
-                  eventName === "workflow_dispatch"
-                  ? [1, 2, 3].map((part) => ({
-                      check_name: `checks-windows-node-test-${part}`,
-                      runtime: "node",
-                      task: `test-${part}`,
-                    }))
-                  : [
-                      {
-                        check_name: "checks-windows-node-test",
-                        runtime: "node",
-                        task: "test",
-                        runner: "blacksmith-8vcpu-windows-2025",
-                      },
-                    ]
+                ? [1, 2].map((part) => ({
+                    check_name: `checks-windows-node-test-${part}`,
+                    runtime: "node",
+                    task: `test-${part}`,
+                  }))
                 : [],
             ),
             run_macos_node: runMacos,
@@ -1194,7 +1184,7 @@ jobs:
 
             fetch_refs=("+${CHECKOUT_SHA}:refs/remotes/origin/ci-target")
             if [ -n "${CHECKOUT_BASE_SHA:-}" ]; then
-              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")
+              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")
             fi
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
@@ -1737,7 +1727,9 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # First-attempt same-repo runs use Blacksmith unless the backend breaker is
     # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # This lane owns the same serial Chromium workload as checks-ui-e2e, so it
+    # follows that job's hybrid routing: Blacksmith on attempt 1, hosted on rerun.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -1746,8 +1738,8 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Hosted paths use the pnpm store cache; first-attempt same-repo
-          # Blacksmith runs restore the preflight-published dependency tree.
+          # The github/hybrid planner profile uses the Actions pnpm-store cache
+          # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
@@ -1828,11 +1820,11 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     env:
-      CHECKOUT_BASE_SHA: ${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}
+      CHECKOUT_BASE_SHA: ${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
-      - name: Prepare release-gate max-lines merge tree
-        if: matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate
+      - name: Prepare release-gate ratchet merge tree
+        if: matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
@@ -1856,8 +1848,8 @@ jobs:
           prepared=false
           for attempt in {1..6}; do
             if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
-              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
-              merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"; then
+              merge_sha="$(git rev-parse refs/remotes/origin/ci-ratchet-merge)"
               read -r frozen_base_sha merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
               if [[ "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
                 prepared=true
@@ -1918,14 +1910,16 @@ jobs:
             coercion-helpers)
               pnpm check:coercion-helpers
               ;;
-            max-lines-ratchet)
-              if ! has_package_script "check:max-lines-ratchet"; then
-                echo "Current CI targets must provide check:max-lines-ratchet." >&2
-                exit 1
-              fi
-              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"
+            baseline-ratchets)
+              for required_script in check:max-lines-ratchet check:assertion-safety; do
+                if ! has_package_script "$required_script"; then
+                  echo "Current CI targets must provide ${required_script}." >&2
+                  exit 1
+                fi
+              done
+              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"
               if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
-                echo "Prepared max-lines base ${base_ref} is unavailable." >&2
+                echo "Prepared ratchet base ${base_ref} is unavailable." >&2
                 exit 1
               fi
               if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
@@ -1941,6 +1935,7 @@ jobs:
                 fi
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
+              pnpm check:assertion-safety --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
                 node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1
               fi
@@ -2337,7 +2332,7 @@ jobs:
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
             scripts/lib/direct-run.mjs
-            scripts/lib/local-heavy-check-runtime.mts
+            scripts/lib/local-check-runtime.mts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -2419,6 +2414,15 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        if: matrix.task == 'lint'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint="$(node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
       - name: Cache extension package boundary artifacts for hosted lint
         if: matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid')
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -2428,9 +2432,9 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
           restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v1-
+            ${{ runner.os }}-extension-package-boundary-v2-
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
@@ -2452,10 +2456,6 @@ jobs:
       - name: Restore extension boundary artifacts from sticky disk
         if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
-        env:
-          # Config/toolchain inputs the tree-OID gate below cannot see; must
-          # stay identical to the boundary lane's fingerprint composition.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2463,11 +2463,10 @@ jobs:
             echo "boundary artifact snapshot not seeded yet; lint prepares cold"
             exit 0
           fi
-          # Same tree-OID gate as the boundary lane: restore only artifacts
-          # produced from identical generative sources, so stale snapshots can
-          # neither false-skip rebuilds nor leave ghost declarations.
-          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
-          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+          # The same canonical fingerprint keys the hosted cache and boundary
+          # lane, so no consumer can restore a snapshot from stale SDK inputs.
+          current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
+          if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
           fi
@@ -2858,6 +2857,15 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        if: matrix.group == 'extension-package-boundary'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint="$(node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
       # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
       # the GitHub cache below is evicted so quickly under the repo quota that
       # its prefix restore never hits, leaving every run to rebuild ~113s of
@@ -2887,10 +2895,6 @@ jobs:
         id: boundary-sticky-restore
         if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
-        env:
-          # Config/toolchain inputs the tree-OID gate below cannot see; must
-          # stay identical to the seed step and check-lint's restore gate.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2898,15 +2902,13 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Restore only when the generative source trees AND the runner
-          # toolchain match the snapshotting run. Tree OIDs cover source
-          # content exactly; the node/pnpm versions and the config hash cover
-          # toolchain/config/scripts/lockfile changes the OIDs cannot see.
+          # Restore only when the canonical generative-input fingerprint
+          # matches the snapshotting run.
           # Restored artifacts are valid by construction: no clock-skew mtime
           # race can false-skip a rebuild, and deleted/renamed sources or a
           # toolchain bump build cold.
-          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
-          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+          current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
+          if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -2928,9 +2930,9 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
           restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v1-
+            ${{ runner.os }}-extension-package-boundary-v2-
 
       - name: Preserve extension package boundary cache hit
         if: matrix.group == 'extension-package-boundary' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
@@ -2955,25 +2957,6 @@ jobs:
               -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
               -exec touch -t 200001010000 {} +
           fi
-          cache_inputs=(
-            tsconfig.json \
-            tsconfig.plugin-sdk.dts.json \
-            packages/plugin-sdk/tsconfig.json \
-            packages/llm-core/package.json \
-            packages/model-catalog-core/package.json \
-            scripts/check-extension-package-tsc-boundary.mts \
-            scripts/prepare-extension-package-boundary-artifacts.mts \
-            scripts/write-plugin-sdk-entry-dts.ts \
-            scripts/lib/plugin-sdk-entrypoints.json \
-            scripts/lib/plugin-sdk-entries.mts \
-            package.json \
-            pnpm-lock.yaml
-          )
-          for cache_input in "${cache_inputs[@]}"; do
-            if [ -e "$cache_input" ]; then
-              touch -t 200001010000 "$cache_input"
-            fi
-          done
 
       - name: Run additional check shard
         env:
@@ -3114,15 +3097,12 @@ jobs:
       - name: Seed extension boundary sticky disk
         if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
         shell: bash
-        env:
-          # Must stay identical to the restore gates above.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
           # A stale marker must not survive a mid-seed failure: drop readiness
           # first so a partial payload can never be restored as valid.
-          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
+          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/.source-fingerprint" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
           if [ -d dist/plugin-sdk ]; then
             rsync -aR dist/plugin-sdk "$sticky_root/"
           fi
@@ -3131,7 +3111,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
-          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; } > "$sticky_root/.source-trees"
+          echo "${{ steps.extension-boundary-inputs.outputs.fingerprint }}" > "$sticky_root/.source-fingerprint"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
@@ -3264,7 +3244,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || github.event_name == 'workflow_dispatch' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025')) }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-windows-2025' || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -3276,7 +3256,9 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      max-parallel: 3
+      # Both parts must run concurrently or the split gains nothing; Blacksmith's
+      # Windows class admits exactly 2, so this is the width, not a cap.
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - &platform_checkout_step
@@ -3393,19 +3375,13 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            test)
-              # Linux owns the full repo test suite. Keep the Windows runner focused on
-              # Windows-native process/path wrappers so platform regressions fail fast.
-              pnpm test:windows:ci
-              ;;
+            # Linux owns the full repo test suite. Keep the Windows runner focused on
+            # Windows-native process/path wrappers so platform regressions fail fast.
             test-1)
               pnpm test:windows:ci:1
               ;;
             test-2)
               pnpm test:windows:ci:2
-              ;;
-            test-3)
-              pnpm test:windows:ci:3
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2

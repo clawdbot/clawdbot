@@ -16,6 +16,7 @@ import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.m
 import {
   computeArtifactInputsDigest,
   createPrefixedOutputWriter,
+  derivePluginSdkTypeInputsFromBuildInfo,
   isArtifactSetFresh,
   parseMode,
   resolveBoundaryEntryShimRequiredOutputs,
@@ -105,6 +106,40 @@ async function waitForProcessExit(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
+  it("derives the historical SDK cache misses from TypeScript build inputs", () => {
+    const rootDir = makeTempDir(tempRoots, "openclaw-plugin-sdk-inputs-");
+    const buildInfoPath = path.join(rootDir, "dist", "plugin-sdk", ".tsbuildinfo");
+    fs.mkdirSync(path.dirname(buildInfoPath), { recursive: true });
+    fs.writeFileSync(
+      buildInfoPath,
+      JSON.stringify({
+        fileNames: [
+          "../../src/plugin-sdk/provider-auth.ts",
+          "../../src/agents/cli-credentials.ts",
+          "../../src/plugins/session-catalog.ts",
+          "../../src/agents/embedded-agent-runner/run/types.ts",
+        ],
+        packageJsons: ["../../package.json"],
+      }),
+      "utf8",
+    );
+
+    const inputs = derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath, rootDir);
+
+    for (const historicalMiss of [
+      "src/agents/cli-credentials.ts",
+      "src/plugins/session-catalog.ts",
+      "src/agents/embedded-agent-runner/run/types.ts",
+    ]) {
+      expect(
+        inputs.some((input) => historicalMiss === input || historicalMiss.startsWith(`${input}/`)),
+        historicalMiss,
+      ).toBe(true);
+      expect(inputs).not.toContain(historicalMiss);
+    }
+    expect(inputs).toContain("package.json");
+  });
+
   it("resolves the tsx loader from the selected checkout toolchain", () => {
     const tsxBinPath = "/primary/node_modules/.bin/tsx";
     const loaderPath = "/primary/node_modules/tsx/dist/loader.mjs";

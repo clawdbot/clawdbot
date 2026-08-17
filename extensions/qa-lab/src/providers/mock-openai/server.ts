@@ -61,6 +61,8 @@ import {
   QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
   QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SEND_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -287,6 +289,8 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_RESTART_CHECKPOINT_COUNT = 3;
+const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
@@ -564,6 +568,27 @@ function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: Resp
       isGeneratedCodeModeExecCall(findToolCallByCallId(input, item.call_id))
     );
   });
+}
+
+function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
+  const checkpoints = new Set<number>();
+  for (const item of input) {
+    if (item.name !== "exec") {
+      continue;
+    }
+    const source = readGeneratedCodeModeExecSource(item);
+    if (!source?.includes("qa_restart_wait")) {
+      continue;
+    }
+    for (const match of source.matchAll(/\bCHECKPOINT-([1-3])\b/gu)) {
+      checkpoints.add(Number(match[1]));
+    }
+  }
+  const waitCount = input.filter((item) => isGeneratedCodeModeWaitCall(input, item)).length;
+  return {
+    checkpoints: [...checkpoints].toSorted((left, right) => left - right),
+    waitCount,
+  };
 }
 
 function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
@@ -881,6 +906,76 @@ async function buildResponsesPayload(
     return buildFailedResponseEvents();
   }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    const progress = readRestartCheckpointProgress(input);
+    const currentControlCallId = extractToolOutputCallId(input);
+    const latestControlCall = input.findLast(
+      (item) => item.name === "exec" || item.name === "wait",
+    );
+    const currentControlOutputIsLatest =
+      currentControlCallId.length > 0 && latestControlCall?.call_id === currentControlCallId;
+    const nextCheckpoint = Array.from(
+      { length: QA_RESTART_CHECKPOINT_COUNT },
+      (_, index) => index + 1,
+    ).find((checkpoint) => !progress.checkpoints.includes(checkpoint));
+    if (toolOutput.includes("unsafe-probe-executed")) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (currentControlOutputIsLatest) {
+      if (
+        codeModeControlJson?.status === "waiting" &&
+        "cellId" in codeModeControlJson &&
+        typeof codeModeControlJson.cellId === "string"
+      ) {
+        return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
+      }
+      if (
+        codeModeControlJson?.status === "waiting" &&
+        "runId" in codeModeControlJson &&
+        typeof codeModeControlJson.runId === "string" &&
+        hasDeclaredTool(body, "wait")
+      ) {
+        return buildToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
+      }
+      if (
+        toolJson?.status === "waiting" &&
+        typeof toolJson.runId === "string" &&
+        hasDeclaredTool(body, "wait")
+      ) {
+        return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+      }
+    }
+    if (progress.waitCount < progress.checkpoints.length) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (nextCheckpoint !== undefined) {
+      if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasDeclaredTool(body, "exec")) {
+        const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
+        return buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          restartSafe: true,
+          code: [
+            `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+            'const target = ALL_TOOLS.find((tool) => tool.name === "qa_restart_wait");',
+            'if (!target) throw new Error("qa_restart_wait unavailable");',
+            "await tools.call(target.id, {});",
+            `return "CHECKPOINT-${nextCheckpoint}";`,
+          ].join("\n"),
+        });
+      }
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+    }
+    return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
+  }
   if (codeModeControlJson?.status === "waiting" && hasToolDefinition(toolDeclarationBody, "wait")) {
     if ("cellId" in codeModeControlJson && typeof codeModeControlJson.cellId === "string") {
       return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
@@ -1048,39 +1143,6 @@ async function buildResponsesPayload(
     ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
-  }
-  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
-    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
-      if (toolOutput.includes("unsafe-probe-executed")) {
-        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-      }
-      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
-        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
-      }
-      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
-    }
-    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
-      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
-    }
-    if (
-      toolJson?.status === "waiting" &&
-      typeof toolJson.runId === "string" &&
-      hasDeclaredTool(body, "wait")
-    ) {
-      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
-    }
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
-      return buildToolCallEventsWithArgs("exec", {
-        language: "javascript",
-        restartSafe: true,
-        code: [
-          'const matches = await tools.search("qa_restart_wait");',
-          "await tools.call(matches[0].id, {});",
-          'return "RESTART-CODE-MODE-WAIT-OK";',
-        ].join("\n"),
-      });
-    }
-    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
@@ -1483,6 +1545,31 @@ async function buildResponsesPayload(
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents(slackChartMatch[2]);
+    }
+  }
+  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message:
+          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
+  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: "QA-MESSAGE-DELIVERY-OK",
+        final: true,
+        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
     }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {

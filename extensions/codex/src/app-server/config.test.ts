@@ -367,10 +367,43 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
-  it("parses the native session discovery toggle", () => {
-    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
+  it("parses named native session discovery homes and rejects empty labels", () => {
+    expect(
+      readCodexPluginConfig({
+        sessionCatalog: {
+          enabled: false,
+          homes: [
+            " /srv/codex-string ",
+            { path: " /srv/codex-named ", label: " Named store " },
+            { path: " /srv/codex-default " },
+          ],
+        },
+      }).sessionCatalog,
+    ).toEqual({
       enabled: false,
+      homes: [
+        "/srv/codex-string",
+        { path: "/srv/codex-named", label: "Named store" },
+        { path: "/srv/codex-default" },
+      ],
     });
+    expect(
+      readCodexPluginConfig({ sessionCatalog: { homes: [{ path: "/srv/codex", label: " " }] } }),
+    ).toStrictEqual({});
+  });
+
+  it.each([
+    { transport: "unix", homeScope: "user" },
+    { transport: "websocket", url: "ws://127.0.0.1:39175" },
+  ] as const)("rejects additional session homes for $transport app servers", (appServer) => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: { appServer, sessionCatalog: { homes: ["/srv/codex-extra"] } },
+        env: {},
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    );
   });
 
   it("rejects unknown app-server fields", () => {

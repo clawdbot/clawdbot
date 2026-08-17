@@ -383,10 +383,9 @@ function formatCliError(err: unknown): string {
 function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
   const message = formatCliError(err);
   if (opts.json) {
-    defaultRuntime.writeJson({ error: message }, 0);
-  } else {
-    defaultRuntime.error(message);
+    throw new Error(message);
   }
+  defaultRuntime.error(message);
   defaultRuntime.exit(1);
 }
 

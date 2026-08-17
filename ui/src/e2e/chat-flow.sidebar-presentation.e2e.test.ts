@@ -17,6 +17,12 @@ const terminalMetadataProofDir = path.join(
   "control-ui-e2e",
   "remote-session-sidebar-metadata",
 );
+const sessionSecondRowProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "session-status-second-row-implementation",
+);
 
 suite.define(() => {
   it("replaces an intermediate running subtitle with the durable final reply", async () => {
@@ -208,6 +214,122 @@ suite.define(() => {
           textOverflow: getComputedStyle(label).textOverflow,
         })),
       ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps session titles on the first line and status on a fixed second line", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionSecondRowProofDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: sessionSecondRowProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const busyKey = "agent:main:busy-session";
+    const plainKey = "agent:main:plain-session";
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            key: busyKey,
+            kind: "direct",
+            label: "Terminal tab bar redesign proposal",
+            updatedAt: 2,
+            lastMessagePreview: "Implemented and committed as 094ab2",
+            incognito: true,
+            hasAutomation: true,
+            status: "done",
+            unread: true,
+          },
+          {
+            key: plainKey,
+            kind: "direct",
+            label: "A session without secondary metadata",
+            updatedAt: 1,
+          },
+        ]),
+      },
+      sessionKey: busyKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
+      const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
+      await busyRow.locator(".session-row-badges").waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(sessionSecondRowProofDir, "01-second-row-endcap.png"),
+        });
+      }
+
+      const layout = await busyRow.evaluate((row) => {
+        const rect = (selector: string) => {
+          const element = row.querySelector<HTMLElement>(selector);
+          if (!element) {
+            throw new Error(`Missing session row fixture ${selector}`);
+          }
+          const box = element.getBoundingClientRect();
+          return {
+            bottom: box.bottom,
+            height: box.height,
+            left: box.left,
+            right: box.right,
+            top: box.top,
+          };
+        };
+        return {
+          badges: rect(".session-row-badges"),
+          busyHeight: row.getBoundingClientRect().height,
+          name: rect(".sidebar-recent-session__name"),
+          state: rect(".session-row-state"),
+          subtitle: rect(".sidebar-recent-session__subtitle"),
+        };
+      });
+      const plainHeight = await plainRow.evaluate((row) => row.getBoundingClientRect().height);
+
+      expect(layout.busyHeight).toBeCloseTo(plainHeight, 1);
+      expect(layout.badges.top).toBeGreaterThanOrEqual(layout.name.bottom - 1);
+      expect(layout.name.right).toBeGreaterThan(layout.badges.left);
+      expect((layout.badges.top + layout.badges.bottom) / 2).toBeCloseTo(
+        (layout.subtitle.top + layout.subtitle.bottom) / 2,
+        1,
+      );
+      expect((layout.state.top + layout.state.bottom) / 2).toBeCloseTo(
+        (layout.subtitle.top + layout.subtitle.bottom) / 2,
+        1,
+      );
+
+      await busyRow.hover();
+      await expect
+        .poll(() =>
+          busyRow
+            .locator(".sidebar-recent-session__details-endcap")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("0");
+      await expect
+        .poll(() =>
+          busyRow
+            .locator("[data-session-menu]")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("1");
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(sessionSecondRowProofDir, "02-hover-actions.png"),
+        });
+      }
+      await plainRow.waitFor();
     } finally {
       await suite.closeBrowserContext(context);
     }

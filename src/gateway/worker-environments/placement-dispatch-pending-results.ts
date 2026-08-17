@@ -1,10 +1,9 @@
-import type {
-  PlacementFailureActions,
-  WorkerActivationBarrier,
-  WorkerActiveDispatchPlacement,
-  WorkerDispatchEnvironmentService,
-  WorkerDispatchPlacementStore,
-  WorkerDrainingDispatchPlacement,
+import {
+  isCurrentActiveWorkerEnvironment,
+  type PlacementFailureActions,
+  type WorkerActivationBarrier,
+  type WorkerDispatchEnvironmentService,
+  type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -51,24 +50,6 @@ export type PlacementRecoveryDeps = {
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
 };
-
-function sameActiveEnvironment(
-  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-): boolean {
-  return Boolean(
-    environment &&
-    environment.state === "attached" &&
-    placement.environmentId &&
-    environment.environmentId === placement.environmentId &&
-    placement.activeOwnerEpoch !== null &&
-    environment.ownerEpoch === placement.activeOwnerEpoch &&
-    placement.workerBundleHash &&
-    environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
-  );
-}
 
 function pendingWorkerLossError(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -323,7 +304,7 @@ export async function recoverPendingWorkspaceResults(
         });
         continue;
       }
-      if (!sameActiveEnvironment(active, environment)) {
+      if (!isCurrentActiveWorkerEnvironment(active, environment)) {
         if (hasPreparedResult) {
           // Verification did not publish this prepared snapshot before the
           // crash. Preserve the fence for retry or operator inspection.

@@ -42,7 +42,7 @@ export type MatrixThreadBindingManager = {
     maxAgeMs: number;
   }) => MatrixThreadBindingRecord[];
   persist: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 type MatrixThreadBindingManagerCacheEntry = {
