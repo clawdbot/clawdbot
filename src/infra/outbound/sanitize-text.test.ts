@@ -149,6 +149,15 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it("does not garble text when a stripped tag contains a code-span placeholder", () => {
+    // The code span sits inside the tag's attribute region; stripping the tag
+    // consumes the restore placeholder. The restore loop must skip it instead
+    // of slicing with -1 (which duplicated and reordered the remaining text).
+    expect(sanitizeForPlainText('Link: <a href="`https://example.com`">click</a> end')).toBe(
+      "Link: click end",
+    );
+  });
+
   it("preserves tag-shaped code inside indented code blocks", () => {
     expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
       'Example:\n\n    <div id="root"></div>\n\ndone',

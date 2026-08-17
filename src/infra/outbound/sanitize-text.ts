@@ -89,6 +89,12 @@ export function sanitizeForPlainText(text: string, options: { style?: "markdown"
   cursor = 0;
   for (const code of preservedCode) {
     const placeholder = converted.indexOf(CODE_PLACEHOLDER, cursor);
+    if (placeholder === -1) {
+      // The conversion stripped an HTML tag whose attribute region contained
+      // this placeholder, so the in-place marker is gone. Skipping avoids
+      // slicing with -1, which garbled and duplicated the remaining text.
+      continue;
+    }
     restored += converted.slice(cursor, placeholder).replaceAll(CODE_ESCAPE, "\u0000");
     restored += code;
     cursor = placeholder + CODE_PLACEHOLDER.length;
