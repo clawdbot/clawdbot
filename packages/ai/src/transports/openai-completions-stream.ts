@@ -429,6 +429,8 @@ export async function processCompletionsStream(
       if (hasMirroredReasoning) {
         beginReasoning(hasSameChunkVisibleText, true);
       }
+      // Compat-classified visible details are explicit output items. Preserve
+      // their order with adjacent structured thinking instead of inferring commentary.
       const appendReasoningDeltas = () => {
         for (const reasoningDelta of reasoningDeltas) {
           if (reasoningDelta.kind === "thinking" && !emitReasoning) {

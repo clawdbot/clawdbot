@@ -168,7 +168,7 @@ describe("openai completions stream", () => {
     expectRecordFields(output.content[0], expected);
   });
 
-  it("preserves reasoning_details item order when visible text and thinking are interleaved", async () => {
+  it("preserves explicitly visible reasoning_details without phase reclassification", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/minimax/minimax-m2.7",
       name: "MiniMax M2.7",
