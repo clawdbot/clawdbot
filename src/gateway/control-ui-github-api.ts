@@ -4,7 +4,13 @@
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import {
+  assertSecretOwnerAvailable,
+  SecretSurfaceUnavailableError,
+} from "../secrets/runtime-degraded-state.js";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
@@ -42,8 +48,38 @@ export function optionalNumber(record: Record<string, unknown>, key: string): nu
   return asFiniteNumber(record[key]);
 }
 
-export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function githubApiToken(
+  env: NodeJS.ProcessEnv = process.env,
+  config: OpenClawConfig | null = getRuntimeConfigSnapshot(),
+): string | undefined {
+  const configured = config?.gateway?.controlUi?.github?.token;
+  if (configured !== undefined) {
+    assertSecretOwnerAvailable("capability", "control-ui-github");
+    const token = typeof configured === "string" ? configured.trim() : "";
+    if (!token) {
+      throw new SecretSurfaceUnavailableError({
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        state: "unavailable",
+        paths: ["gateway.controlUi.github.token"],
+        refKeys: [],
+        reason: "secret reference was not materialized by the active runtime",
+      });
+    }
+    return token;
+  }
   return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
+}
+
+/** Raw-config inspection for doctor; it never consults process-global runtime degradation state. */
+export function hasConfiguredGitHubApiCredential(
+  env: NodeJS.ProcessEnv,
+  config: OpenClawConfig,
+): boolean {
+  return (
+    config.gateway?.controlUi?.github?.token !== undefined ||
+    Boolean(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim())
+  );
 }
 
 /** Captures the effective token and a non-secret cache scope from the same env snapshot. */

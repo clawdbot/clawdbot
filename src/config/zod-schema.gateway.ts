@@ -67,6 +67,9 @@ export const GatewayConfigSchema = z
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),
+        github: z
+          .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
+          .optional(),
         toolTitles: z.boolean().optional(),
         sessionObserver: z.boolean().optional(),
         embedSandbox: z

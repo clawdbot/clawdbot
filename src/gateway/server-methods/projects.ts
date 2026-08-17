@@ -33,6 +33,7 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
 import { githubApiToken } from "../control-ui-github-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
@@ -521,16 +522,11 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       }
       try {
         respond(true, await searchRemoteProjects(params.query), undefined);
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "GitHub project search is unavailable. Retry shortly.",
-            { retryable: true },
-          ),
-        );
+      } catch (error) {
+        const message = isTrustedSecretSurfaceUnavailableError(error)
+          ? error.message
+          : "GitHub project search is unavailable. Retry shortly.";
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true }));
       }
     },
     "projects.remove": async ({ params, respond, context }) => {

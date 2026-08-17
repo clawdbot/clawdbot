@@ -86,7 +86,11 @@ suite.define(() => {
 
       const searchRequest = await gateway.waitForRequest("projects.searchRemote");
       expect(searchRequest.params).toEqual({ query: "openclaw" });
-      await place.getByText("GH_TOKEN is not configured; public GitHub results only.").waitFor();
+      await place
+        .getByText(
+          "The Control UI GitHub credential is not configured; public GitHub results only.",
+        )
+        .waitFor();
       await place.getByRole("button", { name: /openclaw\/openclaw/u }).click();
 
       expect(await gateway.getRequests("projects.add")).toHaveLength(0);

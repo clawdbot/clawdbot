@@ -1,6 +1,7 @@
 import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
   isRetainedAdmittedRunDelegatedAuthorityActive,
@@ -14,6 +15,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { prepareGitHubCredentialIsolation } from "../github-service-credential-isolation.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -184,6 +186,10 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
+  const preparedEnvironment = prepareGitHubCredentialIsolation({
+    config: config ?? {},
+    sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+  });
   const skillUsagePaths = attempt.sandbox?.skillUsagePaths
     ? cloneSnapshot(attempt.sandbox.skillUsagePaths)
     : undefined;
@@ -284,6 +290,14 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    preparedEnvironment: () => {
+      assertActive();
+      return Object.freeze({
+        credentialScrubEnv: Object.freeze({ ...preparedEnvironment.credentialScrubEnv }),
+        credentialScrubRequiresNonLoginShell:
+          preparedEnvironment.credentialScrubRequiresNonLoginShell,
+      });
+    },
     bindToolSurface: (tools, options) => {
       assertActive();
       const boundAbortSignal = attempt.abortSignal

@@ -760,7 +760,8 @@ export const en: TranslationMap = {
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     githubProjects: "GitHub",
-    githubTokenHint: "GH_TOKEN is not configured; public GitHub results only.",
+    githubTokenHint:
+      "The Control UI GitHub credential is not configured; public GitHub results only.",
     cloneProject: "Clone",
     cloningProject: "Cloning project…",
     registerProject: "Register as project",

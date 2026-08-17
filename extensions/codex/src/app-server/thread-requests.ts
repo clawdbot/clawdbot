@@ -29,6 +29,7 @@ import {
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { applyCodexHostShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
@@ -160,6 +161,8 @@ export function buildThreadStartParams(
     modelProvider?: string | null;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    shellEnvironment?: Readonly<Record<string, string>>;
+    disableLoginShell?: boolean;
   },
 ): CodexThreadStartParams {
   const ringZeroActive =
@@ -203,6 +206,8 @@ export function buildThreadStartParams(
       hostSystemAgentActive: options.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         options.restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: options.shellEnvironment,
+      disableLoginShell: options.disableLoginShell,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
@@ -235,6 +240,8 @@ export function buildThreadResumeParams(
     model?: string | null;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    shellEnvironment?: Readonly<Record<string, string>>;
+    disableLoginShell?: boolean;
     preserveNativeModel?: boolean;
   },
 ): CodexThreadResumeParams {
@@ -289,6 +296,8 @@ export function buildThreadResumeParams(
       hostSystemAgentActive: options.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         options.restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: options.shellEnvironment,
+      disableLoginShell: options.disableLoginShell,
     }),
     developerInstructions:
       options.developerInstructions ??
@@ -389,6 +398,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    shellEnvironment?: Readonly<Record<string, string>>;
+    disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
   const ringZeroActive =
@@ -446,14 +457,17 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? undefined
         : { model_context_window: params.authoredContextTokenCap },
     ) ?? baseConfig;
-  if (params.bootstrapContextMode !== "lightweight") {
-    return runtimeConfig;
-  }
-  return (
-    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
-      ...runtimeConfig,
-      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
-    }
+  const contextConfig =
+    params.bootstrapContextMode !== "lightweight"
+      ? runtimeConfig
+      : (mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
+          ...runtimeConfig,
+          ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
+        });
+  return applyCodexHostShellEnvironment(
+    contextConfig,
+    options.shellEnvironment,
+    options.disableLoginShell,
   );
 }
 

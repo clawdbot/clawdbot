@@ -2,11 +2,19 @@ import type { AnyAgentTool } from "../tools/common.js";
 
 type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+export type AgentHarnessPreparedEnvironment = Readonly<{
+  credentialScrubEnv: Readonly<Record<string, string>>;
+  /** Non-secret fact used to select the final harness login-shell policy. */
+  credentialScrubRequiresNonLoginShell: boolean;
+}>;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Closure-bound non-secret maps prepared before harness placement. */
+  preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
   /** Runs policy with host-fixed HookContext; callers provide only the native action tuple. */

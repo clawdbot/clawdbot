@@ -182,6 +182,8 @@ export async function tryReuseCodexLiveThread(
       webSearchAllowed: params.webSearchAllowed,
       hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: params.shellEnvironment,
+      disableLoginShell: params.disableLoginShell,
     }),
   );
   const liveThreadConfigFingerprint = fingerprintCodexThreadConfig(

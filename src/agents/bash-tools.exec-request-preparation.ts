@@ -358,6 +358,7 @@ export function resolvePreparedExecEnvironment(params: {
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
   secretEgressEnv?: Record<string, string>;
+  credentialScrubEnv?: Readonly<Record<string, string>>;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
   const inheritedBaseEnv = coerceEnv(process.env);
@@ -494,6 +495,14 @@ export function resolvePreparedExecEnvironment(params: {
   if (params.secretEgressEnv) {
     Object.assign(env, params.secretEgressEnv);
   }
+  const preparedEnv = { ...params.credentialScrubEnv };
+  // Prepared host values are authoritative over ambient, model, plugin, and store projections.
+  Object.assign(env, preparedEnv);
 
-  return { env, requestedEnv };
+  return {
+    env,
+    ...(Object.keys(preparedEnv).length > 0
+      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
+      : { requestedEnv }),
+  };
 }

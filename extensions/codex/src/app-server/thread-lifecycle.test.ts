@@ -12,6 +12,7 @@ import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
+  type JsonObject,
 } from "./protocol.js";
 import {
   createCodexAppServerBindingStore,
@@ -89,6 +90,140 @@ describe("Codex context window config", () => {
       expect(request.config).not.toHaveProperty("model_context_window");
     }
   });
+});
+
+describe("Codex host shell environment", () => {
+  it.each([
+    { action: "start" as const, inherit: "none" },
+    { action: "resume" as const, inherit: "core" },
+  ])(
+    "applies the host environment last for thread/$action with inherit=$inherit",
+    ({ action, inherit }) => {
+      const options = {
+        appServer: createAppServerOptions() as never,
+        config: {
+          allow_login_shell: true,
+          shell_environment_policy: {
+            inherit,
+            use_profile: true,
+            exclude: ["GIT_*"],
+            set: { KEEP_ME: "yes" },
+            include_only: ["PATH"],
+          },
+        },
+        shellEnvironment: {
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+        disableLoginShell: true,
+      };
+      const request =
+        action === "start"
+          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              cwd: "/repo",
+              dynamicTools: [],
+            })
+          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              threadId: "thread-1",
+            });
+
+      expect(request.config?.shell_environment_policy).toMatchObject({
+        inherit,
+        use_profile: false,
+        exclude: ["GIT_*"],
+        set: {
+          KEEP_ME: "yes",
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+      });
+      expect(request.config?.allow_login_shell).toBe(false);
+      const includeOnly = (request.config?.shell_environment_policy as { include_only?: unknown[] })
+        .include_only;
+      expect(includeOnly).toHaveLength(4);
+      expect(includeOnly).toEqual(
+        expect.arrayContaining(["PATH", "GITHUB_TOKEN", "GH_TOKEN", "PREVIEW_SERVICE_TOKEN"]),
+      );
+    },
+  );
+
+  it.each(["start", "resume"] as const)(
+    "preserves native allow_login_shell for thread/%s without credential risk",
+    (action) => {
+      const build = (config: JsonObject) => {
+        const options = {
+          appServer: createAppServerOptions() as never,
+          config,
+          shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+          disableLoginShell: false,
+        };
+        return action === "start"
+          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              cwd: "/repo",
+              dynamicTools: [],
+            })
+          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              threadId: "thread-1",
+            });
+      };
+
+      expect(build({ allow_login_shell: true }).config?.allow_login_shell).toBe(true);
+      expect(build({}).config).not.toHaveProperty("allow_login_shell");
+    },
+  );
+
+  it.each(["start", "resume"] as const)(
+    "admits host values through restrictive filters for thread/%s",
+    (action) => {
+      const options = {
+        appServer: createAppServerOptions() as never,
+        config: {
+          shell_environment_policy: {
+            use_profile: true,
+            filters: { PATH: "include", "GIT_*": "exclude" },
+            set: { KEEP_ME: "yes" },
+          },
+        },
+        shellEnvironment: {
+          GH_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+      };
+      const request =
+        action === "start"
+          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              cwd: "/repo",
+              dynamicTools: [],
+            })
+          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              threadId: "thread-1",
+            });
+
+      expect(request.config?.shell_environment_policy).toMatchObject({
+        use_profile: false,
+        set: {
+          KEEP_ME: "yes",
+          GH_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+        filters: {
+          PATH: "include",
+          "GIT_*": "exclude",
+          GH_TOKEN: "include",
+          PREVIEW_SERVICE_TOKEN: "include",
+        },
+      });
+      expect(request.config?.shell_environment_policy).not.toHaveProperty("include_only");
+    },
+  );
 });
 
 describe("Codex ring-zero thread config", () => {

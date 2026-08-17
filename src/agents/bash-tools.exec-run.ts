@@ -66,6 +66,7 @@ import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import { prepareGitHubCredentialIsolation } from "./github-service-credential-isolation.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
@@ -75,6 +76,9 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const secretEgressEnabled = isSecretEgressProxyActive();
+  const preparedCredentialIsolation =
+    defaults?.preparedCredentialIsolation ??
+    prepareGitHubCredentialIsolation({ config: defaults?.config ?? {} });
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
   let storeEnvPromise:
@@ -84,6 +88,7 @@ export function createExecTool(
     storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) => {
       return store.readSecretStoreExecEnvironment({
         includeSecretSentinels: secretEgressEnabled,
+        excludeNames: preparedCredentialIsolation.excludedStoreNames,
       });
     });
     return storeEnvPromise;
@@ -438,6 +443,7 @@ export function createExecTool(
           storeEnv: storeEnv.env,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           secretEgressEnv,
+          credentialScrubEnv: preparedCredentialIsolation.credentialScrubEnv,
           warnings,
         });
 

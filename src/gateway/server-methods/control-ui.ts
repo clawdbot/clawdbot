@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { ControlUiGitHubError } from "../control-ui-github-api.js";
 import {
   loadControlUiGitHubPreview,
@@ -30,10 +31,13 @@ export function createControlUiHandlers(
         respond(true, await loadGitHubPreview(target), undefined);
       } catch (error) {
         const statusCode = error instanceof ControlUiGitHubError ? error.statusCode : undefined;
+        const message = isTrustedSecretSurfaceUnavailableError(error)
+          ? error.message
+          : "GitHub preview unavailable";
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub preview unavailable", {
+          errorShape(ErrorCodes.UNAVAILABLE, message, {
             retryable: statusCode === 429 || statusCode === 502,
           }),
         );
