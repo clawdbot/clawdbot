@@ -124,6 +124,85 @@ describe("plugin board widget cells", () => {
     expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
+  it("renders an advertised session progress card and its empty state", async () => {
+    const dashboardSessionKey = "agent:main:dashboard";
+    const targetSessionKey = "agent:main:target";
+    const responses = [
+      {
+        props: { sessionKey: targetSessionKey },
+        response: {
+          card: {
+            sessionKey: targetSessionKey,
+            revision: 1,
+            updatedAt: 1,
+            markdown: "**Release** validation is active.",
+            steps: [{ step: "Run focused checks", status: "in_progress" }],
+          },
+        },
+        text: "Run focused checks",
+        requestedSessionKey: targetSessionKey,
+      },
+      {
+        props: undefined,
+        response: { card: null },
+        text: "No progress card yet",
+        requestedSessionKey: dashboardSessionKey,
+      },
+    ] as const;
+
+    for (const [index, scenario] of responses.entries()) {
+      const request = vi.fn(async () => scenario.response);
+      const context = {
+        gateway: {
+          snapshot: {
+            phase: "connected",
+            client: { request },
+            hello: {
+              features: { methods: ["progressCard.get"] },
+              controlUiWidgetKinds: [
+                { pluginId: "session", kind: "session:progress", label: "Session progress" },
+              ],
+            },
+          },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
+        },
+      } as unknown as ApplicationContext;
+      const widget: BoardWidget = {
+        name: `session-progress-${index}`,
+        tabId: "main",
+        title: "Session progress",
+        contentKind: "plugin",
+        pluginKind: "session:progress",
+        ...(scenario.props ? { props: scenario.props } : {}),
+        sizeW: 6,
+        sizeH: 4,
+        position: index,
+        grantState: "none",
+        revision: 1,
+      };
+      const provider = createApplicationContextProvider(context);
+      const cell = document.createElement("openclaw-board-widget-cell");
+      cell.widget = widget;
+      cell.rect = { name: widget.name, x: 0, y: index * 4, w: 6, h: 4 };
+      cell.sessionKey = dashboardSessionKey;
+      cell.callbacks = callbacks();
+      provider.append(cell);
+      document.body.append(provider);
+
+      await vi.waitFor(
+        () =>
+          expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
+            scenario.text,
+          ),
+        CHUNK_LOAD_WAIT,
+      );
+      expect(request).toHaveBeenCalledWith("progressCard.get", {
+        sessionKey: scenario.requestedSessionKey,
+      });
+    }
+  });
+
   it("passes activity to a retained Workboard plugin element", async () => {
     const context = {
       gateway: {

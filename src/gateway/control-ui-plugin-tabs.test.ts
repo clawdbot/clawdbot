@@ -95,7 +95,7 @@ describe("listControlUiPluginTabs", () => {
     expect(listControlUiPluginTabs([]).map((tab) => tab.id)).toEqual(["beta", "zed", "alpha"]);
   });
 
-  it("projects scoped widget descriptors as namespaced kinds", () => {
+  it("merges the read-scoped core kind into deterministic plugin ordering", () => {
     activateDescriptors([
       {
         pluginId: "workboard",
@@ -119,6 +119,7 @@ describe("listControlUiPluginTabs", () => {
 
     expect(listControlUiPluginWidgetKinds([])).toEqual([]);
     expect(listControlUiPluginWidgetKinds(["operator.read"])).toEqual([
+      { pluginId: "session", kind: "session:progress", label: "Session progress" },
       { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
       { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
     ]);

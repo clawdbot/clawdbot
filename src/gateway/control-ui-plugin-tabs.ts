@@ -31,6 +31,12 @@ type ControlUiPluginWidgetKind = {
   label: string;
 };
 
+// `session` is a core-reserved widget-kind namespace. Core owns progress cards,
+// so their availability is scope-gated rather than plugin-gated.
+const CORE_CONTROL_UI_WIDGET_KINDS: readonly ControlUiPluginWidgetKind[] = [
+  { pluginId: "session", kind: "session:progress", label: "Session progress" },
+];
+
 function findControlUiTabGatewayRoute(
   registry: PluginRegistry,
   tab: ControlUiPluginTab,
@@ -125,28 +131,30 @@ export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
   const entries = getActivePluginSessionExtensionRegistry()?.controlUiDescriptors ?? [];
-  return entries
-    .flatMap((entry) => {
-      const descriptor = entry.descriptor;
-      if (descriptor.surface !== "widget") {
-        return [];
-      }
-      const visible = (descriptor.requiredScopes ?? []).every(
-        (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-      );
-      return visible
-        ? [
-            {
-              pluginId: entry.pluginId,
-              kind: `${entry.pluginId}:${descriptor.id}`,
-              label: descriptor.label,
-            },
-          ]
-        : [];
-    })
-    .toSorted(
-      (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
+  const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
+    ? CORE_CONTROL_UI_WIDGET_KINDS
+    : [];
+  const pluginEntries = entries.flatMap((entry) => {
+    const descriptor = entry.descriptor;
+    if (descriptor.surface !== "widget") {
+      return [];
+    }
+    const visible = (descriptor.requiredScopes ?? []).every(
+      (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
     );
+    return visible
+      ? [
+          {
+            pluginId: entry.pluginId,
+            kind: `${entry.pluginId}:${descriptor.id}`,
+            label: descriptor.label,
+          },
+        ]
+      : [];
+  });
+  return [...coreEntries, ...pluginEntries].toSorted(
+    (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
+  );
 }
 
 /** Builds least-privilege grants only for visible tabs backed by same-plugin gateway routes. */

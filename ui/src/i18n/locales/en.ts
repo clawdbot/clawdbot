@@ -170,6 +170,9 @@ export const en: TranslationMap = {
     ariaLabel: "Session progress",
     title: "Progress",
     noteLabel: "Progress note",
+    widgetLabel: "Session progress",
+    widgetLoading: "Loading session progress…",
+    widgetEmpty: "No progress card yet",
     countLabel: "{completed} of {total} completed",
     stepLabel: "{step}, {status}",
     status: {
