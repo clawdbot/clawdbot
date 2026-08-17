@@ -16,9 +16,10 @@ import { CommandPalette } from "./command-palette.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
-  type CustodianPanelToggleDetail,
   type DesktopPanelToggleDetail,
 } from "./panel-toggle-contract.ts";
+
+type CustodianPanelToggleDetail = { open?: boolean };
 
 type GatewayHarness = {
   gateway: ApplicationGateway;

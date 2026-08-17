@@ -34,11 +34,6 @@ export type DesktopPanelToggleDetail = {
   environmentId?: string;
 };
 
-export type CustodianPanelToggleDetail = {
-  open?: boolean;
-  dock?: "bottom" | "right";
-};
-
 export type PanelToggleElement = HTMLElement & {
   handleToggleRequest: (event: Event) => void;
 };
