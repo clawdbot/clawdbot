@@ -1043,11 +1043,11 @@ describe("promptDefaultModel", () => {
     expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
   });
 
-  it("keeps preferred-provider browsing off unrelated provider setup surfaces", async () => {
+  it("keeps empty-default provider browsing off unrelated provider setup surfaces", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue(
       providerCatalogSnapshot([
-        catalogModel("openai", "gpt-5.5", "GPT-5.5"),
-        catalogModel("openai", "gpt-5.5-pro", "GPT-5.5 Pro"),
+        catalogModel("ollama", "minimax-m2.7:cloud", "MiniMax M2.7"),
+        catalogModel("ollama", "gemma4", "Gemma 4"),
       ]),
     );
     providerModelPickerContributionRuntime.enabled = true;
@@ -1064,17 +1064,8 @@ describe("promptDefaultModel", () => {
         throw new Error("preferred-provider browsing must not load the full setup registry");
       },
     });
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce("__browse__")
-      .mockResolvedValueOnce("openai/gpt-5.5-pro");
-    const config = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-        },
-      },
-    } as OpenClawConfig;
+    const select = vi.fn().mockResolvedValueOnce("ollama/gemma4");
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
 
     await promptDefaultPicker({
       config,
@@ -1082,7 +1073,7 @@ describe("promptDefaultModel", () => {
       allowKeep: true,
       includeManual: true,
       includeProviderPluginSetups: true,
-      preferredProvider: "openai",
+      preferredProvider: "ollama",
       browseCatalogOnDemand: true,
       agentDir: "/tmp/openclaw-agent",
       runtime: {} as never,
@@ -1090,11 +1081,11 @@ describe("promptDefaultModel", () => {
 
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerRefs: ["openai"],
+        providerRefs: ["ollama"],
       }),
     );
     expect(providerModelPickerContributionRuntime.resolve).not.toHaveBeenCalled();
-    expect(optionValues(pickerOptions(select as MockCallSource, 1))).not.toContain(
+    expect(optionValues(pickerOptions(select as MockCallSource, 0))).not.toContain(
       "provider-plugin:nvidia:api-key",
     );
   });

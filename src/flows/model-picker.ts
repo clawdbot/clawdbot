@@ -841,7 +841,7 @@ export async function promptDefaultModel(
         workspaceDir: params.workspaceDir,
         env: params.env,
         ...(providerScopedCatalog && preferredProvider
-          ? { providerRefs: sortUniqueStrings([preferredProvider, resolved.provider]) }
+          ? { providerRefs: [preferredProvider] }
           : {}),
       });
     }

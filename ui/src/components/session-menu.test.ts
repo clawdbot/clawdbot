@@ -7,6 +7,7 @@ import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "
 
 type SessionMenuData = {
   label: string;
+  isChild: boolean;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
@@ -53,6 +54,7 @@ async function mountMenu(
   document.body.append(container);
   const session: SessionMenuData = {
     label: "Test session",
+    isChild: false,
     pinned: false,
     unread: false,
     archived: false,
@@ -163,6 +165,22 @@ describe("session menu", () => {
       "Fork",
       "Add to Workboard",
       "Move to group",
+      "Archive session",
+      "Delete…",
+    ]);
+  });
+
+  it("omits root placement actions for child sessions", async () => {
+    const menu = await mountMenu({
+      session: { isChild: true },
+      workboard: null,
+    });
+
+    expect(menuItemLabels(menu)).toEqual([
+      "Mark as unread",
+      "Rename…",
+      "Set icon",
+      "Fork",
       "Archive session",
       "Delete…",
     ]);
