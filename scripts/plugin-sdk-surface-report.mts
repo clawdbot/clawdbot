@@ -294,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: two focused primitives and the closed read-only SecretRef result contract.
       // -2: remove obsolete transcript display helper exports.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
-      4327,
+      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
+      4328,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -374,7 +375,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: bounded provider stream and read-only SecretRef resolver.
       // -1: remove the obsolete transcript tool-call predicate.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
-      2571,
+      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
+      2572,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -328,7 +328,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/media-runtime` | Deprecated broad media barrel including `saveRemoteMedia`, `saveResponseMedia`, `readRemoteMediaBuffer`, and deprecated `fetchRemoteMedia`; prefer `plugin-sdk/media-store`, `plugin-sdk/media-mime`, `plugin-sdk/outbound-media`, and capability runtime subpaths, and prefer store helpers before buffer reads when a URL should become OpenClaw media |
     | `plugin-sdk/media-local-roots` | Focused `getAgentScopedMediaLocalRoots(...)` and policy-aware `getAgentScopedMediaLocalRootsForSources(...)` helpers for plugin-owned local media reads |
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
-    | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
+    | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer`, `saveMediaStream`, and `saveMediaSource` (local path or HTTP(S) URL into managed media with core's SSRF, byte, redirect, and timeout limits) |
     | `plugin-sdk/media-generation-runtime` | Private-local after July 2026; Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Deprecated compatibility facade for media-understanding provider types and helpers; new providers register through the injected plugin API and keep request helpers plugin-owned |
     | `plugin-sdk/text-chunking` | Outbound text and offset-preserving range chunking, markdown chunking/render helpers, quote-aware HTML tag tokenization, markdown table conversion, directive-tag stripping, and safe-text utilities |
