@@ -415,6 +415,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         const deletionParams = {
           agentId: target.agentId,
           archiveTranscript: incognito ? false : deleteTranscript,
+          deleteDeliveryArtifacts: true,
           deleteTranscriptWithoutArchive: incognito,
           expectedEntry: postCleanupEntry,
           expectedLifecycleRevision,

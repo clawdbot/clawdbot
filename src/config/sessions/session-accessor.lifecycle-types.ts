@@ -82,6 +82,8 @@ export type DeleteSessionEntryLifecycleParams = {
   archiveTranscript: boolean;
   /** Delete transcript rows without writing an archive artifact. */
   deleteTranscriptWithoutArchive?: boolean;
+  /** Full teardown only: delete durable operations sourced from this logical session. */
+  deleteDeliveryArtifacts?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
   /** Optional exact ordered transcript guard checked in the deleting SQLite transaction. */
@@ -153,8 +155,12 @@ export type SessionArchivedTranscriptCleanupRule = {
 };
 
 export type SessionEntryLifecycleMutationResult = {
+  beforeCount: number;
   removedEntries: number;
   removedSessionKeys: string[];
+  modelRunPruned: number;
+  pruned: number;
+  capped: number;
   archivedTranscriptDirectories: string[];
   afterCount: number;
   artifactCleanupError?: unknown;

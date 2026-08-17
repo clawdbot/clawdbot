@@ -22,6 +22,9 @@ const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
   afterMaterialize: undefined as (() => void) | undefined,
 }));
+const archivePublicationHook = vi.hoisted(() => ({
+  failNext: undefined as Error | undefined,
+}));
 
 // Place test mutations after the real Worker finishes but before cleanup opens
 // its final transaction, without relying on cross-isolate filesystem timing.
@@ -40,6 +43,24 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-archive-store.js")>();
+  return {
+    ...actual,
+    publishSessionStateArchives: async (
+      ...args: Parameters<typeof actual.publishSessionStateArchives>
+    ) => {
+      const error = archivePublicationHook.failNext;
+      archivePublicationHook.failNext = undefined;
+      if (error) {
+        throw error;
+      }
+      return await actual.publishSessionStateArchives(...args);
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite lifecycle cleanup races", () => {
@@ -54,6 +75,7 @@ describe("SQLite lifecycle cleanup races", () => {
   afterEach(() => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.afterMaterialize = undefined;
+    archivePublicationHook.failNext = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -673,6 +695,70 @@ describe("SQLite lifecycle cleanup races", () => {
     });
     await expect(writer).resolves.toMatchObject({ label: "progressed" });
     expect(progressedDuringMaterialization).toBe(true);
+  });
+
+  it("reports zero maintenance removals when final compare-and-delete does not commit", async () => {
+    const sessionKey = "agent:main:maintenance-compare-failed";
+    const entry = { sessionId: "maintenance-compare-failed", updatedAt: 1 };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    if (!databasePath) {
+      throw new Error("expected maintenance race database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    let materializations = 0;
+    archiveMaterializationHook.afterMaterialize = () => {
+      materializations += 1;
+      if (materializations !== 2) {
+        return;
+      }
+      const changedEntry = { ...entry, label: "changed", updatedAt: 2 };
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+        .run(JSON.stringify(changedEntry), changedEntry.updatedAt, sessionKey);
+    };
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+    });
+
+    expect(result).toMatchObject({
+      beforeCount: 1,
+      afterCount: 1,
+      removedEntries: 0,
+      removedSessionKeys: [],
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    });
+    expect(materializations).toBe(2);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ label: "changed" });
+  });
+
+  it("retains committed maintenance counts when archive publication fails", async () => {
+    const sessionKey = "agent:main:maintenance-publication-failed";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "maintenance-publication-failed", updatedAt: 1 },
+    );
+    archivePublicationHook.failNext = new Error("injected archive publication failure");
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+    });
+
+    expect(result).toMatchObject({
+      beforeCount: 1,
+      afterCount: 0,
+      modelRunPruned: 0,
+      pruned: 1,
+      capped: 0,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
   it("retains unplanned historical windows behind a placeholder node", async () => {

@@ -1386,6 +1386,7 @@ export async function performGatewaySessionReset(params: {
         const deleted = await deleteSessionEntryLifecycle({
           agentId: target.agentId,
           archiveTranscript: false,
+          deleteDeliveryArtifacts: true,
           deleteTranscriptWithoutArchive: true,
           expectedEntry: entry,
           expectedSessionId: entry.sessionId,

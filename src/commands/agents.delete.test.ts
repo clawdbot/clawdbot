@@ -417,6 +417,7 @@ describe("agents delete command", () => {
         removedBindings: 0,
         removed: [],
         failed: [{ path: workspace, reason: "trash unavailable" }],
+        purgeFailed: true,
       });
 
       await agentsDeleteCommand({ id: "ops", force: true }, runtime);
@@ -425,7 +426,31 @@ describe("agents delete command", () => {
       expect(runtime.error).toHaveBeenCalledWith(
         `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
       );
+      expect(runtime.error).toHaveBeenCalledWith(
+        'Warning: session-store purge failed for deleted agent "ops"; stale shared-store rows may remain.',
+      );
       expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("includes purge failure in delegated JSON output", async () => {
+    await withStateDirEnv("openclaw-agents-delete-gateway-purge-json-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        agentId: "ops",
+        removedBindings: 0,
+        removed: [],
+        failed: [],
+        purgeFailed: true,
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(readJsonLogs()[0]).toMatchObject({ purgeFailed: true, transport: "gateway" });
     });
   });
 
@@ -475,6 +500,7 @@ describe("agents delete command", () => {
       expect(output?.workspaceRetained).toBe(true);
       expect(output?.workspaceRetainedReason).toBe("shared");
       expect(output?.transport).toBeUndefined();
+      expect(output).not.toHaveProperty("purgeFailed");
       expect(output?.clearedOwnerRefs).toEqual([
         "agents.defaults.heartbeat.agentId",
         "agents.defaults.systemAgent.agentId",

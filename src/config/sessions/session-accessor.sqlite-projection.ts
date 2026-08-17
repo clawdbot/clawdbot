@@ -272,11 +272,13 @@ export async function applySessionEntryLifecycleMutation(params: {
     captureArtifactCleanupError(error);
   }
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let beforeCount = 0;
     const removedSessionKeys: string[] = [];
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
       params.beforeCommitInTransaction?.();
+      beforeCount = readSessionEntryCount(transactionDb);
       const validatedRemovals = projected.removals.filter((removal) => {
         if (
           removalArchiveMaterializationFailed &&
@@ -430,9 +432,9 @@ export async function applySessionEntryLifecycleMutation(params: {
       );
     }, toDatabaseOptions(resolved));
     emitCommittedLifecycleIdentityMutations({ projected, removedSessionKeys });
-    return { archivedTranscripts, maintenancePlans, removedSessionKeys };
+    return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
   });
-  const maintenanceArchivedTranscripts =
+  const { archivedTranscripts: maintenanceArchivedTranscripts, ...maintenance } =
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
@@ -470,8 +472,10 @@ export async function applySessionEntryLifecycleMutation(params: {
     }
   }
   return {
+    beforeCount: committed.beforeCount,
     removedEntries: committed.removedSessionKeys.length,
     removedSessionKeys: committed.removedSessionKeys,
+    ...maintenance,
     archivedTranscriptDirectories,
     afterCount,
     artifactCleanupError,
@@ -481,7 +485,7 @@ export async function applySessionEntryLifecycleMutation(params: {
 /** Purges entries owned by a deleted agent from SQLite session rows. */
 export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
-): Promise<SessionEntryLifecycleMutationResult> {
+): Promise<void> {
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.storeAgentId });
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
@@ -524,7 +528,6 @@ export async function purgeDeletedAgentSessionEntries(
   });
   const materializedPlans = await materializeSessionStateDeletePlans(prepared.deletePlans);
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const removedSessionKeys = prepared.entryRemovals.map((removal) => removal.sessionKey);
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
@@ -561,25 +564,18 @@ export async function purgeDeletedAgentSessionEntries(
       );
     }, toDatabaseOptions(resolved));
     emitCommittedSessionEntryRemovals(prepared.entryRemovals);
-    return { archivedTranscripts, maintenancePlans, removedSessionKeys };
+    return { archivedTranscripts, maintenancePlans };
   });
-  const archivedTranscripts = [
-    ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),
-    ...(await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+  const { archivedTranscripts: maintenanceArchivedTranscripts } =
+    await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
-    )),
+    );
+  const archivedTranscripts = [
+    ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),
+    ...maintenanceArchivedTranscripts,
   ];
-  const afterCount = readSessionEntryCount(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
   emitArchivedTranscriptUpdates(archivedTranscripts);
-  return {
-    removedEntries: committed.removedSessionKeys.length,
-    removedSessionKeys: committed.removedSessionKeys,
-    archivedTranscriptDirectories: uniqueStrings(
-      archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
-    ).toSorted(),
-    afterCount,
-  };
 }
 
 /** Fully replaces rows for one transcript in the additive SQLite transcript store. */
