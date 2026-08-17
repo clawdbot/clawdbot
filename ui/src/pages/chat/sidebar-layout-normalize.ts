@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core";
 import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 
-const DEFAULT_WIDTH = 360;
+const DEFAULT_WIDTH = 480;
 const DEFAULT_HEIGHT = 360;
 const MIN_WIDTH = 260;
 const MIN_HEIGHT = 220;

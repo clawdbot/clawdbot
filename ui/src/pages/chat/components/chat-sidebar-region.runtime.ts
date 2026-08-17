@@ -345,7 +345,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     }
     const column = this.layout.columns[0];
     const dock = sidebarDock(this.layout);
-    const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 360}px`;
+    const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 480}px`;
     const height = this.layout.expanded || dock === "right" ? "100%" : `${column?.height ?? 360}px`;
     return html`${!this.narrow && !this.layout.expanded && column
         ? this.renderDivider(column)

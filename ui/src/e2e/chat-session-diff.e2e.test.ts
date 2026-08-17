@@ -515,6 +515,10 @@ describeControlUiE2e("session diff panel", () => {
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
+    const panelSurface = page.locator(".side-panel").filter({ has: panel });
+    await expect
+      .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
+      .toBe(480);
     await expect
       .poll(() => panel.locator(".session-diff__branch-label").textContent())
       .toBe("main → feature/panel");

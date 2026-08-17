@@ -13,7 +13,7 @@ export type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
-const SIDEBAR_DEFAULT_WIDTH_PX = 360;
+const SIDEBAR_DEFAULT_WIDTH_PX = 480;
 const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
 export const SIDEBAR_MIN_WIDTH_PX = 260;
 export const SIDEBAR_MIN_HEIGHT_PX = 220;

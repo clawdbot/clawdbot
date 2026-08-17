@@ -322,6 +322,7 @@ describe("chat sidebar region", () => {
 
   it("offers expand and minimize controls in the no-tabs selector", async () => {
     const region = await createRegion({ columns: [], open: true });
+    expect(root(region).querySelector<HTMLElement>(".side-panel")?.style.width).toBe("480px");
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);
