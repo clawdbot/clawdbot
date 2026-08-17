@@ -47,7 +47,7 @@
 
 import os from "node:os";
 import path from "node:path";
-import { minimatch } from "minimatch";
+import { Minimatch, minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -135,9 +135,67 @@ function normalizeGlobs(patterns: string[] | undefined): string[] {
   if (!Array.isArray(patterns)) {
     return [];
   }
-  return patterns
+  const normalized = patterns
     .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
     .map((p) => expandTilde(p.trim()));
+  for (const pattern of normalized) {
+    warnIfBareLiteralPattern(pattern);
+  }
+  return normalized;
+}
+
+/** True when `pattern` carries glob magic per minimatch's own definition —
+ * a bare literal path is not a glob and matches only its own string. */
+function hasGlobMagic(pattern: string): boolean {
+  return new Minimatch(pattern).hasMagic();
+}
+
+const warnedBareLiteralPatterns = new Set<string>();
+
+/**
+ * A bare-literal allow/deny entry is an operator footgun: a directory entry
+ * like "/data" silently never matches "/data/x" (issue #124992). Emit a
+ * one-time diagnostic so the misconfiguration surfaces instead of failing
+ * misleadingly at every request. Exact-file grants (e.g. "/etc/hosts") are
+ * legitimate and keep working — the note is informational only.
+ */
+function warnIfBareLiteralPattern(pattern: string): void {
+  if (hasGlobMagic(pattern) || warnedBareLiteralPatterns.has(pattern)) {
+    return;
+  }
+  warnedBareLiteralPatterns.add(pattern);
+  console.warn(
+    `[file-transfer] allow/deny entry "${pattern}" has no glob suffix and matches only its literal path; use "${directoryGlobForm(pattern)}" to cover files inside a directory`,
+  );
+}
+
+/** Collapse trailing separators and normalize backslashes for prefix/glob
+ * math, so "/data/" and "/data" compare identically to "/data/x". */
+function directoryGlobForm(pattern: string): string {
+  return pattern.replace(/\\/gu, "/").replace(/[\\/]+$/u, "");
+}
+
+/**
+ * Return the bare-literal allow entry that is a strict ancestor prefix of a
+ * denied path, if any. Such an entry looks like it should cover the path but
+ * matches only its own literal string; naming the fix ("/dir/**") turns the
+ * silent POLICY_DENIED into an actionable message.
+ */
+function findBareAncestorAllowEntry(target: string, patterns: string[]): string | null {
+  const normalizedTarget = target.replace(/\\/gu, "/");
+  for (const pattern of patterns) {
+    if (hasGlobMagic(pattern)) {
+      continue;
+    }
+    const normalizedPattern = directoryGlobForm(pattern);
+    if (
+      normalizedTarget !== normalizedPattern &&
+      normalizedTarget.startsWith(`${normalizedPattern}/`)
+    ) {
+      return pattern;
+    }
+  }
+  return null;
 }
 
 function matchesAny(target: string, patterns: string[]): boolean {
@@ -295,11 +353,17 @@ export function evaluateFilePolicy(input: {
   }
 
   // 4. No allow match. Either askable on miss or hard-deny.
+  const allowMissReason = `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`;
+  const bareAncestorEntry = findBareAncestorAllowEntry(input.path, allowPatterns);
+  const missReasonWithHint =
+    bareAncestorEntry === null
+      ? allowMissReason
+      : `${allowMissReason}; note: entry "${bareAncestorEntry}" has no glob suffix and matches only its literal path — use "${directoryGlobForm(bareAncestorEntry)}/**" to allow files inside the directory`;
   if (askMode === "on-miss") {
     return {
       ok: false,
       code: "POLICY_DENIED",
-      reason: `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
+      reason: missReasonWithHint,
       askable: true,
       askMode,
       maxBytes,
@@ -313,7 +377,7 @@ export function evaluateFilePolicy(input: {
     reason:
       allowPatterns.length === 0
         ? `no allow${input.kind === "read" ? "Read" : "Write"}Paths configured`
-        : `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
+        : missReasonWithHint,
     askable: false,
     askMode,
     maxBytes,

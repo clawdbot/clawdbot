@@ -609,3 +609,145 @@ describe("persistAllowAlways", () => {
     expect(list.reduce((count, p) => count + (p === "/tmp/x" ? 1 : 0), 0)).toBe(1);
   });
 });
+
+describe("evaluateFilePolicy — bare directory allow entries", () => {
+  it("denies a file inside a bare directory entry with an actionable glob hint", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/Users/x/Desktop"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/Users/x/Desktop/photo.png",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+    expect(r.ok ? "" : r.reason).toContain("/Users/x/Desktop/**");
+  });
+
+  it("allows a file inside a directory when the entry carries a /** glob", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/Users/x/Desktop/**"] },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: "/Users/x/Desktop/photo.png",
+      }),
+      { ok: true, reason: "matched-allow" },
+    );
+  });
+
+  it("keeps exact-file grants working and adds no hint for a non-ancestor miss", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/Users/x/Desktop/photo.png"] },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: "/Users/x/Desktop/photo.png",
+      }),
+      { ok: true },
+    );
+    const miss = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/Users/x/Desktop/other.png",
+    });
+    expectResultFields(miss, { ok: false, code: "POLICY_DENIED" });
+    expect(miss.ok ? "" : miss.reason).not.toContain("/**");
+  });
+
+  it("still matches the literal directory itself for dir_list", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/Users/x/Desktop"] },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: "/Users/x/Desktop",
+      }),
+      { ok: true, reason: "matched-allow" },
+    );
+  });
+
+  it("applies the hint for write allows too", () => {
+    withConfig({
+      n1: { allowWritePaths: ["/Users/x/Downloads"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "write",
+      path: "/Users/x/Downloads/app.zip",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
+    expect(r.ok ? "" : r.reason).toContain("/Users/x/Downloads/**");
+  });
+
+  it("keeps denyPaths hard-deny and traversal rejection unchanged", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/Users/x/Desktop/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    const denied = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/Users/x/.ssh/keys",
+    });
+    expectResultFields(denied, { ok: false, code: "POLICY_DENIED", askable: false });
+    const traversal = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/Users/x/Desktop/../secret",
+    });
+    expectResultFields(traversal, { ok: false, code: "POLICY_DENIED" });
+  });
+
+  it("keeps on-miss askable and surfaces the hint", () => {
+    withConfig({
+      n1: { ask: "on-miss", allowReadPaths: ["/Users/x/Desktop"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/Users/x/Desktop/photo.png",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: true });
+    expect(r.ok ? "" : r.reason).toContain("/Users/x/Desktop/**");
+  });
+
+  it("warns once per bare-literal pattern and never for glob patterns", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    withConfig({
+      n1: {
+        allowReadPaths: ["/opt/warn-test/Desktop", "/opt/warn-test/Docs/**"],
+      },
+    });
+    const evaluate = () =>
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: "/opt/warn-test/Desktop/a.png",
+      });
+    evaluate();
+    evaluate();
+    const bareWarnings = warn.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes("/opt/warn-test/Desktop"),
+    );
+    expect(bareWarnings).toHaveLength(1);
+    expect(
+      warn.mock.calls.some(
+        ([message]) => typeof message === "string" && message.includes("no glob suffix"),
+      ),
+    ).toBe(true);
+    expect(
+      warn.mock.calls.some(
+        ([message]) => typeof message === "string" && message.includes("/opt/warn-test/Docs/**"),
+      ),
+    ).toBe(false);
+  });
+});
