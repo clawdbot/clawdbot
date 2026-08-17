@@ -233,10 +233,10 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
 
-  if (options?.reasoningEffort || options?.reasoningSummary) {
-    const effort = options?.reasoningEffort
-      ? resolveResponsesApiReasoningEffort(model, options.reasoningEffort)
-      : "medium";
+  const requestedEffort =
+    options?.reasoningEffort ?? (options?.reasoningSummary ? "medium" : undefined);
+  if (requestedEffort !== undefined) {
+    const effort = resolveResponsesApiReasoningEffort(model, requestedEffort);
     if (effort === undefined) {
       return;
     }
