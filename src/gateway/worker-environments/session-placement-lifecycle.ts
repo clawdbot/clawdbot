@@ -64,7 +64,7 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
   }
 }
 
-export function isWorkerPlacementSafeForArchive(
+function isWorkerPlacementSafeForArchive(
   context: SessionWorkerPlacementContext,
   placement: Placement,
 ): boolean {
