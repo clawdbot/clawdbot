@@ -1697,6 +1697,7 @@ process.on("SIGINT", shutdown);`,
     try {
       const firstCatalog = await runtime.getCatalog();
       expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+      expect(firstCatalog.servers.volatile?.requestTimeoutMs).toBe(123_456);
 
       await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
@@ -1757,6 +1758,7 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
         isError: false,
       });
+      expect(runtime.peekCatalog()?.servers.child?.requestTimeoutMs).toBe(90_000);
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
       await fs.rm(listToolsReleasePath, { force: true });
@@ -1813,7 +1815,7 @@ process.on("SIGINT", shutdown);`,
       filePath: serverPath,
       logPath,
       capabilities: { tools: { listChanged: true } },
-      notifyListChangedAfterFirstList: true,
+      notifyListChangedOnCallTool: true,
       exitOnListCall: 2,
     });
 
@@ -1832,6 +1834,9 @@ process.on("SIGINT", shutdown);`,
 
     try {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
       await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,
