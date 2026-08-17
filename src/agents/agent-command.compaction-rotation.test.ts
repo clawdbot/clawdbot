@@ -14,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { defaultRuntime } from "../runtime.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
@@ -41,6 +42,10 @@ const state = vi.hoisted(() => ({
   runCliTurnCompactionLifecycleMock: vi.fn(
     async (params: CliCompactionParams) => params.sessionEntry,
   ),
+  runMemoryFlushIfNeededMock: vi.fn(async (params: { sessionEntry?: SessionEntry }) => ({
+    sessionEntry: params.sessionEntry,
+    outcome: "completed" as const,
+  })),
   deliverAgentCommandResultMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
@@ -181,6 +186,11 @@ vi.mock("./command/cli-compaction.js", () => ({
     state.runCliTurnCompactionLifecycleMock(params),
 }));
 
+vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+    state.runMemoryFlushIfNeededMock(params),
+}));
+
 vi.mock("../infra/agent-events.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/agent-events.js")>(
     "../infra/agent-events.js",
@@ -199,9 +209,12 @@ vi.mock("./command/delivery.runtime.js", () => ({
 }));
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
+let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
 
 beforeAll(async () => {
-  agentCommand = (await import("./agent-command.js")).agentCommand;
+  const command = await import("./agent-command.js");
+  agentCommand = command.agentCommand;
+  agentCommandFromGatewayIngress = command.agentCommandFromGatewayIngress;
 });
 
 beforeEach(async () => {
@@ -462,10 +475,20 @@ describe("agentCommand compaction transcript rotation", () => {
     ).resolves.toContainEqual(expect.objectContaining({ role: "assistant" }));
   });
 
-  it("keeps embedded assistant transcript ownership when visible text is projected", async () => {
+  it("keeps embedded transcript ownership and flushes once for gateway ingress", async () => {
     const storePath = requireStorePath();
     const sessionId = "embedded-projected-final";
     const sessionKey = `agent:main:explicit:${sessionId}`;
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        totalTokens: 180_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    );
     state.runAgentAttemptMock.mockImplementationOnce(async (attempt) => {
       if (!attempt.userTurnTranscriptRecorder) {
         throw new Error("missing embedded user-turn transcript recorder");
@@ -500,12 +523,18 @@ describe("agentCommand compaction transcript rotation", () => {
       });
     });
 
-    await agentCommand({
-      message: "Reply with exactly: OVERRIDE-OK",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-    });
+    await agentCommandFromGatewayIngress(
+      {
+        message: "Reply with exactly: OVERRIDE-OK",
+        sessionId,
+        sessionKey,
+        cwd: state.workspaceDir,
+        allowModelOverride: false,
+      },
+      defaultRuntime,
+      undefined,
+      {},
+    );
 
     const events = (await loadTranscriptEvents({
       agentId: "main",
@@ -527,6 +556,10 @@ describe("agentCommand compaction transcript rotation", () => {
           event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
       ),
     ).toHaveLength(1);
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 180_000 }) }),
+    );
   });
 
   it("persists the pending final before CLI compaction failure and still delivers", async () => {

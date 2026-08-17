@@ -1,4 +1,5 @@
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
@@ -24,6 +25,7 @@ import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
+  loadAgentRunnerMemoryRuntime,
   loadCliCompactionRuntime,
   loadDeliveryRuntime,
   loadSessionStoreRuntime,
@@ -90,7 +92,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     terminal,
     lifecycleGeneration,
   } = params.attempt;
-  const { skillsSnapshot, runContext } = params.embeddedSessionState;
+  const { resolvedVerboseLevel, skillsSnapshot, runContext } = params.embeddedSessionState;
   const effectiveCwd = cwd ?? workspaceDir;
   let sessionEntry = params.sessionEntry;
   let result = params.attempt.result;
@@ -232,6 +234,60 @@ export async function finalizeEmbeddedAgentCommand(params: {
             runOwnedSessionId,
           });
         }
+      }
+    }
+
+    if (sessionEntry && sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
+      const flushProvider = result.meta.agentMeta?.provider ?? fallbackProvider;
+      const flushModel = result.meta.agentMeta?.model ?? fallbackModel;
+      const followupRun: FollowupRun = {
+        prompt: "",
+        enqueuedAt: Date.now(),
+        run: {
+          ...params.prepared,
+          ...params.opts,
+          agentId: sessionAgentId,
+          sessionId: sessionEntry.sessionId,
+          sessionFile: sessionKey,
+          workspaceDir,
+          runtimePolicySessionKey: sessionKey,
+          config: cfg,
+          provider: flushProvider,
+          model: flushModel,
+          blockReplyBreak: "message_end",
+          groupId: params.opts.groupId ?? undefined,
+          groupChannel: params.opts.groupChannel ?? undefined,
+          groupSpace: params.opts.groupSpace ?? undefined,
+          spawnedBy: params.opts.spawnedBy ?? undefined,
+          skillsSnapshot,
+          thinkLevel: effectiveTurnThinkLevel,
+          verboseLevel: resolvedVerboseLevel ?? "off",
+          agentAccountId: runContext.accountId,
+          senderIsOwner: params.opts.senderIsOwner,
+          cwd: effectiveCwd,
+        },
+      };
+      const { runMemoryFlushIfNeeded } = await loadAgentRunnerMemoryRuntime();
+      const memoryFlushResult = await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun,
+        promptForEstimate: "",
+        sessionCtx: {},
+        defaultModel: flushModel,
+        resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        runtimePolicySessionKey: sessionKey,
+        storePath,
+        isHeartbeat: isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind),
+        abortSignal: params.opts.abortSignal,
+        onSessionIdChanged: params.opts.onSessionIdChanged,
+      });
+      sessionEntry = memoryFlushResult.sessionEntry ?? sessionEntry;
+      if (sessionEntry.sessionId !== runOwnedSessionId) {
+        runOwnedSessionId = sessionEntry.sessionId;
+        publishSessionOwnership();
       }
     }
 

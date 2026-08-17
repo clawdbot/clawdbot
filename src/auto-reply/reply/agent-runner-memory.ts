@@ -1042,9 +1042,16 @@ export async function runMemoryFlushIfNeeded(params: {
   runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
-  replyOperation: ReplyOperation;
+  replyOperation?: ReplyOperation;
+  abortSignal?: AbortSignal;
+  onSessionIdChanged?: (sessionId: string) => void;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<MemoryFlushResult> {
+  const abortSignal = params.replyOperation?.abortSignal ?? params.abortSignal;
+  const updateSessionId = (sessionId: string) => {
+    params.replyOperation?.updateSessionId(sessionId);
+    params.onSessionIdChanged?.(sessionId);
+  };
   const memoryFlushWritable = (() => {
     if (!params.sessionKey) {
       return true;
@@ -1273,7 +1280,7 @@ export async function runMemoryFlushIfNeeded(params: {
   );
 
   activeSessionEntry = entry ?? params.sessionEntry;
-  params.replyOperation.setPhase("memory_flushing");
+  params.replyOperation?.setPhase("memory_flushing");
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     activeSessionEntry?.systemPromptReport ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
@@ -1395,7 +1402,7 @@ export async function runMemoryFlushIfNeeded(params: {
       },
       behavior: { kind: "maintenance" },
       sessionOverride: { kind: "preserve" },
-      abortSignal: params.replyOperation.abortSignal,
+      abortSignal,
       runCandidate: async (provider, model, runOptions) => {
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider,
@@ -1445,7 +1452,7 @@ export async function runMemoryFlushIfNeeded(params: {
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          abortSignal: params.replyOperation.abortSignal,
+          abortSignal,
           replyOperation: params.replyOperation,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
@@ -1505,7 +1512,7 @@ export async function runMemoryFlushIfNeeded(params: {
       if (updatedEntry) {
         activeSessionEntry = updatedEntry;
         params.followupRun.run.sessionId = updatedEntry.sessionId;
-        params.replyOperation.updateSessionId(updatedEntry.sessionId);
+        updateSessionId(updatedEntry.sessionId);
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
           params.followupRun.run.sessionFile = queueKey;
@@ -1537,7 +1544,7 @@ export async function runMemoryFlushIfNeeded(params: {
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
-          params.replyOperation.updateSessionId(updatedEntry.sessionId);
+          updateSessionId(updatedEntry.sessionId);
           const refreshedSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
           if (refreshedSessionKey) {
             params.followupRun.run.sessionFile = refreshedSessionKey;
