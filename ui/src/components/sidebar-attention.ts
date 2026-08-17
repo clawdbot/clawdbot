@@ -1,7 +1,5 @@
-// Ambient health chips in the sidebar footer: failing/overdue cron jobs and
-// expiring model auth. This replaces the removed Overview page's attention
-// list — alerts surface where the user already is instead of on a dashboard
-// they have to visit.
+// Active operational conditions live behind one footer bell so the sidebar
+// stays quiet while the same canonical items remain available on demand.
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
@@ -31,6 +29,7 @@ import {
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
 import "./tooltip.ts";
+import "./menu-surface.ts";
 
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
@@ -39,11 +38,6 @@ const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
-export type SidebarAttentionSummary = {
-  count: number;
-  severity: "error" | "warning" | null;
-};
-
 class SidebarAttention extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
@@ -51,10 +45,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @state() private cronJobs: CronJob[] = [];
   @state() private modelAuthStatus: ModelAuthStatusResult | null = null;
   @state() private dismissed: SidebarAttentionDismissals = {};
+  @state() private panelOpen = false;
+  @state() private panelPosition = { left: 8, bottom: 8 };
 
+  @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) onOpenApprovals?: () => void;
-  @property({ attribute: false }) onSummaryChange?: (summary: SidebarAttentionSummary) => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
@@ -65,7 +61,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
-  private lastSummary: SidebarAttentionSummary | null = null;
+  private panelTrigger: HTMLElement | null = null;
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -184,6 +180,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
+    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
       this.idleRefreshTimer = null;
@@ -195,6 +192,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.loadedAgentId = null;
     this.modelAuthAgentId = null;
     super.disconnectedCallback();
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
+      this.closePanel(false);
+    }
+    if (this.panelOpen && this.currentItems().length === 0) {
+      this.closePanel(false);
+    }
   }
 
   private synchronize(
@@ -264,27 +270,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.dismissed = addDismissal(this.dismissedScope, item.kind, item.signature);
   }
 
-  private async open(item: SidebarAttentionItem) {
-    if (item.action.kind === "openApprovals") {
-      this.onOpenApprovals?.();
-      return;
-    }
-    if (item.action.kind === "navigate") {
-      this.onNavigate?.(item.action.routeId);
-      return;
-    }
-    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
-    custodianAlertStore.present(item.action.alert);
-    const snapshot = this.context?.gateway.snapshot;
-    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
-      window.dispatchEvent(
-        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
-      );
-    } else {
-      (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))("custodian");
-    }
-  }
-
   private buildItems(): SidebarAttentionItem[] {
     const overlays = this.context?.overlays.snapshot;
     return buildSidebarAttentionItems({
@@ -305,68 +290,172 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       : [];
   }
 
-  override updated(changed: PropertyValues<this>) {
-    super.updated(changed);
-    const items = this.currentItems();
-    const summary: SidebarAttentionSummary = {
-      count: items.length,
-      severity: items.some((item) => item.severity === "error")
-        ? "error"
-        : items.length > 0
-          ? "warning"
-          : null,
+  private readonly closeOnOutsidePointer = (event: PointerEvent) => {
+    if (!this.panelOpen || event.composedPath().includes(this)) {
+      return;
+    }
+    this.closePanel(false);
+  };
+
+  private openPanel(trigger: HTMLElement) {
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(304, globalThis.innerWidth - 16);
+    this.panelTrigger = trigger;
+    this.panelPosition = {
+      left: Math.max(8, Math.min(rect.right - width, globalThis.innerWidth - width - 8)),
+      bottom: Math.max(8, globalThis.innerHeight - rect.top + 6),
     };
-    const changedSummary =
-      this.lastSummary?.count !== summary.count || this.lastSummary?.severity !== summary.severity;
-    if (this.onSummaryChange && changedSummary) {
-      this.lastSummary = summary;
-      this.onSummaryChange(summary);
+    this.panelOpen = true;
+    document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-issues-panel [data-autofocus]")?.focus();
+    });
+  }
+
+  private closePanel(restoreFocus: boolean) {
+    if (!this.panelOpen) {
+      return;
+    }
+    const trigger = this.panelTrigger;
+    this.panelOpen = false;
+    this.panelTrigger = null;
+    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
+    if (restoreFocus) {
+      void this.updateComplete.then(() => trigger?.focus());
     }
   }
 
+  private async open(item: SidebarAttentionItem) {
+    this.closePanel(false);
+    if (item.action.kind === "openApprovals") {
+      this.onOpenApprovals?.();
+      return;
+    }
+    if (item.action.kind === "navigate") {
+      this.onNavigate?.(item.action.routeId);
+      return;
+    }
+    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
+    custodianAlertStore.present(item.action.alert);
+    const snapshot = this.context?.gateway.snapshot;
+    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+      window.dispatchEvent(
+        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
+      );
+    } else {
+      (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))("custodian");
+    }
+  }
+
+  private readonly handlePanelKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.closePanel(true);
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const rows = Array.from(
+      (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("button"),
+    );
+    const first = rows[0];
+    const last = rows.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  };
+
+  private renderItem(item: SidebarAttentionItem, autofocus: boolean) {
+    const detail = item.action.kind === "askCustodian" ? item.action.alert.facts[0] : undefined;
+    return html`
+      <div
+        class="sidebar-issues-panel__row sidebar-issues-panel__row--${item.severity}"
+        data-attention-kind=${item.kind}
+      >
+        <button
+          type="button"
+          class="sidebar-issues-panel__open sidebar-attention__open"
+          data-autofocus=${autofocus ? "true" : nothing}
+          aria-label=${detail ? `${item.label}: ${detail}` : item.label}
+          @click=${() => void this.open(item)}
+        >
+          <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
+          <span class="sidebar-issues-panel__content">
+            <span class="sidebar-issues-panel__entity">${item.label}</span>
+            ${detail
+              ? html`<span class="sidebar-issues-panel__state">${detail}</span>`
+              : nothing}
+          </span>
+          <span class="sidebar-issues-panel__chevron" aria-hidden="true"
+            >${icons.chevronRight}</span
+          >
+        </button>
+        <button
+          type="button"
+          class="sidebar-issues-panel__dismiss sidebar-attention__dismiss"
+          aria-label=${t("common.dismiss")}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            this.dismiss(item);
+          }}
+        >
+          ${icons.x}
+        </button>
+      </div>
+    `;
+  }
+
   override render() {
+    if (this.context?.gateway.snapshot.phase !== "connected") {
+      return nothing;
+    }
     const items = this.currentItems();
     if (items.length === 0) {
       return nothing;
     }
+    const count = items.length;
+    const label = `${count} ${count === 1 ? "issue" : "issues"}`;
     return html`
-      <div class="sidebar-attention" role="status">
-        ${items.map(
-          (item) => html`
-            <div
-              class="sidebar-attention__item sidebar-attention__item--${item.severity}"
-              data-attention-kind=${item.kind}
+      <span class="sr-only" role="status" aria-live="polite">${label}</span>
+      <button
+        type="button"
+        class="sidebar-issues-button"
+        aria-expanded=${String(this.panelOpen)}
+        aria-haspopup="dialog"
+        aria-label=${label}
+        @click=${(event: MouseEvent) =>
+          this.panelOpen
+            ? this.closePanel(true)
+            : this.openPanel(event.currentTarget as HTMLElement)}
+      >
+        <span class="sidebar-issues-button__icon" aria-hidden="true">${icons.bell}</span>
+        <span class="sidebar-issues-button__count" aria-hidden="true"
+          >${count > 9 ? "9+" : count}</span
+        >
+      </button>
+      ${this.panelOpen
+        ? html`<openclaw-menu-surface>
+            <section
+              class="sidebar-issues-panel"
+              role="dialog"
+              aria-label="Issues"
+              style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px`}
+              @keydown=${this.handlePanelKeydown}
             >
-              <openclaw-tooltip
-                .content=${item.action.kind === "askCustodian"
-                  ? [item.label, ...item.action.alert.facts].join("\n")
-                  : item.label}
-              >
-                <button
-                  type="button"
-                  class="sidebar-attention__open"
-                  aria-label=${item.label}
-                  @click=${() => void this.open(item)}
-                >
-                  <span class="sidebar-attention__icon" aria-hidden="true"
-                    >${icons[item.icon]}</span
-                  >
-                </button>
-              </openclaw-tooltip>
-              <openclaw-tooltip .content=${t("common.dismiss")}>
-                <button
-                  type="button"
-                  class="sidebar-attention__dismiss"
-                  aria-label=${t("common.dismiss")}
-                  @click=${() => this.dismiss(item)}
-                >
-                  ${icons.x}
-                </button>
-              </openclaw-tooltip>
-            </div>
-          `,
-        )}
-      </div>
+              <header class="sidebar-issues-panel__header">
+                <h2 class="sidebar-issues-panel__heading">Issues</h2>
+              </header>
+              <div class="sidebar-issues-panel__list">
+                ${items.map((item, index) => this.renderItem(item, index === 0))}
+              </div>
+            </section>
+          </openclaw-menu-surface>`
+        : nothing}
     `;
   }
 }

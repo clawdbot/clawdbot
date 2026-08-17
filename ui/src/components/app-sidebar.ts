@@ -27,7 +27,6 @@ import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
-  renderAppSidebarAttention,
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
@@ -65,7 +64,6 @@ import {
   resolveLobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
@@ -77,7 +75,6 @@ const sidebarChromeImport = createIdleImport(() =>
 );
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
-  @state() attentionSummary: SidebarAttentionSummary = { count: 0, severity: null };
   @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
@@ -560,7 +557,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ${renderAppSidebarOnline(this)} ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
-            ${renderAppSidebarAttention(this)}
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}
               .updateSchedule=${this.updateSchedule}

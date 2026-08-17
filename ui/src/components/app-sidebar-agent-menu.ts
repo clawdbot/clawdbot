@@ -19,6 +19,8 @@ import {
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./sidebar-build-chip.ts";
+import type { PresenceViewer } from "./viewer-facepile.ts";
+import "./viewer-facepile.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -193,8 +195,7 @@ type SidebarIdentityMenuParams = {
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
-  selfName?: string;
-  selfEmail?: string;
+  profileViewer?: PresenceViewer;
   offline: boolean;
   themeMode: ThemeMode;
   triggerWidth: number;
@@ -433,7 +434,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
   if (!position) {
     return nothing;
   }
-  const profileLabel = params.selfEmail ?? params.selfName;
+  const profileName = params.profileViewer?.name ?? params.profileViewer?.email;
+  const profileEmail =
+    params.profileViewer?.email && params.profileViewer.email !== profileName
+      ? params.profileViewer.email
+      : null;
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -499,23 +504,39 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           aria-label=${t("profilePage.identity.menuLabel")}
           style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${profileLabel
+        ${profileName
           ? html`<wa-dropdown-item class="sidebar-identity-menu__header" value="command:profile">
-                ${profileLabel}
+                <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
+                  <openclaw-viewer-avatar
+                    .user=${params.profileViewer}
+                    variant="footer"
+                  ></openclaw-viewer-avatar>
+                </span>
+                <span class="sidebar-identity-menu__identity">
+                  <span class="sidebar-identity-menu__name" title=${profileName}
+                    >${profileName}</span
+                  >
+                  ${profileEmail
+                    ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
+                        >${profileEmail}</span
+                      >`
+                    : nothing}
+                </span>
               </wa-dropdown-item>
               <div class="sidebar-customize-menu__separator" role="separator"></div>`
           : nothing}
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
           <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
-          <span slot="details" class="session-menu__shortcut" aria-hidden="true"
-            >${isApplePlatform() ? "⌘⇧," : "Ctrl+Shift+,"}</span
+          <kbd slot="details" class="session-menu__shortcut" aria-hidden="true"
+            >${isApplePlatform() ? "⌘⇧," : "Ctrl+Shift+,"}</kbd
           >
         </wa-dropdown-item>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
           <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
         </wa-dropdown-item>
+        <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-pair-mobile"
           value="command:pair-mobile"
@@ -536,6 +557,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
             >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
           >
         </wa-dropdown-item>
+        <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-identity-menu__help"
           value="command:help"
@@ -558,6 +580,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <div class="sidebar-identity-menu__footer">
           <openclaw-sidebar-build-chip
+            .variant=${"identity"}
             .basePath=${params.basePath}
             .gatewayVersion=${params.gatewayVersion}
             .onNavigate=${(routeId: "about") => {

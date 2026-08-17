@@ -5,6 +5,7 @@ import "../../components/app-sidebar.ts";
 
 describe("AppSidebar footer identity menu", () => {
   it("owns account utilities, restores focus, and routes Profile", async () => {
+    const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const gatewayHarness = createGatewayHarness({
       instanceId: "self-instance",
     } as GatewayBrowserClient);
@@ -20,7 +21,12 @@ describe("AppSidebar footer identity menu", () => {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "self", name: "Ada", email: "ada@example.test" },
+          user: {
+            id: "self",
+            name: fullName,
+            email: "ada.with.a.deliberately.long.address@example.test",
+            avatarUrl: "/api/users/self/avatar?v=1",
+          },
         },
       ],
     });
@@ -52,8 +58,27 @@ describe("AppSidebar footer identity menu", () => {
       "command:debug-overlay",
       "command:help",
     ]);
-    expect(menu?.querySelector(".sidebar-identity-menu__header")?.textContent?.trim()).toBe(
-      "ada@example.test",
+    const footerName = identity?.querySelector(".sidebar-identity-card__name");
+    const menuName = menu?.querySelector(".sidebar-identity-menu__name");
+    expect(footerName?.textContent?.trim()).toBe(fullName);
+    expect(footerName?.getAttribute("title")).toBe(fullName);
+    expect(menuName?.textContent?.trim()).toBe(fullName);
+    expect(menuName?.getAttribute("title")).toBe(fullName);
+    const menuEmail = menu?.querySelector(".sidebar-identity-menu__email");
+    expect(menuEmail?.textContent?.trim()).toBe(
+      "ada.with.a.deliberately.long.address@example.test",
+    );
+    expect(menuEmail?.getAttribute("title")).toBe(
+      "ada.with.a.deliberately.long.address@example.test",
+    );
+    expect(menu?.querySelector(".sidebar-identity-menu__avatar")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(menu?.querySelector('[data-viewer-id="self"] img')?.getAttribute("src")).toBe(
+      "/api/users/self/avatar?v=1",
+    );
+    expect(identity?.querySelector('[data-viewer-id="self"] img')?.getAttribute("src")).toBe(
+      "/api/users/self/avatar?v=1",
     );
     expect(
       menu
@@ -63,7 +88,14 @@ describe("AppSidebar footer identity menu", () => {
     expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(menu?.querySelector(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
+    expect(
+      (menu?.querySelector("openclaw-sidebar-build-chip") as { variant?: string } | null)?.variant,
+    ).toBe("identity");
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
+    expect(menu?.textContent).not.toContain("Recent activity");
+    expect(menu?.querySelectorAll(':scope > [role="separator"]')).toHaveLength(4);
+    expect(identity?.querySelector(".sidebar-identity-card__more svg")).not.toBeNull();
+    expect(identity?.querySelector(".sidebar-identity-card__chevron")).toBeNull();
 
     const helpRow = menu?.querySelector<HTMLElement>(".sidebar-identity-menu__help");
     await (helpRow as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)?.updateComplete;

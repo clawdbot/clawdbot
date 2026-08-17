@@ -26,15 +26,19 @@ export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
   return `${branch}${commit}`;
 }
 
-function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
-  if (info.release) {
-    return null;
-  }
+export function formatIdentityMenuBuildLabel(info: ControlUiBuildInfo): string | null {
   const compactBuild = formatBuildChipText(info);
   if (!compactBuild) {
     return null;
   }
   return info.branch && info.branch !== "main" ? compactBuild : `git@${compactBuild}`;
+}
+
+function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
+  if (info.release) {
+    return null;
+  }
+  return formatIdentityMenuBuildLabel(info);
 }
 
 export function formatSidebarBuildSubtitle(info: ControlUiBuildInfo): string | null {
