@@ -2107,6 +2107,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.broadcast).toHaveBeenCalledOnce();
   });
 
+  it("records the resolved run for accepted leaf-only steering", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-leaf-steer-provenance-");
+    const { send } = createChatRequestFixture();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "agent:main:main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    bindTestToolAuthority(operation);
+    operation.setPhase("running");
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-leaf-steer-provenance",
+        requestParams: { expectedLeafEntryId: null, queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
+  });
+
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-");
     mockState.hasMessageReceivedHooks = true;
@@ -2450,6 +2487,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(successor.result).toBeNull();
     expect(successorCancel).not.toHaveBeenCalled();
     expect(mockState.lastDispatchCtx).toBeUndefined();
+    const persistedUsers = readPersistedUserMessages();
+    expect(persistedUsers).toHaveLength(1);
+    expect(
+      (persistedUsers[0]?.["__openclaw"] as Record<string, unknown> | undefined)?.steerTargetRunId,
+    ).toBeUndefined();
     successor.complete();
   });
 

@@ -186,6 +186,12 @@ export function beginReplyMessageInjectionTarget(
       outcome: Promise.resolve(immediateRejection),
     };
   }
+  const targetRunId = normalizeOptionalString(resolved.backend.runId);
+  const userTurnTranscriptRecorder = queueOptions?.userTurnTranscriptRecorder;
+  // The backend selected at the final admission check owns steering provenance.
+  // Leaf-bound callers may omit a run id, and a captured operation can reattach
+  // before injection, so request metadata and the earlier target snapshot are insufficient.
+  userTurnTranscriptRecorder?.setSteerTargetRunIdForPersistence?.(targetRunId);
   // Injection is user input, not run evidence: stamping activity here would let
   // sub-10-minute user messages re-arm a wedged run's staleness window forever.
   // Invoke before the first await. The capability owns the final synchronous
@@ -212,13 +218,14 @@ export function beginReplyMessageInjectionTarget(
     queued = resolved.injection.queueMessage(text, runtimeQueueOptions);
   } catch (error) {
     settleAcceptance(false);
+    userTurnTranscriptRecorder?.setSteerTargetRunIdForPersistence?.(undefined);
     const immediateRejection = {
       status: "rejected" as const,
       reason: "runtime_rejected" as const,
       errorMessage: String(error),
     };
     return {
-      targetRunId: target.runId,
+      targetRunId,
       acceptance: acceptance.promise,
       outcome: Promise.resolve(immediateRejection),
     };
@@ -226,10 +233,14 @@ export function beginReplyMessageInjectionTarget(
   const outcome = queued.then(
     (result): ReplyMessageInjectionOutcome => {
       settleAcceptance(true);
+      if (result?.transcriptCommit === "unconfirmed") {
+        userTurnTranscriptRecorder?.setSteerTargetRunIdForPersistence?.(undefined);
+      }
       return result ? { status: "accepted", result } : { status: "accepted" };
     },
     (error: unknown): ReplyMessageInjectionOutcome => {
       settleAcceptance(false);
+      userTurnTranscriptRecorder?.setSteerTargetRunIdForPersistence?.(undefined);
       return {
         status: "rejected",
         reason: "runtime_rejected",
@@ -238,7 +249,7 @@ export function beginReplyMessageInjectionTarget(
     },
   );
   return {
-    targetRunId: target.runId,
+    targetRunId,
     acceptance: acceptance.promise,
     outcome,
   };

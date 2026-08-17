@@ -86,7 +86,7 @@ function resolveChatSendToolAuthorityOverlay(params: {
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
-  session: Pick<PreparedChatSendSession, "cfg" | "entry" | "expectedRunId">;
+  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
   userTurnTranscriptRecorder: NonNullable<
@@ -107,9 +107,6 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    params.userTurnTranscriptRecorder.setSteerTargetRunIdForPersistence?.(
-      params.session.expectedRunId,
-    );
     const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
