@@ -958,6 +958,13 @@ describe("deliverFollowupDecision", () => {
     ["status", { text: "later status", isStatusNotice: true }],
     ["reasoning", { text: "later reasoning", isReasoning: true }],
     ["commentary", { text: "later commentary", isCommentary: true }],
+    [
+      "TTS supplement",
+      {
+        mediaUrl: "file:///tmp/later.mp3",
+        ttsSupplement: { spokenText: "terminal reply", visibleTextAlreadyDelivered: true },
+      },
+    ],
   ] satisfies Array<[string, ReplyPayload]>)(
     "does not report a delivered terminal reply when later %s fails",
     async (_name, payload) => {

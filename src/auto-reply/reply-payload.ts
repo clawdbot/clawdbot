@@ -362,4 +362,5 @@ export function isReplyPayloadStatusNotice(
 export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean =>
   payload.isReasoning !== true &&
   payload.isCommentary !== true &&
-  !isReplyPayloadStatusNotice(payload);
+  !isReplyPayloadStatusNotice(payload) &&
+  !isReplyPayloadTtsSupplement(payload);
