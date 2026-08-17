@@ -1854,12 +1854,13 @@ describe("Codex app-server dynamic tool build", () => {
     { permissionMode: "workspace" as const, execMode: "auto" },
     { permissionMode: "full" as const, execMode: "full" },
   ])(
-    "maps $permissionMode session permission into $execMode for dynamic exec",
+    "uses the host-prepared $execMode for $permissionMode dynamic exec",
     async ({ permissionMode, execMode }) => {
       const sessionFile = path.join(tempDir, `${permissionMode}-session.jsonl`);
       const workspaceDir = path.join(tempDir, `${permissionMode}-workspace`);
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
+      params.execOverrides = { ...params.execOverrides, mode: execMode };
       params.permissionMode = permissionMode;
       params.sessionRoot = workspaceDir;
       params.runtimePlan = createCodexRuntimePlanFixture();

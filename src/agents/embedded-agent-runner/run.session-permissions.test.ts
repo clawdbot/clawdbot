@@ -7,7 +7,7 @@ import {
 } from "./run.overflow-compaction.harness.js";
 
 describe("embedded run session permissions", () => {
-  it("preserves plugin-owned permission facts through attempt dispatch", async () => {
+  it("prepares the exec mode with plugin-owned permission facts", async () => {
     const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
 
@@ -20,6 +20,7 @@ describe("embedded run session permissions", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
+        execOverrides: expect.objectContaining({ mode: "auto" }),
         permissionMode: "workspace",
         sessionRoot: "/tmp/openclaw-plugin-session-root",
       }),

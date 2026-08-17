@@ -1,7 +1,6 @@
 import {
   isActiveHarnessContextEngine,
   resolveSandboxContext,
-  resolveSessionPermissionExecMode,
   resolveSessionAgentIds,
   resolveUserPath,
   type FastModeAutoProgressState,
@@ -104,12 +103,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     // The explicit session mode replaces legacy per-session execSecurity/execAsk.
     // Global/agent policy and approvals-file floors remain authoritative.
-    execOverrides: params.permissionMode
-      ? {
-          ...params.execOverrides,
-          mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
-        }
-      : params.execOverrides,
+    execOverrides: params.execOverrides,
     approvals: loadExecApprovals(),
     config: params.config,
     agentId: sessionAgentId,

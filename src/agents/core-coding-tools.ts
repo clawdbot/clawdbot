@@ -8,6 +8,7 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   wrapReadToolWithSkillContent,
+  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -65,6 +66,17 @@ function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undef
     roots.add(path.resolve(root));
   }
   return roots.size > 0 ? Array.from(roots) : undefined;
+}
+
+function guardHostWorkspaceTool(
+  tool: AnyAgentTool,
+  options: Pick<CoreCodingToolsOptions, "codingRoot" | "containmentRoot">,
+): AnyAgentTool {
+  return path.resolve(options.containmentRoot) === path.resolve(options.codingRoot)
+    ? wrapToolWorkspaceRootGuard(tool, options.codingRoot)
+    : wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
+        resolutionCwd: options.codingRoot,
+      });
 }
 
 type CoreCodingToolsOptions = {
@@ -165,13 +177,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createEditTool,
       });
-      base.push(
-        options.workspaceOnly
-          ? wrapToolWorkspaceRootGuardWithOptions(edit, options.containmentRoot, {
-              resolutionCwd: options.codingRoot,
-            })
-          : edit,
-      );
+      base.push(options.workspaceOnly ? guardHostWorkspaceTool(edit, options) : edit);
     }
     if (!options.readOnly && !sandboxRoot && baseToolNames.has("write")) {
       const write = createHostWorkspaceWriteTool(options.codingRoot, {
@@ -180,13 +186,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createWriteTool,
       });
-      base.push(
-        options.workspaceOnly
-          ? wrapToolWorkspaceRootGuardWithOptions(write, options.containmentRoot, {
-              resolutionCwd: options.codingRoot,
-            })
-          : write,
-      );
+      base.push(options.workspaceOnly ? guardHostWorkspaceTool(write, options) : write);
     }
   }
 

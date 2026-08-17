@@ -121,6 +121,8 @@ describe("prepareCodexAttemptConnection", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.agentDir = path.join(tempDir, "agent");
     params.config = { tools: { exec: { mode: "full" } } };
+    // Dispatch owns mode→exec preparation; connection consumes the prepared override.
+    params.execOverrides = { ...params.execOverrides, mode: "auto" };
     params.permissionMode = "workspace";
     params.sessionRoot = workspaceDir;
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
@@ -174,6 +176,7 @@ describe("prepareCodexAttemptConnection", () => {
       const params = createParams(sessionFile, workspaceDir);
       params.agentDir = path.join(tempDir, "agent");
       params.config = { tools: { exec: { mode: "deny" } } };
+      params.execOverrides = { ...params.execOverrides, mode: execMode };
       params.permissionMode = permissionMode;
       params.sessionRoot = workspaceDir;
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);

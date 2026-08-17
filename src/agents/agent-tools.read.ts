@@ -512,6 +512,11 @@ function normalizeReadResultDetails(
   return { ...result, details: { kind: "text", content: text } };
 }
 
+/** Wrap a file tool so path params stay inside the workspace root. */
+export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
+  return wrapToolWorkspaceRootGuardWithOptions(tool, root);
+}
+
 function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;

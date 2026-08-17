@@ -293,7 +293,14 @@ export type RunEmbeddedAgentParams = {
   bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<
     ExecToolDefaults,
-    "host" | "security" | "ask" | "node" | "nodeCwd" | "notifyOnExit" | "notifyOnExitEmptySuccess"
+    | "host"
+    | "mode"
+    | "security"
+    | "ask"
+    | "node"
+    | "nodeCwd"
+    | "notifyOnExit"
+    | "notifyOnExitEmptySuccess"
   >;
   bashElevated?: ExecElevatedDefaults;
   /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */
