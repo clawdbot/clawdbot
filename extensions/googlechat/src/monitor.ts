@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 // Googlechat plugin module implements monitor behavior.
 import {
   formatInboundMediaUnavailableText,
@@ -170,7 +171,7 @@ function resolveBotDisplayName(params: {
   if (accountName?.trim()) {
     return accountName.trim();
   }
-  const agent = config.agents?.list?.find((a) => a.id === agentId);
+  const agent = resolveAgentConfig(config, agentId);
   if (agent?.name?.trim()) {
     return agent.name.trim();
   }

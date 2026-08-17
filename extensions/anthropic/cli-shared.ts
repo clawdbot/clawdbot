@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 /**
  * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
@@ -163,7 +164,7 @@ export function supportsClaudeDynamicSystemPromptSections(
 
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
   const agentExec = context?.agentId
-    ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
+    ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
   return (

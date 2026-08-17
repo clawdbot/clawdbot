@@ -1,3 +1,4 @@
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 /**
  * Anthropic config defaulting helpers. They seed default Anthropic/Claude CLI
  * model refs and cache-retention params based on configured auth mode.
@@ -218,10 +219,13 @@ function collectClaudeCliRuntimeRefsFromConfig(config: OpenClawConfig): string[]
       model: config.agents?.defaults?.model as ClaudeCliModelSelection,
       models: config.agents?.defaults?.models,
     },
-    ...(config.agents?.list ?? []).map((agent) => ({
-      model: agent.model as ClaudeCliModelSelection,
-      models: agent.models,
-    })),
+    ...listAgentIds(config).map((agentId) => {
+      const agent = resolveAgentConfig(config, agentId);
+      return {
+        model: agent?.model as ClaudeCliModelSelection,
+        models: agent?.models,
+      };
+    }),
   ];
   const refs = new Set<string>();
   for (const { model, models } of selections) {

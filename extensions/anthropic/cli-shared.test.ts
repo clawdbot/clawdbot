@@ -671,12 +671,11 @@ describe("normalizeClaudeBackendConfig", () => {
         config: {
           tools: { exec: { mode: "full" } },
           agents: {
-            list: [
-              {
-                id: "safe-agent",
+            entries: {
+              "safe-agent": {
                 tools: { exec: { mode: "ask" } },
               },
-            ],
+            },
           },
         },
       }),
@@ -688,12 +687,11 @@ describe("normalizeClaudeBackendConfig", () => {
         config: {
           tools: { exec: { mode: "ask" } },
           agents: {
-            list: [
-              {
-                id: "yolo-agent",
+            entries: {
+              "yolo-agent": {
                 tools: { exec: { mode: "full" } },
               },
-            ],
+            },
           },
         },
       }),

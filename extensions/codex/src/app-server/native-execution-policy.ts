@@ -1,3 +1,4 @@
+import { resolveAgentConfig, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 /**
  * Resolves whether Codex app-server native execution can own shell/file work,
  * or whether OpenClaw must keep exec/process on a configured node host.
@@ -14,8 +15,6 @@ type ExecHostOverride = {
   host?: string;
   node?: string;
 };
-
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 /** Effective execution-host policy for the Codex app-server native tool surface. */
 export type CodexNativeExecutionPolicy = {
@@ -125,23 +124,14 @@ function resolvePolicyAgentId(params: {
   if (sessionAgentId) {
     return sessionAgentId;
   }
-  const agents = listAgentEntries(params.config);
-  return resolveDefaultPolicyAgentId(agents);
+  return resolveDefaultAgentId(params.config);
 }
 
 function resolvePolicyAgentExec(params: {
   config: OpenClawConfig;
   agentId: string;
 }): ExecHostOverride | undefined {
-  return listAgentEntries(params.config).find(
-    (entry) => normalizeAgentId(entry?.id) === params.agentId,
-  )?.tools?.exec;
-}
-
-function listAgentEntries(config: OpenClawConfig): AgentEntry[] {
-  return (config.agents?.list ?? []).filter(
-    (entry): entry is AgentEntry => entry !== null && typeof entry === "object",
-  );
+  return resolveAgentConfig(params.config, params.agentId)?.tools?.exec;
 }
 
 function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
@@ -179,15 +169,7 @@ function isDefaultAgentSessionKeyForAgent(params: {
   config: OpenClawConfig;
   agentId: string;
 }): boolean {
-  return (
-    normalizeAgentId(params.agentId) ===
-    resolveDefaultPolicyAgentId(listAgentEntries(params.config))
-  );
-}
-
-function resolveDefaultPolicyAgentId(agents: AgentEntry[]): string {
-  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
-  return normalizeAgentId(defaultEntry?.id);
+  return normalizeAgentId(params.agentId) === resolveDefaultAgentId(params.config);
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {

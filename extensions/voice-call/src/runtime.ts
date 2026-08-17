@@ -1,5 +1,5 @@
 // Voice Call plugin module implements runtime behavior.
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -244,8 +244,8 @@ async function resolveRealtimeProvider(params: {
 
 function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfig): string[] {
   const agentIds = new Set<string>([normalizeAgentId(config.agentId)]);
-  for (const agent of coreConfig.agents?.list ?? []) {
-    agentIds.add(normalizeAgentId(agent.id));
+  for (const agentId of listAgentIds(coreConfig)) {
+    agentIds.add(normalizeAgentId(agentId));
   }
   for (const route of Object.values(config.numbers)) {
     if (route.agentId) {

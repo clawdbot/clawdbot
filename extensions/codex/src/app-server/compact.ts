@@ -8,7 +8,11 @@ import {
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -418,15 +422,12 @@ function readCompactionOverrideEntries(params: CompactEmbeddedAgentSessionParams
   if (!agentId) {
     return entries;
   }
-  const agents = Array.isArray(params.config?.agents?.list) ? params.config.agents.list : [];
-  const activeAgent = agents.find((agent) => {
-    const id = typeof agent?.id === "string" ? agent.id.trim().toLowerCase() : "";
-    return id === agentId;
-  });
-  const agentRecord = asOptionalRecord(activeAgent?.compaction);
+  const agentRecord = asOptionalRecord(
+    resolveAgentConfig(params.config ?? {}, agentId)?.compaction,
+  );
   if (agentRecord) {
     entries.push({
-      path: `agents.list.${agentId}`,
+      path: `agents.entries.${agentId}`,
       record: agentRecord,
       inheritedRecord: defaultRecord,
       inheritedPath: "agents.defaults",

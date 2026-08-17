@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 // Discord plugin module owns progress-window state and agent-event rendering.
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -44,10 +45,7 @@ export function createDiscordMessageProgressRuntime(params: {
   const { cfg, route, abortSignal } = ctx;
   // Reasoning delivery follows the session /reasoning level, not streaming config.
   const reasoningLevel = ((): "on" | "stream" | "off" => {
-    const normalizedAgentId = (route.agentId ?? "").trim().toLowerCase() || "main";
-    const agentEntryDefault = cfg.agents?.list?.find(
-      (entry) => ((entry?.id ?? "").trim().toLowerCase() || "main") === normalizedAgentId,
-    )?.reasoningDefault;
+    const agentEntryDefault = resolveAgentConfig(cfg, route.agentId ?? "main")?.reasoningDefault;
     const cfgDefault = agentEntryDefault ?? cfg.agents?.defaults?.reasoningDefault;
     const configDefault: "on" | "stream" | "off" =
       cfgDefault === "on" || cfgDefault === "stream" ? cfgDefault : "off";

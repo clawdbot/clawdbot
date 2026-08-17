@@ -9,15 +9,10 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-function resolveDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const chosen = (agents.find((agent) => agent?.default) ?? agents[0])?.id;
-  return normalizeAgentId(chosen);
-}
 
 function resolveBindingAccount(params: {
   binding: unknown;

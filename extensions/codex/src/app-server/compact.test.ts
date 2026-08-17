@@ -2051,15 +2051,14 @@ describe("maybeCompactCodexAppServerSession", () => {
           trigger: "budget",
           config: {
             agents: {
-              list: [
-                {
-                  id: agentId,
+              entries: {
+                [agentId]: {
                   compaction: {
                     model: "openai/gpt-5.4-mini",
                     provider: "custom-summary",
                   },
                 },
-              ],
+              },
             },
           },
         },
@@ -2100,8 +2099,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionId: "session-1",
         sessionKey: "agent:cap-1:session-1",
         ignoredConfig: [
-          "agents.list.cap-1.compaction.model",
-          "agents.list.cap-1.compaction.provider",
+          "agents.entries.cap-1.compaction.model",
+          "agents.entries.cap-1.compaction.provider",
         ],
       },
     ]);
@@ -2123,15 +2122,14 @@ describe("maybeCompactCodexAppServerSession", () => {
       trigger: "manual",
       config: {
         agents: {
-          list: [
-            {
-              id: "sara",
+          entries: {
+            sara: {
               compaction: {
                 model: "openai/gpt-5.4-mini",
                 provider: "openai",
               },
             },
-          ],
+          },
         },
       },
     });
@@ -2143,8 +2141,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionId: "session-1",
         sessionKey: "agent:sara:session-1",
         ignoredConfig: [
-          "agents.list.sara.compaction.model",
-          "agents.list.sara.compaction.provider",
+          "agents.entries.sara.compaction.model",
+          "agents.entries.sara.compaction.provider",
         ],
       },
     );
@@ -2170,14 +2168,13 @@ describe("maybeCompactCodexAppServerSession", () => {
               provider: "custom-summary",
             },
           },
-          list: [
-            {
-              id: "nik",
+          entries: {
+            nik: {
               compaction: {
                 model: "openai/gpt-5.4-mini",
               },
             },
-          ],
+          },
         },
       },
     });
@@ -2188,7 +2185,10 @@ describe("maybeCompactCodexAppServerSession", () => {
       {
         sessionId: "session-1",
         sessionKey: "agent:nik:session-1",
-        ignoredConfig: ["agents.defaults.compaction.provider", "agents.list.nik.compaction.model"],
+        ignoredConfig: [
+          "agents.defaults.compaction.provider",
+          "agents.entries.nik.compaction.model",
+        ],
       },
     );
     warn.mockRestore();
@@ -2220,15 +2220,14 @@ describe("maybeCompactCodexAppServerSession", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: "lossless",
+          entries: {
+            lossless: {
               compaction: {
                 model: "openai/gpt-5.4",
                 provider: "lossless-claw",
               },
             },
-          ],
+          },
         },
       },
     });
@@ -2240,8 +2239,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionId: "session-1",
         sessionKey: "agent:lossless:session-1",
         ignoredConfig: [
-          "agents.list.lossless.compaction.model",
-          "agents.list.lossless.compaction.provider",
+          "agents.entries.lossless.compaction.model",
+          "agents.entries.lossless.compaction.provider",
         ],
       },
     );
@@ -2279,14 +2278,13 @@ describe("maybeCompactCodexAppServerSession", () => {
               provider: "lossless-claw",
             },
           },
-          list: [
-            {
-              id: "lossless-child",
+          entries: {
+            "lossless-child": {
               compaction: {
                 model: "openai/gpt-5.4-mini",
               },
             },
-          ],
+          },
         },
       },
     });
@@ -2299,7 +2297,7 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionKey: "agent:lossless-child:session-1",
         ignoredConfig: [
           "agents.defaults.compaction.provider",
-          "agents.list.lossless-child.compaction.model",
+          "agents.entries.lossless-child.compaction.model",
         ],
       },
     );

@@ -147,7 +147,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       resolveCodexNativeExecutionPolicy({
         config: {
           tools: { exec: { host: "gateway" } },
-          agents: { list: [{ id: "bot-a", default: true }] },
+          agents: { entries: { "bot-a": { default: true } } },
         },
         sessionKey: "node-session",
         agentId: "bot-a",
@@ -171,7 +171,9 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       resolveCodexNativeExecutionPolicy({
         config: {
           tools: { exec: { host: "gateway" } },
-          agents: { list: [{ id: "main", tools: { exec: { host: "node", node: "worker-4" } } }] },
+          agents: {
+            entries: { main: { tools: { exec: { host: "node", node: "worker-4" } } } },
+          },
         },
         sessionKey: "agent:main:session-1",
       }),

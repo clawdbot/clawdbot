@@ -888,12 +888,11 @@ describe("generateVoiceResponse", () => {
     ]);
     const coreConfig = {
       agents: {
-        list: [
-          {
-            id: "voice",
+        entries: {
+          voice: {
             tools: { allow: [] },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
