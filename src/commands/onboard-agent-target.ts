@@ -39,7 +39,13 @@ export function resolveOnboardingAgentTarget(
 
 /** Resolve the configured System Agent as the owner of onboarding effects. */
 export function resolveSystemAgentOnboardingTarget(config: OpenClawConfig): OnboardingAgentTarget {
-  return resolveOnboardingAgentTarget(config, config.agents?.defaults?.systemAgent?.agentId);
+  // The system agent is an explicit fleet-owner signal. Legacy rosters still use
+  // their retained/default marker for onboarding ownership until they migrate.
+  const explicitSystemAgentId =
+    config.agents?.ownership === "explicit"
+      ? config.agents?.defaults?.systemAgent?.agentId
+      : undefined;
+  return resolveOnboardingAgentTarget(config, explicitSystemAgentId);
 }
 
 export async function ensureOnboardingAgentWorkspace(
