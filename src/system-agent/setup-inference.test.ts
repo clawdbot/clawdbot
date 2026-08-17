@@ -588,9 +588,20 @@ function createConfigTransformHarness(
     state.runtimeConfig = materializeRuntimeAgentListForTest(state.sourceConfig);
     return { nextConfig: state.sourceConfig };
   });
+  const readSnapshot = vi.fn(async () => ({
+    exists: true as const,
+    valid: true as const,
+    path: "/tmp/openclaw.json",
+    issues: [],
+    config: state.runtimeConfig,
+    sourceConfig: state.sourceConfig,
+    runtimeConfig: state.runtimeConfig,
+  }));
   return {
     transform,
+    readSnapshot,
     current: () => structuredClone(state.sourceConfig),
+    currentRuntime: () => structuredClone(state.runtimeConfig),
   };
 }
 
@@ -4019,6 +4030,7 @@ describe("activateSetupInference", () => {
 
     const result = await activateCodexSetup({
       deps: {
+        readConfigFileSnapshot: configHarness.readSnapshot as never,
         readCodexCliActiveApiKey,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -4441,7 +4453,7 @@ describe("activateSetupInference", () => {
       modelRef: "openai/gpt-5.4",
       workspace: "/tmp/work",
       deps: {
-        readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
+        readConfigFileSnapshot: configHarness.readSnapshot as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
@@ -4520,7 +4532,9 @@ describe("activateSetupInference", () => {
       },
     });
     expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
-    expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(configHarness.current());
+    expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
+      configHarness.currentRuntime(),
+    );
   });
 
   it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
@@ -4560,13 +4574,14 @@ describe("activateSetupInference", () => {
     await withPluginRuntimeGatewayRequestScope(
       { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
       async () => {
+        const configHarness = createPreRosterConfigTransformHarness();
         const result = await activateCodexSetup({
           workspace: "/tmp/work",
           deps: {
+            readConfigFileSnapshot: configHarness.readSnapshot as never,
             captureSystemAgentOwnerPluginArtifacts,
             runEmbeddedAgent: runEmbeddedAgent as never,
-            transformConfigWithPendingPluginInstalls: createPreRosterConfigTransformHarness()
-              .transform as never,
+            transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           },
         });
 
@@ -5006,6 +5021,7 @@ describe("activateSetupInference", () => {
     });
     const markRetained = vi.fn(async () => true);
     const committedInstallRecords: PluginInstallRecord[] = [];
+    let currentConfig: OpenClawConfig = {};
     const transformConfig = vi.fn(
       async (params: {
         transform: (
@@ -5013,26 +5029,38 @@ describe("activateSetupInference", () => {
           context: { snapshot: { config: OpenClawConfig; runtimeConfig: OpenClawConfig } },
         ) => Promise<{ nextConfig: OpenClawConfig }>;
       }) => {
-        const transformed = await params.transform(
-          {},
-          {
-            snapshot: {
-              config: materializedMainRuntimeConfig,
-              runtimeConfig: materializedMainRuntimeConfig,
-            },
+        const transformed = await params.transform(currentConfig, {
+          snapshot: {
+            config: materializedMainRuntimeConfig,
+            runtimeConfig: materializedMainRuntimeConfig,
           },
-        );
+        });
         const record = transformed.nextConfig.plugins?.installs?.codex;
         if (record) {
           committedInstallRecords.push(record);
         }
-        return { nextConfig: withoutPluginInstallRecords(transformed.nextConfig) };
+        currentConfig = withoutPluginInstallRecords(transformed.nextConfig);
+        return { nextConfig: currentConfig };
       },
     );
+    const readConfigFileSnapshot = vi.fn(async () => {
+      const runtimeConfig =
+        Object.keys(currentConfig).length === 0
+          ? materializedMainRuntimeConfig
+          : materializeRuntimeAgentListForTest(currentConfig);
+      return {
+        exists: true as const,
+        valid: true as const,
+        config: runtimeConfig,
+        sourceConfig: currentConfig,
+        runtimeConfig,
+      };
+    });
     const deps = {
       ensureCodexRuntimePlugin: ensureCodex as never,
       runEmbeddedAgent: runEmbeddedAgent as never,
       transformConfigWithPendingPluginInstalls: transformConfig as never,
+      readConfigFileSnapshot: readConfigFileSnapshot as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
       readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
       markRetainedManagedNpmInstall: markRetained,

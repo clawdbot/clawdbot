@@ -143,6 +143,7 @@ async function activateSetupInferenceUnredacted(
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
   let codexRegistryNeedsReload = false;
   let codexRegistryReloaded = false;
+  let codexReloadedRuntimeConfig: OpenClawConfig | undefined;
   let codexProbePluginRegistry: PluginRegistry | undefined;
   try {
     const plan = await buildTestPlan({
@@ -595,11 +596,14 @@ async function activateSetupInferenceUnredacted(
       ({ committedConfig, autoLocalModelLeanApplied, codexInstallOwnership } = persistenceState);
     }
     if (codexRegistryNeedsReload && committedConfig) {
-      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
+      const reloadedRuntimeConfig = await reloadCodexRegistryAfterActivation({
         readSnapshot,
         workspaceDir: workspace,
         deps,
+        requireValidConfig: true,
       });
+      codexRegistryReloaded = reloadedRuntimeConfig !== null;
+      codexReloadedRuntimeConfig = reloadedRuntimeConfig ?? undefined;
       if (!codexRegistryReloaded) {
         throw new SetupInferenceActivationIndeterminateError(
           "Inference activation committed, but the active plugin registry could not be reloaded. Restart the Gateway before using Codex inference.",
@@ -608,11 +612,16 @@ async function activateSetupInferenceUnredacted(
     }
     if (committedConfig && params.surface === "gateway" && params.kind === "codex-cli") {
       try {
+        // The writer returns authored config, while prepared owners are keyed to the Gateway's
+        // materialized runtime snapshot. Publishing the authored shape strands metadata/probes.
+        if (!codexReloadedRuntimeConfig) {
+          throw new Error("committed runtime config is unavailable");
+        }
         const refreshPreparedModelRuntimeSnapshots =
           deps.refreshPreparedModelRuntimeSnapshots ??
           (await import("../agents/prepared-model-runtime.js"))
             .refreshPreparedModelRuntimeSnapshots;
-        await refreshPreparedModelRuntimeSnapshots(committedConfig);
+        await refreshPreparedModelRuntimeSnapshots(codexReloadedRuntimeConfig);
       } catch {
         throw new SetupInferenceActivationIndeterminateError(
           "Inference activation committed, but the prepared model catalog could not be refreshed. Restart the Gateway before using the new inference route.",
@@ -670,11 +679,12 @@ async function activateSetupInferenceUnredacted(
     if (codexRegistryNeedsReload && !codexRegistryReloaded) {
       // The probe loaded discovery against staged config. Restore the live
       // registry from the latest persisted config before another request runs.
-      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
-        readSnapshot,
-        workspaceDir: workspace,
-        deps,
-      });
+      codexRegistryReloaded =
+        (await reloadCodexRegistryAfterActivation({
+          readSnapshot,
+          workspaceDir: workspace,
+          deps,
+        })) !== null;
       if (!codexRegistryReloaded) {
         codexCleanupError = new SetupInferenceActivationIndeterminateError(
           "Inference activation could not restore the active plugin registry after its Codex probe. Restart the Gateway before retrying.",
