@@ -48,6 +48,11 @@ const SQLITE_OPEN_OPTIONS_WITH_VALUES = new Map<string, number>([
   ["textkey", 1],
 ]);
 
+// ATTACH [DATABASE] '<path>' | "<path>" | <bare-path> — case-insensitive, as
+// SQLite keywords are.
+const SQLITE_ATTACH_DATABASE_RE =
+  /\bATTACH(?:\s+DATABASE)?\s+(?:'([^']+)'|"([^"]+)"|([^\s;]+))/giu;
+
 function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();
   const match = normalized.match(
@@ -186,6 +191,16 @@ function parseSqliteDatabaseTokens(argv: string[]): string[] {
     const databaseToken = parseSqliteOpenCommandDatabaseToken(commandToken);
     if (databaseToken) {
       databaseTokens.push(databaseToken);
+    }
+    // SQL statements can attach another database file without ever naming it
+    // as an argv entry or .open target: sqlite3 scratch.db "ATTACH DATABASE
+    // '/state/live.db' AS live; ...". Extract those paths too, otherwise the
+    // live-state guard is trivially bypassed.
+    for (const match of commandToken.matchAll(SQLITE_ATTACH_DATABASE_RE)) {
+      const attachToken = match[1] ?? match[2] ?? match[3];
+      if (attachToken) {
+        databaseTokens.push(attachToken);
+      }
     }
   }
   return databaseTokens;
