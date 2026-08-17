@@ -1,4 +1,5 @@
 // Msteams tests cover monitor handler.adaptive card plugin behavior.
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -9,9 +10,11 @@ import {
   installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { buildMSTeamsPresentationCard } from "./presentation.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const runtimeApiMockState = getMSTeamsTestRuntimeState();
+const APPROVER_ID = "5e4b4b6f-c242-45de-b0de-bf44eb233145";
 
 vi.mock("./reply-dispatcher.js", () => ({
   createMSTeamsReplyDispatcher: () => ({
@@ -91,6 +94,7 @@ async function runMessageActivity(params: {
   value?: unknown;
   text?: string;
   deps?: MSTeamsMessageHandlerDeps;
+  senderId?: string;
 }) {
   const deps = params.deps ?? createDeps();
   let messageHandler: Parameters<MSTeamsActivityHandler["onMessage"]>[0] | undefined;
@@ -115,7 +119,7 @@ async function runMessageActivity(params: {
         serviceUrl: "https://service.example.test",
         from: {
           id: "user-bf",
-          aadObjectId: "user-aad",
+          aadObjectId: params.senderId ?? "user-aad",
           name: "User",
         },
         recipient: {
@@ -150,6 +154,98 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+  });
+
+  it("renders and resolves a typed approval before agent dispatch", async () => {
+    const card = buildMSTeamsPresentationCard({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                action: {
+                  type: "approval",
+                  approvalId: "plugin:approval-1",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const submittedData = (card.actions?.[0] as { data?: unknown } | undefined)?.data;
+    const gatewayRequest = vi.fn(
+      async (): Promise<ApprovalResolveResult> => ({
+        applied: true,
+        approval: {
+          id: "plugin:approval-1",
+          urlPath: "/approve/plugin%3Aapproval-1",
+          createdAtMs: 1,
+          expiresAtMs: 10_000,
+          resolvedAtMs: 2,
+          reason: "user",
+          presentation: {
+            kind: "plugin",
+            title: "Send Outlook message",
+            description: "Send this exact prepared Outlook message now.",
+            severity: "info",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+          status: "allowed",
+          decision: "allow-once",
+        },
+      }),
+    );
+    const deps = createDeps();
+    deps.accountId = "jimmy";
+    deps.cfg = {
+      channels: { msteams: { allowFrom: [APPROVER_ID] } },
+    } as OpenClawConfig;
+    deps.approvalGatewayRuntime = { request: gatewayRequest };
+
+    await runMessageActivity({ value: submittedData, deps, senderId: APPROVER_ID });
+
+    expect(deps.log.debug).not.toHaveBeenCalled();
+    expect(deps.log.error).not.toHaveBeenCalled();
+    expect(deps.runtime.error).not.toHaveBeenCalled();
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "approval.resolve",
+      {
+        id: "plugin:approval-1",
+        kind: "plugin",
+        decision: "allow-once",
+        reviewer: {
+          channel: "msteams",
+          accountId: "jimmy",
+          senderId: APPROVER_ID,
+        },
+      },
+      { clientDisplayName: `Microsoft Teams approval (${APPROVER_ID})` },
+    );
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("consumes an unauthorized approval before gateway or agent dispatch", async () => {
+    const gatewayRequest = vi.fn();
+    const deps = createDeps();
+    deps.accountId = "jimmy";
+    deps.cfg = {
+      channels: { msteams: { allowFrom: [APPROVER_ID] } },
+    } as OpenClawConfig;
+    deps.approvalGatewayRuntime = { request: gatewayRequest };
+
+    await runMessageActivity({
+      text: "/approve plugin:approval-1 allow-once",
+      deps,
+      senderId: "6e4b4b6f-c242-45de-b0de-bf44eb233146",
+    });
+
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("forwards adaptive card submitted data to the agent as message text", async () => {

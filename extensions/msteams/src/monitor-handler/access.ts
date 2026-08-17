@@ -113,12 +113,14 @@ function formatMSTeamsSenderReason(params: {
 
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
 }) {
   const activity = params.activity;
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   const msteamsCfg = params.cfg.channels?.msteams;
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
@@ -130,7 +132,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const pairing = createChannelPairingController({
     core,
     channel: "msteams",
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId,
   });
   const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
   const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];

@@ -1071,6 +1071,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           ctx.log?.info(`starting provider (port ${port})`);
           return monitorMSTeamsProvider({
             cfg: ctx.cfg,
+            accountId: ctx.accountId,
             runtime: ctx.runtime,
             abortSignal: ctx.abortSignal,
             statusSink,

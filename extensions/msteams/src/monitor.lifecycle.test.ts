@@ -272,6 +272,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const stores = createStores();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
+      accountId: "jimmy",
       runtime: createRuntime(),
       abortSignal: abort.signal,
       conversationStore: stores.conversationStore,
@@ -290,6 +291,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await waitForMSTeamsTestState(() => {
       expect(keepHttpServerTaskAliveMock).toHaveBeenCalledTimes(1);
     });
+    expect(registerMSTeamsHandlers.mock.calls[0]?.[1]?.accountId).toBe("jimmy");
+    expect(getMSTeamsIngressMockState().instances[0]?.options.accountId).toBe("jimmy");
     await Promise.resolve();
     expect(taskSettled).toBe(false);
 

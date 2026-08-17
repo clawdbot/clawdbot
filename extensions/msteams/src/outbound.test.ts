@@ -334,7 +334,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
-  it("renders typed URL actions and omits unresolved approval actions", async () => {
+  it("renders typed URL and approval actions", async () => {
     const presentation = {
       blocks: [
         {
@@ -394,9 +394,17 @@ describe("msteamsOutbound cfg threading", () => {
         title: "Open app",
         url: "https://example.com/app",
       },
+      {
+        type: "Action.Submit",
+        title: "Allow",
+        data: {
+          msteams: {
+            type: "imBack",
+            value: "/approve approval-1 allow-once",
+          },
+        },
+      },
     ]);
-    expect(JSON.stringify(card)).not.toContain("approval-1");
-    expect(JSON.stringify(card)).not.toContain("/approve");
   });
 
   it("falls back to text/media delivery when payload rendering did not produce a card", async () => {

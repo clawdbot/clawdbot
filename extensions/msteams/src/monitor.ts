@@ -1,6 +1,7 @@
 // Msteams plugin module implements monitor behavior.
 import type { Server } from "node:http";
 import type { Request, Response } from "express";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
   isDangerousNameMatchingEnabled,
@@ -67,6 +68,7 @@ import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
+  accountId?: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
@@ -84,6 +86,7 @@ export async function monitorMSTeamsProvider(
 ): Promise<MonitorMSTeamsResult> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
+  const accountId = opts.accountId?.trim() || DEFAULT_ACCOUNT_ID;
   let cfg = opts.cfg;
   let msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
@@ -308,6 +311,7 @@ export async function monitorMSTeamsProvider(
   const handler = buildActivityHandler();
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -321,7 +325,7 @@ export async function monitorMSTeamsProvider(
   registerMSTeamsHandlers(handler, handlerDeps);
 
   const ingress = createMSTeamsIngress({
-    accountId: appId,
+    accountId,
     runtime,
     dispatch: async (activity, lifecycle, liveContext) => {
       // The journaled activity is the dispatch payload; the live context only
