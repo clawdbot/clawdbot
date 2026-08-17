@@ -85,7 +85,14 @@ async function parseSnapshot(filePath: string, params: HistoryParams): Promise<r
       // Ignore malformed external history entries.
     }
   }
-  return Object.freeze(messages);
+  const redacted: Message[] = [];
+  for (const [index, message] of messages.entries()) {
+    if (index % 32 === 0) {
+      await yieldToEventLoop();
+    }
+    redacted.push(redactClaudeCliHistoryMessage(message));
+  }
+  return Object.freeze(redacted);
 }
 
 export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): Promise<Message[]> {
@@ -107,13 +114,13 @@ export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): 
     }
     return [];
   }
-  const redacted: Message[] = [];
+  const messages: Message[] = [];
   for (const [index, message] of snapshot.entries()) {
     if (index % 32 === 0) {
       await yieldToEventLoop();
     }
-    // Redaction and downstream merge/projection are pure; only the frozen array is shared.
-    redacted.push(redactClaudeCliHistoryMessage(message));
+    // The process cache owns redacted objects; callers receive isolated mutable copies.
+    messages.push(structuredClone(message));
   }
-  return redacted;
+  return messages;
 }

@@ -266,6 +266,8 @@ describe("cli session history", () => {
           preparedImportedMessages: await readChatHistoryCliSessionImportSnapshot(params),
         });
       const streamSpy = vi.spyOn(rawFs, "createReadStream");
+      const transcriptRedact = await import("../agents/transcript-redact.js");
+      const redactSpy = vi.spyOn(transcriptRedact, "redactTranscriptMessage");
       const initial = await (async () => {
         try {
           const [first, second] = await Promise.all([
@@ -274,12 +276,14 @@ describe("cli session history", () => {
           ]);
           expect(second).toEqual(first);
           expect(streamSpy).toHaveBeenCalledTimes(1);
+          expect(redactSpy).toHaveBeenCalledTimes(first.length);
           return resolveChatHistoryWithCliSessionImports({
             ...params,
             preparedImportedMessages: first,
           });
         } finally {
           streamSpy.mockRestore();
+          redactSpy.mockRestore();
         }
       })();
       expect(initial.messages).toHaveLength(3);

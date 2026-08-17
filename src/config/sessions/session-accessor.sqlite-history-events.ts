@@ -126,7 +126,9 @@ function readBoundaryEvents(
   boundaries: Iterable<VisibleHistoryBoundary>,
 ): Map<number, TranscriptEvent> {
   const eventSeqs = Array.from(boundaries, (boundary) => boundary.eventSeq);
-  if (eventSeqs.length === 0) {
+  const [firstSeq] = eventSeqs;
+  const lastSeq = eventSeqs.at(-1);
+  if (firstSeq === undefined || lastSeq === undefined) {
     return new Map();
   }
   const db = getActiveTranscriptKysely(projection.database);
@@ -134,10 +136,17 @@ function readBoundaryEvents(
     executeSqliteQuerySync(
       projection.database.db,
       db
-        .selectFrom("transcript_events")
-        .select(["seq", "event_json"])
-        .where("session_id", "=", projection.resolved.sessionId)
-        .where("seq", "in", eventSeqs),
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .select(["event.seq", "event.event_json"])
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_type", "in", ["compaction", "reset"])
+        .where("identity.seq", ">=", firstSeq)
+        .where("identity.seq", "<=", lastSeq),
     ).rows.map((row) => [row.seq, JSON.parse(row.event_json) as TranscriptEvent]),
   );
 }
@@ -184,7 +193,10 @@ function resolveRecentHistoryStart(
 ): number {
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
-  const positions = resolveVisibleMessagePositionRange(projection, messageStart, messageEnd);
+  // No result can include more than maxMessages events, so older metadata would
+  // only add SQLite bindings and synchronous work before the backward scan stops.
+  const metadataStart = Math.max(messageStart, messageEnd - maxMessages);
+  const positions = resolveVisibleMessagePositionRange(projection, metadataStart, messageEnd);
   const db = getActiveTranscriptKysely(projection.database);
   const messageBytes = new Map(
     positions.length === 0
@@ -220,6 +232,9 @@ function resolveRecentHistoryStart(
     displayPosition >= boundedStart;
     displayPosition -= 1
   ) {
+    if (selectedCount >= maxMessages) {
+      break;
+    }
     const boundary = boundaries.get(displayPosition);
     const messagePosition = boundary ? undefined : positions[messageIndex--];
     const serializedBytes =
@@ -228,7 +243,7 @@ function resolveRecentHistoryStart(
     if (serializedBytes === undefined) {
       continue;
     }
-    if (selectedCount >= maxMessages || (selectedCount > 0 && bytes + serializedBytes > maxBytes)) {
+    if (selectedCount > 0 && bytes + serializedBytes > maxBytes) {
       break;
     }
     selectedStart = displayPosition;
