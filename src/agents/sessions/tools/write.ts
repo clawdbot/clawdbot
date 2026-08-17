@@ -341,7 +341,11 @@ async function readOriginalWriteState(
   if (stat.type !== "file") {
     return { state: "unknown", beforeStat: stat };
   }
-  if (stat.size !== Buffer.byteLength(content, "utf8")) {
+  const normalizedContent = normalizeNewWindowsBatchContent(absolutePath, content);
+  if (
+    stat.size !== Buffer.byteLength(content, "utf8") &&
+    stat.size !== Buffer.byteLength(normalizedContent, "utf8")
+  ) {
     return { state: "different", beforeStat: stat };
   }
   if (!ops.readFile || stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
@@ -357,7 +361,11 @@ async function readOriginalWriteState(
       return { state: "unknown", beforeStat: stat, readAttempted: true };
     }
     return {
-      state: originalText === content ? "same" : "different",
+      state:
+        originalText === content ||
+        (normalizedContent !== content && originalText === normalizedContent)
+          ? "same"
+          : "different",
       beforeStat: stat,
       beforeText: originalText,
       readAttempted: true,

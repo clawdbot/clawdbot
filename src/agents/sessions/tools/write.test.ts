@@ -227,6 +227,30 @@ describe("write tool", () => {
     );
   });
 
+  it("keeps repeated LF writes to a new Windows batch file as a CRLF no-op", async () => {
+    const tool = createWriteTool(tmpDir);
+    const content = "@echo off\necho ready\n";
+
+    await tool.execute("call-1", { path: "launch.cmd", content }, undefined);
+    const result = await tool.execute("call-2", { path: "launch.cmd", content }, undefined);
+
+    expect(result.details).toEqual({ changed: false });
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    await expect(fs.readFile(path.join(tmpDir, "launch.cmd"), "utf8")).resolves.toBe(
+      "@echo off\r\necho ready\r\n",
+    );
+  });
+
+  it("preserves an existing LF Windows batch file when its content changes", async () => {
+    const filePath = await createTempPath("legacy.cmd");
+    await fs.writeFile(filePath, "@echo off\necho old\n", "utf8");
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute("call-1", { path: "legacy.cmd", content: "@echo off\necho new\n" }, undefined);
+
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("@echo off\necho new\n");
+  });
+
   it("keeps oversized created-file details bounded", async () => {
     await createTempPath("large-created.txt");
     const content = "x".repeat(1024 * 1024 + 1);
