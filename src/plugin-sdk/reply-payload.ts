@@ -12,7 +12,12 @@ import {
 } from "../infra/outbound/reply-payload-parts.js";
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import { createDirectAcceptedFencedMediaWarnLatch } from "./channel-outbound-fenced-media-runtime.js";
+
+/** Lazy-load fenced-MEDIA latch so reply-payload stays free of outbound plan cycles (#41966). */
+async function loadDirectAcceptedFencedMediaWarnLatch() {
+  const mod = await import("./channel-outbound-fenced-media-runtime.js");
+  return mod.createDirectAcceptedFencedMediaWarnLatch;
+}
 
 export type { MediaPayloadInput } from "../channels/plugins/media-payload.js";
 /** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
@@ -522,6 +527,7 @@ export async function deliverTextOrMediaReply(params: {
   });
   // Shared direct-delivery owner for iMessage/Zalo-family (and peers): warn once
   // after an accepted visible send when fenced MEDIA: stayed as text (#41966).
+  const createDirectAcceptedFencedMediaWarnLatch = await loadDirectAcceptedFencedMediaWarnLatch();
   const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
     payload: params.payload,
     cfg: params.cfg,
@@ -582,6 +588,7 @@ export async function deliverFormattedTextWithAttachments(params: {
   }
   // Shared direct-delivery owner for IRC/Nextcloud-family: warn once after an
   // accepted formatted send when fenced MEDIA: stayed as text (#41966).
+  const createDirectAcceptedFencedMediaWarnLatch = await loadDirectAcceptedFencedMediaWarnLatch();
   const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
     payload: params.payload,
     cfg: params.cfg,
