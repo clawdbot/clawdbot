@@ -241,6 +241,7 @@ describe("Canvas tool", () => {
       Buffer.from("not-a-real-png"),
       "image/png",
       "canvas",
+      (25 * 1024 * 1024 * 3) / 4,
     );
     expect(imageResultParams?.path).toBe("/tmp/openclaw-media/canvas/snapshot.png");
     expect(imageResultParams?.details).toEqual({
@@ -249,6 +250,34 @@ describe("Canvas tool", () => {
       media: { outbound: false },
     });
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
+  });
+
+  it("preserves snapshots above the media-store default limit", async () => {
+    const snapshot = Buffer.alloc(5 * 1024 * 1024 + 1, 0xa5);
+    mocks.saveMediaBuffer.mockImplementationOnce(
+      async (buffer, contentType, _subdir, maxBytes = 5 * 1024 * 1024) => {
+        if (buffer.byteLength > maxBytes) {
+          throw new Error("Media exceeds configured limit");
+        }
+        return {
+          id: "snapshot.png",
+          path: "/tmp/openclaw-media/canvas/snapshot.png",
+          size: buffer.byteLength,
+          contentType: contentType ?? "image/png",
+        };
+      },
+    );
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: { format: "png", base64: snapshot.toString("base64") },
+    });
+
+    await createCanvasTool().execute("large-snapshot", { action: "snapshot" });
+
+    const [savedBuffer, contentType, subdir, maxBytes] = mocks.saveMediaBuffer.mock.calls[0] ?? [];
+    expect(savedBuffer?.equals(snapshot)).toBe(true);
+    expect(contentType).toBe("image/png");
+    expect(subdir).toBe("canvas");
+    expect(maxBytes).toBe((25 * 1024 * 1024 * 3) / 4);
   });
 
   it("keeps private Canvas snapshots visible to the model but out of channel delivery", async () => {

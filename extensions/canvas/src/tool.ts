@@ -44,6 +44,8 @@ type CanvasImageSanitizationLimits = {
 export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
+// Preserve every decoded snapshot that can fit in the 25 MiB Gateway frame after base64 encoding.
+const CANVAS_SNAPSHOT_MAX_BYTES = (25 * 1024 * 1024 * 3) / 4;
 const CANVAS_EVAL_TRUNCATION_MARKER = "\n[truncated — refine the Canvas eval expression]";
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
@@ -239,6 +241,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
               ? "image/png"
               : "image/jpeg",
             "canvas",
+            CANVAS_SNAPSHOT_MAX_BYTES,
           );
           return await imageResultFromFile({
             label: "canvas:snapshot",
