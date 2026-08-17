@@ -43,7 +43,9 @@ vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () =>
             identities.length > 0
               ? identities.some((directive: string) => {
                   const identity = directive.trim();
-                  if (!identity) return false;
+                  if (!identity) {
+                    return false;
+                  }
                   return (
                     acceptedVisibleText.split("\n").some((line) => line.trim() === identity) ||
                     acceptedVisibleText.includes(identity)

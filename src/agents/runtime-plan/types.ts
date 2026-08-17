@@ -268,6 +268,10 @@ type AgentRuntimeReplyPayload = {
   replyToId?: string;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  /** Plan-time #41966 fenced MEDIA skip signal (warn after accepted send). */
+  mediaTokenSkippedInFence?: boolean;
+  /** Skipped fenced MEDIA identities for operator diagnostics. */
+  fencedSkippedMediaDirectives?: string[];
   audioAsVoice?: boolean;
   videoAsNote?: boolean;
   location?: AgentRuntimeReplyPayloadLocation;

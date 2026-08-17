@@ -23,7 +23,9 @@ vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () =>
       const identities = planEntry.fencedSkippedMediaDirectives ?? [];
       return {
         afterAcceptedVisibleText(visibleChunk: string) {
-          if (warned) return;
+          if (warned) {
+            return;
+          }
           if (visibleChunk) {
             acceptedVisibleText = acceptedVisibleText
               ? `${acceptedVisibleText}${visibleChunk}`
@@ -33,14 +35,18 @@ vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () =>
             identities.length > 0
               ? identities.some((directive: string) => {
                   const identity = directive.trim();
-                  if (!identity) return false;
+                  if (!identity) {
+                    return false;
+                  }
                   return (
                     acceptedVisibleText.split("\n").some((line) => line.trim() === identity) ||
                     acceptedVisibleText.includes(identity)
                   );
                 })
               : /media:/i.test(acceptedVisibleText);
-          if (!retained) return;
+          if (!retained) {
+            return;
+          }
           warned = true;
           fencedMediaLogWarn("media: MEDIA: token skipped — fenced");
         },
