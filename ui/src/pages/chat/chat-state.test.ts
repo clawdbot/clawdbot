@@ -1287,7 +1287,7 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.waitingApprovalStatuses.size).toBe(0);
   });
 
-  it("skips no-op assistant invalidation while tool and plan changes render immediately", () => {
+  it("skips no-op assistant invalidation while tool changes render immediately", () => {
     const requestUpdate = vi.fn();
     const state = createStreamEventState({
       requestUpdate,
@@ -1296,7 +1296,6 @@ describe("ChatStateController render lifecycle", () => {
       toolStreamById: new Map(),
       toolStreamOrder: [],
       toolStreamSyncTimer: null,
-      planStatus: null,
       sessions: { setModelOverride: vi.fn() } as never,
     });
     const emitAgent = (seq: number, stream: string, data: Record<string, unknown>) =>
@@ -1309,14 +1308,7 @@ describe("ChatStateController render lifecycle", () => {
     emitAgent(1, "assistant", { text: "Hello", delta: "Hello" });
     expect(requestUpdate).not.toHaveBeenCalled();
 
-    emitAgent(2, "plan", {
-      phase: "update",
-      steps: [{ step: "Measure the repair", status: "in_progress" }],
-    });
-    expect(requestUpdate).toHaveBeenCalledOnce();
-
-    requestUpdate.mockClear();
-    emitAgent(3, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
+    emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 

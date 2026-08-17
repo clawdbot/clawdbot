@@ -86,20 +86,16 @@ export function countTranscriptEventsForPath(
 export function createTranscriptEventReader(
   transcriptPath: string,
   sessionId: string,
+  allowMalformedPrefix = false,
+  sourceFingerprint = readTranscriptFingerprint(transcriptPath),
 ): (append: (event: TranscriptEvent) => void) => void {
   return (append) => {
-    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, false)) {
-      append(event as TranscriptEvent);
-    }
-  };
-}
-
-export function createTranscriptEventPrefixReader(
-  transcriptPath: string,
-  sessionId: string,
-): (append: (event: TranscriptEvent) => void) => void {
-  return (append) => {
-    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, true)) {
+    for (const event of readTranscriptEventsForImport(
+      transcriptPath,
+      sessionId,
+      allowMalformedPrefix,
+      sourceFingerprint,
+    )) {
       append(event as TranscriptEvent);
     }
   };
@@ -109,10 +105,10 @@ function readTranscriptEventsForImport(
   transcriptPath: string,
   sessionId: string,
   allowMalformedPrefix: boolean,
+  sourceFingerprint: TranscriptFileFingerprint,
 ): Iterable<FileEntry> {
   // Production import owns the process-wide Gateway/SQLite-maintenance lock
   // through commit and archive. Fingerprints catch non-cooperating external edits.
-  const sourceFingerprint = readTranscriptFileFingerprint(transcriptPath);
   const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
   assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
   const classificationHeader = {
@@ -198,7 +194,7 @@ type TranscriptFileFingerprint = {
   size: bigint;
 };
 
-function readTranscriptFileFingerprint(transcriptPath: string): TranscriptFileFingerprint {
+export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });
   return {
     ctimeNs: stat.ctimeNs,
@@ -213,7 +209,7 @@ function assertTranscriptFileUnchanged(
   transcriptPath: string,
   expected: TranscriptFileFingerprint,
 ): void {
-  const current = readTranscriptFileFingerprint(transcriptPath);
+  const current = readTranscriptFingerprint(transcriptPath);
   if (
     current.ctimeNs !== expected.ctimeNs ||
     current.dev !== expected.dev ||

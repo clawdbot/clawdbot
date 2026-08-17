@@ -6,6 +6,7 @@ export type MarkdownRenderOptions = {
   codeBlockChrome?: MarkdownCodeBlockChrome;
   fileLinks?: boolean;
   interactiveImages?: boolean;
+  progressBars?: boolean;
   mode?: MarkdownRenderMode;
   sessionLinks?: boolean;
 };
@@ -20,6 +21,7 @@ export function normalizeMarkdownRenderOptions(
     codeBlockChrome: options.codeBlockChrome ?? "copy",
     fileLinks: options.fileLinks ?? false,
     interactiveImages: options.interactiveImages ?? false,
+    progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
     sessionLinks: options.sessionLinks ?? false,
   };

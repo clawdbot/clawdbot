@@ -220,7 +220,6 @@ export function projectChatTranscript(
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
-    planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,
     loading: props.loading,
     searchOpen: state.searchOpen,
@@ -449,8 +448,6 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        planStatus: props.planStatus,
-        planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
@@ -514,9 +511,7 @@ export function projectChatTranscript(
       return true;
     }
     const previous = collapsedItems[index - 1];
-    const isActiveStatusRun =
-      item.parts.some((part) => part.kind === "reading-indicator") &&
-      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    const isActiveStatusRun = item.parts.every((part) => part.kind === "reading-indicator");
     if (
       previous?.kind !== "group" ||
       !isActiveStatusRun ||
@@ -530,8 +525,6 @@ export function projectChatTranscript(
       parts: item.parts,
       options: {
         ...streamGroupOptions,
-        planStatus: props.planStatus,
-        planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
@@ -632,7 +625,6 @@ export function projectChatTranscript(
     Boolean(props.runWorking),
     props.startupStatus?.phase,
     Boolean(props.waitingApproval),
-    props.planStatus,
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,

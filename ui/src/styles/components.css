@@ -806,6 +806,31 @@ openclaw-session-link-hovercard-provider {
   display: contents;
 }
 
+openclaw-session-progress-hovercard-provider {
+  display: contents;
+}
+
+.session-progress-hovercard {
+  position: fixed;
+  z-index: 1990;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 24px));
+  padding: 14px 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .session-progress-hovercard {
+    pointer-events: auto;
+  }
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
@@ -1916,7 +1941,6 @@ openclaw-chat-session-rail {
 .chat-session-rail__status-row,
 .chat-session-rail__status,
 .chat-session-rail__actions,
-.chat-session-rail__plan-heading,
 .chat-session-rail__prs,
 .chat-session-rail__pr {
   display: flex;
@@ -2053,47 +2077,6 @@ openclaw-chat-session-rail {
   color: var(--text);
   font-size: 12.5px;
   line-height: 1.45;
-}
-
-.chat-session-rail__plan {
-  margin-top: 11px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.chat-session-rail__plan-heading {
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-session-rail__plan-list {
-  display: grid;
-  gap: 5px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.chat-session-rail__plan-item {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 5px;
-  color: var(--text);
-  font-size: 11.5px;
-}
-
-.chat-session-rail__plan-item[data-status="completed"] {
-  color: var(--muted);
-}
-
-.chat-session-rail__plan-icon {
-  color: var(--accent);
-  text-align: center;
 }
 
 .chat-session-rail__prs {

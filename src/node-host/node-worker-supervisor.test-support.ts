@@ -149,7 +149,7 @@ if (mode === "connection-failure") {
 
 export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): WorkerLaunchPlan {
   return {
-    version: 3,
+    version: 4,
     admission: {
       environmentId: "environment-1",
       credential: TEST_WORKER_CREDENTIAL,

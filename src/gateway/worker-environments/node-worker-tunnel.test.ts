@@ -82,7 +82,7 @@ function environment(): WorkerEnvironmentRecord {
 
 function plan() {
   return parseWorkerLaunchPlan({
-    version: 3,
+    version: 4,
     admission: {
       environmentId: "environment-1",
       credential: "worker-credential-fixture",

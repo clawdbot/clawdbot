@@ -50,6 +50,8 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
+  scripts/verify-pr-hosted-gates.mjs
+  scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
 )

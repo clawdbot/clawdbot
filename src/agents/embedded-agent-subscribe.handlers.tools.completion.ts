@@ -57,7 +57,7 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readUpdatePlanResult,
+  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -367,7 +367,7 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,

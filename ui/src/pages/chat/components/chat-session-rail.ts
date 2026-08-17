@@ -1,3 +1,4 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -7,6 +8,7 @@ import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/con
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
+import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -19,7 +21,6 @@ import {
   storeChatObserverDisplayPreference,
 } from "../chat-observer-display.ts";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
-import type { PlanStatus } from "../tool-stream.ts";
 
 export type SessionRailMode = "hidden" | "pill" | "expanded";
 
@@ -182,16 +183,6 @@ function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null 
   return t("chat.rail.checksPending", { count: String(checks.running) });
 }
 
-function renderPlanStep(step: PlanStatus["steps"][number]) {
-  const icon = step.status === "completed" ? "✓" : step.status === "in_progress" ? "→" : "·";
-  return html`
-    <li class="chat-session-rail__plan-item" data-status=${step.status}>
-      <span class="chat-session-rail__plan-icon" aria-hidden="true">${icon}</span>
-      <span>${step.step}</span>
-    </li>
-  `;
-}
-
 const SESSION_RAIL_STARTER_KEYS = ["changed", "stopped", "remaining"] as const;
 
 function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
@@ -228,7 +219,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) activeRunId: string | null = null;
   @property({ attribute: false }) startedAt?: number;
   @property({ attribute: false }) lastReadAt?: number;
-  @property({ attribute: false }) planStatus: PlanStatus | null = null;
+  @property({ attribute: false }) progressCard: ProgressCard | null = null;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
   @property({ attribute: false }) companion: ChatSessionCompanionThread = {
     exchanges: [],
@@ -417,33 +408,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     if (!digest) {
       return nothing;
     }
-    const progress = digest.planProgress;
-    const steps = this.planStatus?.steps.slice(-3) ?? [];
     return html`
       ${digest.assessment
         ? html`<p class="chat-session-rail__assessment">${digest.assessment}</p>`
-        : nothing}
-      ${progress || steps.length > 0
-        ? html`
-            <div class="chat-session-rail__plan">
-              <div class="chat-session-rail__plan-heading">
-                <span>${t("chat.rail.plan")}</span>
-                ${progress
-                  ? html`<span
-                      >${t("chat.rail.progress", {
-                        completed: String(progress.completed),
-                        total: String(progress.total),
-                      })}</span
-                    >`
-                  : nothing}
-              </div>
-              ${steps.length > 0
-                ? html`<ul class="chat-session-rail__plan-list">
-                    ${steps.map(renderPlanStep)}
-                  </ul>`
-                : nothing}
-            </div>
-          `
         : nothing}
       ${this.renderPullRequests()}
     `;
@@ -659,7 +626,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         ${digest
           ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
           : nothing}
-        ${this.renderThread()}
+        ${renderSessionProgressCard(this.progressCard, "rail")} ${this.renderThread()}
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
           ? this.renderStarters()
           : nothing}

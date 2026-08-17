@@ -28,7 +28,7 @@ describe("createChannelProgressDraftCompositor", () => {
     const work = createChannelProgressWorkCounter({ now: () => now });
 
     work.noteToolCall("exec");
-    work.noteToolCall("update_plan");
+    work.noteToolCall("progress_card");
     now = 43_000;
 
     expect(work.toolCalls).toBe(1);

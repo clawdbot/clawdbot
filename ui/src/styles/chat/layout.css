@@ -2535,7 +2535,9 @@ button.chat-pr__diff {
   padding: 8px 10px 0;
 }
 
-.agent-chat__composer-status-stack:not(:has(.compaction-indicator, .agent-chat__goal)) {
+.agent-chat__composer-status-stack:not(
+  :has(.compaction-indicator, .agent-chat__goal, .session-progress-card)
+) {
   display: none;
 }
 

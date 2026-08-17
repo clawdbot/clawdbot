@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type {
+  ProgressCard,
   SessionPlacementDiskSpace,
   SessionSharingRole,
   SessionSuggestion,
@@ -66,7 +67,7 @@ import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
+import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 type ChatReplyTarget = {
@@ -94,7 +95,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     waitingApproval?: boolean;
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
-    planStatus?: PlanStatus | null;
+    progressCard?: ProgressCard | null;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
     onGatewayQuestionSubmit?: (
@@ -311,7 +312,6 @@ export function renderChat(props: ChatProps) {
       runWorking: isChatRunWorking(props),
       startupStatus: props.startupStatus,
       waitingApproval: props.waitingApproval,
-      planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
@@ -381,7 +381,7 @@ export function renderChat(props: ChatProps) {
     waitingApproval: props.waitingApproval,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
-    planStatus: props.planStatus,
+    progressCard: props.progressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
     stream: props.stream,

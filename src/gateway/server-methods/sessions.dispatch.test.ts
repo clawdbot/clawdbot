@@ -274,7 +274,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects explicit permission modes before cloud worker placement", async () => {
+  it("dispatches explicit permission modes through the worker capability gate", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -288,7 +288,7 @@ describe("sessions.dispatch", () => {
       ownerKind: "session",
       ownerId: sessionKey,
     });
-    const dispatch = vi.fn();
+    const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
     const respond = await invoke(
       makeContext({
         workerPlacementDispatchService: { dispatch },
@@ -296,16 +296,14 @@ describe("sessions.dispatch", () => {
       }),
     );
 
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
+      true,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringMatching(
-          /permissionMode.*run this session locally.*operator\.admin/su,
-        ),
+        ok: true,
+        placement: expect.objectContaining({ state: "active" }),
       }),
+      undefined,
     );
   });
 
@@ -661,7 +659,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("classifies workspace preflight operational failures as unavailable", async () => {
+  it("surfaces an execution-context feature mismatch as unavailable", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -675,7 +673,11 @@ describe("sessions.dispatch", () => {
     });
     const dispatch = vi
       .fn()
-      .mockRejectedValue(Object.assign(new Error("spawn failed"), { code: "ENOENT" }));
+      .mockRejectedValue(
+        new Error(
+          "Worker environment is not dispatchable with the current execution-context contract: ready",
+        ),
+      );
 
     const respond = await invoke(
       makeContext({
@@ -685,7 +687,10 @@ describe("sessions.dispatch", () => {
     );
 
     const error = vi.mocked(respond).mock.calls[0]?.[2];
-    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE, message: "spawn failed" });
+    expect(error).toMatchObject({
+      code: ErrorCodes.UNAVAILABLE,
+      message: expect.stringContaining("current execution-context contract"),
+    });
   });
 
   it("dispatches an existing managed-worktree session and projects placement", async () => {

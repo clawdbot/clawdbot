@@ -356,6 +356,70 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
   `;
 }
 
+type ProgressReceiptStep = {
+  step: string;
+  status: "pending" | "in_progress" | "completed";
+};
+
+function progressReceiptSteps(value: unknown): ProgressReceiptStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const step = asNullableRecord(entry);
+    if (
+      typeof step?.step !== "string" ||
+      (step.status !== "pending" && step.status !== "in_progress" && step.status !== "completed")
+    ) {
+      return [];
+    }
+    return [{ step: step.step, status: step.status }];
+  });
+}
+
+function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
+  if (card.name.trim().toLowerCase() !== "progress_card") {
+    return null;
+  }
+  const args = asNullableRecord(card.args);
+  const steps = progressReceiptSteps(args?.plan);
+  const markdown = typeof args?.markdown === "string" ? args.markdown.trim() : "";
+  const completed = steps.filter((step) => step.status === "completed").length;
+  const current =
+    steps.find((step) => step.status === "in_progress") ??
+    steps.find((step) => step.status === "pending") ??
+    steps.findLast((step) => step.status === "completed");
+  const label =
+    outcome === "failed"
+      ? t("sessionProgressCard.receipt.failed")
+      : outcome === "running"
+        ? t("sessionProgressCard.receipt.updating")
+        : steps.length > 0
+          ? t("sessionProgressCard.receipt.updated", {
+              completed: String(completed),
+              current: current?.step ?? "",
+              total: String(steps.length),
+            })
+          : markdown
+            ? t("sessionProgressCard.receipt.noteUpdated")
+            : t("sessionProgressCard.receipt.cleared");
+  return html`<div class="chat-tool-msg-collapse chat-progress-card-receipt">
+    <div class="chat-tool-msg-summary chat-tool-row" role="status">
+      <span class="chat-tool-msg-summary__icon">${renderToolIcon("listChecks")}</span>
+      <span class="chat-tool-msg-summary__label">${label}</span>
+      ${outcome === "failed"
+        ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
+        : nothing}
+      ${outcome === "running"
+        ? html`<span
+            class="chat-tool-row__spinner"
+            aria-label=${t("chat.toolCards.running")}
+          ></span>`
+        : nothing}
+    </div>
+  </div>`;
+}
+
 // ── Command syntax highlighting ──
 
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
@@ -616,9 +680,13 @@ export function renderToolCard(
     allowExternalEmbedUrls?: boolean;
   },
 ) {
+  const outcome = resolveToolCardOutcome(card, opts.runActive);
+  const progressReceipt = renderProgressCardReceipt(card, outcome);
+  if (progressReceipt) {
+    return progressReceipt;
+  }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const outcome = resolveToolCardOutcome(card, opts.runActive);
   const isError = outcome === "failed";
   const isRunning = outcome === "running";
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;

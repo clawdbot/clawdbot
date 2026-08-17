@@ -189,7 +189,6 @@ export function createPageState(
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
-    planStatus: null,
     observerDigest: null,
     knownAgentRunIds: new Set(),
     waitingApprovalStatuses: new Map(),

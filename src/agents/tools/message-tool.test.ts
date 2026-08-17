@@ -339,9 +339,6 @@ vi.mock("./subagents-tool.js", () => ({
 vi.mock("./tts-tool.js", () => ({
   createTtsTool: () => openClawToolsFactoryMocks.tool("tts"),
 }));
-vi.mock("./update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => openClawToolsFactoryMocks.tool("update_plan"),
-}));
 vi.mock("./video-generate-tool.js", () => ({
   createVideoGenerateTool: () => null,
 }));

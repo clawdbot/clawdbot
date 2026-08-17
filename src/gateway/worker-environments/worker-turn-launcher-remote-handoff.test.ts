@@ -276,7 +276,7 @@ describe("worker turn launcher remote handoff", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
-    expect(descriptor?.version).toBe(3);
+    expect(descriptor?.version).toBe(4);
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );

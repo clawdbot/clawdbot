@@ -120,6 +120,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     void import("../components/app-sidebar.ts");
+    void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {
@@ -366,11 +367,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
             .client=${gatewaySnapshot.client}
             .context=${context}
           >
-            ${gatewayUrlConfirmation}
-            <openclaw-app-shell
-              .runtime=${runtime}
-              .onboarding=${this.onboarding}
-            ></openclaw-app-shell>
+            <openclaw-session-progress-hovercard-provider .gateway=${context.gateway}>
+              ${gatewayUrlConfirmation}
+              <openclaw-app-shell
+                .runtime=${runtime}
+                .onboarding=${this.onboarding}
+              ></openclaw-app-shell>
+            </openclaw-session-progress-hovercard-provider>
           </openclaw-session-link-hovercard-provider>
         </openclaw-github-link-hovercard-provider>
       </openclaw-tooltip-provider>

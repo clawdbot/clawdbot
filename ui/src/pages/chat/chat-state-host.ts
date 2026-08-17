@@ -30,7 +30,6 @@ import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
   CompactionStatus,
   FallbackStatus,
-  PlanStatus,
   ToolStreamEntry,
   WaitingApprovalStatus,
 } from "./tool-stream.ts";
@@ -88,7 +87,6 @@ export type ChatPageHost = ChatHost &
     toolStreamSyncTimer: number | null;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
-    planStatus: PlanStatus | null;
     observerDigest: SessionObserverDigest | null;
     knownAgentRunIds: Set<string>;
     /** `sessionKey|runId` scopes that already forced a PR-chips refresh mid-stream. */

@@ -1,3 +1,4 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { SessionsListResult } from "../../../api/types.ts";
@@ -19,7 +20,7 @@ import type {
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
 import type {
   ChatComposerPlusMenuProps,
@@ -79,7 +80,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
-  planStatus?: PlanStatus | null;
+  progressCard?: ProgressCard | null;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;

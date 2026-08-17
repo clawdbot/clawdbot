@@ -306,10 +306,10 @@ describe("tool mutation helpers", () => {
       expect(isReplaySafeToolCall(toolName, {}), toolName).toBe(true);
     }
     expect(
-      isReplaySafeToolCall("update_plan", {
+      isReplaySafeToolCall("progress_card", {
         plan: [{ step: "Inspect", status: "in_progress" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(isReplaySafeToolCall("memory_get", { path: "memory/notes.md" })).toBe(true);
     expect(isReplaySafeToolCall("memory_search", { query: "recall" })).toBe(false);
     expect(isReplaySafeToolCall("memory_recall", { query: "recall" })).toBe(false);

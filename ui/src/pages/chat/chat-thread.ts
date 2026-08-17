@@ -137,8 +137,6 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.questionId === next.questionId &&
         previous.startedAt === next.startedAt
       );
-    case "plan":
-      return previous.kind === "plan";
   }
   return false;
 }
@@ -244,7 +242,6 @@ function sameChatItemsStructuralInput(
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
-    Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery

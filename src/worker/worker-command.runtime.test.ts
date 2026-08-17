@@ -14,7 +14,7 @@ vi.mock("./worker.runtime.js", () => ({
 }));
 
 const descriptor = {
-  version: 3,
+  version: 4,
   connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
   admission: {
     environmentId: "environment-1",

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
@@ -25,13 +26,26 @@ function configResponse(config: Record<string, unknown>, hash: string) {
 }
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
-  if (!request.params || typeof request.params !== "object" || Array.isArray(request.params)) {
+  if (!isRecord(request.params) || typeof request.params.raw !== "string") {
     throw new Error("Expected config.patch params");
   }
-  return JSON.parse(String((request.params as Record<string, unknown>).raw)) as Record<
-    string,
-    unknown
-  >;
+  const parsed: unknown = JSON.parse(request.params.raw);
+  if (!isRecord(parsed)) {
+    throw new Error("Expected config.patch raw object");
+  }
+  return parsed;
+}
+
+async function waitForConfigPatch(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  previousCount: number,
+): Promise<Record<string, unknown>> {
+  await expect.poll(() => gateway.getRequests("config.patch")).toHaveLength(previousCount + 1);
+  const request = (await gateway.getRequests("config.patch"))[previousCount];
+  if (!request) {
+    throw new Error("Expected next config.patch request");
+  }
+  return requestRaw(request);
 }
 
 suite.define(() => {
@@ -64,8 +78,9 @@ suite.define(() => {
       await page.getByLabel("Profile ID").fill("build-fleet");
       await page.getByLabel("Crabbox backend").fill("hetzner");
       await gateway.deferNext("config.patch");
+      const addRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
-      const addPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const addPatch = await waitForConfigPatch(gateway, addRequestCount);
       expect(addPatch).toEqual({
         cloudWorkers: {
           profiles: {
@@ -114,8 +129,9 @@ suite.define(() => {
         .click();
       await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox");
       await gateway.deferNext("config.patch");
+      const editRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
-      const editPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const editPatch = await waitForConfigPatch(gateway, editRequestCount);
       expect(editPatch).toMatchObject({
         cloudWorkers: {
           profiles: {
@@ -158,8 +174,9 @@ suite.define(() => {
       await page.getByLabel("Profile ID").fill("pending");
       await page.getByLabel("Crabbox backend").fill("aws");
       await gateway.deferNext("config.patch");
+      const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
-      const pendingPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const pendingPatch = await waitForConfigPatch(gateway, pendingRequestCount);
       expect(pendingPatch).toMatchObject({
         cloudWorkers: {
           profiles: {

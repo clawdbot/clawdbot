@@ -166,6 +166,25 @@ export const en: TranslationMap = {
     archived: "Archived",
     ariaLabel: "Session: {title}",
   },
+  sessionProgressCard: {
+    ariaLabel: "Session progress",
+    title: "Progress",
+    noteLabel: "Progress note",
+    countLabel: "{completed} of {total} completed",
+    stepLabel: "{step}, {status}",
+    status: {
+      completed: "completed",
+      inProgress: "in progress",
+      pending: "pending",
+    },
+    receipt: {
+      updating: "Updating progress",
+      failed: "Progress update failed",
+      updated: "Progress updated — {completed}/{total} · {current}",
+      noteUpdated: "Progress note updated",
+      cleared: "Progress cleared",
+    },
+  },
   channels: {
     lastError: "Last error",
     refreshingStaleSnapshot:
@@ -5381,8 +5400,6 @@ export const en: TranslationMap = {
       show: "Show session companion",
       moreActions: "More companion actions",
       clear: "Clear companion session",
-      plan: "Plan",
-      progress: "{completed} of {total}",
       pullRequests: "Pull requests",
       checksPassing: "{count} passed",
       checksFailing: "{count} failed",

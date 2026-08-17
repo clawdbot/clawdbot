@@ -4,6 +4,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   countSessionToolOverrides,
@@ -33,7 +34,6 @@ import {
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
-import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { renderChatVoiceError } from "./chat-voice-activity.ts";
 
@@ -282,10 +282,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              ${renderChatPlanChecklist(props.planStatus, {
-                active: showAbortableUi,
-                variant: "bar",
-              })}
+              ${renderSessionProgressCard(props.progressCard, "composer")}
               ${renderFallbackIndicator(props.fallbackStatus)}
               ${renderCompactionIndicator(props.compactionStatus)}
               ${renderChatGoal(state, activeSession?.goal, {
