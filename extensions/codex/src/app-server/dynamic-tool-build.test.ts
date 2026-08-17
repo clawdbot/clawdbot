@@ -422,7 +422,7 @@ describe("Codex app-server dynamic tool build", () => {
 
   it.each([
     { nativeToolSurfaceEnabled: true, expected: ["message"] },
-    { nativeToolSurfaceEnabled: false, expected: ["image", "message"] },
+    { nativeToolSurfaceEnabled: false, expected: ["view_image", "message"] },
   ])(
     "uses the active native image loader when native tools are $nativeToolSurfaceEnabled",
     async ({ nativeToolSurfaceEnabled, expected }) => {
@@ -432,7 +432,7 @@ describe("Codex app-server dynamic tool build", () => {
       params.model = createCodexTestModel("codex", ["text", "image"]);
       params.runtimePlan = createCodexRuntimePlanFixture();
       setOpenClawCodingToolsFactoryForTests(() => [
-        createRuntimeDynamicTool("image"),
+        createRuntimeDynamicTool("view_image"),
         createRuntimeDynamicTool("message"),
       ]);
 

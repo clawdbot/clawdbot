@@ -982,7 +982,7 @@ export function buildAgentSystemPrompt(params: {
     "subagents",
     "session_status",
     "skill_workshop",
-    "image",
+    "view_image",
     "image_generate",
   ];
 

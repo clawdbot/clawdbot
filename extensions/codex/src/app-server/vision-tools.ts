@@ -1,6 +1,6 @@
 /**
  * Codex's enabled native surface includes its stable view_image loader. Keep
- * OpenClaw's image tool only when that surface or model vision is unavailable.
+ * OpenClaw's view_image tool only when that surface or model vision is unavailable.
  */
 export function filterCodexVisionTools<T extends { name?: string }>(
   tools: T[],
@@ -12,5 +12,5 @@ export function filterCodexVisionTools<T extends { name?: string }>(
   if (!params.modelHasVision || !params.nativeImageInspectionEnabled) {
     return tools;
   }
-  return tools.filter((tool) => tool.name !== "image");
+  return tools.filter((tool) => tool.name !== "view_image");
 }

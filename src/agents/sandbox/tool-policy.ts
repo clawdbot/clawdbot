@@ -173,14 +173,14 @@ function expandResolvedPolicy(policy: SandboxToolPolicy): SandboxToolPolicy {
   const expandedDenyLower = expandedDeny.map(normalizeLowercaseStringOrEmpty);
   const expandedAllowLower = expandedAllow.map(normalizeLowercaseStringOrEmpty);
 
-  // `image` is essential for multimodal workflows; keep the existing sandbox
+  // `view_image` is essential for multimodal workflows; keep the existing sandbox
   // behavior that auto-includes it for explicit allowlists unless it is denied.
   if (
     expandedAllow.length > 0 &&
-    !expandedDenyLower.includes("image") &&
-    !expandedAllowLower.includes("image")
+    !expandedDenyLower.includes("view_image") &&
+    !expandedAllowLower.includes("view_image")
   ) {
-    expandedAllow = [...expandedAllow, "image"];
+    expandedAllow = [...expandedAllow, "view_image"];
   }
 
   return {

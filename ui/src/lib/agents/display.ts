@@ -216,7 +216,11 @@ const FALLBACK_TOOL_SECTIONS: FallbackToolSection[] = [
     id: "media",
     labelKey: "agents.toolCatalog.groups.media",
     tools: [
-      { id: "image", label: "image", descriptionKey: "agents.toolCatalog.descriptions.image" },
+      {
+        id: "view_image",
+        label: "view_image",
+        descriptionKey: "agents.toolCatalog.descriptions.image",
+      },
     ],
   },
 ];
