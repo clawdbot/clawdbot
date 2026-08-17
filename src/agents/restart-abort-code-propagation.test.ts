@@ -1,6 +1,9 @@
 import { failTransportStream, finalizeTransportStream } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
-import { resolveMainSessionResumePolicy } from "./main-session-recovery/main-session-restart-recovery-resume-policy.js";
+import {
+  isRestartAbortTailArtifact,
+  resolveMainSessionResumePolicy,
+} from "./main-session-recovery/main-session-restart-recovery-resume-policy.js";
 import {
   createAssistantOutput,
   makeCompletionsModel,
@@ -48,6 +51,7 @@ describe("restart abort code propagation", () => {
 
     const message = runTerminalTransportTurn(controller.signal);
     expect(message.errorCode).toBe("OPENCLAW_RESTART_ABORT");
+    expect(isRestartAbortTailArtifact(message)).toBe(true);
 
     // The transcript tail is the transport's own output, not a fixture.
     const policy = resolveMainSessionResumePolicy([
@@ -57,7 +61,7 @@ describe("restart abort code propagation", () => {
     expect(policy).toMatchObject({ action: "resume" });
   });
 
-  it("keeps a non-restart coded abort unresumable through the same path", () => {
+  it("classifies a non-restart coded abort as a real error tail, not a restart artifact", () => {
     const controller = new AbortController();
     const timeout = Object.assign(new Error("First stream event timed out"), {
       name: "TimeoutError",
@@ -70,10 +74,13 @@ describe("restart abort code propagation", () => {
 
     // stopReason is "aborted" here because the signal itself aborted, which
     // stays resumable by design: the run was still interrupted mid-flight.
-    // The code only has to discriminate once a tail lands as "error".
+    // The code only has to discriminate once a tail lands as "error": a
+    // non-restart code is a real provider tail that stays in the transcript
+    // (never trimmed as a restart artifact) while recovery still resumes.
     const erroredTail = { ...message, stopReason: "error" };
+    expect(isRestartAbortTailArtifact(erroredTail)).toBe(false);
     expect(
       resolveMainSessionResumePolicy([{ role: "user", content: "do the thing" }, erroredTail]),
-    ).toMatchObject({ action: "fail" });
+    ).toMatchObject({ action: "resume" });
   });
 });

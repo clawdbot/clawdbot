@@ -3,6 +3,7 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeLowercaseStringOrEmpty as normalizeModelId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
   OPENAI_GPT_54_MINI_MODEL_ID,
@@ -52,10 +53,6 @@ const OPENAI_UNIFIED_XHIGH_MODEL_IDS = [
   OPENAI_GPT_54_MINI_MODEL_ID,
   OPENAI_GPT_54_NANO_MODEL_ID,
 ] as const;
-
-function normalizeModelId(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   const normalizedId = normalizeModelId(id);

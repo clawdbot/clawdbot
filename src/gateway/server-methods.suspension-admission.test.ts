@@ -28,7 +28,7 @@ function dispatch(params: {
   method: string;
   scope: "operator.read" | "operator.write" | "operator.admin";
   handler: GatewayRequestHandler;
-  requestParams?: Record<string, unknown>;
+  requestParams?: unknown;
   context?: Parameters<typeof handleGatewayRequest>[0]["context"];
 }) {
   const respond = vi.fn();
@@ -173,12 +173,13 @@ describe("gateway request suspension admission", () => {
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      terminalSessions: { size: 2 },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
     const busy = dispatch({
       method: "gateway.suspend.prepare",
       scope: "operator.admin",
       handler: prepareHandler,
-      requestParams: { requestId: "request-concurrent-root" },
+      requestParams: { requestId: "request-concurrent-root", terminalPolicy: "terminate" },
       context,
     });
     await busy.request;
@@ -201,7 +202,7 @@ describe("gateway request suspension admission", () => {
       method: "gateway.suspend.prepare",
       scope: "operator.admin",
       handler: prepareHandler,
-      requestParams: { requestId: "request-own-root-excluded" },
+      requestParams: { requestId: "request-own-root-excluded", terminalPolicy: "terminate" },
       context,
     });
     await ready.request;
@@ -220,6 +221,95 @@ describe("gateway request suspension admission", () => {
       ok: true,
       resumed: true,
     });
+  });
+
+  it("applies terminal policy at the suspension RPC boundary", async () => {
+    const prepareHandler = suspendHandlers["gateway.suspend.prepare"];
+    expect(prepareHandler).toBeTypeOf("function");
+    if (!prepareHandler) {
+      throw new Error("expected gateway suspension prepare handler");
+    }
+    const context = {
+      cron: {
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        getSuspensionBlockerCount: vi.fn(() => 0),
+      },
+      logGateway: { warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      terminalSessions: { size: 2 },
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+
+    for (const [suffix, requestParams] of [
+      ["default", { requestId: "request-terminal-default" }],
+      ["preserve", { requestId: "request-terminal-preserve", terminalPolicy: "preserve" }],
+    ] as const) {
+      const blocked = dispatch({
+        method: "gateway.suspend.prepare",
+        scope: "operator.admin",
+        handler: prepareHandler,
+        requestParams,
+        context,
+      });
+      await blocked.request;
+      expect(blocked.respond, suffix).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          activeCount: 2,
+          blockers: [expect.objectContaining({ kind: "terminal-session", count: 2 })],
+        }),
+      );
+    }
+
+    const ready = dispatch({
+      method: "gateway.suspend.prepare",
+      scope: "operator.admin",
+      handler: prepareHandler,
+      requestParams: { requestId: "request-terminal-terminate", terminalPolicy: "terminate" },
+      context,
+    });
+    await ready.request;
+    expect(ready.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "ready", activeCount: 0, blockers: [] }),
+    );
+    const readyPayload = ready.respond.mock.calls[0]?.[1] as { suspensionId?: string } | undefined;
+    expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+      ok: true,
+      resumed: true,
+    });
+
+    context.chatAbortControllers.set("persisting", {
+      controller: new AbortController(),
+      sessionId: "session-persisting",
+      sessionKey: "agent:main:session-persisting",
+      startedAtMs: 1,
+      expiresAtMs: 2,
+      registrationCleanupRequested: true,
+      controlUiVisible: true,
+      projectSessionTerminalPending: true,
+    });
+    const persisting = dispatch({
+      method: "gateway.suspend.prepare",
+      scope: "operator.admin",
+      handler: prepareHandler,
+      requestParams: {
+        requestId: "request-terminal-persistence",
+        terminalPolicy: "terminate",
+      },
+      context,
+    });
+    await persisting.request;
+    expect(persisting.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "busy",
+        activeCount: 1,
+        blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
+      }),
+    );
   });
 
   it("rejects new read and write handlers outside the suspension allowlist", async () => {
@@ -260,6 +350,82 @@ describe("gateway request suspension admission", () => {
       expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
     );
     suspension?.release();
+  });
+
+  it.each([undefined, false])(
+    "admits an exact targeted restart with safe=%s on an owned root",
+    async (safe) => {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.commit()).toBe(true);
+      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        respond(true, { ok: true });
+      });
+
+      const restarted = dispatch({
+        method: "gateway.restart.request",
+        scope: "operator.admin",
+        handler,
+        requestParams: {
+          ...(safe === undefined ? {} : { safe }),
+          target: { pid: process.pid, ownerId: "gateway-owner", port: 18_789 },
+          restartIntent: { waitMs: 5_000 },
+        },
+      });
+      await restarted.request;
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(restarted.respond).toHaveBeenCalledWith(true, { ok: true });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(suspension?.release()).toBe(true);
+    },
+  );
+
+  it.each([
+    ["untargeted", { reason: "operator" }],
+    [
+      "safe targeted",
+      {
+        safe: true,
+        target: { pid: process.pid, ownerId: "gateway-owner", port: 18_789 },
+      },
+    ],
+    ["malformed target", { target: { pid: process.pid, ownerId: "", port: 18_789 } }],
+    [
+      "malformed intent",
+      {
+        target: { pid: process.pid, ownerId: "gateway-owner", port: 18_789 },
+        restartIntent: { force: true, waitMs: 1 },
+      },
+    ],
+  ])("rejects %s restart requests while suspension is prepared", async (_name, requestParams) => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const handler = vi.fn<GatewayRequestHandler>();
+
+    const blocked = dispatch({
+      method: "gateway.restart.request",
+      scope: "operator.admin",
+      handler,
+      requestParams,
+    });
+    await blocked.request;
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(blocked.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: expect.objectContaining({
+          method: "gateway.restart.request",
+          reason: "gateway-suspending",
+          phase: "prepared",
+        }),
+      }),
+    );
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(suspension?.release()).toBe(true);
   });
 
   it("keeps suspension status reachable while prepared", async () => {

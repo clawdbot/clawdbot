@@ -32,17 +32,19 @@ import {
   hasExecApprovalPayload,
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
+import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
   captureDeliveredTranscriptMirror,
-  getDispatcherFinalOutcomeCounts,
   mirrorDeliveredReplyToTranscript,
   mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
   attachReplyDispatchUndeliveredFallback,
+  prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
 
@@ -71,23 +73,19 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     routeReplyTo,
     runWithDispatchLifecycleAdmission,
     sendPayloadAsync,
-    sendPolicyDenied,
     sessionAgentId,
     sessionKey,
     sessionStoreEntry,
     sessionTtsAuto,
     shouldEmitVerboseProgress,
     shouldRouteToOriginating,
-    sourceReplyDeliveryMode,
-    suppressAutomaticSourceDelivery,
-    suppressDelivery,
     traceReplyPhase,
     trackDispatchLifecycleWork,
     turnLedger,
   } = state;
   const shouldSuppressProgressDelivery = () =>
-    sendPolicyDenied ||
-    (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
+    state.sendPolicyDenied ||
+    (state.suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
   const shouldSuppressDefaultToolProgressMessages = () =>
     params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
@@ -119,23 +117,23 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     params.onSessionMetadataChanges?.(freshChanges);
   };
   const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
-    sourceReplyDeliveryMode === "message_tool_only" &&
+    state.suppressAutomaticSourceDelivery &&
+    state.sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
-    !sendPolicyDenied &&
+    !state.sendPolicyDenied &&
     shouldEmitVerboseProgress() &&
     shouldSendVerboseProgressMessages();
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
-    sourceReplyDeliveryMode === "message_tool_only" &&
+    state.suppressAutomaticSourceDelivery &&
+    state.sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
-    !sendPolicyDenied &&
+    !state.sendPolicyDenied &&
     params.replyOptions?.forceToolResultProgress === true;
   const shouldDeliverFastModeAutoProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
-    sourceReplyDeliveryMode === "message_tool_only" &&
+    state.suppressAutomaticSourceDelivery &&
+    state.sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
-    !sendPolicyDenied;
+    !state.sendPolicyDenied;
   let finalReplyDeliveryStarted = false;
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
     if (!finalReplyDeliveryStarted) {
@@ -197,7 +195,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
     if (
-      sourceReplyDeliveryMode !== "message_tool_only" ||
+      state.sourceReplyDeliveryMode !== "message_tool_only" ||
       state.shouldEmitFullVerboseProgress() ||
       payload.isError !== true
     ) {
@@ -282,7 +280,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     return delivered;
   };
   const sendFinalPayload = async (
-    payload: ReplyPayload,
+    inputPayload: ReplyPayload,
     options: {
       abortSignal?: AbortSignal | false;
       deliveryId?: string;
@@ -293,6 +291,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     dedupedAgainstBlock?: boolean;
     queuedFinal: boolean;
     routedFinalCount: number;
+    suppressionReason?: NormalizeReplySkipReason;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
   }> => {
     const abortSignal =
@@ -308,6 +307,16 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     // Trailing commentary must land ahead of the final answer.
     await flushPendingCommentaryProgress();
     throwIfFinalDeliveryAborted();
+    const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
+    if (preparation.kind === "suppress") {
+      await suppressPendingFinalDelivery(inputPayload);
+      return {
+        queuedFinal: false,
+        routedFinalCount: 0,
+        suppressionReason: preparation.reason,
+      };
+    }
+    const payload = preparation.payload;
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
@@ -482,15 +491,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           )
         : undefined);
     markInboundDedupeReplayUnsafe();
-    const finalOutcomeBefore = transcriptMirror
-      ? getDispatcherFinalOutcomeCounts(dispatcher)
-      : undefined;
     const finalDeliveryCapture = transcriptMirror ? {} : undefined;
     const deliveredTranscriptMirror = transcriptMirror
       ? captureDeliveredTranscriptMirror({
           dispatcher,
           metadata: transcriptMirror,
-          deliveryId: options.deliveryId,
           captureToken: finalDeliveryCapture,
         })
       : undefined;
@@ -507,14 +512,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       "final",
       normalizedPayload,
     );
-    if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
+    if (queuedFinal && deliveredTranscriptMirror && dispatcherOutcome) {
       // The common settle owner runs this after successful delivery or
-      // cancellation. Keeping reconciliation out of the reply operation lets a
-      // newer foreground turn settle without creating an operation/idle cycle.
+      // cancellation. Keeping reconciliation out of the reply operation avoids
+      // creating another operation/idle cycle during delivery settlement.
       registerReplyDispatcherSettledTask(dispatcher, () =>
         mirrorTranscriptAfterDispatcherSettled({
-          dispatcher,
-          before: finalOutcomeBefore,
+          outcome: dispatcherOutcome,
           metadata: deliveredTranscriptMirror,
           cfg,
         }),
@@ -587,7 +591,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       const text = beforeDispatchResult.text;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      if (text && !suppressDelivery) {
+      if (text && !state.suppressDelivery) {
         const handledReply = await sendFinalPayload(
           { text },
           {
@@ -630,7 +634,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   ttsChannel: deliveryChannel,
                   suppressUserDelivery: state.suppressHookUserDelivery,
                   suppressReplyLifecycle: state.suppressHookReplyLifecycle,
-                  sourceReplyDeliveryMode,
+                  sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                   shouldRouteToOriginating,
                   originatingChannel: routeReplyChannel,
                   originatingTo: routeReplyTo,

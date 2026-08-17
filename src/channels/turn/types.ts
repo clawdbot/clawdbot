@@ -190,7 +190,7 @@ export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
   /** Intentional no-send outcome after payload policy or modifying hooks settle. */
   suppression?: {
-    reason: OutboundPayloadDeliverySuppressionReason | "no_visible_result";
+    reason: OutboundPayloadDeliverySuppressionReason | "channel_transform" | "no_visible_result";
     cancelReason?: string;
     metadata?: Record<string, unknown>;
   };

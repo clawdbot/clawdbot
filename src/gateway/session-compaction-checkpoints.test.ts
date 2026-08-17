@@ -16,7 +16,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -90,7 +90,7 @@ describe("session-compaction-checkpoints", () => {
       storePath,
     });
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId,
       sessionFile: marker,
       updatedAt: Date.now(),
@@ -137,7 +137,7 @@ describe("session-compaction-checkpoints", () => {
         entryId: sourceLeafId,
       },
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId,
       sessionFile: marker,
       updatedAt: Date.now(),
@@ -202,7 +202,7 @@ describe("session-compaction-checkpoints", () => {
         lifecycleRevision: "checkpoint-original-revision",
         sessionId,
       };
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         ...expectedState,
         updatedAt: 10,
       });
@@ -234,7 +234,7 @@ describe("session-compaction-checkpoints", () => {
           entryId: sourceMessage.messageId,
         },
       };
-      await upsertSessionEntry(scope, { compactionCheckpoints: [checkpoint] });
+      await upsertSessionEntryCore(scope, { compactionCheckpoints: [checkpoint] });
 
       let releaseOwnerChange = () => {};
       const ownerChangeGate = new Promise<void>((resolve) => {
@@ -307,7 +307,7 @@ describe("session-compaction-checkpoints", () => {
     });
     const staleSessionFile = path.join(dir, "stale-transcript.jsonl");
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId,
       sessionFile: staleSessionFile,
       updatedAt: Date.now(),
@@ -372,7 +372,7 @@ describe("session-compaction-checkpoints", () => {
         leafId: sourceEntryId,
       },
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId,
       sessionFile: staleSessionFile,
       updatedAt: Date.now(),
@@ -450,7 +450,7 @@ describe("session-compaction-checkpoints", () => {
         .join("\n") + "\n",
       "utf-8",
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: MAIN_AGENT_ID,
         sessionKey,
@@ -611,7 +611,7 @@ describe("session-compaction-checkpoints", () => {
       sessionKey: "agent:main:structured-leaf-session",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     await appendTranscriptEvent(target, {
       type: "session",
       version: CURRENT_SESSION_VERSION,

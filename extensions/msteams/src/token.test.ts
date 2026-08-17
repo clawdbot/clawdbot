@@ -26,13 +26,15 @@ vi.mock("./oauth.token.js", () => ({
   refreshMSTeamsDelegatedTokens: oauthTokenMocks.refreshMSTeamsDelegatedTokens,
 }));
 
-vi.mock("./secret-input.js", () => ({
-  normalizeSecretInputString: (v: unknown) =>
-    typeof v === "string" && v.trim() ? v.trim() : undefined,
-  normalizeResolvedSecretInputString: (opts: { value: unknown; path: string }) =>
-    typeof opts.value === "string" && opts.value.trim() ? opts.value.trim() : undefined,
-  hasConfiguredSecretInput: (v: unknown) => typeof v === "string" && v.trim().length > 0,
-}));
+vi.mock("./secret-input.js", async () => {
+  const { normalizeOptionalString } = await import("openclaw/plugin-sdk/string-coerce-runtime");
+  return {
+    normalizeSecretInputString: normalizeOptionalString,
+    normalizeResolvedSecretInputString: (opts: { value: unknown; path: string }) =>
+      typeof opts.value === "string" && opts.value.trim() ? opts.value.trim() : undefined,
+    hasConfiguredSecretInput: (v: unknown) => typeof v === "string" && v.trim().length > 0,
+  };
+});
 
 const ENV_KEYS = [
   "MSTEAMS_APP_ID",

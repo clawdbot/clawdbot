@@ -9,7 +9,9 @@ import {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
+  asFiniteNumberInRange,
   asOptionalRecord as readRecord,
+  asSafeIntegerInRange,
   normalizeOptionalString,
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -81,19 +83,17 @@ function normalizeCommitStrategy(value: unknown): "manual" | "vad" | undefined {
 
 function normalizePositiveSafeInteger(value: unknown): number | undefined {
   const parsed = readFiniteNumber(value);
-  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return asSafeIntegerInRange(parsed, { min: 1 });
 }
 
 function normalizeFiniteRange(value: unknown, min: number, max: number): number | undefined {
   const parsed = readFiniteNumber(value);
-  return parsed !== undefined && parsed >= min && parsed <= max ? parsed : undefined;
+  return asFiniteNumberInRange(parsed, { min, max });
 }
 
 function normalizeIntegerRange(value: unknown, min: number, max: number): number | undefined {
   const parsed = readFiniteNumber(value);
-  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= min && parsed <= max
-    ? parsed
-    : undefined;
+  return asSafeIntegerInRange(parsed, { min, max });
 }
 
 function normalizeProviderConfig(

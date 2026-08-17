@@ -27,7 +27,6 @@ import type {
 } from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
-  clearProviderRuntimePluginCacheForTest,
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
@@ -44,7 +43,6 @@ import {
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
   resolveCatalogHookProviderPluginIds,
   resolveExternalAuthProfileProviderPluginIds,
@@ -63,11 +61,9 @@ import type {
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderCacheTtlEligibilityContext,
-  ProviderCreateEmbeddingProviderContext,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
-  ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
   ProviderFailoverErrorContext,
   ProviderNormalizeToolSchemasContext,
@@ -75,8 +71,6 @@ import type {
   ProviderNormalizeModelIdContext,
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
   ProviderNormalizeResolvedModelContext,
   ProviderNormalizeTransportContext,
   ProviderModernModelPolicyContext,
@@ -85,7 +79,6 @@ import type {
   ProviderPlugin,
   ProviderResolveExternalAuthProfilesContext,
   ProviderPrepareRuntimeAuthContext,
-  ProviderApplyConfigDefaultsContext,
   ProviderResolveConfigApiKeyContext,
   ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
@@ -157,10 +150,6 @@ export {
   wrapProviderSimpleCompletionStreamFn,
   wrapProviderStreamFn,
 };
-
-export const testing = {
-  clearProviderRuntimePluginCacheForTest,
-} as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
@@ -510,16 +499,6 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   );
 }
 
-export function resolveProviderReplayPolicyWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderReplayPolicyContext;
-}): ProviderReplayPolicy | undefined {
-  return resolveProviderRuntimePlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
-}
-
 export async function sanitizeProviderReplayHistoryWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -636,16 +615,6 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
       ...turnState?.websocket,
     },
   };
-}
-
-export async function createProviderEmbeddingProvider(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderCreateEmbeddingProviderContext;
-}) {
-  return await resolveProviderRuntimePlugin(params)?.createEmbeddingProvider?.(params.context);
 }
 
 export async function prepareProviderRuntimeAuth(params: {
@@ -918,34 +887,6 @@ export function resolveProviderCacheTtlEligibility(params: {
   context: ProviderCacheTtlEligibilityContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
-}
-
-export function resolveProviderThinkingProfile(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderDefaultThinkingPolicyContext;
-}): ProviderThinkingProfile | null | undefined {
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.resolveThinkingProfile) {
-    return bundledSurface.resolveThinkingProfile(params.context) ?? undefined;
-  }
-  return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
-}
-
-export function applyProviderConfigDefaultsWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderApplyConfigDefaultsContext;
-}) {
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.applyConfigDefaults) {
-    return bundledSurface.applyConfigDefaults(params.context) ?? undefined;
-  }
-  return resolveProviderRuntimePlugin(params)?.applyConfigDefaults?.(params.context) ?? undefined;
 }
 
 export function resolveProviderModernModelRef(params: {

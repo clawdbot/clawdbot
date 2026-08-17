@@ -34,6 +34,7 @@ import {
   detectAndLoadPromptImages,
   detectImageReferences,
 } from "../embedded-agent-runner/run/images.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -53,7 +54,7 @@ const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
-export function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
@@ -73,11 +74,11 @@ export function resolveCliRunQueueKey(params: {
   ownerKey?: string;
 }): string {
   const requiresLiveSessionSerialization =
-    isClaudeCliProvider(params.backendId) && params.liveSession === "claude-stdio";
+    isClaudeCliBackendId(params.backendId) && params.liveSession === "claude-stdio";
   if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
-  if (isClaudeCliProvider(params.backendId)) {
+  if (isClaudeCliBackendId(params.backendId)) {
     const ownerKey = params.ownerKey?.trim();
     if (requiresLiveSessionSerialization && ownerKey) {
       return `${params.backendId}:owner:${ownerKey}`;
@@ -388,8 +389,10 @@ export async function prepareCliPromptImagePayload(params: {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
+  localRoots?: readonly string[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
 }): Promise<{
   prompt: string;
@@ -401,6 +404,7 @@ export async function prepareCliPromptImagePayload(params: {
   const needsHydration =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
+    Boolean(params.mediaImageLayout) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
   const imageResult = needsHydration
     ? await detectAndLoadPromptImages({
@@ -410,7 +414,9 @@ export async function prepareCliPromptImagePayload(params: {
         model: { input: ["text", "image"] },
         existingImages: params.images,
         imageOrder: params.imageOrder,
+        mediaImageLayout: params.mediaImageLayout,
         maxBytes: MAX_IMAGE_BYTES,
+        localRoots: params.localRoots,
       })
     : undefined;
   if (imageResult?.failedMediaCount) {

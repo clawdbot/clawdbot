@@ -490,6 +490,13 @@ export const zalouserOutboundAdapter = {
 export const zalouserMessagingAdapter = {
   targetPrefixes: ["zalouser", "zlu"],
   normalizeTarget: (raw: string) => normalizeZalouserTarget(raw),
+  inferTargetChatType: ({ to }: { to: string }) => {
+    try {
+      return parseZalouserOutboundTarget(to).isGroup ? ("group" as const) : ("direct" as const);
+    } catch {
+      return undefined;
+    }
+  },
   resolveOutboundSessionRoute: (
     params: Parameters<typeof resolveZalouserOutboundSessionRoute>[0],
   ) => resolveZalouserOutboundSessionRoute(params),

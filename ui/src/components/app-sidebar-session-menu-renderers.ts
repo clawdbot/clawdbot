@@ -12,14 +12,18 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderSessionOwnerChip, type SessionCreatorOption } from "./session-owner-chip.ts";
+import { renderSessionOwnerChip, type SessionOwnerOption } from "./session-owner-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
   trackDropdownKeyboardDismissal,
 } from "./web-awesome.ts";
 
-type SidebarSessionGroupMenuAction = "rename-group" | "new-group" | "delete-group";
+type SidebarSessionGroupMenuAction =
+  | "group-defaults"
+  | "rename-group"
+  | "new-group"
+  | "delete-group";
 
 function renderSidebarMenuTrigger(position: { x: number; y: number }, label: string) {
   return html`
@@ -38,7 +42,7 @@ function renderSidebarMenuRadioItem(params: {
   value: string;
   checked: boolean;
   label: string;
-  creator?: SessionCreatorOption;
+  creator?: SessionOwnerOption;
 }) {
   return html`
     <wa-dropdown-item
@@ -58,19 +62,25 @@ function renderSidebarMenuRadioItem(params: {
 }
 
 function renderSidebarCreatorFilter(
-  creators: readonly SessionCreatorOption[],
+  creators: readonly SessionOwnerOption[],
   creatorFilterId: string | null,
+  involvingMe: boolean,
 ) {
-  if (creators.length < 2) {
+  if (creators.length === 0) {
     return nothing;
   }
   return html`
     <div class="session-menu__separator" role="separator"></div>
-    <div class="sidebar-session-sort-menu__title">${t("sessionsView.people")}</div>
+    <div class="sidebar-session-sort-menu__title">${t("sessionsView.owners")}</div>
     ${renderSidebarMenuRadioItem({
       value: "creator:",
-      checked: creatorFilterId === null,
-      label: t("sessionsView.allCreators"),
+      checked: creatorFilterId === null && !involvingMe,
+      label: t("sessionsView.allOwners"),
+    })}
+    ${renderSidebarMenuRadioItem({
+      value: "involving-me",
+      checked: involvingMe,
+      label: t("sessionsView.involvingMe"),
     })}
     ${creators.map((creator) =>
       renderSidebarMenuRadioItem({
@@ -87,6 +97,7 @@ export function renderSidebarSessionGroupMenu(params: {
   menu: SidebarSessionGroupMenuState | null;
   trigger: HTMLElement | null;
   connected: boolean;
+  groupDefaultsUnavailable?: boolean;
   actionDisabledReasons?: Partial<Record<SidebarSessionGroupMenuAction, string>>;
   onAction: (action: SidebarSessionGroupMenuAction, group: string) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -109,7 +120,10 @@ export function renderSidebarSessionGroupMenu(params: {
             event.preventDefault();
             const value = event.detail.item.value;
             if (
-              (value === "rename-group" || value === "new-group" || value === "delete-group") &&
+              (value === "group-defaults" ||
+                value === "rename-group" ||
+                value === "new-group" ||
+                value === "delete-group") &&
               !params.actionDisabledReasons?.[value]
             ) {
               params.onAction(value, menu.group);
@@ -121,6 +135,20 @@ export function renderSidebarSessionGroupMenu(params: {
             params.onClose(consumeDropdownKeyboardDismissal(event))}
         >
           ${renderSidebarMenuTrigger(menu, t("sessionsView.groupMenu", { group: menu.group }))}
+          <wa-dropdown-item
+            class="session-menu__item"
+            value="group-defaults"
+            ?disabled=${!params.connected ||
+            Boolean(params.actionDisabledReasons?.["group-defaults"])}
+            title=${params.actionDisabledReasons?.["group-defaults"] ?? nothing}
+          >
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.settings}</span>
+            <span class="session-menu__text"
+              >${params.groupDefaultsUnavailable
+                ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
+                : t("sessionsView.groupDefaultsMenu")}</span
+            >
+          </wa-dropdown-item>
           <wa-dropdown-item
             class="session-menu__item"
             value="rename-group"
@@ -162,10 +190,11 @@ export function renderSidebarCatalogViewMenu(params: {
   position: { x: number; y: number } | null;
   trigger: HTMLElement | null;
   grouping: CatalogProjectGrouping;
-  creators: readonly SessionCreatorOption[];
+  creators: readonly SessionOwnerOption[];
   creatorFilterId: string | null;
+  involvingMe: boolean;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
-  onCreatorFilterChange: (creatorId: string | null) => void;
+  onCreatorFilterChange: (creatorId: string | null, involvingMe?: boolean) => void;
   onHide: () => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
@@ -195,6 +224,8 @@ export function renderSidebarCatalogViewMenu(params: {
               params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
             } else if (value?.startsWith("creator:")) {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
+            } else if (value === "involving-me") {
+              params.onCreatorFilterChange(null, true);
             } else if (value === "hide-catalog") {
               params.onHide();
             }
@@ -213,7 +244,7 @@ export function renderSidebarCatalogViewMenu(params: {
               label: option.label,
             }),
           )}
-          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId)}
+          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId, params.involvingMe)}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
             <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
@@ -233,12 +264,13 @@ export function renderSidebarSessionSortMenu(params: {
   statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
   showSystem: boolean;
-  creators: readonly SessionCreatorOption[];
+  creators: readonly SessionOwnerOption[];
   creatorFilterId: string | null;
+  involvingMe: boolean;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
-  onCreatorFilterChange: (creatorId: string | null) => void;
+  onCreatorFilterChange: (creatorId: string | null, involvingMe?: boolean) => void;
   onShowCronChange: (show: boolean) => void;
   onShowSystemChange: (show: boolean) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -274,6 +306,8 @@ export function renderSidebarSessionSortMenu(params: {
               );
             } else if (value?.startsWith("creator:")) {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
+            } else if (value === "involving-me") {
+              params.onCreatorFilterChange(null, true);
             } else if (value === "show-cron") {
               params.onShowCronChange(!params.showCron);
             } else if (value === "show-system") {
@@ -319,7 +353,7 @@ export function renderSidebarSessionSortMenu(params: {
                     : t("sessionsView.all"),
             }),
           )}
-          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId)}
+          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId, params.involvingMe)}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item
             class="sidebar-session-sort-menu__item"

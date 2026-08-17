@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import {
   authorizeActiveMemorySearchHits,
-  getActiveMemorySearchManager,
+  getActiveMemorySearchManagerCore,
 } from "../plugins/memory-runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
@@ -111,7 +111,7 @@ async function lookupFastContext(params: {
 }): Promise<FastContextLookupResult> {
   // The memory runtime owns whether memory/session search is active for this
   // agent. Talk only consumes the current manager when it is already available.
-  const memory = await getActiveMemorySearchManager({
+  const memory = await getActiveMemorySearchManagerCore({
     cfg: params.cfg,
     agentId: params.agentId,
   });

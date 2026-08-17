@@ -16,6 +16,7 @@ let persistenceFailureWarned = false;
 type AuditEventRecorder = AgentEventAuditRecorder & {
   recordMessage: (event: TrustedMessageAuditEvent) => void;
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
+  recordExecutionDecision: AuditEventWriter["recordExecutionDecision"];
 };
 
 export function createAuditEventRecorder(options: {
@@ -46,6 +47,7 @@ export function createAuditEventRecorder(options: {
   return {
     ...agentRecorder,
     recordExecutionIdentity: writer.recordExecutionIdentity,
+    recordExecutionDecision: writer.recordExecutionDecision,
     recordMessage: (event) => {
       if (options.messageMode === "off") {
         return;

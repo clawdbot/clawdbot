@@ -11,7 +11,7 @@ import {
 
 export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVitestScheduling };
 
-export const rootVitestProjects = [
+const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
   "test/vitest/vitest.infra.config.ts",
   "test/vitest/vitest.boundary.config.ts",

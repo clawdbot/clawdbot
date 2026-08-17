@@ -17,13 +17,13 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntry as patchAccessorSessionEntry,
+  patchSessionEntryCore as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -39,7 +39,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { resolveSessionCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
+import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -262,6 +262,7 @@ async function createSessionEntry(
           const persisted = await upsertAcpSessionMeta({
             cfg: params.cfg,
             sessionKey: context.key,
+            agentId: context.agentId,
             mutate: () => meta,
           });
           if (!persisted?.acp) {
@@ -311,11 +312,13 @@ async function createSessionEntry(
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
           const expectedExecNode = params.execNode?.trim() || undefined;
           const expectedExecCwd = params.execCwd?.trim() || undefined;
           const matchingAcpMeta = acpInitial
             ? readAcpSessionMetaForEntry({
                 sessionKey: target.canonicalKey,
+                agentId: target.agentId,
                 entry: matchingEntry,
               })
             : undefined;
@@ -335,6 +338,8 @@ async function createSessionEntry(
               (isDeepStrictEqual(matchingEntry.acpSessionBinding, persistedAcpBinding) &&
                 (matchingAcpMeta === undefined || acpMetaMatches(matchingAcpMeta)))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            matchingEntry.sessionRoot === expectedSessionRoot &&
+            matchingEntry.permissionMode === params.permissionMode &&
             matchingEntry.execNode === expectedExecNode &&
             matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
@@ -363,6 +368,10 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+            ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
+            ...(params.permissionMode !== undefined
+              ? { permissionMode: params.permissionMode }
+              : {}),
             ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
@@ -510,6 +519,7 @@ async function createSessionEntry(
             await upsertAcpSessionMeta({
               cfg: params.cfg,
               sessionKey: callbackContext.key,
+              agentId: callbackContext.agentId,
               mutate: () => null,
             });
           }
@@ -581,7 +591,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
-    resolveSessionCatalogCreateTarget,
+    resolveSessionCatalogCreateTarget: resolveAgentCatalogCreateTarget,
     resolveThinkingDefault,
     normalizeThinkingLevel: normalizeThinkLevel,
     resolveThinkingPolicy: (params) => {
@@ -613,19 +623,14 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
   );
-  defineCachedValue(
-    agentRuntime,
-    "runEmbeddedPiAgent",
-    () => (agentRuntime as PluginRuntime["agent"]).runEmbeddedAgent,
-  );
   defineCachedValue(agentRuntime, "session", () => ({
-    resolveStorePath,
+    resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
     listSessionEntries,

@@ -10,21 +10,19 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  loadExpectedRestartRecoveryClaim,
-  type ExpectedRestartRecoveryClaim,
-} from "./main-session-restart-claim.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
   type ExhaustedRestartRecoveryTarget,
   type ExpectedRestartRecoveryTarget,
-  log,
+  mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
   RETRY_BACKOFF_MULTIPLIER,
   resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
 import {
+  type ExpectedRestartRecoveryClaim,
+  loadExpectedRestartRecoveryClaim,
   loadExpectedRestartRecoveryTarget,
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
@@ -102,7 +100,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   }
 
   if (result.recovered > 0 || result.failed > 0) {
-    log.info(
+    mainSessionRecoveryLog.info(
       `main-session restart recovery complete: recovered=${result.recovered} failed=${result.failed} skipped=${result.skipped}`,
     );
   }
@@ -260,7 +258,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
     },
     onError: (error, finalAttempt) => {
       if (finalAttempt) {
-        log.warn(`main-session owner-release recovery failed: ${String(error)}`);
+        mainSessionRecoveryLog.warn(`main-session owner-release recovery failed: ${String(error)}`);
       }
     },
   });
@@ -341,7 +339,9 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     );
     for (const outcome of outcomes) {
       if (outcome.status === "rejected") {
-        log.warn(`main-session exhaustion reconciliation failed: ${String(outcome.reason)}`);
+        mainSessionRecoveryLog.warn(
+          `main-session exhaustion reconciliation failed: ${String(outcome.reason)}`,
+        );
       }
     }
   };
@@ -371,10 +371,10 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       },
       onError: async (err, finalAttempt) => {
         if (finalAttempt) {
-          log.warn(`main-session restart recovery gave up: ${String(err)}`);
+          mainSessionRecoveryLog.warn(`main-session restart recovery gave up: ${String(err)}`);
           await reconcileExhaustedTargets(exhaustedTargets.values());
         } else {
-          log.warn(`main-session restart recovery failed: ${String(err)}`);
+          mainSessionRecoveryLog.warn(`main-session restart recovery failed: ${String(err)}`);
         }
       },
     });

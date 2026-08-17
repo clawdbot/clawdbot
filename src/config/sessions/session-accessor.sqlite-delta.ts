@@ -93,7 +93,7 @@ function bootstrapCursor(
 }
 
 /** Read one generation-consistent raw transcript page without parsing excluded payload rows. */
-export function readSqliteTranscriptRawDelta(
+export function readTranscriptRawDelta(
   scope: SessionTranscriptReadScope,
   limits: SessionTranscriptRawDeltaLimits = {},
 ): SessionTranscriptRawDeltaResult {

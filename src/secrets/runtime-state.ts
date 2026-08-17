@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreProfileSetMutationToken,
@@ -247,7 +247,7 @@ function mergeLiveAuthStoreBookkeeping(
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],
 ): PreparedSecretsRuntimeSnapshot["authStores"] {
   return authStores.map((entry) => {
-    const live = getRuntimeAuthProfileStoreSnapshot(entry.agentDir);
+    const live = getRuntimeAuthProfileStoreSnapshotCore(entry.agentDir);
     if (!live) {
       return entry;
     }
@@ -871,7 +871,7 @@ export function graftActiveSecretsRuntimeAuthState(snapshot: PreparedSecretsRunt
 /**
  * Returns the env used by the active runtime snapshot, falling back to process env.
  */
-export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
+export function getActiveSecretsRuntimeEnvState(): NodeJS.ProcessEnv {
   return {
     ...(activeRefreshContext?.env ?? process.env),
   } as NodeJS.ProcessEnv;
@@ -1037,7 +1037,7 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
 /**
  * Returns a cloned active secrets runtime snapshot for callers that need mutable data.
  */
-export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
+export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSnapshot | null {
   if (!activeSnapshot) {
     return null;
   }
@@ -1054,7 +1054,7 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
 }
 
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */
-export function getActiveSecretsRuntimeSnapshotRevision(): number {
+export function getActiveSecretsRuntimeSnapshotRevisionState(): number {
   return activeSnapshotRevision;
 }
 
@@ -1154,7 +1154,7 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
     return [];
   }
   return activeSnapshot.authStores.flatMap((entry) => {
-    const store = getRuntimeAuthProfileStoreSnapshot(entry.agentDir);
+    const store = getRuntimeAuthProfileStoreSnapshotCore(entry.agentDir);
     return store ? [{ agentDir: entry.agentDir, store }] : [];
   });
 }
@@ -1162,7 +1162,7 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
 /**
  * Clears active secrets runtime state and all linked config/auth/web-tool snapshots.
  */
-export function clearSecretsRuntimeSnapshot(): void {
+export function clearSecretsRuntimeSnapshotState(): void {
   activeSnapshotRevision += 1;
   activeSnapshotLineageStartRevision = 0;
   activeSnapshotLineageAuthStores = [];

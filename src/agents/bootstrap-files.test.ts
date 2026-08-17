@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  upsertSessionEntry,
+  upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -663,7 +663,7 @@ describe("hasCompletedBootstrapTurn", () => {
       sessionKey: "agent:main:bootstrap-turn",
       storePath: path.join(tmpDir, "sessions.json"),
     };
-    await upsertSessionEntry(sessionTarget, {
+    await upsertSessionEntryCore(sessionTarget, {
       sessionId: sessionTarget.sessionId,
       updatedAt: Date.now(),
     });

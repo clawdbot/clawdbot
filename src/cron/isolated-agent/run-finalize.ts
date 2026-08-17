@@ -1,4 +1,8 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber as resolvePositiveContextTokens,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
@@ -12,7 +16,6 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -38,10 +41,6 @@ type CronExecutionRuntime = typeof import("./run-executor.runtime.js");
 type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronRun"]>>;
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
-
-function resolvePositiveContextTokens(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
 
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
@@ -93,8 +92,10 @@ export async function finalizeCronRun(params: {
     execution.fallbackProvider ??
     execution.liveSelection.provider;
   const contextTokens =
-    resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
-    (await cronContextRuntimeLoader.load()).lookupContextTokens(modelUsed, {
+    (await cronContextRuntimeLoader.load()).resolveContextTokensForModel({
+      cfg: prepared.cfgWithAgentDefaults,
+      provider: providerUsed,
+      model: modelUsed,
       allowAsyncLoad: false,
     }) ??
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
@@ -142,7 +143,7 @@ export async function finalizeCronRun(params: {
       model: modelUsed,
       config: prepared.cfgWithAgentDefaults,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({ usage, cost: costConfig }),
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
@@ -199,7 +200,7 @@ export async function finalizeCronRun(params: {
         diagnosticUsage?.output !== undefined ||
         diagnosticUsage?.cacheRead !== undefined ||
         diagnosticUsage?.cacheWrite !== undefined;
-      const diagnosticEstimatedCostUsd = resolveNonNegativeNumber(
+      const diagnosticEstimatedCostUsd = asNonNegativeFiniteNumber(
         estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
       );
       const contextUsedTokens = deriveContextPromptTokens({

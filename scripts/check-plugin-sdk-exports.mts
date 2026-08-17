@@ -70,7 +70,7 @@ let missing = 0;
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",
@@ -110,6 +110,11 @@ export default defineChannelPluginEntry({
     const openclawPackagePath = join(consumerRoot, "node_modules", "openclaw");
     mkdirSync(dirname(openclawPackagePath), { recursive: true });
     symlinkSync(repoRoot, openclawPackagePath, process.platform === "win32" ? "junction" : "dir");
+    symlinkSync(
+      join(repoRoot, "node_modules", "zod"),
+      join(consumerRoot, "node_modules", "zod"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const result = spawnSync(
       process.execPath,

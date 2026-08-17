@@ -12,9 +12,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { CliParseError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
+
+const TLS_FINGERPRINT = "ab".repeat(32);
+const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 
 type RunMainModule = typeof import("./run-main.js");
 
@@ -58,6 +62,9 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const hasManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn(() => false));
+const hasProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(() => false));
+const providerCleanupModuleImportState = vi.hoisted(() => ({ local: 0, transport: 0 }));
 const stopManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn());
 const closeProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(async () => {}));
 const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
@@ -270,8 +277,6 @@ vi.mock("./one-shot-exit.js", () => ({
 
 vi.mock("../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/env.js")>()),
-  isTruthyEnvValue: (value?: string) =>
-    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
 }));
 
@@ -308,7 +313,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
+  closeActiveMemorySearchManagersCore: closeActiveMemorySearchManagersMock,
 }));
 
 vi.mock("../plugins/memory-state.js", () => ({
@@ -320,13 +325,20 @@ vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
 
-vi.mock("../agents/provider-local-service.js", () => ({
-  stopManagedProviderLocalServices: stopManagedProviderLocalServicesMock,
+vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
+  hasManagedProviderLocalServices: hasManagedProviderLocalServicesMock,
+  hasProviderTransportDispatcherPool: hasProviderTransportDispatcherPoolMock,
 }));
 
-vi.mock("../agents/provider-transport-dispatcher-pool.js", () => ({
-  closeProviderTransportDispatcherPool: closeProviderTransportDispatcherPoolMock,
-}));
+vi.mock("../agents/provider-local-service.js", () => {
+  providerCleanupModuleImportState.local += 1;
+  return { stopManagedProviderLocalServices: stopManagedProviderLocalServicesMock };
+});
+
+vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
+  providerCleanupModuleImportState.transport += 1;
+  return { closeProviderTransportDispatcherPool: closeProviderTransportDispatcherPoolMock };
+});
 
 vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
   getActiveMcpLoopbackRuntime: getActiveMcpLoopbackRuntimeMock,
@@ -570,6 +582,8 @@ describe("runCli exit behavior", () => {
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
     listRegisteredAgentHarnessesMock.mockReturnValue([]);
+    hasManagedProviderLocalServicesMock.mockReturnValue(false);
+    hasProviderTransportDispatcherPoolMock.mockReturnValue(false);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
@@ -593,6 +607,22 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;
+  });
+
+  it("does not load inactive provider cleanup modules for cold help", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "nodes", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
+      await runCli(["node", "openclaw", "nodes", "--help"]);
+    });
+
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "nodes", "--help"]);
+    expect(providerCleanupModuleImportState).toEqual({ local: 0, transport: 0 });
   });
 
   it("does not import dotenv for gateway forms without a workspace file", async () => {
@@ -673,6 +703,8 @@ describe("runCli exit behavior", () => {
   it("completes asynchronous teardown before returning to the outer entrypoint", async () => {
     const order: string[] = [];
     listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "copilot" } }]);
+    hasManagedProviderLocalServicesMock.mockReturnValueOnce(true);
+    hasProviderTransportDispatcherPoolMock.mockReturnValueOnce(true);
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
@@ -2419,6 +2451,17 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
+  it("reads source-only proxy config before doctor lint owns plugin-aware validation", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor-lint" } });
+
+    await runCli(["node", "openclaw", "doctor", "--lint", "--json"]);
+
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor-lint" });
+  });
+
   it.each([
     {
       name: "version-pinned skill install",
@@ -2727,7 +2770,7 @@ describe("runCli exit behavior", () => {
 
   it("rejects unowned command roots before proxy and plugin runtime registration", async () => {
     await expect(runCli(["node", "openclaw", "foo"])).rejects.toThrow(
-      'No built-in command or plugin CLI metadata owns "foo"',
+      'OpenClaw does not know the command "foo".',
     );
 
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -2780,7 +2823,7 @@ describe("runCli exit behavior", () => {
     const target = "https://gateway.example/dashboard/main/movies-a1166b81";
 
     await expect(runCli(["node", "openclaw", "unknown-owner", target])).rejects.toThrow(
-      "Unknown command: openclaw unknown-owner",
+      'OpenClaw does not know the command "unknown-owner".',
     );
 
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
@@ -2795,7 +2838,7 @@ describe("runCli exit behavior", () => {
         "direct-token",
         "--password=direct-password",
         "--tls-fingerprint",
-        "sha256:direct",
+        PREFIXED_TLS_FINGERPRINT,
         "--deliver",
         "--message",
         "continue here",
@@ -2809,7 +2852,7 @@ describe("runCli exit behavior", () => {
         "--password",
         "direct-password",
         "--tls-fingerprint",
-        "sha256:direct",
+        PREFIXED_TLS_FINGERPRINT,
         "https://gateway.example/dashboard/main/movies-a1166b81",
         "--deliver",
         "--message",
@@ -2821,7 +2864,7 @@ describe("runCli exit behavior", () => {
       args: [
         "--token=direct-token",
         "--password=direct-password",
-        "--tls-fingerprint=sha256:direct",
+        `--tls-fingerprint=${PREFIXED_TLS_FINGERPRINT}`,
         "--message=continue here",
         "https://gateway.example/dashboard/main/movies-a1166b81",
         "--deliver",
@@ -2840,7 +2883,7 @@ describe("runCli exit behavior", () => {
     expect(runTuiCliActionMock).toHaveBeenCalledWith(target, {
       token: "direct-token",
       password: "direct-password",
-      tlsFingerprint: "sha256:direct",
+      tlsFingerprint: PREFIXED_TLS_FINGERPRINT,
       deliver: true,
       message: "continue here",
     });
@@ -2875,7 +2918,7 @@ describe("runCli exit behavior", () => {
 
   it("does not claim a bare session ref as root-command sugar", async () => {
     await expect(runCli(["node", "openclaw", "movies-a1166b81"])).rejects.toThrow(
-      "Unknown command: openclaw movies-a1166b81",
+      'OpenClaw does not know the command "movies-a1166b81".',
     );
 
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
@@ -2883,15 +2926,18 @@ describe("runCli exit behavior", () => {
 
   it("does not claim host shorthand as root-command sugar", async () => {
     await expect(runCli(["node", "openclaw", "gateway.example/main/a1166b81"])).rejects.toThrow(
-      "Unknown command: openclaw gateway.example/main/a1166b81",
+      'OpenClaw does not know the command "gateway.example/main/a1166b81".',
     );
 
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
   });
 
   it("suggests close known commands for unowned command roots before proxy startup", async () => {
-    await expect(runCli(["node", "openclaw", "upate"])).rejects.toThrow(
-      "Did you mean this?\n  openclaw update",
+    const error = await runCli(["node", "openclaw", "upate"]).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(CliParseError);
+    expect((error as CliParseError).humanOutput).toContain(
+      "Did you mean this?\n  openclaw update\n",
     );
 
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -2904,7 +2950,7 @@ describe("runCli exit behavior", () => {
     const primary = "bad\u001b[31m-red\u001b[0m\nforged\tline";
 
     await expect(runCli(["node", "openclaw", primary])).rejects.toThrow(
-      'Unknown command: openclaw bad-red\\nforged\\tline. No built-in command or plugin CLI metadata owns "bad-red\\nforged\\tline".',
+      'OpenClaw does not know the command "bad-red\\nforged\\tline".',
     );
 
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -2927,7 +2973,7 @@ describe("runCli exit behavior", () => {
     const message = (error as Error).message;
     const displayPrimary = `${"🦞".repeat(63)}…`;
     expect(displayPrimary.length).toBeLessThanOrEqual(128);
-    expect(message).toContain(`Unknown command: openclaw ${displayPrimary}`);
+    expect(message).toContain(`OpenClaw does not know the command "${displayPrimary}".`);
     expect(message).not.toContain("�");
     expect(message.length).toBeLessThan(500);
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -2962,7 +3008,7 @@ describe("runCli exit behavior", () => {
 
   it("rejects unowned command roots even when --help is appended (regression for #81077)", async () => {
     await expect(runCli(["node", "openclaw", "foo", "--help"])).rejects.toThrow(
-      'No built-in command or plugin CLI metadata owns "foo"',
+      'OpenClaw does not know the command "foo".',
     );
 
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -2973,7 +3019,7 @@ describe("runCli exit behavior", () => {
 
   it("rejects unowned command roots even when --version is appended", async () => {
     await expect(runCli(["node", "openclaw", "foo", "--version"])).rejects.toThrow(
-      'No built-in command or plugin CLI metadata owns "foo"',
+      'OpenClaw does not know the command "foo".',
     );
 
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -2995,7 +3041,7 @@ describe("runCli exit behavior", () => {
     }
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain(
-      'No built-in command or plugin CLI metadata owns "totally-unknown"',
+      'OpenClaw does not know the command "totally-unknown".',
     );
     expect((error as Error).message).not.toContain("plugins.allow");
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -3564,7 +3610,7 @@ describe("runCli exit behavior", () => {
         remote: {
           url: "wss://gateway.example/ws",
           token: "missing-inference-remote-auth",
-          tlsFingerprint: "sha256:remote",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
         },
       },
     };
@@ -3586,7 +3632,7 @@ describe("runCli exit behavior", () => {
       config: sourceConfig,
       gatewayUrl: "wss://gateway.example/ws",
       token: "missing-inference-remote-auth",
-      tlsFingerprint: "sha256:remote",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
     expect(runTuiMock).not.toHaveBeenCalled();
   });
@@ -3678,7 +3724,7 @@ describe("runCli exit behavior", () => {
     loadGatewayTlsRuntimeMock.mockResolvedValueOnce({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local-self-signed-fingerprint",
+      fingerprintSha256: TLS_FINGERPRINT,
     });
 
     await runBareCli();
@@ -3686,12 +3732,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
-      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
     expectBoundTui({
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
-      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
   });
 
@@ -4111,7 +4157,7 @@ describe("runCli exit behavior", () => {
         remote: {
           url: "wss://gateway.example.com:18789",
           token: "tls-remote-auth",
-          tlsFingerprint: "sha256:11:22:33:44",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
         },
       },
     });
@@ -4121,12 +4167,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://gateway.example.com:18789",
       token: "tls-remote-auth",
-      tlsFingerprint: "sha256:11:22:33:44",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
     expectBoundTui({
       url: "wss://gateway.example.com:18789",
       token: "tls-remote-auth",
-      tlsFingerprint: "sha256:11:22:33:44",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
   });
 

@@ -48,6 +48,8 @@ vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => undefined),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => undefined),
+  tryResolveSystemAgentWorkspaceDir: vi.fn(() => undefined),
 }));
 
 vi.mock("../runtime.js", () => ({

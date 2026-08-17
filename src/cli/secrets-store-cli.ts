@@ -18,6 +18,8 @@ type SetOptions = {
   kind?: string;
   scope?: string;
   dryRun?: boolean;
+  allowHost?: string[];
+  clearAllowedHosts?: boolean;
 };
 type RemoveOptions = { scope?: string; dryRun?: boolean; yes?: boolean };
 type ImportOptions = RemoveOptions & { from?: string; kind?: string };
@@ -73,7 +75,9 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
   if (
     validation?.name === "SecretStoreValidationError" &&
     (validation.code === "SECRET_STORE_INVALID_NAME" ||
-      validation.code === "SECRET_STORE_VALUE_TOO_LARGE")
+      validation.code === "SECRET_STORE_VALUE_TOO_LARGE" ||
+      validation.code === "SECRET_STORE_VALUE_EMPTY" ||
+      validation.code === "SECRET_STORE_INVALID_ALLOWED_HOST")
   ) {
     return new SecretStoreCliFailure(2, validation.message ?? "Invalid secret store input.");
   }
@@ -102,7 +106,12 @@ function renderList(entries: SecretStoreEntryMetadata[], options: OutputOptions)
   if (options.plain) {
     for (const entry of entries) {
       defaultRuntime.writeStdout(
-        [entry.name, entry.kind, entry.kind === "env" ? (entry.valuePreview ?? "") : ""].join("\t"),
+        [
+          entry.name,
+          entry.kind,
+          entry.kind === "env" ? (entry.valuePreview ?? "") : "",
+          entry.kind === "secret" ? (entry.allowedHosts ?? []).join(",") : "",
+        ].join("\t"),
       );
     }
     return;
@@ -113,7 +122,11 @@ function renderList(entries: SecretStoreEntryMetadata[], options: OutputOptions)
   }
   for (const entry of entries) {
     const value = entry.kind === "env" ? ` = ${entry.valuePreview ?? ""}` : " (write-only)";
-    defaultRuntime.log(`${entry.name} [${entry.kind}]${value}`);
+    const hosts =
+      entry.kind === "secret"
+        ? `; allowed hosts: ${(entry.allowedHosts ?? []).join(", ") || "none"}`
+        : "";
+    defaultRuntime.log(`${entry.name} [${entry.kind}]${value}${hosts}`);
   }
 }
 
@@ -175,13 +188,43 @@ export function registerSecretStoreCli(secrets: Command): void {
     .option("--value <value>", "Literal value (env kind only)")
     .option("--value-file <path>", "Read value from a file; use - for stdin")
     .option("--kind <secret|env>", "Entry kind (defaults from NAME)")
+    .option(
+      "--allow-host <host>",
+      "Allow substitution only for this exact host (repeatable)",
+      (host: string, hosts: string[]) => [...hosts, host],
+      [],
+    )
+    .option("--clear-allowed-hosts", "Remove all allowed hosts", false)
     .option("--scope <team>", "Store scope", "team")
     .option("--dry-run", "Validate without writing", false)
     .action((name: string, options: SetOptions) =>
       runStoreAction(async () => {
         assertStoreName(name);
         const scope = teamScope(options.scope);
-        const kind = storeKind(options.kind, name);
+        const storeModule = await import("../secrets/store/secret-store.js");
+        const requestedHosts = options.allowHost ?? [];
+        const hostPolicyRequested = requestedHosts.length > 0 || options.clearAllowedHosts === true;
+        const existingEntry = hostPolicyRequested
+          ? storeModule.listSecretStoreEntries({ scope }).find((entry) => entry.name === name)
+          : undefined;
+        const kind = options.kind
+          ? storeKind(options.kind, name)
+          : (existingEntry?.kind ?? storeKind(undefined, name));
+        if (requestedHosts.length > 0 && options.clearAllowedHosts) {
+          throw new SecretStoreCliFailure(
+            2,
+            "Use either --allow-host or --clear-allowed-hosts, not both.",
+          );
+        }
+        if (kind === "env" && (requestedHosts.length > 0 || options.clearAllowedHosts)) {
+          throw new SecretStoreCliFailure(2, "Allowed hosts apply only to secret entries.");
+        }
+        const allowedHosts =
+          requestedHosts.length > 0
+            ? storeModule.normalizeSecretAllowedHosts(requestedHosts)
+            : options.clearAllowedHosts
+              ? []
+              : undefined;
         if (options.value !== undefined && options.valueFile !== undefined) {
           throw new SecretStoreCliFailure(2, "Use only one of --value or --value-file.");
         }
@@ -192,6 +235,29 @@ export function registerSecretStoreCli(secrets: Command): void {
             "--value is refused for secret entries. Use a stdin pipe, --value-file, or the interactive no-echo prompt.",
           );
         }
+        const policyOnly =
+          allowedHosts !== undefined &&
+          options.value === undefined &&
+          options.valueFile === undefined &&
+          existingEntry?.kind === "secret";
+        if (policyOnly) {
+          if (options.dryRun) {
+            defaultRuntime.log(`Would update allowed hosts for ${name}.`);
+            return;
+          }
+          storeModule.updateSecretStoreAllowedHosts({
+            scope,
+            name,
+            allowedHosts,
+            updatedBy: "cli",
+          });
+          defaultRuntime.log(
+            allowedHosts.length > 0
+              ? `Allowed ${name} for ${allowedHosts.join(", ")}.`
+              : `Cleared allowed hosts for ${name}.`,
+          );
+          return;
+        }
         const value =
           options.value !== undefined
             ? options.value
@@ -200,7 +266,6 @@ export function registerSecretStoreCli(secrets: Command): void {
               ).readSecretStoreInput({
                 valueFile: options.valueFile,
               });
-        const storeModule = await import("../secrets/store/secret-store.js");
         if (Buffer.byteLength(value, "utf8") > storeModule.SECRET_STORE_VALUE_MAX_BYTES) {
           throw new SecretStoreCliFailure(
             2,
@@ -211,7 +276,14 @@ export function registerSecretStoreCli(secrets: Command): void {
           defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
           return;
         }
-        storeModule.writeSecretStoreEntry({ scope, name, value, kind, updatedBy: "cli" });
+        storeModule.writeSecretStoreEntry({
+          scope,
+          name,
+          value,
+          kind,
+          ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+          updatedBy: "cli",
+        });
         storeModule.purgeExpiredSecretStoreEntries();
         defaultRuntime.log(`Stored ${name} (${kind}).`);
         await noteGatewayReload();

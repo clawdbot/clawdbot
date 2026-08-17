@@ -18,6 +18,11 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import {
+  resolveSessionPermissionExecMode,
+  type PreparedSessionPermissionPolicy,
+} from "../../tool-fs-policy.js";
+import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
@@ -57,6 +62,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   runTrace: DiagnosticTraceContext;
   sandbox?: SandboxContext | null;
   sandboxSessionKey: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   sessionAgentId: string;
   skillUsagePaths: SkillUsagePaths;
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
@@ -115,10 +121,13 @@ export function prepareEmbeddedAttemptToolBase(params: {
       ? createToolSearchCatalogRef()
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
-  const codeModeSkills = attempt.toolsAllow?.length ? [] : params.codeModeSkills;
+  const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
+    ? []
+    : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
       ? params.resolvedWorkspace
@@ -176,6 +185,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
     scheduledToolPolicy: attempt.scheduledToolPolicy,
+    pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
@@ -217,10 +227,14 @@ export function prepareEmbeddedAttemptToolBase(params: {
           chatType: attempt.chatType,
           exec: {
             ...attempt.execOverrides,
+            ...(params.sessionPermissionPolicy
+              ? { mode: resolveSessionPermissionExecMode(params.sessionPermissionPolicy) }
+              : {}),
             config: attempt.config,
             elevated: attempt.bashElevated,
           },
           sandbox: params.sandbox,
+          sessionPermissionPolicy: params.sessionPermissionPolicy,
           messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
           agentAccountId: attempt.agentAccountId,
           messageTo: attempt.messageTo,
@@ -246,6 +260,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               : undefined,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
+          operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
           conversationRecall: attempt.conversationRecall,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
           oneShotCliRun: attempt.oneShotCliRun,
@@ -297,6 +312,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           hasRepliedRef: attempt.hasRepliedRef,
           modelHasVision: attempt.model.input?.includes("image") ?? false,
           computerContextEpoch,
+          registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
           requireExplicitMessageTarget:
             attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey),
           sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
@@ -357,6 +373,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     localModelLeanPreserveToolNames,
     replaySafetyOptions,
     runtimeCapabilityProfile,
+    runCleanups,
     toolSearchCatalogRef,
     toolSearchConfig,
     toolSearchControlsEnabledForRun,

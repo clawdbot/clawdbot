@@ -57,6 +57,11 @@ runtime allowlist disables native Code Mode and leaves the turn without an
 execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
 tools available instead for direct, unsandboxed execution.
 
+When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
+`node_process` as the shell path. This keeps the configured execution host from
+silently falling back to the app-server or Gateway machine.
+
 This Codex-native feature is separate from
 [OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
@@ -218,6 +223,7 @@ rules, paired-node limits, metadata exposure, and troubleshooting.
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | Enable the harness                                  | `plugins.entries.codex.enabled: true`                                                                     | OpenClaw config                    |
 | Hide native Codex session discovery                 | `plugins.entries.codex.config.sessionCatalog.enabled: false`                                              | Codex plugin config                |
+| Include additional local Codex stores (stdio only)  | `plugins.entries.codex.config.sessionCatalog.homes`                                                       | Codex plugin config                |
 | Keep an allowlisted plugin install                  | Include `codex` in `plugins.allow`                                                                        | OpenClaw config                    |
 | Allow eligible OpenAI turns to use Codex implicitly | Exact official HTTPS Responses/ChatGPT route, no authored provider request override, runtime unset/`auto` | OpenAI provider/model config       |
 | Sign in with ChatGPT/Codex OAuth                    | `openclaw models auth login --provider openai`                                                            | CLI auth profile                   |
@@ -254,6 +260,11 @@ Do not set `compaction.model` or `compaction.provider` on Codex-backed
 agents. Codex compacts through its native app-server thread state, so
 OpenClaw ignores those local summarizer overrides at runtime, and
 `openclaw doctor --fix` removes them when the agent uses Codex.
+
+An authored `models.providers.*.models[].contextTokens` cap is forwarded to
+Codex thread start and resume as `model_context_window`. Codex clamps the value
+to the model's native maximum and derives automatic compaction from the capped
+window. When the model entry has no authored cap, OpenClaw sends no override.
 
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
@@ -462,6 +473,18 @@ Then check Codex app-server state:
 /codex binding
 ```
 
+After installing or updating OpenClaw, explicitly verify the managed package
+binary before cutover:
+
+```bash
+openclaw doctor --lint --only codex/managed-app-server --json
+```
+
+For an effective Codex route using the managed stdio app-server, this
+default-disabled check resolves the platform-native executable and requires the
+exact Codex version pinned by OpenClaw. It does not execute custom, remote, or
+macOS desktop-owned app-servers.
+
 `/status` reports the resolved OpenClaw Fast policy (`on`, `off`, or `auto`)
 and the selected runtime. It does not report the upstream service tier actually
 honored or returned for a completed request. `/codex binding` reports the
@@ -499,10 +522,13 @@ Keep provider refs and runtime policy separate:
 | List or filter Codex threads                               | `/codex threads [filter]`                                                                             |
 | Read or update the bound thread's native goal              | `/codex goal [status\|set <objective>\|pause\|resume\|block\|complete\|clear]`                        |
 | List native Codex plugins                                  | `/codex plugins list`                                                                                 |
+| Discover available native Codex marketplace plugins        | `/codex plugins available`                                                                            |
+| Install and authorize one native Codex plugin              | `/codex plugins install <plugin>@<marketplace>`                                                       |
 | Enable or disable a configured native Codex plugin         | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Resume a stored Codex CLI session as a paired-node turn    | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | View non-archived Codex sessions across computers          | Enable Codex supervision and open **Codex Sessions**                                                  |
 | Change the bound thread's model, fast-mode, or permissions | `/codex model <model>`, `/codex fast [on\|off\|status]`, `/codex permissions [default\|yolo\|status]` |
+| Compact the current Codex session                          | `/codex compact`                                                                                      |
 | Stop or steer the active turn                              | `/codex stop`, `/codex steer <text>`                                                                  |
 | Detach the current binding                                 | `/codex detach` (alias `/codex unbind`)                                                               |
 | Send Codex feedback only                                   | `/codex diagnostics [note]`                                                                           |
@@ -547,7 +573,7 @@ route is eligible to select Codex implicitly:
 
 ### Mixed provider deployment
 
-Keep Claude as the default agent and add a named Codex agent:
+Configure a Claude `main` agent and add a named Codex agent:
 
 ```json5
 {
@@ -559,12 +585,12 @@ Keep Claude as the default agent and add a named Codex agent:
     },
   },
   agents: {
+    ownership: "explicit",
     defaults: {
       model: "anthropic/claude-opus-4-6",
     },
     entries: {
       main: {
-        default: true,
         model: "anthropic/claude-opus-4-6",
       },
       codex: {
@@ -576,10 +602,7 @@ Keep Claude as the default agent and add a named Codex agent:
 }
 ```
 
-The `main` agent uses its normal provider path. The `codex` agent uses Codex
-app-server when its effective OpenAI route remains compatible; add explicit
-model-scoped `agentRuntime.id: "codex"` when that should be a fail-closed
-requirement.
+This explicit fleet has no default agent; target `main` or `codex` with a session, `--agent`, or binding. The `main` agent uses its normal provider path. The `codex` agent uses Codex app-server when its effective OpenAI route remains compatible; add explicit model-scoped `agentRuntime.id: "codex"` when that should be a fail-closed requirement.
 
 ### Fail-closed Codex deployment
 
@@ -729,15 +752,21 @@ Common forms:
 - `/codex stop` stops the active turn; `/codex steer <text>` steers it.
 - `/codex model <model>`, `/codex fast [on|off|status]`, and
   `/codex permissions [default|yolo|status]` change per-conversation state.
-- `/codex compact` asks Codex app-server to compact the attached thread.
+- `/codex compact` runs the same completion and session-accounting pipeline as
+  `/compact`, then reports whether Codex compacted the session and the resulting
+  token count. If compaction is skipped or fails, the reply includes the reason.
 - `/codex review` starts Codex native review for the attached thread.
 - `/codex diagnostics [note]` asks before sending Codex feedback for the
   attached thread.
 - `/codex account` shows account and rate-limit status.
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
-- `/codex plugins list`, `/codex plugins enable <name>`, and
-  `/codex plugins disable <name>` manage configured native Codex plugins.
+- `/codex plugins list` shows configured native plugins; `/codex plugins
+available` discovers Codex marketplace plugins in the bound workspace.
+- `/codex plugins install <plugin>@<marketplace>` installs and authorizes one
+  discovered plugin. `/codex plugins enable <name>` and `/codex plugins
+disable <name>` update its persisted policy. Mutations require an owner or
+  `operator.admin` gateway client.
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
 
@@ -815,10 +844,12 @@ model or Codex runtime.
 
 When native Codex plugins are configured, OpenClaw reads and caches one
 runtime-and-workspace-scoped `plugin/installed` snapshot. That one snapshot
-covers both curated and workspace plugins, including disabled plugin ownership.
-`plugin/read` resolves only explicitly configured plugin details; `plugin/list`
-is reserved for finding or repairing an explicitly enabled missing curated
-plugin. OpenClaw never installs, enables, or authenticates workspace plugins.
+covers configured plugins from Codex-discovered marketplaces, including
+disabled plugin ownership. `plugin/read` resolves only explicitly configured
+plugin details. `/codex plugins available` queries `plugin/list` with the
+bound workspace, while `/codex plugins install <plugin>@<marketplace>` is the
+owner- or administrator-authorized installation path. Routine thread setup
+retains existing explicitly configured curated-plugin recovery.
 
 `app/installed` supplies the installed app runtime snapshot, and `app/read`
 supplies authenticated app metadata in batches of at most 100 app IDs. OpenClaw
@@ -846,8 +877,8 @@ the `plugin/installed` snapshot and reads only the exact configured plugin's
 details to keep its apps denied. This check never installs, enables, or
 authenticates the plugin.
 
-OpenClaw does not install unknown apps; it activates only explicitly configured
-marketplace plugins with `plugin/install` and refreshes their installed
+OpenClaw does not install unknown apps or let the model authorize new plugin
+installs. Owner-approved plugin installation refreshes the target runtime
 inventory. Missing inventory methods, authentication errors, transport
 failures, and connector refresh failures fail closed.
 
@@ -1035,6 +1066,15 @@ networking, so a full-access profile would not protect outbound traffic.
 Domain entries use `allow` or `deny`; Unix socket entries use Codex's
 `allow` or `none` values.
 
+### Image loader ownership
+
+For image-capable models with Codex native tools enabled, Codex owns
+`view_image` and OpenClaw suppresses its duplicate loader. The native Codex
+schema accepts one local filesystem `path`. For text-only models, or when the
+native tool surface is disabled, OpenClaw supplies `view_image` with its
+`path`/`paths` schema and delegated vision route. Callers must use the schema
+advertised for the active run.
+
 ### Dynamic tool call timeouts
 
 OpenClaw-owned dynamic tool calls are bounded independently from
@@ -1043,7 +1083,7 @@ second OpenClaw watchdog by default. A positive per-call `timeoutMs`
 argument extends or shortens that specific tool budget, capped at 600000 ms.
 The `image_generate` tool uses `agents.defaults.mediaModels.image.timeoutMs`
 when the tool call does not provide its own timeout, or a 120 second
-image-generation default otherwise. The media-understanding `image` tool
+image-generation default otherwise. The media-understanding `view_image` tool
 uses the selected image-capable `tools.media.models[]` entry's `timeoutSeconds` or its 60 second media default; for
 image understanding, that timeout applies to the request itself and is not
 reduced by earlier preparation work. On timeout, OpenClaw aborts the tool

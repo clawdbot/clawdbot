@@ -330,7 +330,7 @@ describe("createPdfTool", () => {
 
       const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expectFields(loadOptions, { maxBytes: 524_288 });
-      expect(modelAuth.getApiKeyForModel).toHaveBeenCalledWith(
+      expect(modelAuth.getApiKeyForModelCore).toHaveBeenCalledWith(
         expect.objectContaining({ secretSentinels: true }),
       );
     });
@@ -833,7 +833,7 @@ describe("createPdfTool", () => {
         api: "bedrock-converse-stream",
         input: ["text", "image"],
       });
-      vi.mocked(modelAuth.getApiKeyForModel).mockResolvedValue({
+      vi.mocked(modelAuth.getApiKeyForModelCore).mockResolvedValue({
         apiKey: "",
         source: "aws-sdk default chain",
         mode: "aws-sdk",

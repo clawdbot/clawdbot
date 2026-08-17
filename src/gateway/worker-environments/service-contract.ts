@@ -1,5 +1,17 @@
-import type { WorkerDesktopApp } from "../../plugins/capability-provider.types.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { createHash } from "node:crypto";
+import type {
+  WorkerDesktopApp,
+  WorkerMachineOption,
+  WorkerProfile,
+} from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerPlacementMoveSource,
+  WorkerPlacementMoveTarget,
+} from "./placement-move-intent.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerPlacementExecutionMode,
+} from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -7,11 +19,23 @@ import type {
   WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 
+export function deriveEnvironmentIntent(idempotencyKey: string): {
+  environmentId: string;
+  provisionOperationId: string;
+} {
+  const digest = createHash("sha256").update(idempotencyKey).digest("hex");
+  return {
+    environmentId: `worker:${digest.slice(0, 32)}`,
+    provisionOperationId: `provision:v2:${digest}`,
+  };
+}
+
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   leaseId: string | null;
+  sharedHost: boolean | null;
   state: WorkerEnvironmentState;
   ownerEpoch: number;
   createdAtMs: number;
@@ -40,7 +64,12 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
-  create(profileId: string, idempotencyKey: string): Promise<WorkerEnvironmentServiceRecord>;
+  listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
+  create(
+    profileId: string,
+    idempotencyKey: string,
+    machineClass?: string,
+  ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   observeDesktop(request: {
@@ -60,12 +89,30 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  executionMode: WorkerPlacementExecutionMode;
+  idempotencyKey?: string;
+  deviceId?: string;
+  machineClass?: string;
+  inheritedProfile?: {
+    providerId: string;
+    profileSnapshot: WorkerProfile;
+  };
 };
+
+export type WorkerPlacementMoveDestination = Pick<
+  WorkerPlacementDispatchRequest,
+  "profileId" | "executionMode" | "deviceId" | "inheritedProfile"
+>;
 
 export type WorkerPlacementReclaimRequest = {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+};
+
+export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
+  source: WorkerPlacementMoveSource;
+  target: WorkerPlacementMoveTarget;
 };
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
@@ -74,9 +121,13 @@ export type WorkerPlacementDispatchContract = {
   dispatch(
     request: WorkerPlacementDispatchRequest,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
+  move?(
+    request: WorkerPlacementMoveRequest,
+    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "active" }>>;
   reclaim?(
     request: WorkerPlacementReclaimRequest,
-  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>>;
+  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,
     onCleanupError?: (error: unknown) => void,

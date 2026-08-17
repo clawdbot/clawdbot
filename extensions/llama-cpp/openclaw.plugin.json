@@ -1,7 +1,10 @@
 {
   "id": "llama-cpp",
   "name": "llama.cpp Provider",
-  "description": "Local GGUF text inference and embeddings through node-llama-cpp.",
+  "description": "Managed local llama.cpp server for GGUF chat and embeddings.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
@@ -31,7 +34,7 @@
       "appGuidedDiscovery": true,
       "appGuidedActionLabel": "Set up model",
       "choiceLabel": "llama.cpp",
-      "choiceHint": "Run one private GGUF model directly inside this Gateway",
+      "choiceHint": "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
       "groupId": "llama-cpp",
       "groupLabel": "Local llama.cpp",
       "groupHint": "No API key required"

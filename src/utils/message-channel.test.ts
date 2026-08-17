@@ -119,10 +119,11 @@ describe("message-channel", () => {
     try {
       const channelModule = await import("./message-channel.js");
       const promptModule = await import("../channels/plugins/native-approval-prompt.js");
-      for (const channel of ["webchat", "discord", "imessage", "telegram", "whatsapp"]) {
+      for (const channel of ["webchat", "discord", "imessage", "qqbot", "telegram", "whatsapp"]) {
         expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(true);
       }
       expect(promptModule.isKnownNativeApprovalPromptChannel("whatsapp")).toBe(true);
+      expect(promptModule.isKnownNativeApprovalPromptChannel("qqbot")).toBe(true);
       for (const channel of ["feishu", "msteams", "line", "heartbeat", "", "TELEGRAM"]) {
         expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(false);
       }

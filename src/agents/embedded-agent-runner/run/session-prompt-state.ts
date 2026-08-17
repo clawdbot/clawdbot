@@ -91,9 +91,10 @@ export function createEmbeddedRunSessionPromptState(input: {
     activeSessionFile = resolvedTarget.sessionKey;
     adoptSessionId(resolvedTarget.sessionId);
   };
-  const activateInternalPrompt = (prompt: string, persisted: boolean) => {
-    activePrompt = { override: prompt, persisted, internal: true };
-    suppressNextUserMessagePersistence = persisted;
+  // Internal control prompts are model-only context, never operator-authored transcript turns.
+  const activateInternalPrompt = (prompt: string) => {
+    activePrompt = { override: prompt, persisted: true, internal: true };
+    suppressNextUserMessagePersistence = true;
   };
   const onUserMessagePersisted: NonNullable<
     PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
@@ -173,7 +174,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     adoptSessionTarget,
     activateInternalPrompt,
     continueFromCurrentTranscript: () =>
-      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true),
+      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT),
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
     prepareCompactedTranscriptRetry: async () => {
@@ -181,7 +182,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;
       } else if (activePrompt.persisted) {
-        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
+        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
       }
     },
   };

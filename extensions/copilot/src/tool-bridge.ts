@@ -15,6 +15,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   extractToolErrorMessage,
   getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
   isSubagentSessionKey,
   isToolResultError,
   resolveAttemptSpawnWorkspaceDir,
@@ -23,6 +24,7 @@ import {
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -135,7 +137,7 @@ interface CopilotToolBridgeInput {
    * `src/agents/pi-embedded-runner/run/attempt.ts:1107-1113` and
    * `extensions/codex/src/app-server/run-attempt.ts:539-541`.
    */
-  onYieldDetected?: (message?: string) => void;
+  onYieldDetected?: (message?: string, acknowledgment?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
   createOpenClawCodingTools?: CreateOpenClawCodingToolsForBridge;
   beforeExecute?: (ctx: {
@@ -408,6 +410,7 @@ function buildOpenClawCodingToolsOptions(
       elevated: a.bashElevated,
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
+    messageChannel: a.messageChannel,
     toolBindings: a.toolBindings,
     chatType: a.chatType,
     agentAccountId: a.agentAccountId,
@@ -477,7 +480,7 @@ function buildOpenClawCodingToolsOptions(
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,
     isTurnTainted: a.isTurnTainted,
-    onYield: (message) => {
+    onYield: (message, acknowledgment) => {
       // Notify the caller first so the final attempt result can carry
       // yieldDetected even if the abort below races a concurrent
       // settle path. Errors thrown by the caller's handler must not
@@ -486,7 +489,7 @@ function buildOpenClawCodingToolsOptions(
       // calling abort) and codex (`onYieldDetected()` runs before the
       // run-abort controller fires).
       try {
-        input.onYieldDetected?.(message);
+        input.onYieldDetected?.(message, acknowledgment);
       } catch (error) {
         console.warn("[copilot-tool-bridge] onYieldDetected handler threw; continuing", error);
       }
@@ -522,6 +525,8 @@ function convertOpenClawToolToSdkTool(
     );
   }
 
+  const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
+  const ownerMutation = ownerKey ? { ownerKey } : undefined;
   let sequentialLock = Promise.resolve();
   const notifyToolResult = (result: unknown, isError: boolean) => {
     try {
@@ -555,6 +560,7 @@ function convertOpenClawToolToSdkTool(
       executionStarted,
       outcome: "failure",
       failure: { error: errorMessage },
+      ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(
       sanitizeToolResult({
@@ -649,6 +655,7 @@ function convertOpenClawToolToSdkTool(
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",
       ...(resultIsError ? { failure: { error: resultError ?? "tool returned an error" } } : {}),
+      ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(sanitizedResult, resultIsError);
     notifyToolCompleted({
@@ -712,6 +719,8 @@ async function executeCatalogTool(
   params: CatalogExecuteParams,
 ): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> {
   const sourceTool = params.tool as AnyAgentTool;
+  const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
+  const ownerMutation = ownerKey ? { ownerKey } : undefined;
   const startedAt = Date.now();
   let preparedArgs: unknown = params.input;
   let executionStarted = false;
@@ -740,6 +749,7 @@ async function executeCatalogTool(
       executionStarted,
       outcome: isError ? "failure" : "success",
       ...(error ? { failure: { error } } : {}),
+      ...(ownerMutation ? { ownerMutation } : {}),
     });
     input.attemptParams?.onAgentToolResult?.({
       toolName: params.toolName,
@@ -767,6 +777,7 @@ async function executeCatalogTool(
         executionStarted,
         outcome: "failure",
         failure: { error: message },
+        ...(ownerMutation ? { ownerMutation } : {}),
       });
     }
     const failure = sanitizeToolResult({
@@ -910,8 +921,4 @@ function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
     .filter(([, count]) => count > 1)
     .map(([name]) => name)
     .toSorted();
-}
-
-function toCopilotToolError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

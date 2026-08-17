@@ -4,8 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import { countPendingDescendantRuns } from "./subagent-registry-read.js";
-import { countActiveDescendantRuns } from "./subagent-registry-read.js";
+import { countPendingDescendantRuns, countActiveDescendantRuns } from "./subagent-registry-read.js";
 
 vi.mock("../../../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../../../config/config.js")>(
@@ -296,40 +295,5 @@ describe("subagent registry nested agent tracking", () => {
       cleanupCompletedAt: 5,
     });
     expect(countPendingDescendantRuns(parentSessionKey)).toBe(0);
-  });
-
-  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", () => {
-    const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } = subagentRegistry;
-
-    addSubagentRunForTests({
-      runId: "run-self",
-      childSessionKey: "agent:main:subagent:worker",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "self",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 1,
-      endedAt: 2,
-      cleanupHandled: false,
-      cleanupCompletedAt: undefined,
-    });
-
-    addSubagentRunForTests({
-      runId: "run-sibling",
-      childSessionKey: "agent:main:subagent:sibling",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "sibling",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 1,
-      endedAt: 2,
-      cleanupHandled: false,
-      cleanupCompletedAt: undefined,
-    });
-
-    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-self")).toBe(1);
-    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-sibling")).toBe(1);
   });
 });

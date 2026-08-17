@@ -13,11 +13,11 @@ import {
 } from "./openai-responses-compaction-replay.js";
 import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
-import { stripOpenAIResponsesCompactionReplayCheckpoint } from "./openai-responses-replay.js";
 import {
   processResponsesStream,
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
+import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
 const model = {
   id: "gpt-5.6-luna",
@@ -139,13 +139,13 @@ function responseMessage(id: string, text: string) {
 describe("OpenAI Responses compaction replay", () => {
   it("strips only exact compaction checkpoints with structural sharing", () => {
     const unchanged = createOutput();
-    expect(stripOpenAIResponsesCompactionReplayCheckpoint(unchanged)).toBe(unchanged);
+    expect(stripCompactionReplayCheckpoint(unchanged)).toBe(unchanged);
 
     const checkpoint = createAssistant(
       [{ type: "text", text: "checkpoint owner" }],
       compactionState(),
     );
-    const stripped = stripOpenAIResponsesCompactionReplayCheckpoint(checkpoint);
+    const stripped = stripCompactionReplayCheckpoint(checkpoint);
     expect(stripped).not.toBe(checkpoint);
     expect(stripped.content).toBe(checkpoint.content);
     expect(stripped).not.toHaveProperty("providerReplay");
@@ -153,10 +153,10 @@ describe("OpenAI Responses compaction replay", () => {
 
     const suppression = createOutput();
     suppressOpenAIResponsesCompaction(suppression, model, replayIdentity);
-    expect(stripOpenAIResponsesCompactionReplayCheckpoint(suppression)).toBe(suppression);
+    expect(stripCompactionReplayCheckpoint(suppression)).toBe(suppression);
 
     const unrelated = createAssistant([], compactionState(model, { type: "future-replay" }));
-    expect(stripOpenAIResponsesCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
+    expect(stripCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
   });
 
   it("persists a streamed compaction output item as opaque provider replay state", async () => {
@@ -928,19 +928,15 @@ describe("OpenAI Responses compaction replay", () => {
     expect(input.map((item) => item.type)).toEqual(["compaction", "message"]);
   });
 
-  it("replays when session and auth identities match", () => {
-    const assistant = createOutput();
-    assistant.providerReplay = compactionState(model, { replayIndex: 0 });
+  it.each(responseConverters)(
+    "$name replays an empty checkpoint owner when request identities match",
+    ({ convert }) => {
+      const assistant = createOutput();
+      assistant.providerReplay = compactionState(model, { replayIndex: 0 });
 
-    const input = convertResponsesMessages(
-      model,
-      { messages: [assistant] },
-      new Set(["openai"]),
-      replayIdentity,
-    );
-
-    expect(input.some((item) => item.type === "compaction")).toBe(true);
-  });
+      expect(convert({ messages: [assistant] }).map((item) => item.type)).toEqual(["compaction"]);
+    },
+  );
 
   it.each(responseConverters)(
     "$name does not replay or prune across a different or missing request identity",

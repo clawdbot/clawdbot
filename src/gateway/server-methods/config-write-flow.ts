@@ -15,7 +15,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
+import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
 import { invalidateConfigGetResponseCache } from "../config-get-response.js";
@@ -137,7 +137,7 @@ export function didActiveSharedGatewayAuthChange(params: {
   fallbackSource?: OpenClawConfig;
   next: OpenClawConfig;
 }): boolean {
-  const active = getActiveSecretsRuntimeSnapshot();
+  const active = getActiveSecretsRuntimeSnapshotState();
   if (!active) {
     return didSharedGatewayAuthChange(params.fallbackPrev, params.next);
   }

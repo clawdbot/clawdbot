@@ -2,9 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
+import { runSecurityAuditCore } from "./audit.js";
 
-type ChannelSecurityFinding = Awaited<ReturnType<typeof collectChannelSecurityFindings>>[number];
+type ChannelSecurityFinding = Awaited<
+  ReturnType<typeof collectChannelSecurityFindingsCore>
+>[number];
 
 function requireFinding(
   findings: ChannelSecurityFinding[],
@@ -78,6 +81,37 @@ function createDmPlugin(
 }
 
 describe("security audit channel dm policy", () => {
+  it("keeps producer-owned channel severity through the audit summary", async () => {
+    const pluginOptions = {
+      accounts: { default: { policy: "disabled", allowFrom: [] } },
+    };
+    const plugin = createDmPlugin(pluginOptions);
+    if (!plugin.security) {
+      throw new Error("test plugin security adapter missing");
+    }
+    plugin.security.collectWarnings = () => [
+      {
+        checkId: "channels.whatsapp.test.open_access",
+        severity: "critical",
+        title: "WhatsApp security warning",
+        detail: "Open access test finding",
+      },
+    ];
+
+    const auditOptions = { config: {}, includeFilesystem: false } as const;
+    const baseline = await runSecurityAuditCore({
+      ...auditOptions,
+      plugins: [createDmPlugin(pluginOptions)],
+    });
+    const report = await runSecurityAuditCore({ ...auditOptions, plugins: [plugin] });
+
+    expect(requireFinding(report.findings, "channels.whatsapp.test.open_access")).toMatchObject({
+      severity: "critical",
+      detail: "Open access test finding",
+    });
+    expect(report.summary.critical).toBe(baseline.summary.critical + 1);
+  });
+
   it.each([
     {
       name: "global main + winning isolated binding is safe",
@@ -151,7 +185,7 @@ describe("security audit channel dm policy", () => {
       expectedCollisions: 0,
     },
   ])("$name", async ({ cfg, expectedCollisions, remediation }) => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg,
       plugins: [createDmPlugin()],
     });
@@ -164,7 +198,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("detects cross-account collisions with one admitted sender per account", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [
         createDmPlugin({
@@ -185,7 +219,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("keeps same-named accounts attributed across channels", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [
         createDmPlugin({ accounts: { default: { allowFrom: ["user-a"] } } }),
@@ -210,8 +244,8 @@ describe("security audit channel dm policy", () => {
     };
     const plugin = createDmPlugin();
 
-    const linkedFindings = await collectChannelSecurityFindings({ cfg, plugins: [plugin] });
-    const distinctFindings = await collectChannelSecurityFindings({
+    const linkedFindings = await collectChannelSecurityFindingsCore({ cfg, plugins: [plugin] });
+    const distinctFindings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [plugin],
     });
@@ -221,7 +255,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("keeps separate collision topologies distinct", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: {
         agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
         session: { dmScope: "main" },
@@ -251,7 +285,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("uses the channel-owned DM route for wildcard senders", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [
         createDmPlugin({
@@ -304,7 +338,7 @@ describe("security audit channel dm policy", () => {
       expectedCollisions: 0,
     },
   ])("models wildcard namespace: $name", async ({ dmScope, plugins, expectedCollisions }) => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope } },
       plugins: plugins(),
     });
@@ -375,7 +409,7 @@ describe("security audit channel dm policy", () => {
       expectedCollisions: 1,
     },
   ])("intersects wildcard namespace: $name", async ({ cfg, plugins, expectedCollisions }) => {
-    const findings = await collectChannelSecurityFindings({ cfg, plugins });
+    const findings = await collectChannelSecurityFindingsCore({ cfg, plugins });
     const collisions = collisionFindings(findings);
 
     expect(collisions).toHaveLength(expectedCollisions);
@@ -386,7 +420,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("does not let exact bindings on finite probe strings hide an open-DM collision", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: {
         session: { dmScope: "main" },
         bindings: [
@@ -419,7 +453,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("audits exact DM bindings admitted by wildcard policy", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: {
         session: { dmScope: "per-account-channel-peer" },
         bindings: [
@@ -466,7 +500,7 @@ describe("security audit channel dm policy", () => {
       }
       return { sessionKey: route.sessionKey };
     });
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [
         createDmPlugin({
@@ -482,7 +516,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("warns when custom finite routing omits an unknown-principal policy", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [
         createDmPlugin({
@@ -503,7 +537,7 @@ describe("security audit channel dm policy", () => {
   });
 
   it("flags public DMs and shared session ownership together", async () => {
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
       plugins: [
         createDmPlugin({

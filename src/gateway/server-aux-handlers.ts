@@ -2,7 +2,11 @@
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
+import {
+  type AgentRunDelegatedAuthority,
+  registerAgentRunDelegatedAuthorityClosedHandler,
+} from "../infra/agent-run-registry.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
@@ -21,8 +25,8 @@ import {
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -127,6 +131,7 @@ export function createGatewayAuxHandlers(params: {
   getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
   onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  onAgentRunAuthorityClosed?: (authority: AgentRunDelegatedAuthority) => void;
   validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
   chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
   registerWorkerTurnClaimClosedHandler?: (
@@ -153,11 +158,17 @@ export function createGatewayAuxHandlers(params: {
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       onLifecycle: params.onApprovalLifecycle,
-      ...(params.validateAgentRuntimeDelegatedAuthority
-        ? {
-            validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
-          }
-        : {}),
+      // Timeout expiry is gateway-clock truth: publish the terminal like a
+      // resolve so reviewer surfaces need not infer it from their own clocks.
+      // system-agent approvals have no forwarder/push route to notify.
+      onExpired: (record, liveRecord) => {
+        if (approvalKind === "system-agent") {
+          return;
+        }
+        const publication = { kind: approvalKind, record, liveRecord };
+        publishAuthorityClosure(publication as PendingAuthorityPublication);
+      },
+      validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
       onError: (error, context) =>
         params.log.error?.(
           `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
@@ -194,7 +205,7 @@ export function createGatewayAuxHandlers(params: {
   );
   const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
   type PendingAuthorityPublication = {
-    kind: "exec" | "plugin";
+    kind: ChannelApprovalKind;
     record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"];
     liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"];
   };
@@ -248,6 +259,7 @@ export function createGatewayAuxHandlers(params: {
       } catch (error) {
         params.log.error?.(`plugin approvals: authority-close settlement failed: ${String(error)}`);
       }
+      params.onAgentRunAuthorityClosed?.(authority);
     },
   );
   const unregisterWorkerTurnClaimClosedObserver = params.registerWorkerTurnClaimClosedHandler?.(
@@ -280,7 +292,7 @@ export function createGatewayAuxHandlers(params: {
   };
   const cancelRunBoundApprovals = (runId: string, context: GatewayRequestContext): number => {
     const publish = (
-      kind: "exec" | "plugin",
+      kind: ChannelApprovalKind,
       record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"],
       liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"],
     ) => {
@@ -381,11 +393,11 @@ export function createGatewayAuxHandlers(params: {
               const restartedChannels = new Set<ChannelKind>();
               try {
                 for (;;) {
-                  const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+                  const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
                   if (!previousSnapshot) {
                     throw new Error("Secrets runtime snapshot is not active.");
                   }
-                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                   const previousGenerationOwnership =
                     captureSharedGatewaySessionGenerationOwnership(
                       params.sharedGatewaySessionGenerationState,
@@ -404,7 +416,7 @@ export function createGatewayAuxHandlers(params: {
                       publishFailureAsDegraded: true,
                       forceColdRefKeys: reloadOptions?.forceColdRefKeys,
                       canPublishFailureAsDegraded: () =>
-                        getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
+                        getActiveSecretsRuntimeSnapshotRevisionState() === previousSnapshotRevision,
                     },
                   );
                   const plan = buildReloadPlan(
@@ -425,7 +437,7 @@ export function createGatewayAuxHandlers(params: {
                         activate: true,
                       },
                       async () => {
-                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                         generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
                           params.sharedGatewaySessionGenerationState,
                           previousGenerationOwnership,

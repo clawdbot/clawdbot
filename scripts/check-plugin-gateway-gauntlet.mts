@@ -7,6 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
+import { normalizeCsvOrLooseStringList } from "../packages/normalization-core/src/string-normalization.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -57,7 +62,6 @@ const SINGLE_VALUE_FLAGS = new Set([
   "--wall-anomaly-multiplier",
 ]);
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 type ProcessSignal = `SIG${string}`;
@@ -158,7 +162,7 @@ export function parseArgs(argv: string[]) {
     failOnObservation: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION === "1",
     keepRunRoot: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT === "1",
   };
-  const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
+  const envIds = normalizeCsvOrLooseStringList(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
   const seenSingleValueFlags = new Set<string>();
   parseArgv: for (let index = 0; index < args.length; index += 1) {
@@ -326,15 +330,6 @@ Environment:
   OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT=1
   OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES  QA summary read ceiling
 `);
-}
-
-function normalizeCsv(raw: string | undefined) {
-  return raw
-    ? raw
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0)
-    : [];
 }
 
 function assertNoDuplicateValues(values: string[], label: string) {
@@ -550,13 +545,10 @@ function stripAnsi(value: string) {
   return value.replace(ANSI_PATTERN, "");
 }
 
-function resolveTimerTimeoutMs(valueMs: number) {
-  const value = Number.isFinite(valueMs) ? Math.floor(valueMs) : MAX_TIMER_TIMEOUT_MS;
-  return Math.min(Math.max(value, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: number | undefined) {
-  return valueMs === undefined || valueMs <= 0 ? null : resolveTimerTimeoutMs(valueMs);
+  return valueMs === undefined || valueMs <= 0
+    ? null
+    : resolveTimerTimeoutMs(valueMs, MAX_TIMER_TIMEOUT_MS);
 }
 
 function writeCommandLog(params: {
@@ -614,7 +606,10 @@ export function runMeasuredCommandLive(params: GauntletMeasuredCommandParams) {
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
     const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
     const timeoutMs = resolveOptionalTimerTimeoutMs(params.timeoutMs);
-    const timeoutKillGraceMs = resolveTimerTimeoutMs(params.timeoutKillGraceMs ?? 5_000);
+    const timeoutKillGraceMs = resolveTimerTimeoutMs(
+      params.timeoutKillGraceMs ?? 5_000,
+      MAX_TIMER_TIMEOUT_MS,
+    );
     const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
     const useProcessGroup =
       process.platform !== "win32" &&

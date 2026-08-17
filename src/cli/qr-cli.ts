@@ -7,12 +7,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
-import { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
 
@@ -220,6 +224,10 @@ export function registerQrCli(program: Command) {
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,
             }),
+          loadLocalTlsFingerprint: async () => {
+            const tls = await loadGatewayTlsRuntime(cfg.gateway?.tls);
+            return tls.enabled ? tls.fingerprintSha256 : undefined;
+          },
         });
 
         if (!resolved.ok) {
@@ -277,7 +285,7 @@ export function registerQrCli(program: Command) {
 
         defaultRuntime.log(lines.join("\n"));
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });

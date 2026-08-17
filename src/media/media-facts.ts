@@ -292,30 +292,43 @@ export function isGenericBinaryMediaContentType(contentType?: string | null): bo
   );
 }
 
-/** Returns whether a fact can produce native image input. */
-export function isImageMediaFact(fact: MediaFactInput): boolean {
+function classifyMediaFact(fact: MediaFactInput): MediaKind | undefined {
   if (fact.kind && fact.kind !== "unknown") {
-    return fact.kind === "image" || fact.kind === "sticker";
+    return fact.kind;
   }
   const normalizedContentType = normalizeMimeType(fact.contentType);
   if (normalizedContentType && !isGenericBinaryMediaContentType(normalizedContentType)) {
     const mimeKind = kindFromMime(normalizedContentType);
     if (mimeKind) {
-      return mimeKind === "image";
+      return mimeKind;
     }
     // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
-    return normalizedContentType === "image" || normalizedContentType === "sticker";
+    return LEGACY_MEDIA_KINDS.has(normalizedContentType as MediaKind)
+      ? (normalizedContentType as MediaKind)
+      : undefined;
   }
   const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
   const inferredMime = mimeTypeFromFilePath(pathValue);
   if (inferredMime === "image/svg+xml") {
-    return false;
+    return undefined;
   }
-  if (kindFromMime(inferredMime) === "image") {
-    return true;
+  const inferredKind = kindFromMime(inferredMime);
+  if (inferredKind) {
+    return inferredKind;
   }
   const extension = getFileExtension(pathValue);
-  return extension === ".tif" || extension === ".tiff";
+  return extension === ".tif" || extension === ".tiff" ? "image" : undefined;
+}
+
+/** Returns whether a fact can produce native image input. */
+export function isImageMediaFact(fact: MediaFactInput): boolean {
+  const kind = classifyMediaFact(fact);
+  return kind === "image" || kind === "sticker";
+}
+
+/** Returns whether a fact can produce native video input. */
+export function isVideoMediaFact(fact: MediaFactInput): boolean {
+  return classifyMediaFact(fact) === "video";
 }
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {

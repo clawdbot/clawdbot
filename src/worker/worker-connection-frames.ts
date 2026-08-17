@@ -10,6 +10,12 @@ import {
   type WorkerLiveEventResponseFrame,
   WorkerLiveEventResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  type WorkerSessionsSendParams,
+  type WorkerSessionsSendResponseFrame,
+  WorkerSessionsSendResponseFrameSchema,
+  type WorkerSessionsSpawnParams,
+  type WorkerSessionsSpawnResponseFrame,
+  WorkerSessionsSpawnResponseFrameSchema,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResponseFrame,
   WorkerTranscriptCommitResponseFrameSchema,
@@ -50,6 +56,14 @@ const WORKER_REQUEST_SPECS = {
     method: "worker.live-event",
     responseSchema: WorkerLiveEventResponseFrameSchema,
   },
+  "sessions-spawn": {
+    method: "worker.sessions.spawn",
+    responseSchema: WorkerSessionsSpawnResponseFrameSchema,
+  },
+  "sessions-send": {
+    method: "worker.sessions.send",
+    responseSchema: WorkerSessionsSendResponseFrameSchema,
+  },
   "inference-start": {
     method: "worker.inference.start",
     responseSchema: WorkerInferenceStartResponseFrameSchema,
@@ -65,6 +79,8 @@ type WorkerRequestParams = {
   heartbeat: WorkerHeartbeatParams;
   transcript: WorkerTranscriptCommitParams;
   "live-event": WorkerLiveEventParams;
+  "sessions-spawn": WorkerSessionsSpawnParams;
+  "sessions-send": WorkerSessionsSendParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;
 };
@@ -72,12 +88,15 @@ type WorkerResponseFrames = {
   heartbeat: WorkerHeartbeatResponseFrame;
   transcript: WorkerTranscriptCommitResponseFrame;
   "live-event": WorkerLiveEventResponseFrame;
+  "sessions-spawn": WorkerSessionsSpawnResponseFrame;
+  "sessions-send": WorkerSessionsSendResponseFrame;
   "inference-start": WorkerInferenceStartResponseFrame;
   "inference-cancel": WorkerInferenceCancelResponseFrame;
 };
 type WorkerResponseFrame = WorkerResponseFrames[WorkerRequestKind];
 type PendingRequestValue = {
   kind: WorkerRequestKind;
+  timeoutMs?: number;
   // Durable replay can emit its terminal as the next socket frame. Reset the
   // consumer cursor synchronously after validation, before Promise continuation.
   beforeResolve?: (frame: WorkerResponseFrame) => void;
@@ -172,6 +191,7 @@ export class WorkerConnectionFrameDispatcher {
     kind: K,
     params: WorkerRequestParams[K],
     beforeResolve?: (frame: WorkerResponseFrames[K]) => void,
+    timeoutMs?: number,
   ): Promise<WorkerResponseFrames[K]> {
     const id = randomUUID();
     const spec = WORKER_REQUEST_SPECS[kind];
@@ -182,6 +202,7 @@ export class WorkerConnectionFrameDispatcher {
     return this.sendRequest(id, frame, {
       kind,
       ...(wrappedBeforeResolve ? { beforeResolve: wrappedBeforeResolve } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     }) as Promise<WorkerResponseFrames[K]>;
   }
 
@@ -234,7 +255,7 @@ export class WorkerConnectionFrameDispatcher {
     }
     const pending = this.pending.add(id, {
       value,
-      timeoutMs: this.options.requestTimeoutMs,
+      timeoutMs: value.timeoutMs ?? this.options.requestTimeoutMs,
       timeoutError: () =>
         new WorkerConnectionInterruptedError(`worker ${value.kind} response timed out`),
       onTimeout: () => this.options.interruptReadySocket(readySocket),

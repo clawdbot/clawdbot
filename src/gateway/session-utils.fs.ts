@@ -4,10 +4,15 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber as resolvePositiveUsageNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -22,12 +27,7 @@ import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcr
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
-import { truncateUtf16Safe } from "../utils.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
-import { stripEnvelope } from "./chat-sanitize.js";
+import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import {
   resolveSessionTranscriptCandidates,
   resolveSessionTranscriptResetArchiveCandidatesAsync,
@@ -38,39 +38,11 @@ import {
   extractJsonStringFieldPrefix,
   readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
+import {
+  attachOpenClawTranscriptMeta,
+  projectTranscriptEntryMessage,
+} from "./session-transcript-message.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
-
-/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
-export function attachOpenClawTranscriptMeta(
-  message: unknown,
-  meta: Record<string, unknown>,
-): unknown {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const existing =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: {
-      ...existing,
-      ...meta,
-    },
-  };
-}
-
-function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
@@ -468,14 +440,16 @@ function parseRecentTranscriptTailSnapshot(
     const entry = parseTranscriptRecord(line);
     return entry ? [entry] : [];
   });
-  const selected = selectSessionTranscriptActiveEntries({
-    entries,
-    recordOf: (entry) => entry.record,
-    failClosedOnInvalidLeafControl: true,
-  });
+  const selected = projectResetBoundary(
+    selectSessionTranscriptActiveEntries({
+      entries,
+      recordOf: (entry) => entry.record,
+      failClosedOnInvalidLeafControl: true,
+    }),
+  );
   const messages: unknown[] = [];
   for (const entry of selected) {
-    const message = parsedSessionEntryToMessage(entry.record, messages.length + 1);
+    const message = projectTranscriptEntryMessage(entry.record, messages.length + 1);
     if (message) {
       messages.push(message);
     }
@@ -487,7 +461,7 @@ function parseRecentTranscriptTailSnapshot(
 }
 
 function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
-  return Boolean(record.message) || record.type === "compaction";
+  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
 }
 
 function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {
@@ -509,7 +483,7 @@ function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {
           const role = (record.message as { role?: unknown } | undefined)?.role;
           return role === "user" || role === "assistant";
         });
-  return [...kept, ...entries.slice(boundaryIndex + 1)];
+  return [...kept, ...entries.slice(boundaryIndex)];
 }
 
 function toIndexedEntries(entries: TranscriptRecord[]): IndexedTranscriptEntry[] {
@@ -860,48 +834,8 @@ async function readRecentSessionSnapshotFromPathAsync(
   return parseRecentTranscriptTailSnapshot(lines, maxMessages);
 }
 
-function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const entry = parsed as Record<string, unknown>;
-  if (entry.message) {
-    const recordTimestampMs =
-      typeof entry.timestamp === "string"
-        ? Date.parse(entry.timestamp)
-        : typeof entry.timestamp === "number"
-          ? entry.timestamp
-          : Number.NaN;
-    const idempotencyKey = readTranscriptMessageIdempotencyKey(entry.message);
-    return attachOpenClawTranscriptMeta(entry.message, {
-      ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
-      seq,
-    });
-  }
-
-  // Compaction entries are not "message" records, but they're useful context for debugging.
-  // Emit a lightweight synthetic message that the Web UI can render as a divider.
-  if (entry.type === "compaction") {
-    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(ts) ? ts : Date.now();
-    return {
-      role: "system",
-      content: [{ type: "text", text: "Compaction" }],
-      timestamp,
-      __openclaw: {
-        kind: "compaction",
-        id: typeof entry.id === "string" ? entry.id : undefined,
-        seq,
-      },
-    };
-  }
-  return null;
-}
-
 function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
-  return parsedSessionEntryToMessage(entry.record, entry.seq);
+  return projectTranscriptEntryMessage(entry.record, entry.seq);
 }
 
 function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
@@ -914,11 +848,12 @@ export { resolveSessionTranscriptCandidates } from "./session-transcript-files.f
 export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,
+  byteLength: (item: T) => number = jsonUtf8Bytes,
 ): { items: T[]; bytes: number } {
   if (items.length === 0) {
     return { items, bytes: 2 };
   }
-  const parts = items.map((item) => jsonUtf8Bytes(item));
+  const parts = items.map(byteLength);
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
   while (bytes > maxBytes && start < items.length - 1) {
@@ -968,16 +903,12 @@ function extractTranscriptUsageCost(raw: unknown): number | undefined {
     return undefined;
   }
   const total = (cost as { total?: unknown }).total;
-  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : undefined;
-}
-
-function resolvePositiveUsageNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(total);
 }
 
 function extractTranscriptContentEstimatedChars(content: unknown): number {
   if (typeof content === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
+    const normalized = content.trim();
     return normalized ? estimateStringChars(normalized) : 0;
   }
   if (!Array.isArray(content)) {
@@ -996,7 +927,7 @@ function extractTranscriptContentEstimatedChars(content: unknown): number {
     if (type !== "text" && type !== "output_text" && type !== "input_text") {
       continue;
     }
-    const normalized = stripInlineDirectiveTagsForDisplay(record.text).text.trim();
+    const normalized = record.text.trim();
     if (normalized) {
       chars += estimateStringChars(normalized);
     }
@@ -1284,99 +1215,6 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   }
 }
 
-type TranscriptContentEntry = {
-  type?: string;
-  text?: string;
-  name?: string;
-};
-
-type TranscriptPreviewMessage = {
-  role?: string;
-  content?: string | TranscriptContentEntry[];
-  text?: string;
-  toolName?: string;
-  tool_name?: string;
-};
-
-function normalizeRole(role: string | undefined, isTool: boolean): SessionPreviewItem["role"] {
-  if (isTool) {
-    return "tool";
-  }
-  switch (normalizeLowercaseStringOrEmpty(role)) {
-    case "user":
-      return "user";
-    case "assistant":
-      return "assistant";
-    case "system":
-      return "system";
-    case "tool":
-      return "tool";
-    default:
-      return "other";
-  }
-}
-
-function truncatePreviewText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  // The preview entry point clamps maxChars to at least 20, so the suffix budget stays positive.
-  return `${truncateUtf16Safe(text, maxChars - 3)}...`;
-}
-
-function extractPreviewText(message: TranscriptPreviewMessage): string | null {
-  const role = normalizeLowercaseStringOrEmpty(message.role);
-  if (role === "assistant") {
-    const assistantText = extractAssistantVisibleText(message);
-    if (assistantText) {
-      const normalized = stripInlineDirectiveTagsForDisplay(assistantText).text.trim();
-      return normalized ? normalized : null;
-    }
-    return null;
-  }
-  if (typeof message.content === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(message.content).text.trim();
-    return normalized ? normalized : null;
-  }
-  if (Array.isArray(message.content)) {
-    const parts = message.content
-      .map((entry) =>
-        typeof entry?.text === "string" ? stripInlineDirectiveTagsForDisplay(entry.text).text : "",
-      )
-      .filter((text) => text.trim().length > 0);
-    if (parts.length > 0) {
-      return parts.join("\n").trim();
-    }
-  }
-  if (typeof message.text === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(message.text).text.trim();
-    return normalized ? normalized : null;
-  }
-  return null;
-}
-
-function isToolCall(message: TranscriptPreviewMessage): boolean {
-  return hasToolCall(message as Record<string, unknown>);
-}
-
-function extractToolNames(message: TranscriptPreviewMessage): string[] {
-  return extractToolCallNames(message as Record<string, unknown>);
-}
-
-function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
-  if (!Array.isArray(message.content)) {
-    return null;
-  }
-  for (const entry of message.content) {
-    const raw = normalizeLowercaseStringOrEmpty(entry?.type);
-    if (!raw || raw === "text" || raw === "toolcall" || raw === "tool_call") {
-      continue;
-    }
-    return `[${raw}]`;
-  }
-  return null;
-}
-
 export function buildSessionPreviewItems(
   messages: readonly unknown[],
   maxItems: number,
@@ -1384,39 +1222,11 @@ export function buildSessionPreviewItems(
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    const projected = projectSessionDisplayMessage(message, { maxChars });
+    if (!projected) {
       continue;
     }
-    const previewMessage = message as TranscriptPreviewMessage;
-    const toolCall = isToolCall(previewMessage);
-    const role = normalizeRole(previewMessage.role, toolCall);
-    let text = extractPreviewText(previewMessage);
-    if (!text) {
-      const toolNames = extractToolNames(previewMessage);
-      if (toolNames.length > 0) {
-        const shown = toolNames.slice(0, 2);
-        const overflow = toolNames.length - shown.length;
-        text = `call ${shown.join(", ")}`;
-        if (overflow > 0) {
-          text += ` +${overflow}`;
-        }
-      }
-    }
-    if (!text) {
-      text = extractMediaSummary(previewMessage);
-    }
-    if (!text) {
-      continue;
-    }
-    let trimmed = text.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (role === "user") {
-      trimmed = stripEnvelope(trimmed);
-    }
-    trimmed = truncatePreviewText(trimmed, maxChars);
-    items.push({ role, text: trimmed });
+    items.push(projected);
   }
 
   if (items.length <= maxItems) {

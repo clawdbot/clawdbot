@@ -2,12 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { cancelUnreadResponseBody } from "./http-body.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -21,9 +16,10 @@ export async function fetchGeminiUsage(
   fetchFn: typeof fetch,
   provider: UsageProviderId,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
-    {
+  const parsed = await fetchUsageJson({
+    provider,
+    url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+    init: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -33,17 +29,7 @@ export async function fetchGeminiUsage(
     },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await cancelUnreadResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider,
-      status: res.status,
-    });
-  }
-
-  const parsed = await readUsageJson(provider, res);
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }

@@ -14,11 +14,13 @@ import {
   type CodexDynamicToolFunctionSpec,
 } from "./protocol.js";
 import {
+  createCodexAppServerBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerPendingSupervisionBranch,
 } from "./session-binding.js";
 import {
+  createCodexTestBindingStateStore,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
@@ -59,6 +61,33 @@ describe("Codex incognito thread persistence", () => {
 
     expect(build(persistent)).not.toHaveProperty("ephemeral");
     expect(build(incognito)).toMatchObject({ ephemeral: true });
+  });
+});
+
+describe("Codex context window config", () => {
+  it("forwards only a prepared cap on thread start and resume (#124702)", () => {
+    const appServer = createAppServerOptions() as never;
+    const capped = createAttemptParams({ provider: "openai" });
+    capped.authoredContextTokenCap = 32_000;
+    const uncapped = createAttemptParams({ provider: "openai" });
+    const build = (params: EmbeddedRunAttemptParams) => [
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      }),
+      buildThreadResumeParams(params, {
+        appServer,
+        threadId: "thread-1",
+      }),
+    ];
+
+    for (const request of build(capped)) {
+      expect(request.config?.model_context_window).toBe(32_000);
+    }
+    for (const request of build(uncapped)) {
+      expect(request.config).not.toHaveProperty("model_context_window");
+    }
   });
 });
 
@@ -232,6 +261,36 @@ describe("Codex delegation capability", () => {
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
+    }
+  });
+
+  it("disables only native image generation for an audited image_generate deny", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.image_generation"]).toBe(false);
+      expect(request.config?.["features.multi_agent"]).toBe(true);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(request.config?.["agents.enabled"]).toBeUndefined();
     }
   });
 
@@ -1046,7 +1105,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
     expect(instructions).toContain("`skill_workshop`");
-    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("Other generated work = pending proposal");
     expect(instructions).toContain("only explicit user ask");
   });
 
@@ -1081,7 +1140,7 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("set `final=true`");
+    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -2174,6 +2233,46 @@ describe("Codex plugin binding recovery", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
+  it("rechecks scheduled current policy against the exact existing thread", async () => {
+    const sessionFile = path.join(tempDir, "session-current-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-current-policy");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-current-policy");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi.fn(async (_options?: { threadId?: string }) => ({
+      enabled: true,
+      configPatch: { apps: { _default: { enabled: false } } },
+      fingerprint: "plugin-config-current-policy",
+      inputFingerprint: "plugin-input-current-policy",
+      policyContext: { fingerprint: "plugin-policy-current", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      pluginThreadConfig: {
+        enabled: true,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint: "plugin-input-current-policy",
+        build,
+      },
+    };
+
+    await startOrResumeThread(common);
+    await startOrResumeThread(common);
+
+    expect(build).toHaveBeenNthCalledWith(1);
+    expect(build).toHaveBeenNthCalledWith(2, { threadId: "thread-current-policy" });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
   it("rebuilds once when a settled negative binding still enables the plugin", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2248,6 +2347,127 @@ describe("Codex plugin binding recovery", () => {
       "thread/start",
       "thread/resume",
     ]);
+  });
+
+  it("rotates warm bindings across scheduled authority changes and resumes after store restart", async () => {
+    const sessionFile = path.join(tempDir, "session-authority.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-authority");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const stateStore = createCodexTestBindingStateStore();
+    let bindingStore = createCodexAppServerBindingStore(stateStore);
+    let threadSequence = 0;
+    const threadStarts: Array<Record<string, unknown>> = [];
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        threadSequence += 1;
+        threadStarts.push(requestParams as Record<string, unknown>);
+        return threadStartResult(`thread-authority-${threadSequence}`);
+      }
+      if (method === "thread/resume") {
+        const threadId = (requestParams as { threadId?: string })?.threadId;
+        return threadStartResult(threadId ?? "thread-resumed");
+      }
+      if (method === "app/installed") {
+        return {
+          apps: [{ id: "calendar", runtimeName: "Calendar", enabled: true, callable: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const provider = (inputFingerprint: string, destructive: boolean) => {
+      const base = createProvisionalPluginThreadConfigProvider("calendar");
+      return {
+        ...base,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint,
+        build: vi.fn(async () => {
+          const config = await base.build();
+          const apps = config.configPatch?.apps as Record<string, Record<string, unknown>>;
+          return {
+            ...config,
+            inputFingerprint,
+            fingerprint: `${inputFingerprint}:${destructive}`,
+            configPatch: {
+              ...config.configPatch,
+              apps: {
+                ...apps,
+                calendar: {
+                  ...apps.calendar,
+                  destructive_enabled: destructive,
+                  tools: {
+                    edit: { approval_mode: destructive ? "approve" : "prompt" },
+                  },
+                },
+              },
+            },
+          };
+        }),
+      };
+    };
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+    const revokedProvider = provider("unrestricted", true);
+    revokedProvider.build.mockRejectedValueOnce(new Error("calendar revoked by current policy"));
+    await expect(
+      startOrResumeThreadImpl({
+        ...common,
+        bindingStore,
+        pluginThreadConfig: revokedProvider,
+      }),
+    ).rejects.toThrow("calendar revoked by current policy");
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("scheduled-cap-1", false),
+    });
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+    bindingStore = createCodexAppServerBindingStore(stateStore);
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/start",
+      "app/installed",
+      "thread/start",
+      "app/installed",
+      "thread/resume",
+    ]);
+    expect(threadStarts).toHaveLength(3);
+    expect(threadStarts[1]?.config).toMatchObject({
+      apps: { calendar: { destructive_enabled: false } },
+    });
+    expect(threadStarts[2]?.config).toMatchObject({
+      apps: { calendar: { destructive_enabled: true } },
+    });
+    const resumeCall = request.mock.calls.find(([method]) => method === "thread/resume");
+    expect((resumeCall?.[1] as { config?: unknown })?.config).toMatchObject({
+      apps: {
+        calendar: {
+          destructive_enabled: true,
+          tools: { edit: { approval_mode: "approve" } },
+        },
+      },
+    });
   });
 });
 

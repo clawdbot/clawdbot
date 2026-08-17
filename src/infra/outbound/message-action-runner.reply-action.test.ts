@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { registerReplyPlugin, runReplyAction } from "./message-action-test-fixtures.js";
+import { registerReplyPlugin, runReplyAction } from "./message-action-runner.test-support.js";
 
 const CITATION_MARKED_MESSAGE = "Ayutthaya Thai is my pick. citeturn2search9turn2search6";
 

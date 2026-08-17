@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import {
   resolveNpmPackArchiveMetadata,
   type NpmSpecResolution,
@@ -80,7 +80,7 @@ async function stageNpmPackArchiveInManagedRoot(params: {
 > {
   const archiveStoreDir = path.join(params.npmRoot, MANAGED_NPM_PACK_ARCHIVE_DIR);
   const identity = params.integrity ?? params.shasum ?? params.tarballName;
-  const identitySlug = sha256HexPrefix(identity, 16);
+  const identitySlug = sha256HexPrefixCore(identity, 16);
   const packageSlug = safePluginInstallFileName(params.packageName) || "plugin";
   const versionSlug = safePluginInstallFileName(params.version ?? "pack") || "pack";
   const archiveFileName = `${packageSlug}-${versionSlug}-${identitySlug}.tgz`;
@@ -234,6 +234,7 @@ export async function installPluginFromNpmPackArchive(
 
   const result = await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     packageName,

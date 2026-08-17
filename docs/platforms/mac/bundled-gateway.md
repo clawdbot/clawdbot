@@ -29,8 +29,11 @@ OpenClaw package.
 For a manual install, use Node 26 (recommended) or another supported release:
 Node 22.22.3+, Node 24.15+, or Node 25.9+. Install `openclaw` globally:
 
+The command below is for npm 12 or npm 11.16+. On npm 11.12 and earlier,
+omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+
 ```bash
-npm install -g openclaw@<version>
+npm install -g openclaw@<version> --allow-scripts=openclaw
 ```
 
 Use **Retry setup** after a failed automatic setup. If that still fails,
@@ -87,7 +90,7 @@ Logging:
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in
-  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gatewaynode-launchagents).
+  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gateway%2Fnode-launchagents).
 
 ## Version compatibility
 

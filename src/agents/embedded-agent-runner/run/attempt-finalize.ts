@@ -3,13 +3,13 @@
  * It may assume stream execution and transcript writes are settled.
  */
 
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -20,6 +20,7 @@ import type { createCacheTrace } from "../../cache-trace.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -28,10 +29,7 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
-import {
-  finalizeAttemptContextEngineTurn,
-  type buildContextEnginePromptCacheInfo,
-} from "./attempt-context-engine-helpers.js";
+import type { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
@@ -253,7 +251,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       sessionManager?: SessionManager;
       withSessionManagerRewriteLock: WithOwnedTranscriptWrite;
     }) => {
-      await finalizeAttemptContextEngineTurn({
+      await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
         promptError: Boolean(state.promptError),
         aborted: lifecycleState.aborted,
@@ -280,6 +278,7 @@ export async function completeEmbeddedAttemptAfterTurn(
             withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
             config: attempt.config,
             agentId: runtime.sessionAgentId,
+            contextEngineAgentId: attempt.contextEngineAgentId,
           }),
         sessionManager: transcript.sessionManager,
         config: attempt.config,

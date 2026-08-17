@@ -385,9 +385,17 @@ describe("scripts/profile-extension-memory", () => {
         });
 
         try {
-          await waitForCondition(() => existsSync(descendantPidPath));
-          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-          expect(Number.isInteger(descendantPid)).toBe(true);
+          await waitForCondition(() => {
+            if (!existsSync(descendantPidPath)) {
+              return false;
+            }
+            const candidatePid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+            if (!Number.isInteger(candidatePid) || candidatePid <= 0) {
+              return false;
+            }
+            descendantPid = candidatePid;
+            return true;
+          });
           expect(isProcessAlive(descendantPid)).toBe(true);
 
           const runnerExit = waitForChildExit(runner);

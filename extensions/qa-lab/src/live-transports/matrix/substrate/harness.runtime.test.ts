@@ -88,6 +88,28 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
+function createStalledVersionsFetch() {
+  const probeSignals: AbortSignal[] = [];
+  const fetchImpl = vi.fn(
+    async (_input: string, init?: Pick<RequestInit, "signal">) =>
+      await new Promise<never>((_resolve, reject) => {
+        const probeSignal = init?.signal ?? undefined;
+        if (!probeSignal) {
+          reject(new Error("versions probe signal missing"));
+          return;
+        }
+        probeSignals.push(probeSignal);
+        const rejectAborted = () => reject(new Error("versions probe aborted"));
+        if (probeSignal.aborted) {
+          rejectAborted();
+          return;
+        }
+        probeSignal.addEventListener("abort", rejectAborted, { once: true });
+      }),
+  );
+  return { fetchImpl, probeSignals };
+}
+
 describe("matrix harness runtime", () => {
   it("writes a pinned Tuwunel compose file", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
@@ -315,28 +337,14 @@ describe("matrix harness runtime", () => {
   });
 
   it("bounds a stalled versions probe by the remaining discovery deadline", async () => {
-    let probeSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(
-      async (_input: string, init?: Pick<RequestInit, "signal">) =>
-        await new Promise<never>((_resolve, reject) => {
-          probeSignal = init?.signal ?? undefined;
-          if (!probeSignal) {
-            reject(new Error("versions probe signal missing"));
-            return;
-          }
-          const rejectAborted = () => reject(new Error("versions probe aborted"));
-          if (probeSignal.aborted) {
-            rejectAborted();
-            return;
-          }
-          probeSignal.addEventListener("abort", rejectAborted, { once: true });
-        }),
-    );
-    const sleepImpl = vi.fn(async () => {});
-    const startedAt = Date.now();
-
-    await expect(
-      testing.waitForReachableMatrixBaseUrl({
+    vi.useFakeTimers();
+    const requestTimeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(requestTimeout.signal);
+    try {
+      const { fetchImpl, probeSignals } = createStalledVersionsFetch();
+      const sleepImpl = vi.fn(async () => {});
+      const startedAt = Date.now();
+      const waiting = testing.waitForReachableMatrixBaseUrl({
         composeFile: "/tmp/docker-compose.matrix-qa.yml",
         containerBaseUrl: null,
         fetchImpl,
@@ -344,13 +352,52 @@ describe("matrix harness runtime", () => {
         sleepImpl,
         timeoutMs: 25,
         pollMs: 1_000,
-      }),
-    ).rejects.toThrow("did not become healthy");
+      });
+      const rejection = expect(waiting).rejects.toThrow("did not become healthy");
 
-    expect(Date.now() - startedAt).toBeLessThan(500);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(probeSignal?.aborted).toBe(true);
-    expect(sleepImpl).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+
+      expect(Date.now() - startedAt).toBe(25);
+      expect(probeSignals).toHaveLength(1);
+      expect(probeSignals[0]?.aborted).toBe(true);
+      expect(sleepImpl).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-poll when the request timeout wins at the discovery deadline", async () => {
+    vi.useFakeTimers();
+    const requestTimeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(requestTimeout.signal);
+    try {
+      const { fetchImpl } = createStalledVersionsFetch();
+      const startedAt = Date.now();
+      const sleepImpl = vi.fn(async (ms: number) => {
+        vi.setSystemTime(Date.now() + ms);
+      });
+      const waiting = testing.waitForReachableMatrixBaseUrl({
+        composeFile: "/tmp/docker-compose.matrix-qa.yml",
+        containerBaseUrl: null,
+        fetchImpl,
+        hostBaseUrl: "http://127.0.0.1:28008/",
+        sleepImpl,
+        timeoutMs: 25,
+        pollMs: 1_000,
+      });
+
+      vi.setSystemTime(startedAt + 24);
+      requestTimeout.abort(new DOMException("request timed out", "TimeoutError"));
+      await expect(waiting).rejects.toThrow("did not become healthy");
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(sleepImpl).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("probes the container fallback when the host versions probe stalls", async () => {

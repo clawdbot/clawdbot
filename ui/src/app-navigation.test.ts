@@ -94,6 +94,7 @@ describe("navigationIconForRoute", () => {
       custodian: "lobster",
       activity: "activity",
       apps: "layoutGrid",
+      portals: "monitor",
       approvals: "badgeCheck",
       workboard: "kanban",
       dashboards: "layoutDashboard",
@@ -109,6 +110,7 @@ describe("navigationIconForRoute", () => {
       plugins: "puzzle",
       "skill-workshop": "wrench",
       devices: "monitorSmartphone",
+      "cloud-workers": "server",
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
@@ -216,6 +218,7 @@ describe("titleForRoute", () => {
       custodian: "OpenClaw",
       activity: "Activity",
       apps: "Apps",
+      portals: "Portals",
       approvals: "Approvals",
       workboard: "Workboard",
       dashboards: "Dashboards",
@@ -231,6 +234,7 @@ describe("titleForRoute", () => {
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
       devices: "Devices",
+      "cloud-workers": "Cloud workers",
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
@@ -266,6 +270,7 @@ describe("subtitleForRoute", () => {
       custodian: "System setup and care.",
       activity: "Browser-local tool activity summaries.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
+      portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       dashboards: "Sessions that open on their dashboard face.",
@@ -281,6 +286,7 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
+      "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
@@ -319,7 +325,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
-    expect(pathForRoute("secrets")).toBe("/settings/secrets");
+    expect(pathForRoute("cloud-workers")).toBe("/settings/cloud-workers");
   });
 
   it("prepends base path", () => {
@@ -422,9 +428,9 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/instances")).toBeNull();
   });
 
-  it("matches canonical route casing exactly", () => {
-    expect(routeIdFromPath("/CHAT")).toBeNull();
-    expect(routeIdFromPath("/Sessions")).toBeNull();
+  it("matches static routes case-insensitively like the uirouter path key", () => {
+    expect(routeIdFromPath("/CHAT")).toBe("chat");
+    expect(routeIdFromPath("/Sessions")).toBe("sessions");
   });
 });
 
@@ -504,32 +510,33 @@ describe("plugin tabs route", () => {
     // Distinct plugins with the same local tab id stay distinct.
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
   });
-
-  it("stays out of the customizable static sidebar routes", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
-    expect(SIDEBAR_NAV_ROUTES).toContain("plugins");
-    expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
-    expect(routeIdFromPath("/plugins")).toBeNull();
-  });
 });
 
 describe("SIDEBAR_NAV_ROUTES", () => {
-  it("all routes are unique", () => {
-    expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
+  it("keeps the canonical sidebar route order", () => {
+    expect(SIDEBAR_NAV_ROUTES).toEqual([
+      "workboard",
+      "dashboards",
+      "usage",
+      "cron",
+      "tasks",
+      "sessions",
+      "activity",
+      "plugins",
+      "apps",
+      "portals",
+    ]);
   });
 
-  it("collapses the plugins hub to a single sidebar entry", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("skills");
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("skill-workshop");
+  it("recognizes plugin hub routes", () => {
     expect(isPluginsHubRoute("plugins")).toBe(true);
     expect(isPluginsHubRoute("skills")).toBe(true);
     expect(isPluginsHubRoute("skill-workshop")).toBe(true);
     expect(isPluginsHubRoute("sessions")).toBe(false);
   });
 
-  it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
+  it("keeps the canonical settings navigation order", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
@@ -540,6 +547,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "communications",
       "talk",
       "devices",
+      "cloud-workers",
       "agents",
       "labs",
       "model-providers",
@@ -558,9 +566,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     ]);
   });
 
-  it("keeps settings sidebar groups unique with personal settings first", () => {
-    const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-    expect(new Set(settingsRoutes).size).toBe(settingsRoutes.length);
+  it("keeps personal settings first and labels remaining groups", () => {
     const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
     expect(firstGroup?.labelKey).toBeNull();
     expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);

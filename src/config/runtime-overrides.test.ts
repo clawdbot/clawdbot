@@ -9,13 +9,35 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "./runtime-overrides.js";
-import { resolveMainSessionKey } from "./sessions/main-session.js";
+import { resolveMainSessionKey, resolveSessionRoutingContract } from "./sessions/main-session.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
 describe("runtime overrides", () => {
   beforeEach(() => {
     resetConfigOverrides();
+  });
+
+  it("fingerprints the persisted owner of a global fixed store", () => {
+    const cfg = {
+      session: { scope: "global" as const, store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {}, ops: {} },
+      },
+    };
+
+    expect(resolveSessionRoutingContract(cfg)).toBe("global|main|ops");
+    expect(
+      resolveSessionRoutingContract({
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { sessionStore: { agentId: "research" } },
+        },
+      }),
+    ).toBe("global|main|research");
   });
 
   it("sets and applies nested overrides", () => {

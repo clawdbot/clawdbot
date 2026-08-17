@@ -91,7 +91,6 @@ export const zh_CN = {
       remotePasswordMode: "你想如何提供这个 Gateway 密码？",
       remoteTokenMode: "你想如何提供这个 Gateway 令牌？",
       tailscaleExposure: "Tailscale 暴露方式",
-      tailscaleReset: "退出时重置 Tailscale serve/funnel？",
       tokenPlaceholder: "多机器或非 loopback 访问需要使用",
       tokenPrompt: "Gateway 令牌",
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",
@@ -113,6 +112,8 @@ export const zh_CN = {
       cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
+      profileNotWritable:
+        "Shell completion 未更改：{profile} 不可写。请对可写的 profile 文件运行 `{command}`。",
       reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",
@@ -286,7 +287,6 @@ export const zh_CN = {
         "我看到这台机器上有 {labels} — 品味不错。等 AI 就绪后，我还能把它们的记忆一并带过来。",
       controlUiPreparing: "正在准备 Control UI…",
       custodianIntro: "你好 — 我是 OpenClaw，负责维护这套系统。我们开始设置吧。",
-      failedOptionLine: "{label}：{reason}",
       failedOptionsIntro: "刚才这些没有成功：",
       findMeLater: "以后随时可以找到我 — 在终端运行 `openclaw`，或在仪表盘中打开设置。",
       hatchingNow: "正在孵化你的智能体…",
@@ -901,6 +901,12 @@ export const zh_CN = {
       outgoingWebhookPathKeep: "Outgoing webhook path 已设置（{value}）。保留？",
       outgoingWebhookPathPrompt: "Outgoing webhook path（可选）",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "使用在 Synology Chat 中配置的、可从外部访问的确切 HTTPS outgoing webhook 回调 URL。",
+      publicWebhookUrlKeep: "已配置公开附件 webhook URL。保留当前值？",
+      publicWebhookUrlPrompt: "公开附件 webhook URL（可选）",
+      publicWebhookUrlScope: "仅公开此 webhook 路由；OpenClaw 使用它提供短期附件下载。",
+      publicWebhookUrlTitle: "Synology Chat 公开附件路由",
       setupTitle: "Synology Chat webhook 设置",
       tokenEnvPrompt: "检测到 SYNOLOGY_CHAT_TOKEN。使用环境变量？",
       tokenInput: "输入 Synology Chat outgoing webhook token",
@@ -1104,6 +1110,10 @@ export const zh_CN = {
       healthCheckHelp: "健康检查帮助",
       installGateway: "安装 Gateway 服务（推荐）",
       laterTitle: "稍后",
+      managedGatewaySetupFailed:
+        "托管的 {service} 设置失败：{error}\n检查服务状态和日志：{statusCommand}\n重试托管服务安装：{recoveryCommand}",
+      managedGatewayUnreachable:
+        "托管的 {service} 在设置后仍无法访问。\n检查服务状态和日志：{statusCommand}\n重试托管服务：{recoveryCommand}",
       managedWebSearchSkipped: "已跳过托管 web search provider。",
       noBackgroundGatewayExpected: "本次设置未安装 Gateway 服务，因此不会有后台 Gateway。",
       noModelAuth: "提供商 “{provider}” 尚未配置凭据，聊天将失败，直到添加认证。",

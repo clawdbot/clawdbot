@@ -1,5 +1,8 @@
 // Model Catalog Core module implements model catalog refs behavior.
-import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeProviderId } from "./provider-id.js";
+
+export { normalizeProviderId as normalizeModelCatalogProviderId } from "./provider-id.js";
 
 // Stable model catalog ref and merge-key builders.
 
@@ -43,14 +46,9 @@ export function isCloudModelRef(modelRef: string | undefined): boolean {
   return source?.source === "cloud" && parseModelSourceSuffix(source.base) === undefined;
 }
 
-/** Normalize provider ids for catalog refs. */
-export function normalizeModelCatalogProviderId(provider: string): string {
-  return normalizeLowercaseStringOrEmpty(provider);
-}
-
 /** Build a provider/model catalog reference. */
 export function buildModelCatalogRef(provider: string, modelId: string): string {
-  return `${normalizeModelCatalogProviderId(provider)}/${modelId}`;
+  return `${normalizeProviderId(provider)}/${modelId}`;
 }
 
 /** Parse a strict provider/model reference without normalizing either segment. */
@@ -72,12 +70,12 @@ export function parseModelCatalogRef(value: string): ModelCatalogRef | null {
     return null;
   }
   return {
-    provider: normalizeModelCatalogProviderId(parsed.provider),
+    provider: normalizeProviderId(parsed.provider),
     modelId: parsed.model,
   };
 }
 
 /** Build a case-insensitive merge key for provider/model rows. */
 export function buildModelCatalogMergeKey(provider: string, modelId: string): string {
-  return `${normalizeModelCatalogProviderId(provider)}::${normalizeLowercaseStringOrEmpty(modelId)}`;
+  return `${normalizeProviderId(provider)}::${normalizeLowercaseStringOrEmpty(modelId)}`;
 }

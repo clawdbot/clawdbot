@@ -1,18 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
+import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  claimExecApprovalFollowupRuntimeHandoff,
-  finalizeExecApprovalFollowupRuntimeHandoff,
-  releaseExecApprovalFollowupRuntimeHandoff,
-} from "../../agents/bash-tools.exec-approval-followup-state.js";
-import {
-  buildExecApprovalContinuationPrompt,
-  EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
-  type ExecApprovalContinuationPromptRange,
-} from "../../agents/bash-tools.exec-approval-output.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -28,8 +17,8 @@ import {
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
@@ -37,23 +26,16 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import {
-  buildRunUserTurnIdempotencyKey,
-  createUserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
-import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import {
-  clientHasAdminScope,
-  shouldSuppressAgentPromptPersistence,
   yieldAfterAgentAcceptedAck,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
@@ -66,6 +48,10 @@ import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
+import {
+  finalizePreparedAgentRunUserTurn,
+  releasePreparedAgentRunUserTurn,
+} from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export function startAgentRunExecution(params: {
@@ -77,7 +63,6 @@ export function startAgentRunExecution(params: {
   sessionEntry?: SessionEntry;
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
-  requestedSessionKeyRaw?: string;
   resolvedSessionId?: string;
   agentId?: string;
   activeSessionAgentId: string;
@@ -87,14 +72,11 @@ export function startAgentRunExecution(params: {
   isOneShotModelRun: boolean;
   isRestartRecoveryResumeRun: boolean;
   suppressVisibleSessionEffects: boolean;
-  message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
-  effectiveTranscriptInputText: string;
   inputProvenance?: InputProvenance;
   runId: string;
-  idempotencyKey: string;
   agentDedupeKeys: readonly string[];
   spawnedBy?: string;
   groupId?: string;
@@ -103,13 +85,11 @@ export function startAgentRunExecution(params: {
   bestEffortDeliver: boolean;
   lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  requestedPromptPersistenceSuppression: boolean;
   preserveUserFacingSessionModelState: boolean;
   sessionEffects?: "visible" | "internal";
   skipAgentInitialSessionTouch: boolean;
   restoredCronContinuation?: RestoredCronContinuation;
   canUseInternalRuntimeHandoff: boolean;
-  execApprovalFollowupApprovalId?: string;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
   io: AgentTurnIo;
@@ -129,8 +109,6 @@ export function startAgentRunExecution(params: {
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
-    const execApprovalFollowupHandoffClaimId = randomUUID();
-    let claimedExecApprovalFollowupHandoffId: string | undefined;
     let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -139,7 +117,7 @@ export function startAgentRunExecution(params: {
         setAbortedAgentDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.agentDedupeKeys,
-          agentId: params.resolvedSessionKey === "global" ? params.activeSessionAgentId : undefined,
+          agentId: params.activeSessionAgentId,
           runId: params.runId,
           stopReason,
         });
@@ -161,52 +139,11 @@ export function startAgentRunExecution(params: {
         return;
       }
 
-      let execApprovalFollowupRuntimeHandoff =
-        params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-          ? claimExecApprovalFollowupRuntimeHandoff({
-              handoffId: params.request.internalRuntimeHandoffId,
-              approvalId: params.execApprovalFollowupApprovalId,
-              idempotencyKey: params.idempotencyKey,
-              sessionKey: params.resolvedSessionKey,
-              claimId: execApprovalFollowupHandoffClaimId,
-            })
-          : undefined;
-      if (
-        !execApprovalFollowupRuntimeHandoff &&
-        params.canUseInternalRuntimeHandoff &&
-        params.execApprovalFollowupApprovalId &&
-        params.requestedSessionKeyRaw &&
-        params.requestedSessionKeyRaw !== params.resolvedSessionKey
-      ) {
-        execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
-          handoffId: params.request.internalRuntimeHandoffId,
-          approvalId: params.execApprovalFollowupApprovalId,
-          idempotencyKey: params.idempotencyKey,
-          sessionKey: params.requestedSessionKeyRaw,
-          claimId: execApprovalFollowupHandoffClaimId,
-        });
-      }
-      if (execApprovalFollowupRuntimeHandoff) {
-        claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
-      }
-
-      let message = params.message;
-      let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
-      let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
-      let execApprovalContinuationTranscriptPromptRange:
-        | ExecApprovalContinuationPromptRange
-        | undefined;
-      if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
-        const continuation = buildExecApprovalContinuationPrompt(
-          execApprovalFollowupRuntimeHandoff.resultText,
-        );
-        message = continuation.message;
-        effectiveTranscriptInputText = continuation.message;
-        execApprovalContinuationPromptRange = continuation.resultRange;
-        execApprovalContinuationTranscriptPromptRange = continuation.resultRange;
-      } else if (message === EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE) {
-        throw new Error("exec approval followup runtime handoff is unavailable");
-      }
+      let message = prepared.userTurn.message;
+      let execApprovalContinuationPromptRange =
+        prepared.userTurn.execApprovalContinuationPromptRange;
+      const execApprovalContinuationTranscriptPromptRange =
+        prepared.userTurn.execApprovalContinuationTranscriptPromptRange;
 
       if (!params.isOneShotModelRun && params.resolvedSessionKey) {
         await reactivateCompletedSubagentSession({
@@ -223,18 +160,14 @@ export function startAgentRunExecution(params: {
       ) {
         emitSessionsChanged(params.context, {
           sessionKey: params.resolvedSessionKey,
-          ...(params.resolvedSessionKey === "global"
-            ? { agentId: params.activeSessionAgentId }
-            : {}),
+          agentId: params.activeSessionAgentId,
           reason: "create",
         });
       }
       if (!params.suppressVisibleSessionEffects && params.resolvedSessionKey) {
         emitSessionsChanged(params.context, {
           sessionKey: params.resolvedSessionKey,
-          ...(params.resolvedSessionKey === "global"
-            ? { agentId: params.activeSessionAgentId }
-            : {}),
+          agentId: params.activeSessionAgentId,
           reason: "send",
         });
       }
@@ -253,77 +186,12 @@ export function startAgentRunExecution(params: {
           };
         }
       }
-      const senderIsOwner = params.restoredCronContinuation
-        ? true
-        : clientHasAdminScope(params.client);
-      const userTurnTranscriptRecorder =
-        params.resolvedSessionKey &&
-        params.resolvedSessionId &&
-        !params.suppressVisibleSessionEffects &&
-        params.images.length === 0 &&
-        params.imageOrder.length === 0
-          ? createUserTurnTranscriptRecorder({
-              input: {
-                text: effectiveTranscriptInputText,
-                timestamp: Date.now(),
-                idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
-                ...gatewayClientSenderFields(params.client),
-                senderIsOwner,
-                ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
-              },
-              target: () => {
-                const loaded = loadSessionEntry(params.resolvedSessionKey!, {
-                  ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
-                  clone: false,
-                });
-                const loadedEntry = loaded.entry;
-                const loadedSessionId = loadedEntry?.sessionId?.trim();
-                if (loadedSessionId && loadedSessionId !== params.resolvedSessionId) {
-                  return undefined;
-                }
-                const latestEntry = loadedSessionId
-                  ? loadedEntry
-                  : params.sessionEntry?.sessionId?.trim() === params.resolvedSessionId
-                    ? params.sessionEntry
-                    : {
-                        sessionId: params.resolvedSessionId!,
-                        updatedAt: Date.now(),
-                      };
-                if (!latestEntry) {
-                  return undefined;
-                }
-                return {
-                  sessionId: latestEntry.sessionId,
-                  sessionKey: params.resolvedSessionKey!,
-                  sessionEntry: latestEntry,
-                  sessionStore: loaded.store,
-                  storePath: loaded.storePath,
-                  agentId: params.activeSessionAgentId,
-                  cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
-                  ...(prepared.resolvedThreadId != null
-                    ? { threadId: prepared.resolvedThreadId }
-                    : {}),
-                  config: params.cfgForAgent ?? params.cfg,
-                };
-              },
-              errorContext: "gateway agent user turn transcript",
-              beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-              onPersistenceError: (error) => {
-                params.context.logGateway.warn(
-                  `gateway agent user transcript persistence failed: ${formatForLog(error)}`,
-                );
-              },
-            })
-          : undefined;
+      const senderIsOwner = prepared.userTurn.senderIsOwner;
+      const userTurnTranscriptRecorder = prepared.userTurn.recorder;
 
-      const ingressAgentId =
-        params.resolvedSessionKey === "global"
-          ? params.activeSessionAgentId
-          : params.agentId &&
-              (!params.resolvedSessionKey ||
-                resolveAgentIdFromSessionKey(params.resolvedSessionKey) === params.agentId)
-            ? params.agentId
-            : undefined;
+      const ingressAgentId = params.resolvedSessionKey
+        ? params.activeSessionAgentId
+        : params.agentId;
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -366,6 +234,11 @@ export function startAgentRunExecution(params: {
         restartRecoveryChannelContext?.sameChannelThreadRequired,
       );
 
+      const localUserIngress = getGatewayLocalUserIngress(params.client);
+      if (localUserIngress) {
+        attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
+      }
+      finalizePreparedAgentRunUserTurn(prepared.userTurn);
       dispatchAgentRunFromGateway({
         cronCreatorAuthority: prepared.cronCreatorAuthority,
         ingressOpts: {
@@ -386,8 +259,8 @@ export function startAgentRunExecution(params: {
           accountId: params.delivery.resolvedAccountId,
           threadId: prepared.resolvedThreadId,
           runContext,
-          ...(execApprovalFollowupRuntimeHandoff?.bashElevated
-            ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
+          ...(prepared.userTurn.bashElevated
+            ? { bashElevated: prepared.userTurn.bashElevated }
             : {}),
           ...(execApprovalContinuationPromptRange ? { execApprovalContinuationPromptRange } : {}),
           ...(execApprovalContinuationTranscriptPromptRange
@@ -415,6 +288,7 @@ export function startAgentRunExecution(params: {
             ? resolveScheduledToolPolicyContext({
                 toolsAllow: params.restoredCronContinuation.toolsAllow,
                 scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+                callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
               })
             : undefined,
           requireExplicitMessageTarget:
@@ -451,12 +325,7 @@ export function startAgentRunExecution(params: {
           },
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
-          suppressPromptPersistence:
-            params.requestedPromptPersistenceSuppression ||
-            shouldSuppressAgentPromptPersistence({
-              inputProvenance: params.inputProvenance,
-              internalEvents: params.request.internalEvents,
-            }),
+          suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
           userTurnTranscriptRecorder,
           cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
           abortSignal: prepared.activeRunAbort.controller.signal,
@@ -517,16 +386,13 @@ export function startAgentRunExecution(params: {
         restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
       });
       dispatched = true;
-      finalizeExecApprovalFollowupRuntimeHandoff({
-        handoffId: claimedExecApprovalFollowupHandoffId,
-        claimId: execApprovalFollowupHandoffClaimId,
-      });
     } catch (err) {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err));
+      const renderedErr = formatErrorMessageWithCode(err);
+      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const payload = {
         runId: params.runId,
         status: "error" as const,
-        summary: formatForLog(err),
+        summary: renderedErr,
       };
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
@@ -535,14 +401,11 @@ export function startAgentRunExecution(params: {
       });
       params.io.emitFinal([false, payload, error], {
         runId: params.runId,
-        error: formatForLog(err),
+        error: renderedErr,
       });
     } finally {
       if (!dispatched) {
-        releaseExecApprovalFollowupRuntimeHandoff({
-          handoffId: claimedExecApprovalFollowupHandoffId,
-          claimId: execApprovalFollowupHandoffClaimId,
-        });
+        releasePreparedAgentRunUserTurn(prepared.userTurn);
         try {
           const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
           if (restoreAdmittedRecovery) {

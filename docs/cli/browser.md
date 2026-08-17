@@ -118,6 +118,23 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+### Cookie sync to a remote Gateway
+
+`import-profile` targets a managed profile on the same host. When your OpenClaw Gateway and agent browser run on a separate computer, use `cookie-sync` to decrypt cookies on this Mac and push them into a managed profile on that remote Gateway over the operator connection:
+
+```bash
+openclaw browser cookie-sync --domains github.com,news.ycombinator.com --into work
+openclaw browser --url wss://gateway.example.com cookie-sync --domains github.com --into work --watch
+```
+
+- `--domains` is required. Cookie sync copies live session cookies, so it never sends an unrestricted cookie jar; a missing or empty allowlist is a hard error.
+- `--into` selects the target managed profile on the Gateway (default `imported`); `--gateway`/`--url` selects a remote Gateway (default is the configured/local one).
+- `--watch` keeps the command running and re-pushes when the source Cookies database changes. The macOS Keychain secret is read once per watch session, so you approve a single consent prompt rather than one per change.
+- Decryption is host-local (macOS only) and reuses the same allowlist and Keychain path as `import-profile`. Cookies are decrypted on this Mac and shipped over the existing TLS-pinned Gateway connection; no cookie values are printed.
+- Some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and can still require re-authentication after sync. For those sites, prefer driving the browser on the Mac itself through the [browser node proxy](#remote-browser-control-node-host-proxy).
+
+The macOS app exposes the same capability under **Settings → General → Cookie sync**: an off-by-default toggle, an editable domain allowlist, and a target-profile field. When enabled in remote mode it supervises `cookie-sync --watch` for you against the connected Gateway and shows a live status row.
+
 ## Chrome extension relay
 
 ```bash
@@ -133,16 +150,13 @@ openclaw browser extension cdp
 openclaw browser extension cdp --json
 ```
 
-- `extension install` copies the bundled runtime into a stable state-directory
-  path and pre-registers its deterministic, origin-locked native bootstrap host
-  in existing Chrome-family user-data roots. Launch Chrome, run this command,
-  and use **Load unpacked** only after it prints the stable path. The command
-  waits while Chrome records that exact path, then verifies the recorded ID
-  against Chromium's path-derived ID. **Load unpacked** is the only manual
-  action in normal setup.
-- `extension status` reports the installed copy, detected IDs/profiles,
-  owned-registration health, and whether manual setup is required. JSON output
-  never includes a pairing string or relay key.
+- `extension install` pre-registers the origin-locked native bootstrap host in
+  existing Chrome-family user-data roots. Run it first, then
+  [add OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
+  The stable **Load unpacked** path remains available as a development fallback.
+- `extension status` reports Store discovery separately from approved unpacked
+  IDs and paths, plus owned-registration health and whether manual setup is
+  required. JSON output never includes a pairing string or relay key.
 - `extension uninstall-host` removes only verified OpenClaw-owned native-host
   manifests and launchers. It does not remove the extension from Chrome.
 - `extension path` is read-only. It prints the stable installed copy when
@@ -154,18 +168,31 @@ openclaw browser extension cdp --json
   challenge/complete binding. It never prints the relay key or an authorization
   header by default.
 
+Automatic local bootstrap connects through the local Gateway's exact
+`/browser/extension` route so the first authenticated extension connection
+starts the lazy browser-control service. Keep `openclaw gateway run` or the
+managed Gateway service running; no separate browser request or prewarm is
+needed. Local OpenClaw and mcporter calls still use the profile relay port
+reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
+pairings continue to use the relay on the browser-node host, while explicit
+`--gateway-url` pairings remain direct-remote and manual-only.
+
+The advanced manual `extension pair` command without `--gateway-url` retains
+the host-local `/extension` relay URL. It does not wake Browser control, so the
+selected profile relay must already be running before the extension connects.
+
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while
 `browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
 without printing a credential. Use `--json` for machine output; warnings remain
 on stderr so stdout stays valid JSON.
 
-Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
+Setup, security model, and recovery steps: [Chrome extension](/tools/chrome-extension).
 
 If the extension already attempted automatic setup before the native host
 existed, Chromium retains that miss for the running browser process. Restart
-Chrome once, then repeat the ordered install flow; popup retries alone cannot
-recover that existing process.
+Chrome once, run `extension install`, then reopen the Store extension; popup
+retries alone cannot recover that existing process.
 
 ## Tabs
 

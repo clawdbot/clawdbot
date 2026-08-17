@@ -12,8 +12,9 @@ import {
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   type AgentHarnessV2,
   type AgentMessage,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
@@ -485,10 +486,10 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     sessionTarget: {
       sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
+      sessionKey: "agent:agent-1:session-1",
       storePath: "openclaw-agent.sqlite",
     },
     timeoutMs: 5000,
@@ -1716,7 +1717,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "agent:agent-1:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -1861,15 +1862,17 @@ describe("runCopilotAttempt", () => {
   it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async (input: { onYieldDetected?: (msg?: string) => void }) => {
-      // Simulate a wrapped tool invoking sessions_yield before the
-      // attempt settles. The bridge is responsible for notifying the
-      // caller via onYieldDetected so the final result can carry the
-      // flag (parent runner uses it to mark liveness paused /
-      // stop_reason end_turn). Mirrors PI/codex parity.
-      input.onYieldDetected?.("paused by tool");
-      return { sdkTools: [], sourceTools: [] };
-    });
+    const createToolBridge = vi.fn(
+      async (input: { onYieldDetected?: (message?: string, acknowledgment?: string) => void }) => {
+        // Simulate a wrapped tool invoking sessions_yield before the
+        // attempt settles. The bridge is responsible for notifying the
+        // caller via onYieldDetected so the final result can carry the
+        // flag (parent runner uses it to mark liveness paused /
+        // stop_reason end_turn). Mirrors PI/codex parity.
+        input.onYieldDetected?.("private continuation", "Research started; results will follow.");
+        return { sdkTools: [], sourceTools: [] };
+      },
+    );
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -1877,6 +1880,7 @@ describe("runCopilotAttempt", () => {
     });
 
     expect(result.yieldDetected).toBe(true);
+    expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
   });
 
   it("F7: result.yieldDetected is false on a clean attempt (no sessions_yield fired)", async () => {
@@ -2012,12 +2016,20 @@ describe("runCopilotAttempt", () => {
     });
     const pool = makeFakePool(sdk);
 
-    const attempt = runCopilotAttempt(makeParams({ onBlockReply }), { pool });
+    const toolAuthorityFingerprint = "ask-user-authority";
+    const attempt = runCopilotAttempt(makeParams({ onBlockReply, toolAuthorityFingerprint }), {
+      pool,
+    });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
     await waitForEventLoopTurn();
-    expect(queueAgentHarnessMessage("session-1", "2", { isInboundUserMessage: true })).toBe(true);
+    expect(
+      queueAgentHarnessMessage("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     const result = await attempt;
 
     const cfg = requireCreateSessionConfig(sdk);
@@ -4903,17 +4915,4 @@ describe("runCopilotAttempt", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

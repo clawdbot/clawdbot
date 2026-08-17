@@ -24,12 +24,15 @@ import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+import {
+  normalizeCronRunErrorText,
+  resolveCronAbortReasonText,
+} from "../service/execution-errors.js";
 import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
-  CronJob,
+  CronStoredJob,
 } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
@@ -80,7 +83,7 @@ async function disposeCronRunContext(params: {
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
-  job: CronJob;
+  job: CronStoredJob;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
@@ -286,7 +289,7 @@ export async function runCronIsolatedAgentTurn(params: {
   } catch (err) {
     consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
-    const error = isCronLaneTimeout ? abortReason() : String(err);
+    const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
     return prepared.context.withRunSession({

@@ -1,17 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  appendReplyMediaFailureWarning,
   readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
+import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import {
   cleanupManagedOutgoingMediaRecords,
   createManagedOutgoingMediaBlocks,
 } from "../managed-image-attachments.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { hasRegisteredChatRunForSessionKey } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -185,9 +187,13 @@ export function sanitizeAssistantDisplayText(
   }
   const withoutEnvelope = stripEnvelopeFromMessage(value);
   const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text;
-  const visible = stripped.trim();
-  return visible ? (options?.preserveBoundaries ? stripped : visible) : undefined;
+  const stripped = stripInlineDirectiveTagsForDelivery(normalized);
+  const visible = stripped.text.trim();
+  return visible
+    ? options?.preserveBoundaries && !stripped.changed
+      ? normalized
+      : visible
+    : undefined;
 }
 
 export function extractAssistantDisplayTextFromContent(
@@ -236,6 +242,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
+    let managedMediaPrepareFailed = false;
     const text = sanitizeAssistantDisplayText(payload.text, {
       preserveBoundaries: preserveTextBoundaries,
     });
@@ -269,13 +276,14 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
       for (const [groupIndex, mediaUrl] of mediaGroup.mediaUrls.entries()) {
         const mediaBlocks = await createManagedOutgoingMediaBlocks({
           sessionKey: params.sessionKey,
-          ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           mediaUrls: [mediaUrl],
           attachments: [mediaGroup.attachments[groupIndex] ?? {}],
           localRoots: params.managedMediaLocalRoots,
           allowLocalNonImage: mediaGroup.trustedLocalMedia,
           continueOnPrepareError: true,
           onPrepareError: (error) => {
+            managedMediaPrepareFailed = true;
             params.onManagedMediaPrepareError?.(error.message);
           },
         });
@@ -294,6 +302,9 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     }
     preparedMedia.sort((left, right) => left.sourceIndex - right.sourceIndex);
     content.push(...preparedMedia.flatMap((preparedEntry) => preparedEntry.blocks));
+    if (managedMediaPrepareFailed) {
+      content.push({ type: "text", text: appendReplyMediaFailureWarning(undefined) });
+    }
   }
 
   if (content.length > 0) {
@@ -427,20 +438,25 @@ export function hasManagedOutgoingAssistantContent(
 export function scheduleChatHistoryManagedMediaCleanup(params: {
   sessionKey: string;
   agentId?: string;
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
 }) {
-  const cleanupKey =
-    params.sessionKey === "global" && params.agentId
-      ? `agent:${params.agentId}:global`
-      : params.sessionKey;
+  const cleanupKey = params.agentId
+    ? `agent:${params.agentId}:${params.sessionKey}`
+    : params.sessionKey;
   if (chatHistoryManagedMediaCleanupState.has(cleanupKey)) {
     return;
   }
   const pending = cleanupManagedOutgoingMediaRecords({
     sessionKey: params.sessionKey,
-    ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     hasActiveSessionRun: (sessionKey, agentId) =>
-      hasRegisteredChatRunForSessionKey({ context: params.context, sessionKey, agentId }),
+      hasRegisteredChatRunForSessionKey({
+        context: params.context,
+        sessionKey,
+        agentId,
+        defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey),
+      }),
   })
     .then(() => undefined)
     .catch((error: unknown) => {

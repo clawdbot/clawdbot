@@ -5,6 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import "../../components/session-link-hovercard-registration.ts";
 import "../../components/resizable-divider.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
@@ -27,13 +28,16 @@ import "./chat-pane.ts";
 import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
-import type { ChatMessageCache } from "./session-message-cache.ts";
+import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
+import { installSessionPrefetch } from "./session-prefetch.ts";
+import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import {
   resolveSplitDropZone,
   splitDropIndicatorRect,
   type SplitDropRect,
   type SplitDropZone,
 } from "./split-drop-zone.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
@@ -47,7 +51,6 @@ import {
   singlePaneLayout,
   splitRatio,
   splitWeight,
-  type ChatSplitLayout,
 } from "./split-layout.ts";
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
@@ -77,7 +80,8 @@ export class ChatPage extends OpenClawLightDomElement {
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
   private consumedDraftData: SessionChatRouteData | null = null;
   private readonly draftFocus = new RouteDraftComposerFocus(this);
-  private readonly chatMessagesBySession: ChatMessageCache = new Map();
+  private readonly messageCache: ChatMessageCache = new Map();
+  private readonly snapshotStore = new SessionSnapshotStore(this.messageCache);
   private classicColumnId = "c1";
   private classicPaneId = "p1";
   private routeHref = "";
@@ -92,8 +96,15 @@ export class ChatPage extends OpenClawLightDomElement {
     },
   });
 
+  constructor() {
+    super();
+    installSessionPrefetch(this, this.messageCache, this.snapshotStore, () => this.context);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
+    this.snapshotStore.connect();
+    observeChatCache(this.messageCache, this.snapshotStore);
     this.routeHref = window.location.href;
     this.layout = loadSettings().chatSplitLayout;
     this.mediaQuery = window.matchMedia("(max-width: 1099px)");
@@ -116,6 +127,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.snapshotStore.disconnect();
     this.retainedSessions.disconnect();
     this.viewerPresence.dispose();
     this.subscriptions.clear();
@@ -142,7 +154,11 @@ export class ChatPage extends OpenClawLightDomElement {
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
     const activeSessionKey = this.layout ? (activePane?.sessionKey ?? null) : undefined;
-    const draftRendered = this.draftFocus.rendered(data, activeSessionKey, this.consumedDraftData);
+    const routeHandoffRendered = this.draftFocus.rendered(
+      data,
+      activeSessionKey,
+      this.consumedDraftData,
+    );
     if (changedProperties.has("data")) {
       this.routeHref = window.location.href;
       if (
@@ -171,7 +187,7 @@ export class ChatPage extends OpenClawLightDomElement {
       this.syncRouteToActivePane();
       this.retainedSessions.settleRoute(data.sessionKey);
     }
-    if (data && draftRendered) {
+    if (data && routeHandoffRendered) {
       queueMicrotask(() => {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.draftFocus.beforeDraftCleanup(data);
@@ -388,7 +404,12 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
-    if (data?.sessionKey === sessionKey && (data.face ?? "chat") === face && !data.draft) {
+    if (
+      data?.sessionKey === sessionKey &&
+      (data.face ?? "chat") === face &&
+      !data.draft &&
+      !data.focusComposer
+    ) {
       return;
     }
     const options = sessionNavigationTarget({
@@ -585,7 +606,8 @@ export class ChatPage extends OpenClawLightDomElement {
                 (pane, paneIndex) => html`
                   ${renderChatPagePaneCell({
                     active: pane.id === layout.activePaneId,
-                    chatMessagesBySession: this.chatMessagesBySession,
+                    chatMessagesBySession: this.messageCache,
+                    sessionSnapshotStore: this.snapshotStore,
                     consumedDraftData: this.consumedDraftData,
                     context: this.context,
                     data: this.data,

@@ -1,6 +1,12 @@
 // Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
+import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
+import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -29,12 +35,6 @@ export type {
   ThinkingCatalogEntry,
   VerboseLevel,
 } from "./thinking.shared.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { resolveProviderThinkingProfile } from "../plugins/provider-thinking.js";
-import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 
 /** UI-facing thinking level option. */
 type ThinkingLevelOption = {
@@ -203,10 +203,10 @@ export function resolveThinkingProfile(params: {
   };
   const providerProfile =
     params.providerPolicySource === "active"
-      ? resolveProviderThinkingProfile(providerProfileParams, {
+      ? resolveEffectiveThinkingProfile(providerProfileParams, {
           allowPublicArtifactFallback: false,
         })
-      : resolveProviderThinkingProfile(providerProfileParams);
+      : resolveEffectiveThinkingProfile(providerProfileParams);
   // Any anthropic-messages catalog row routes through the canonical Claude
   // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
   // non-Claude models on the anthropic-messages transport collapse to the Claude

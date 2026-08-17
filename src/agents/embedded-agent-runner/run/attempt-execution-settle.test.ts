@@ -1,21 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createUsageAccumulator } from "../usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
+  completeAfterTurn: vi.fn(),
   completeResult: vi.fn(),
-  finalizeStream: vi.fn(),
   logDebug: vi.fn(),
   logError: vi.fn(),
+  logWarn: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
+  settleStream: vi.fn(),
   runPrompt: vi.fn(),
 }));
 
 vi.mock("../logger.js", () => ({
-  log: { debug: mocks.logDebug, error: mocks.logError },
+  log: { debug: mocks.logDebug, error: mocks.logError, warn: mocks.logWarn },
 }));
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
-}));
+vi.mock("../../subagents/registry/subagent-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../subagents/registry/subagent-registry.js")>();
+  return {
+    ...actual,
+    settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
+  };
+});
 vi.mock("../runs.js", () => ({ clearActiveEmbeddedRun: mocks.clearActiveEmbeddedRun }));
 vi.mock("./attempt-prompt-phase.js", () => ({
   runEmbeddedAttemptPromptPhase: mocks.runPrompt,
@@ -23,12 +32,21 @@ vi.mock("./attempt-prompt-phase.js", () => ({
 vi.mock("./attempt-result.js", () => ({
   completeEmbeddedAttemptResult: mocks.completeResult,
 }));
-vi.mock("./attempt-stream-finalize.js", () => ({
-  finalizeEmbeddedAttemptStreamPhase: mocks.finalizeStream,
+vi.mock("./attempt-finalize.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./attempt-finalize.js")>();
+  return {
+    ...actual,
+    completeEmbeddedAttemptAfterTurn: mocks.completeAfterTurn,
+  };
+});
+vi.mock("./attempt-stream-settle.js", () => ({
+  settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
+import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 
@@ -37,19 +55,79 @@ function createFixture() {
   const queueHandle = { kind: "embedded", runId: "run-1" };
   const unsubscribe = vi.fn(() => order.push("unsubscribe"));
   const waitForPendingEvents = vi.fn(async () => undefined);
-  const subscription = { unsubscribe, waitForPendingEvents };
+  const subscription = {
+    assistantTexts: [],
+    didSendDeterministicApprovalPrompt: vi.fn(() => false),
+    didSendViaMessagingTool: vi.fn(() => false),
+    getAcceptedSessionSpawns: vi.fn(() => []),
+    getAssistantTurnCount: vi.fn(() => 1),
+    getCompactionCount: vi.fn(() => 0),
+    getCurrentAttemptAssistant: vi.fn(() => undefined),
+    getHeartbeatToolResponse: vi.fn(() => undefined),
+    getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
+    getLastAssistantTextMessageIndex: vi.fn(() => undefined),
+    getLastAssistantUsage: vi.fn(() => undefined),
+    getLastCompactionTokensAfter: vi.fn(() => undefined),
+    getLastToolError: vi.fn(() => undefined),
+    getLastToolRecovery: vi.fn(() => undefined),
+    getLatestMcpAppChannelView: vi.fn(() => undefined),
+    getLatestMcpConnectAction: vi.fn(() => undefined),
+    getMessagingToolSentMediaUrls: vi.fn(() => []),
+    getMessagingToolSentTargets: vi.fn(() => []),
+    getMessagingToolSentTexts: vi.fn(() => []),
+    getMessagingToolSourceReplyPayloads: vi.fn(() => []),
+    getPendingToolMediaReply: vi.fn(() => undefined),
+    getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
+    getSuccessfulCronAdds: vi.fn(() => []),
+    getUsageTotals: vi.fn(() => ({ input: 1, output: 2, total: 3 })),
+    getVisibleBlockReplyCount: vi.fn(() => 0),
+    hasToolMediaBlockReply: vi.fn(() => false),
+    isCompactionInFlight: vi.fn(() => false),
+    setTerminalLifecycleMeta: vi.fn(),
+    toolMetas: [{ toolName: "exec", isError: false }],
+    unsubscribe,
+    waitForCompactionRetry: vi.fn(async () => undefined),
+    waitForPendingEvents,
+  };
   const detachBackend = vi.fn(() => order.push("detach-backend"));
   const clearTimers = vi.fn(() => order.push("clear-timers"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
+  const getBeforeAgentFinalizeRevisionEntryId = vi.fn(() => undefined);
   const promptActiveSession = vi.fn(async () => undefined);
+  const messages = [
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "model",
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 3,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 100,
+    },
+  ];
   const activeSession = {
+    agent: { state: { messages } },
+    isCompacting: false,
+    isStreaming: false,
+    messages,
     sessionId: "active-session",
     getActiveToolNames: vi.fn(() => ["read"]),
   };
-  const sessionManager = { kind: "session-manager" };
-  const hookRunner = { kind: "hook-runner" };
-  const cacheTrace = { kind: "cache-trace" };
-  const trajectoryRecorder = { kind: "trajectory" };
+  const sessionManager = {
+    kind: "session-manager",
+    buildSessionContext: vi.fn(() => ({ messages: [] })),
+  };
+  const hookRunner = { hasHooks: vi.fn(() => false) };
+  const cacheTrace = { recordStage: vi.fn() };
+  const trajectoryRecorder = { recordEvent: vi.fn(), flush: vi.fn(async () => undefined) };
   const toolResultPromptProjectionState = { kind: "tool-result-projection" };
   const sessionPromptState = { toolResults: toolResultPromptProjectionState };
   const sessionRuntimeState = {
@@ -82,6 +160,7 @@ function createFixture() {
       queueHandle,
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
+      getBeforeAgentFinalizeRevisionEntryId,
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
@@ -129,11 +208,19 @@ function createFixture() {
   };
   const input = {
     attempt: {
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
+      config: {},
+      model: { api: "openai-responses" },
+      modelId: "model",
+      promptCacheKey: undefined,
+      provider: "openai",
       replyOperation: { detachBackend },
       runId: "run-1",
       sessionFile: "/tmp/session.jsonl",
       sessionId: "session-1",
       sessionKey: "agent:main",
+      trigger: "user",
+      workspaceDir: "/workspace",
     },
     agentDir: "/agent",
     isRawModelRun: false,
@@ -141,7 +228,7 @@ function createFixture() {
     runAbortController: new AbortController(),
     prepared: {
       bootstrap: {
-        bootstrapPromptWarning: undefined,
+        bootstrapPromptWarning: {},
         shouldRecordCompletedBootstrapTurn: false,
       },
       bundleTools: {
@@ -153,7 +240,7 @@ function createFixture() {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: { chars: 13 },
       },
-      toolBase: { toolSearchTargetTranscriptProjections: new Map() },
+      toolBase: { toolSearchTargetTranscriptProjections: [] },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,
@@ -161,7 +248,7 @@ function createFixture() {
       },
     },
     sessionLock: {
-      withOwnedTranscriptWrite: vi.fn(),
+      withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
     },
     setup: {
       effectiveFsWorkspaceOnly: false,
@@ -178,7 +265,7 @@ function createFixture() {
         yieldMessage: "yield",
       }),
     },
-    getRepairedRejectedThinkingReplay: () => true,
+    getRepairedRejectedProviderReplay: () => true,
     preparedStreamRuntime,
   } as unknown as SettledInput;
 
@@ -196,9 +283,9 @@ function createFixture() {
     promptInput.lifecycle.markBeforeAgentRunBlocked({ blockedBy: "before_agent" });
     return { promptStartedAt: 100 };
   });
-  mocks.finalizeStream.mockImplementation(async (finalizeInput) => {
+  mocks.settleStream.mockImplementation(async () => {
     order.push("finalize");
-    finalizeInput.onSettled({
+    return {
       promptError: null,
       promptErrorSource: null,
       timedOutDuringCompaction: false,
@@ -206,10 +293,15 @@ function createFixture() {
       sessionIdUsed: "settled-session",
       lastAssistant: { role: "assistant", content: "done" },
       currentAttemptAssistant: { role: "assistant", content: "done" },
+      currentAttemptCompletedAssistant: undefined,
       attemptUsage: { input: 1, output: 2, total: 3 },
       cacheBreak: null,
       promptCache: { cacheRead: 1 },
-    });
+      lastCallUsage: undefined,
+      compactionOccurredThisAttempt: false,
+    };
+  });
+  mocks.completeAfterTurn.mockImplementation(async () => {
     return { sessionIdUsed: "final-session", sessionFileUsed: "/tmp/final.jsonl" };
   });
   mocks.completeResult.mockImplementation(() => {
@@ -307,6 +399,78 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
+  it("carries a successful hidden target through settlement into the terminal receipt", async () => {
+    const fixture = createFixture();
+    fixture.input.prepared.toolBase.toolSearchTargetTranscriptProjections.push(
+      {
+        parentToolCallId: "outer-exec",
+        toolCallId: "tool_search_code:outer-exec:read:1",
+        toolName: "read",
+        input: { path: "qa/scenarios/index.yaml" },
+        result: {
+          content: [{ type: "text", text: "QA scenario pack mission" }],
+          details: {},
+        },
+        isError: false,
+      },
+      {
+        parentToolCallId: "outer-exec",
+        toolCallId: "tool_search_code:outer-exec:write:2",
+        toolName: "write",
+        input: { path: "qa/scenarios/index.yaml", content: "invalid" },
+        result: {
+          content: [{ type: "text", text: "write failed" }],
+          details: {},
+        },
+        isError: true,
+      },
+    );
+    const actualStreamSettle = await vi.importActual<typeof import("./attempt-stream-settle.js")>(
+      "./attempt-stream-settle.js",
+    );
+    const actualAttemptResult =
+      await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
+    mocks.settleStream.mockImplementationOnce(actualStreamSettle.settleEmbeddedAttemptStream);
+    mocks.completeResult.mockImplementationOnce(actualAttemptResult.completeEmbeddedAttemptResult);
+
+    const attempt = await runEmbeddedAttemptSettledPhase(fixture.input);
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-1"),
+        sessionId: "session-1",
+        runId: "run-1",
+        workspaceDir: "/workspace",
+        prompt: "read the QA scenario index",
+        trigger: "user",
+        timeoutMs: 60_000,
+      },
+      attempt,
+      currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
+      provider: "openai",
+      model: "model",
+      activeErrorContext: { provider: "openai", model: "model" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: attempt.sessionIdUsed,
+      sessionFileUsed: attempt.sessionFileUsed,
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(
+      (
+        prepared.agentMeta as {
+          terminalReceipt?: { successfulToolNames?: string[] };
+        }
+      ).terminalReceipt?.successfulToolNames,
+    ).toEqual(["exec", "read"]);
+  });
+
   it("preserves a prompt failure while still completing stream cleanup", async () => {
     const fixture = createFixture();
     const failure = new Error("prompt failed");
@@ -318,7 +482,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
 
-    expect(mocks.finalizeStream).not.toHaveBeenCalled();
+    expect(mocks.settleStream).not.toHaveBeenCalled();
     expect(mocks.completeResult).not.toHaveBeenCalled();
     expect(fixture.clearTimers).toHaveBeenCalledOnce();
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
@@ -391,6 +555,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
       requesterSessionKey: "agent:main",
+      requesterAgentId: "main",
       requesterTurnRunId: "run-1",
       requesterYielded: true,
       acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
@@ -435,8 +600,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture();
     const failure = new Error("settlement failed");
-    mocks.finalizeStream.mockImplementationOnce(async (finalizeInput) => {
-      finalizeInput.onSettled({
+    mocks.settleStream.mockImplementationOnce(async () => {
+      return {
         promptError: failure,
         promptErrorSource: null,
         timedOutDuringCompaction: true,
@@ -447,8 +612,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         attemptUsage: undefined,
         cacheBreak: null,
         promptCache: undefined,
-      });
-      return { sessionIdUsed: "settled-session" };
+        lastCallUsage: undefined,
+        compactionOccurredThisAttempt: false,
+      };
     });
 
     await runEmbeddedAttemptSettledPhase(fixture.input);
@@ -473,6 +639,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
       requesterSessionKey: "agent:main",
+      requesterAgentId: "main",
       requesterTurnRunId: "run-1",
       requesterYielded: false,
       acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],

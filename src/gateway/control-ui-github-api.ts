@@ -1,10 +1,21 @@
 // Shared api.github.com plumbing for Control UI GitHub surfaces (link
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
-export { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import {
+  assertSecretOwnerAvailable,
+  SecretSurfaceUnavailableError,
+} from "../secrets/runtime-degraded-state.js";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
+export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
+  "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.";
 const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
@@ -21,8 +32,8 @@ export class ControlUiGitHubError extends Error {
 }
 
 export function requiredString(record: Record<string, unknown>, key: string): string {
-  const value = record[key];
-  if (typeof value !== "string" || !value.trim()) {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
     throw new ControlUiGitHubError(502, `GitHub response omitted ${key}`);
   }
   return value;
@@ -32,17 +43,57 @@ export function readOptionalGitHubString(
   record: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
+  return readNonBlankString(record[key]);
 }
 
 export function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
-export function githubApiToken(): string | undefined {
-  return process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+export function githubApiToken(
+  env: NodeJS.ProcessEnv = process.env,
+  config: OpenClawConfig | null = getRuntimeConfigSnapshot(),
+): string | undefined {
+  const configured = config?.gateway?.controlUi?.github?.token;
+  if (configured !== undefined) {
+    assertSecretOwnerAvailable("capability", "control-ui-github");
+    const token = typeof configured === "string" ? configured.trim() : "";
+    if (!token) {
+      throw new SecretSurfaceUnavailableError({
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        state: "unavailable",
+        paths: ["gateway.controlUi.github.token"],
+        refKeys: [],
+        reason: "secret reference was not materialized by the active runtime",
+      });
+    }
+    return token;
+  }
+  return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
+}
+
+/** Raw-config inspection for doctor; it never consults process-global runtime degradation state. */
+export function hasConfiguredGitHubApiCredential(
+  env: NodeJS.ProcessEnv,
+  config: OpenClawConfig,
+): boolean {
+  return (
+    config.gateway?.controlUi?.github?.token !== undefined ||
+    Boolean(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim())
+  );
+}
+
+/** Captures the effective token and a non-secret cache scope from the same env snapshot. */
+export function resolveGitHubApiCredentialScope(env: NodeJS.ProcessEnv = process.env): {
+  token: string | undefined;
+  cacheScope: string;
+} {
+  const token = githubApiToken(env);
+  return {
+    token,
+    cacheScope: token ? createHash("sha256").update(token).digest("hex") : "anonymous",
+  };
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {

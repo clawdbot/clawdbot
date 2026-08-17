@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
@@ -381,7 +382,7 @@ export function recordScheduleComputeError(params: {
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
-  const errText = String(err);
+  const errText = formatErrorMessageWithCode(err);
 
   job.state.scheduleErrorCount = errorCount;
   job.state.nextRunAtMs = undefined;
@@ -552,7 +553,7 @@ function walkSchedulableJobs(
   return changed;
 }
 
-function recomputeJobNextRunAtMs(params: {
+export function recomputeJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;
@@ -629,98 +630,105 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  * to prevent silently advancing past-due nextRunAtMs values without execution
  * (see #13992).
  */
-export function recomputeNextRunsForMaintenance(
+export type CronMaintenanceOptions = {
+  recomputeExpired?: boolean;
+  nowMs?: number;
+  repairFutureCronNextRunAtMs?: boolean;
+  preserveExpiredPacedNextRunJobId?: string;
+  deferredNotifications?: DeferredCronNotifications;
+  skipScheduleErrorHandling?: boolean;
+};
+
+export function recomputeSingleJobForMaintenance(
   state: CronServiceState,
-  opts?: {
-    recomputeExpired?: boolean;
-    nowMs?: number;
-    repairFutureCronNextRunAtMs?: boolean;
-    preserveExpiredPacedNextRunJobId?: string;
-    deferredNotifications?: DeferredCronNotifications;
-    skipScheduleErrorHandling?: boolean;
-  },
+  job: CronJob,
+  opts?: CronMaintenanceOptions,
 ): boolean {
+  const now = opts?.nowMs ?? state.deps.nowMs();
+  const tick = normalizeJobTickState({ state, job, nowMs: now });
+  let changed = tick.changed;
+  if (tick.skip) {
+    return changed;
+  }
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const recomputeJob = (job: CronJob, nowMs: number) =>
+  const recomputeJob = () =>
     recomputeJobNextRunAtMs({
       state,
       job,
-      nowMs,
+      nowMs: now,
       deferredNotifications: opts?.deferredNotifications,
       skipScheduleErrorHandling: opts?.skipScheduleErrorHandling,
     });
-  return walkSchedulableJobs(
-    state,
-    ({ job, nowMs: now }) => {
-      let changed = false;
+  const startupCatchupAtMs = job.state.startupCatchupAtMs;
+  const pacedNextRunAtMs = job.state.pacedNextRunAtMs;
+  const nextRunAtMs = job.state.nextRunAtMs;
+  const hasForcePreservedNextRun =
+    isFiniteTimestamp(job.state.forcePreservedNextRunAtMs) &&
+    hasScheduledNextRunAtMs(nextRunAtMs) &&
+    job.state.forcePreservedNextRunAtMs === nextRunAtMs;
+  const hasPendingStartupCatchup =
+    isFiniteTimestamp(startupCatchupAtMs) &&
+    hasScheduledNextRunAtMs(nextRunAtMs) &&
+    startupCatchupAtMs === nextRunAtMs &&
+    now < startupCatchupAtMs;
+  if (startupCatchupAtMs !== undefined && !hasPendingStartupCatchup) {
+    job.state.startupCatchupAtMs = undefined;
+    changed = true;
+  }
+  const hasPendingPacedNextRun =
+    isFiniteTimestamp(pacedNextRunAtMs) &&
+    hasScheduledNextRunAtMs(nextRunAtMs) &&
+    pacedNextRunAtMs === nextRunAtMs &&
+    (now < pacedNextRunAtMs || opts?.preserveExpiredPacedNextRunJobId === job.id);
+  if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
+    job.state.pacedNextRunAtMs = undefined;
+    changed = true;
+  }
 
-      const startupCatchupAtMs = job.state.startupCatchupAtMs;
-      const pacedNextRunAtMs = job.state.pacedNextRunAtMs;
-      const nextRunAtMs = job.state.nextRunAtMs;
-      const hasForcePreservedNextRun =
-        isFiniteTimestamp(job.state.forcePreservedNextRunAtMs) &&
-        hasScheduledNextRunAtMs(nextRunAtMs) &&
-        job.state.forcePreservedNextRunAtMs === nextRunAtMs;
-      // The persisted marker owns only its exact future slot. Schedule edits,
-      // malformed state, or arrival at the slot release normal repair policy.
-      const hasPendingStartupCatchup =
-        isFiniteTimestamp(startupCatchupAtMs) &&
-        hasScheduledNextRunAtMs(nextRunAtMs) &&
-        startupCatchupAtMs === nextRunAtMs &&
-        now < startupCatchupAtMs;
-      if (startupCatchupAtMs !== undefined && !hasPendingStartupCatchup) {
-        job.state.startupCatchupAtMs = undefined;
-        changed = true;
-      }
-      const hasPendingPacedNextRun =
-        isFiniteTimestamp(pacedNextRunAtMs) &&
-        hasScheduledNextRunAtMs(nextRunAtMs) &&
-        pacedNextRunAtMs === nextRunAtMs &&
-        (now < pacedNextRunAtMs || opts?.preserveExpiredPacedNextRunJobId === job.id);
-      if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
-        job.state.pacedNextRunAtMs = undefined;
-        changed = true;
-      }
+  if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
+    changed = recomputeJob() || changed;
+  } else if (
+    repairFutureCronNextRunAtMs &&
+    !hasPendingStartupCatchup &&
+    !hasPendingPacedNextRun &&
+    !hasForcePreservedNextRun &&
+    shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })
+  ) {
+    changed = recomputeJob() || changed;
+  } else if (
+    recomputeExpired &&
+    !hasForcePreservedNextRun &&
+    now >= job.state.nextRunAtMs &&
+    typeof job.state.queuedAtMs !== "number" &&
+    typeof job.state.runningAtMs !== "number"
+  ) {
+    const lastRun = job.state.lastRunAtMs;
+    const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
+    const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
+    const isStaleBackoffSlot =
+      backoffUntilMs !== undefined &&
+      now < backoffUntilMs &&
+      job.state.nextRunAtMs < backoffUntilMs;
+    if (alreadyExecutedSlot || isStaleBackoffSlot) {
+      changed = recomputeJob() || changed;
+    }
+  }
+  return changed;
+}
 
-      if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-        changed = recomputeJob(job, now) || changed;
-      } else if (
-        repairFutureCronNextRunAtMs &&
-        !hasPendingStartupCatchup &&
-        !hasPendingPacedNextRun &&
-        !hasForcePreservedNextRun &&
-        shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })
-      ) {
-        changed = recomputeJob(job, now) || changed;
-      } else if (
-        recomputeExpired &&
-        !hasForcePreservedNextRun &&
-        now >= job.state.nextRunAtMs &&
-        typeof job.state.queuedAtMs !== "number" &&
-        typeof job.state.runningAtMs !== "number"
-      ) {
-        // Only advance when the expired slot was already executed, or when
-        // old start-based retry state predates the active run-end backoff.
-        // Otherwise preserve the past-due value so the job can still run.
-        const lastRun = job.state.lastRunAtMs;
-        const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
-        const backoffUntilMs = resolveJobErrorBackoffUntilMs(
-          job,
-          DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-        );
-        const isStaleBackoffSlot =
-          backoffUntilMs !== undefined &&
-          now < backoffUntilMs &&
-          job.state.nextRunAtMs < backoffUntilMs;
-        if (alreadyExecutedSlot || isStaleBackoffSlot) {
-          changed = recomputeJob(job, now) || changed;
-        }
-      }
-      return changed;
-    },
-    opts?.nowMs,
-  );
+export function recomputeNextRunsForMaintenance(
+  state: CronServiceState,
+  opts?: CronMaintenanceOptions,
+): boolean {
+  if (!state.store) {
+    return false;
+  }
+  let changed = false;
+  for (const job of state.store.jobs) {
+    changed = recomputeSingleJobForMaintenance(state, job, opts) || changed;
+  }
+  return changed;
 }
 
 /** Returns the next enabled wake timestamp from the in-memory cron store. */

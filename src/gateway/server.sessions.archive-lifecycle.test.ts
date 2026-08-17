@@ -1,14 +1,14 @@
 // Archive lifecycle tests protect fence-before-cancel, terminal drains, and sentinels.
 import { afterEach, expect, test, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { loadSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController, removeChatAbortControllerEntry } from "./chat-abort.js";
@@ -65,7 +65,7 @@ function activeRunContext(params: {
   runId: string;
   sessionId: string;
   sessionKey: string;
-  persistence: ReturnType<typeof createDeferred<void>>;
+  persistence: ReturnType<typeof createDeferredCore<void>>;
   ownerConnId?: string;
 }) {
   const chatAbortControllers = new Map();
@@ -238,6 +238,18 @@ type LifecycleHandlerResponse = {
   error?: Parameters<RespondFn>[2];
 };
 
+function archivePatch(key: string, expectedSessionId: string) {
+  return { key, archived: true, expectedSessionId };
+}
+
+function archiveTarget(key: string, expectedSessionId: string) {
+  return { key, expectedSessionId };
+}
+
+function expectArchived(storePath: string, sessionKey: string) {
+  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+}
+
 async function invokeArchiveHandler(params: {
   authorization: NonNullable<
     ReturnType<typeof resolveSessionMutationAuthorization>["authorization"]
@@ -245,6 +257,7 @@ async function invokeArchiveHandler(params: {
   client: GatewayClient;
   context: GatewayRequestContext;
   sessionKey: string;
+  expectedSessionId: string;
 }): Promise<LifecycleHandlerResponse> {
   const handlers = await getSessionsHandlers();
   let response: LifecycleHandlerResponse | undefined;
@@ -253,7 +266,7 @@ async function invokeArchiveHandler(params: {
   };
   await handlers["sessions.patch"]?.({
     req: {} as never,
-    params: { key: params.sessionKey, archived: true },
+    params: archivePatch(params.sessionKey, params.expectedSessionId),
     client: params.client,
     context: params.context,
     isWebchatConnect: () => false,
@@ -297,16 +310,14 @@ test("sessions.patch cancels active work and commits only after admission and te
   await writeSessionStore({
     entries: { [sessionKey]: sessionStoreEntry(sessionId) },
   });
-  let interrupted = false;
+  const interrupted = createDeferredCore();
   const admission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: [sessionKey, sessionId],
     assertAllowed: () => {},
-    onInterrupt: () => {
-      interrupted = true;
-    },
+    onInterrupt: () => interrupted.resolve(),
   });
-  const persistence = createDeferred();
+  const persistence = createDeferredCore();
   const active = activeRunContext({
     runId,
     sessionId,
@@ -317,16 +328,14 @@ test("sessions.patch cancels active work and commits only after admission and te
   try {
     const archive = directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: active.context,
         client: { connId: "archive-writer", connect: { scopes: ["operator.write"] } } as never,
       },
     );
-    await vi.waitFor(() => {
-      expect(interrupted).toBe(true);
-      expect(active.controller.signal.aborted).toBe(true);
-    });
+    await interrupted.promise;
+    expect(active.controller.signal.aborted).toBe(true);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
     let replacementAdmitted = false;
@@ -385,7 +394,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
       interrupted = true;
     },
   });
-  const persistence = createDeferred();
+  const persistence = createDeferredCore();
   const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
   const requestContext = await archiveLifecycleRequestContext(active.context);
   const placement = workerPlacement({ sessionId, sessionKey, state: "active" });
@@ -410,7 +419,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     throw new Error("expected resolved sharing target");
   }
 
-  const releaseAudit = createDeferred();
+  const releaseAudit = createDeferredCore();
   sessionAuditGate.entered.mockClear();
   sessionAuditGate.wait = releaseAudit.promise;
   let sharing: Promise<LifecycleHandlerResponse> | undefined;
@@ -441,6 +450,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
       client: viewer,
       context: requestContext,
       sessionKey,
+      expectedSessionId: sessionId,
     }).finally(() => {
       archiveSettled = true;
     });
@@ -492,11 +502,11 @@ test("archive retains the lifecycle fence until drain and commit before sharing 
     identities: [sessionKey, sessionId],
     assertAllowed: () => {},
   });
-  const persistence = createDeferred();
+  const persistence = createDeferredCore();
   const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
   const requestContext = await archiveLifecycleRequestContext(active.context);
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const reclaimGate = createDeferred();
+  const reclaimGate = createDeferredCore();
   const reclaim = vi.fn(async () => {
     await reclaimGate.promise;
     placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
@@ -523,6 +533,7 @@ test("archive retains the lifecycle fence until drain and commit before sharing 
       client: owner,
       context: requestContext,
       sessionKey,
+      expectedSessionId: sessionId,
     });
     await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
 
@@ -569,9 +580,9 @@ test("alias archive lets the canonical cloud reclaim barrier reenter without dea
   const sessionId = "session-archive-cloud-alias";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const reclaimEntered = createDeferred();
-  const allowNestedReclaim = createDeferred();
-  const contenderRelease = createDeferred();
+  const reclaimEntered = createDeferredCore();
+  const allowNestedReclaim = createDeferredCore();
+  const contenderRelease = createDeferredCore();
   const reclaim = vi.fn(async () => {
     reclaimEntered.resolve();
     await allowNestedReclaim.promise;
@@ -585,7 +596,7 @@ test("alias archive lets the canonical cloud reclaim barrier reenter without dea
   });
   const archive = directSessionReq(
     "sessions.patch",
-    { key: aliasKey, archived: true },
+    { key: aliasKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerSessionPlacementService: placementReader(() => placement),
@@ -634,7 +645,7 @@ test("sessions.patch returns retryable UNAVAILABLE when runtime drain does not s
   embeddedRunMock.activeIds.add(sessionId);
   embeddedRunMock.waitResults.set(sessionId, false);
 
-  const archived = await directSessionReq("sessions.patch", { key: sessionKey, archived: true });
+  const archived = await directSessionReq("sessions.patch", archivePatch(sessionKey, sessionId));
 
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
@@ -660,7 +671,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerEnvironmentService,
@@ -682,7 +693,7 @@ test("sessions.patch fails closed when active worker inference has no archive dr
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerEnvironmentService: {
@@ -709,7 +720,7 @@ test("sessions.patch retains the archive drain through the ordered audit append"
   try {
     const archived = await directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         client: {
           authenticatedUserId: "archive-reviewer@example.com",
@@ -752,12 +763,12 @@ test("sessions.patch returns UNAVAILABLE when terminal persistence fails", async
   const sessionId = "session-archive-persistence-failure";
   const runId = "run-archive-persistence-failure";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const persistence = createDeferred();
+  const persistence = createDeferredCore();
   const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
   try {
     const archive = directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: active.context,
       },
@@ -820,10 +831,11 @@ test("sessions.patchMany independently archives active and idle sessions in targ
   const activeKey = "agent:main:archive-batch-active";
   const idleKey = "agent:main:archive-batch-idle";
   const activeSessionId = "session-batch-active";
+  const idleSessionId = "session-batch-idle";
   await writeSessionStore({
     entries: {
       [activeKey]: sessionStoreEntry(activeSessionId),
-      [idleKey]: sessionStoreEntry("session-batch-idle"),
+      [idleKey]: sessionStoreEntry(idleSessionId),
     },
   });
   embeddedRunMock.activeIds.add(activeSessionId);
@@ -832,7 +844,7 @@ test("sessions.patchMany independently archives active and idle sessions in targ
   const result = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [{ key: activeKey }, { key: idleKey }],
+      targets: [archiveTarget(activeKey, activeSessionId), archiveTarget(idleKey, idleSessionId)],
       patch: { archived: true },
     },
   );
@@ -842,12 +854,8 @@ test("sessions.patchMany independently archives active and idle sessions in targ
     { key: activeKey, ok: true },
     { key: idleKey, ok: true },
   ]);
-  expect(loadSessionEntry({ storePath, sessionKey: activeKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: idleKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, activeKey);
+  expectArchived(storePath, idleKey);
 });
 
 test("sessions.patchMany prepares independent archive drains concurrently and releases in target order", async () => {
@@ -862,7 +870,7 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
       [secondKey]: sessionStoreEntry(secondSessionId),
     },
   });
-  const firstDrained = createDeferred();
+  const firstDrained = createDeferredCore();
   const firstRelease = vi.fn();
   const secondRelease = vi.fn();
   const beginInferenceSessionDrain = vi.fn((sessionId: string) => ({
@@ -874,7 +882,7 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
   const archive = directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [{ key: firstKey }, { key: secondKey }],
+      targets: [archiveTarget(firstKey, firstSessionId), archiveTarget(secondKey, secondSessionId)],
       patch: { archived: true },
     },
     {
@@ -908,12 +916,8 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
   expect(firstRelease.mock.invocationCallOrder[0]).toBeLessThan(
     secondRelease.mock.invocationCallOrder[0]!,
   );
-  expect(loadSessionEntry({ storePath, sessionKey: firstKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: secondKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, firstKey);
+  expectArchived(storePath, secondKey);
 });
 
 test("sessions.patchMany attempts every archive drain release without masking success", async () => {
@@ -936,7 +940,7 @@ test("sessions.patchMany attempts every archive drain release without masking su
   const result = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [{ key: firstKey }, { key: secondKey }],
+      targets: [archiveTarget(firstKey, firstSessionId), archiveTarget(secondKey, secondSessionId)],
       patch: { archived: true },
     },
     {
@@ -962,12 +966,8 @@ test("sessions.patchMany attempts every archive drain release without masking su
   ]);
   expect(firstRelease).toHaveBeenCalledOnce();
   expect(secondRelease).toHaveBeenCalledOnce();
-  expect(loadSessionEntry({ storePath, sessionKey: firstKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: secondKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, firstKey);
+  expectArchived(storePath, secondKey);
 });
 
 test("sessions.patchMany isolates a failed archive drain and continues later targets", async () => {
@@ -975,10 +975,11 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
   const stuckKey = "agent:main:archive-batch-stuck";
   const idleKey = "agent:main:archive-batch-after-stuck";
   const stuckSessionId = "session-batch-stuck";
+  const idleSessionId = "session-batch-after-stuck";
   await writeSessionStore({
     entries: {
       [stuckKey]: sessionStoreEntry(stuckSessionId),
-      [idleKey]: sessionStoreEntry("session-batch-after-stuck"),
+      [idleKey]: sessionStoreEntry(idleSessionId),
     },
   });
   embeddedRunMock.activeIds.add(stuckSessionId);
@@ -987,7 +988,7 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
   const result = await directSessionReq<{
     outcomes: Array<{ error?: { code: string; retryable?: boolean }; key: string; ok: boolean }>;
   }>("sessions.patchMany", {
-    targets: [{ key: stuckKey }, { key: idleKey }],
+    targets: [archiveTarget(stuckKey, stuckSessionId), archiveTarget(idleKey, idleSessionId)],
     patch: { archived: true },
   });
 
@@ -1001,9 +1002,7 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
     { key: idleKey, ok: true },
   ]);
   expect(loadSessionEntry({ storePath, sessionKey: stuckKey })?.archivedAt).toBeUndefined();
-  expect(loadSessionEntry({ storePath, sessionKey: idleKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, idleKey);
 });
 
 test("sessions.patch rejects a generation replaced after the exact preparation read", async () => {
@@ -1012,7 +1011,7 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
   const sessionId = "session-archive-generation-race";
   const runId = "run-archive-generation-race";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const persistence = createDeferred();
+  const persistence = createDeferredCore();
   const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
   const dispatch = vi.fn();
@@ -1023,7 +1022,7 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
   try {
     const archive = directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: {
           ...active.context,
@@ -1033,7 +1032,7 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
       },
     );
     await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       { sessionId: "session-archive-generation-replacement", updatedAt: 2 },
     );
@@ -1041,7 +1040,10 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
 
     const archived = await archive;
     expect(archived.ok).toBe(false);
-    expect(archived.error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(archived.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "session-changed" },
+    });
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       sessionId: "session-archive-generation-replacement",
     });

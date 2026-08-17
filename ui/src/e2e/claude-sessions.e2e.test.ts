@@ -4,125 +4,20 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  captureTopVisibleVirtualRow,
+  expectPaintedVirtualRowAnchor,
+  startVirtualRowPaintProbe,
+  stopVirtualRowPaintProbe,
+  type VirtualRowPaintResult,
+  waitForPaintedVirtualRowAnchor,
+} from "./virtual-row-anchor.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Claude native session catalog",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-type VisibleVirtualRow = {
-  key: string;
-  viewportTop: number;
-};
-
-async function firstVisibleVirtualRow(thread: Locator): Promise<VisibleVirtualRow> {
-  return thread.evaluate((element) => {
-    const viewport = element.getBoundingClientRect();
-    const row = Array.from(
-      element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-    ).find((candidate) => {
-      const rect = candidate.getBoundingClientRect();
-      return (
-        candidate.dataset.virtualRowKey !== "history" &&
-        rect.bottom > viewport.top &&
-        rect.top < viewport.bottom
-      );
-    });
-    if (!row) {
-      throw new Error("expected a visible virtual transcript row");
-    }
-    return {
-      key: row.dataset.virtualRowKey ?? "",
-      viewportTop: Math.round(row.getBoundingClientRect().top - viewport.top),
-    };
-  });
-}
-
-type VirtualRowPrependSample = {
-  phase: "before" | "mutation" | "frame";
-  viewportTop: number | null;
-};
-
-async function startVirtualRowPrependProbe(thread: Locator, anchor: VisibleVirtualRow) {
-  await thread.evaluate((element, expected) => {
-    const target = globalThis as typeof globalThis & {
-      chatPrependProbe?: {
-        observer: MutationObserver;
-        samples: VirtualRowPrependSample[];
-      };
-    };
-    const samples: VirtualRowPrependSample[] = [];
-    let framePending = false;
-    const sample = (phase: VirtualRowPrependSample["phase"]) => {
-      const row = Array.from(
-        element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-      ).find((candidate) => candidate.dataset.virtualRowKey === expected.key);
-      samples.push({
-        phase,
-        viewportTop: row
-          ? Math.round(row.getBoundingClientRect().top - element.getBoundingClientRect().top)
-          : null,
-      });
-    };
-    sample("before");
-    const observer = new MutationObserver(() => {
-      sample("mutation");
-      if (framePending) {
-        return;
-      }
-      framePending = true;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          framePending = false;
-          sample("frame");
-        });
-      });
-    });
-    observer.observe(element, {
-      attributeFilter: ["style"],
-      attributes: true,
-      childList: true,
-      subtree: true,
-    });
-    target.chatPrependProbe = { observer, samples };
-  }, anchor);
-}
-
-async function finishVirtualRowPrependProbe(thread: Locator) {
-  return thread.evaluate(() => {
-    const target = globalThis as typeof globalThis & {
-      chatPrependProbe?: {
-        observer: MutationObserver;
-        samples: VirtualRowPrependSample[];
-      };
-    };
-    const probe = target.chatPrependProbe;
-    if (!probe) {
-      throw new Error("expected an active virtual row prepend probe");
-    }
-    probe.observer.disconnect();
-    delete target.chatPrependProbe;
-    return probe.samples;
-  });
-}
-
-function expectStableVirtualRowPrepend(
-  anchor: VisibleVirtualRow,
-  samples: VirtualRowPrependSample[],
-) {
-  expect(samples.some((sample) => sample.phase === "mutation")).toBe(true);
-  expect(samples.some((sample) => sample.phase === "frame")).toBe(true);
-  const paintedSamples = samples.filter((sample) => sample.phase !== "mutation");
-  expect(
-    paintedSamples.every((sample) => sample.viewportTop !== null),
-    JSON.stringify({ anchor, samples }),
-  ).toBe(true);
-  expect(
-    paintedSamples.every((sample) => Math.abs((sample.viewportTop ?? 0) - anchor.viewportTop) <= 1),
-    JSON.stringify({ anchor, samples }),
-  ).toBe(true);
-}
 
 function resumableClaudeCatalog() {
   return {
@@ -230,11 +125,14 @@ async function catalogHeaderAffordances(header: Locator) {
 
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await page.waitForFunction(() =>
-    Boolean(
-      document.querySelector('[data-session-section="work"]') ??
-      document.querySelector('[data-session-section^="catalog:"]'),
-    ),
+  await page.waitForFunction(
+    () =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    undefined,
+    { timeout: 30_000 },
   );
   if ((await toggle.count()) === 0) {
     return;
@@ -244,14 +142,22 @@ async function expandCodingSection(page: Page) {
   }
 }
 
-async function openClaudeCatalogTerminal(page: Page) {
+async function navigateToClaudeCatalog(page: Page) {
   await page.goto(`${suite.server.baseUrl}chat`);
   await expandCodingSection(page);
+}
+
+async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
-  await row.click({ button: "right" });
-  await page.locator('wa-dropdown-item[value="terminal"]').click();
+  await row.click({ button: "right", force: options.force });
+  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+}
+
+async function openClaudeCatalogTerminal(page: Page) {
+  await navigateToClaudeCatalog(page);
+  await triggerClaudeCatalogTerminal(page);
 }
 
 suite.define(() => {
@@ -446,14 +352,19 @@ suite.define(() => {
       });
 
       await openClaudeCatalogTerminal(page);
-      const open = await gateway.waitForRequest("terminal.open");
-      expect(open.params).toMatchObject({
-        catalog: {
-          catalogId: "claude",
-          hostId: "gateway:local",
-          threadId: "claude-terminal-session",
-        },
-      });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({
+            catalog: {
+              catalogId: "claude",
+              hostId: "gateway:local",
+              threadId: "claude-terminal-session",
+            },
+          }),
+        );
       const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
@@ -513,22 +424,38 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
+      await navigateToClaudeCatalog(page);
       await page.clock.install();
-      await openClaudeCatalogTerminal(page);
-      await gateway.waitForRequest("terminal.open");
+      await triggerClaudeCatalogTerminal(page, { force: true });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
+        );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
-      await page.clock.runFor(30_001);
+      await page
+        .locator("openclaw-terminal-panel .tabstrip-tab", {
+          hasText: "claude --resume claude-termi…",
+        })
+        .waitFor();
+      const resize = await gateway.waitForRequest("terminal.resize");
+      expect(resize.params).toEqual(
+        expect.objectContaining({ sessionId: "claude-terminal-timeout" }),
+      );
+      await page.clock.fastForward(30_001);
+      await page.clock.runFor(100);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator(".tabstrip-tab").count()).toBe(0);
+      expect(await page.locator("openclaw-terminal-panel .tabstrip-tab").count()).toBe(0);
     });
   });
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
-    await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -589,7 +516,7 @@ suite.define(() => {
               response: {
                 hostId: "node:devbox",
                 threadId: "remote-thread",
-                items: [{ id: "u1", type: "userMessage", text: "older question" }],
+                items: [{ id: "a0", type: "agentMessage", text: "older question" }],
               },
             },
             {
@@ -622,7 +549,14 @@ suite.define(() => {
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.clock.runFor(30_000);
+    await page.clock.install();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.clock.runFor(50);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    await page.clock.fastForward(30_000);
+    await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
@@ -654,20 +588,28 @@ suite.define(() => {
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
     await catalogPane.locator(".chat-history-loading").waitFor();
-    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
-    const anchor = await firstVisibleVirtualRow(thread);
-    await startVirtualRowPrependProbe(thread, anchor);
-    await gateway.resolveDeferred("sessions.catalog.read");
-    await expect
-      .poll(() =>
-        catalogPane.evaluate(
-          (element) =>
-            (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
-        ),
-      )
-      .toBe(41);
-    await page.clock.runFor(100);
-    expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
+    const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
+    await showEarlier.waitFor();
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
+    const anchor = await captureTopVisibleVirtualRow(thread);
+    await startVirtualRowPaintProbe(thread, anchor);
+    let paintResult: VirtualRowPaintResult;
+    try {
+      await gateway.resolveDeferred("sessions.catalog.read");
+      await expect
+        .poll(() =>
+          catalogPane.evaluate(
+            (element) =>
+              (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
+          ),
+        )
+        .toBe(41);
+      await page.clock.runFor(100);
+      await waitForPaintedVirtualRowAnchor(thread, anchor);
+    } finally {
+      paintResult = await stopVirtualRowPaintProbe(thread);
+    }
+    expectPaintedVirtualRowAnchor(anchor, paintResult);
     expect(
       await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
     ).toBe(true);
@@ -714,14 +656,164 @@ suite.define(() => {
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
     expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
-    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
   });
 
-  it("auto-loads older native history with a spinner and stable viewport", async () => {
+  it("auto-pages an underfilled native transcript until it becomes scrollable", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+    }
+    const viewport = { width: 1280, height: 900 };
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const historyMessage = (seq: number, role: "assistant" | "user", text: string) => ({
+      __openclaw: { seq },
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+      role,
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const recent = [
+      historyMessage(21, "user", "Recent question"),
+      historyMessage(22, "assistant", "Recent answer"),
+    ];
+    // Consecutive assistant records collapse into one rendered group, so this
+    // page advances the raw offset without filling the real transcript viewport.
+    const firstOlderPage = Array.from({ length: 4 }, (_, index) =>
+      historyMessage(index + 17, "assistant", `Short older answer ${index + 17}`),
+    );
+    const secondOlderPage = Array.from({ length: 16 }, (_, index) => {
+      const seq = index + 1;
+      const role = seq % 2 === 0 ? "assistant" : "user";
+      return historyMessage(
+        seq,
+        role,
+        `Scrollable older ${role} message ${seq}\n${"Transcript detail line\n".repeat(3)}`,
+      );
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.history"],
+      featureMethods: ["chat.metadata", "chat.startup"],
+      methodResponses: {
+        "chat.startup": {
+          messages: recent,
+          hasMore: true,
+          nextOffset: 2,
+          totalMessages: 30,
+          sessionId: "native-underfill-pagination",
+          thinkingLevel: null,
+        },
+        "chat.history": {
+          cases: [
+            {
+              match: { offset: 2 },
+              response: {
+                messages: firstOlderPage,
+                hasMore: true,
+                nextOffset: 6,
+                totalMessages: 30,
+                sessionId: "native-underfill-pagination",
+                thinkingLevel: null,
+              },
+            },
+            {
+              match: { offset: 6 },
+              response: {
+                messages: secondOlderPage,
+                hasMore: true,
+                nextOffset: 22,
+                totalMessages: 30,
+                sessionId: "native-underfill-pagination",
+                thinkingLevel: null,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = pane.locator(".chat-thread");
+      await page.getByText("Recent answer", { exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).map(
+            (request) => (request.params as { offset?: number } | undefined)?.offset,
+          ),
+        )
+        .toEqual([2]);
+      await pane.locator(".chat-history-loading").waitFor();
+      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+        true,
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
+          fullPage: true,
+        });
+      }
+
+      await gateway.deferNext("chat.history", { offset: 6 });
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).map(
+            (request) => (request.params as { offset?: number } | undefined)?.offset,
+          ),
+        )
+        .toEqual([2, 6]);
+      await pane.locator(".chat-history-loading").waitFor();
+      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+        true,
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "01-native-history-continued-auto-load.png"),
+          fullPage: true,
+        });
+      }
+
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      await expect.poll(() => pane.locator(".chat-history-loading").count()).toBe(0);
+      expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "02-native-history-final-scrollable.png"),
+          fullPage: true,
+        });
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 300);
+      });
+      expect(
+        (await gateway.getRequests("chat.history")).map(
+          (request) => (request.params as { offset?: number } | undefined)?.offset,
+        ),
+      ).toEqual([2, 6]);
+    } finally {
+      await suite.closeBrowserContext(context);
+      if (artifactDir && proofVideo) {
+        await proofVideo.saveAs(path.join(artifactDir, "native-history-auto-pagination.webm"));
+      }
+    }
+  });
+
+  it("shows loaded native history before fetching and revealing an earlier page", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.clock.install();
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
       content: [
@@ -777,17 +869,59 @@ suite.define(() => {
       element.scrollTop = element.scrollHeight;
       element.dispatchEvent(new Event("scroll"));
     });
+    const showEarlier = page.getByRole("button", { name: "Show earlier" });
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDir, "00-native-history-available.png"),
+        fullPage: true,
+      });
+    }
+    const initialRequestCount = (await gateway.getRequests("chat.history")).length;
+    const tailAnchor = await captureTopVisibleVirtualRow(thread);
+    const initialScrollTop = await thread.evaluate((element) => element.scrollTop);
+    await showEarlier.click();
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollTop))
+      .toBeLessThan(initialScrollTop);
+    const earlierAnchor = await captureTopVisibleVirtualRow(thread);
+    expect(earlierAnchor.index).toBeLessThan(tailAnchor.index);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(initialRequestCount);
     await gateway.deferNext("chat.history");
     await thread.evaluate((element) => {
       element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
+      element.parentElement?.querySelector<HTMLButtonElement>(".chat-history-available")?.click();
     });
-    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
     await gateway.waitForRequest("chat.history");
     await page.locator(".chat-history-loading").waitFor();
-    const anchor = await firstVisibleVirtualRow(thread);
-    await startVirtualRowPrependProbe(thread, anchor);
-    await gateway.resolveDeferred("chat.history");
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
+    if (artifactDir) {
+      await page.screenshot({
+        path: path.join(artifactDir, "01-native-history-loading.png"),
+        fullPage: true,
+      });
+    }
+    await gateway.rejectDeferred("chat.history", {
+      code: "UNAVAILABLE",
+      message: "history unavailable",
+      retryable: true,
+    });
+    await expect.poll(() => page.locator(".chat-history-loading").count()).toBe(0);
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("false");
+    const failedRequestCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.history");
+    await showEarlier.click();
+    await gateway.waitForRequest("chat.history");
+    await page.locator(".chat-history-loading").waitFor();
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
+    await gateway.resolveDeferred("chat.history", {
+      messages: older,
+      hasMore: true,
+      nextOffset: 140,
+      totalMessages: 180,
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
     await expect
       .poll(() =>
         page
@@ -799,22 +933,45 @@ suite.define(() => {
           ),
       )
       .toBe(140);
-    await page.clock.runFor(100);
-    expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
+    const firstOlderMessage = page.getByText(/^older native message 1\n/);
+    await firstOlderMessage.waitFor();
+    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+    if (artifactDir) {
+      await page.screenshot({
+        path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
+        fullPage: true,
+      });
+    }
     expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
       limit: 100,
       offset: 100,
     });
-    const exhaustedRequestCount = (await gateway.getRequests("chat.history")).length;
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
+    const firstPageRequestCount = (await gateway.getRequests("chat.history")).length;
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount);
+    await gateway.deferNext("chat.history");
+    await showEarlier.click();
+    await gateway.waitForRequest("chat.history");
+    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
+      limit: 100,
+      offset: 140,
     });
-    await page.clock.runFor(100);
-    await page.getByText(/^older native message 1\n/).waitFor();
-    await page.clock.runFor(300);
+    await gateway.resolveDeferred("chat.history", {
+      messages: [],
+      hasMore: false,
+      totalMessages: 180,
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
+    await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await page.locator(".chat-history-loading").count()).toBe(0);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(exhaustedRequestCount);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
     await page.close();
   });
 

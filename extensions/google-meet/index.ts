@@ -27,9 +27,6 @@ import { GOOGLE_MEET_NODE_COMMAND } from "./src/transports/google-meet-platform-
 
 export { testing };
 
-/** @deprecated Use `testing`. */
-export { testing as __testing };
-
 export default definePluginEntry({
   id: "google-meet",
   name: "Google Meet",

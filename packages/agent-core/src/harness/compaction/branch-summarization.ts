@@ -7,8 +7,14 @@ import {
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
-import type { BranchSummaryResult, SessionTreeEntry } from "../types.js";
-import { BranchSummaryError, err, ok, type Result } from "../types.js";
+import {
+  type BranchSummaryResult,
+  type SessionTreeEntry,
+  BranchSummaryError,
+  err,
+  ok,
+  type Result,
+} from "../types.js";
 import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 import {
   computeFileLists,

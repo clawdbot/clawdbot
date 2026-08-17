@@ -11,8 +11,8 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 2,
-    socketPath: "/tmp/openclaw-worker/gateway.sock",
+    version: 3,
+    connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
     admission: {
       environmentId: "environment-1",
       credential: ["worker", "fixture", "value"].join("-"),
@@ -60,6 +60,65 @@ describe("worker launch descriptor", () => {
       client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
       admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
     });
+  });
+
+  it("accepts only closed Unix or public WebSocket connection endpoints", () => {
+    const descriptor = launchDescriptor();
+    descriptor.connectionEndpoint = {
+      kind: "websocket",
+      url: "wss://gateway.example/tenant/__openclaw__/worker",
+      tlsFingerprint: "ab:".repeat(31) + "ab",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual({
+      ...descriptor,
+      connectionEndpoint: {
+        ...descriptor.connectionEndpoint,
+        tlsFingerprint: "ab".repeat(32),
+      },
+    });
+
+    const invalidEndpoints: unknown[] = [
+      { kind: "unix", socketPath: "gateway.sock" },
+      { kind: "unix", socketPath: "/tmp/gateway:sock" },
+      { kind: "websocket", url: "https://gateway.example/__openclaw__/worker" },
+      { kind: "websocket", url: "ws://user@gateway.example/__openclaw__/worker" },
+      { kind: "websocket", url: "wss://gateway.example/other" },
+      { kind: "websocket", url: "wss://gateway.example/__openclaw__/worker?token=x" },
+      {
+        kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        tlsFingerprint: "ab".repeat(32),
+      },
+      {
+        kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        cloudflareAccess: {
+          clientId: "cf-worker-plaintext-id",
+          clientSecret: "cf-worker-plaintext-secret",
+        },
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "ab:cd:ef",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "g".repeat(64),
+      },
+      { ...descriptor.connectionEndpoint, unexpected: true },
+    ];
+    for (const connectionEndpoint of invalidEndpoints) {
+      expect(() => parseWorkerLaunchDescriptor({ ...descriptor, connectionEndpoint })).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
   });
 
   it("rejects unknown fields at every launch-owned boundary", () => {
@@ -129,7 +188,7 @@ describe("worker launch descriptor", () => {
     const descriptor = launchDescriptor();
     const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
     const cases: unknown[] = [
-      { ...descriptor, version: 1 },
+      { ...descriptor, version: 2 },
       { ...descriptor, assignment: assignmentWithoutAuthority },
       {
         ...descriptor,
@@ -220,7 +279,10 @@ describe("worker launch descriptor", () => {
   it("rejects non-absolute paths, unattached sessions, and discontinuous event sequences", () => {
     const descriptor = launchDescriptor();
     const cases: unknown[] = [
-      { ...descriptor, socketPath: "gateway.sock" },
+      {
+        ...descriptor,
+        connectionEndpoint: { kind: "unix", socketPath: "gateway.sock" },
+      },
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, workspaceDir: "workspace" },

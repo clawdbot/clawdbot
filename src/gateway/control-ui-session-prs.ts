@@ -16,10 +16,10 @@ import {
   ControlUiGitHubError,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  githubApiToken,
   isRecord,
   optionalNumber,
   readOptionalGitHubString,
+  resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
 import {
   gitOutput,
@@ -32,7 +32,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
@@ -94,9 +94,12 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
 function resolveSessionPullRequestGitRoot(
   params: ControlUiSessionPullRequestsParams,
 ): string | null {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
-    agentId: params.agentId,
-  });
+  const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    {
+      agentId: params.agentId,
+    },
+  );
   // Same session/agent scoping as sessions.files.*: a missing entry means an
   // unknown or deleted session, which must not fall back to some agent
   // workspace and surface another checkout's PRs.
@@ -566,9 +569,10 @@ async function refreshBranchPullRequests(
   context: SessionPullRequestGitContext,
   fetchImpl: typeof fetch,
   entry: CacheEntry,
+  token: string | undefined,
 ): Promise<BranchPullRequestsSnapshot> {
   try {
-    const result = await fetchBranchPullRequests(context, fetchImpl, githubApiToken());
+    const result = await fetchBranchPullRequests(context, fetchImpl, token);
     // Degraded state-only chips still become lastGood: a later refresh that
     // rate-limits at the list fetch must serve the proven PRs, not an empty
     // list that would resurrect the Create PR row mid-outage. The shortened
@@ -636,7 +640,8 @@ async function cachedBranchPullRequests(
   deps: LoadSessionPullRequestDeps,
   refresh: boolean,
 ): Promise<BranchPullRequestsSnapshot> {
-  const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
+  const { token, cacheScope } = resolveGitHubApiCredentialScope();
+  const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}\0${cacheScope}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     branchCache.delete(key);
@@ -657,7 +662,7 @@ async function cachedBranchPullRequests(
         }
         return snapshot;
       }
-      return refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, cached);
+      return refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, cached, token);
     });
   }
   const entry: CacheEntry = cached ?? {
@@ -666,7 +671,7 @@ async function cachedBranchPullRequests(
     refreshMode: null,
   };
   const promise = trackBranchRefresh(entry, refresh ? "forced" : "normal", () =>
-    refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry),
+    refreshBranchPullRequests(context, deps.fetchImpl ?? fetch, entry, token),
   );
   branchCache.delete(key);
   branchCache.set(key, entry);

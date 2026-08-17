@@ -43,7 +43,7 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 }
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
@@ -114,6 +114,18 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
   await runDoctorHealthContributions(ctx);
+  if (ctx.configWriteRefusal) {
+    // Config fixes were computed but refused by the writer; the warning above
+    // already lists the manual work. This failure outranks a recoverable
+    // post-install advisory because the run did not converge.
+    outro(
+      ctx.configResultWriteCommitted === true
+        ? "Doctor finished, but some config fixes were not applied."
+        : "Doctor finished, but config fixes were not applied.",
+    );
+    effectiveRuntime.exit(1);
+    return;
+  }
   if (ctx.postInstallDoctorResult) {
     const {
       UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -130,6 +142,5 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
       return;
     }
   }
-
   outro("Doctor complete.");
 }

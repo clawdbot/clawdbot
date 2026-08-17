@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import {
@@ -50,7 +50,7 @@ function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWork
   const sessionKey = String(payload.sessionKey);
   const sessionId = String(payload.expectedExistingSessionId);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const scope = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
+  const scope = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
   const admission = consumeSessionWorkAdmissionHandoff({
     handoffId: String(payload.internalRuntimeHandoffId),
     scope,

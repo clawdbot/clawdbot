@@ -358,6 +358,14 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.cron-table__running {
+  color: var(--accent);
+}
+
+.cron-table__auto-disabled {
+  color: var(--danger);
+}
+
 .cron-table__cell {
   color: var(--text);
   font-size: 12.5px;
@@ -783,13 +791,14 @@
 }
 
 .cron-job-menu__item {
+  min-height: var(--menu-item-height);
   border: 0;
   background: transparent;
   color: var(--text);
   font-size: 13px;
   text-align: left;
   padding: 7px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--menu-item-radius);
   cursor: var(--cursor-action);
 }
 
@@ -979,7 +988,7 @@
   margin-bottom: 0;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
@@ -1028,6 +1037,7 @@
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */
+/* stylelint-disable-next-line no-duplicate-selectors -- popover sizing stays with its Web Awesome part overrides */
 .cron-filter-popover {
   --max-width: min(280px, calc(100vw - 48px));
 }
@@ -1043,18 +1053,18 @@
 
 .cron-job-menu::part(menu) {
   min-width: 170px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  padding: var(--space-1);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .cron-filter-dropdown__details::part(menu) {
   width: min(300px, calc(100vw - 48px));
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }

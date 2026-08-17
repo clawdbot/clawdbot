@@ -69,6 +69,7 @@ async function resolveStatusChannelsStatus(params: {
 }
 
 export type StatusScanOverviewResult = {
+  env?: NodeJS.ProcessEnv;
   coldStart: boolean;
   hasConfiguredChannels: boolean;
   skipColdStartNetworkChecks: boolean;
@@ -101,6 +102,7 @@ export type StatusScanOverviewResult = {
 
 /** Collects the common status scan data shared by text, JSON, and status-all commands. */
 export async function collectStatusScanOverview(params: {
+  env?: NodeJS.ProcessEnv;
   commandName: string;
   opts: { timeoutMs?: number; all?: boolean };
   showSecrets: boolean;
@@ -137,6 +139,7 @@ export async function collectStatusScanOverview(params: {
     summarizingChannels?: string;
   };
 }): Promise<StatusScanOverviewResult> {
+  const env = params.env ?? process.env;
   if (params.labels?.loadingConfig) {
     params.progress?.setLabel(params.labels.loadingConfig);
   }
@@ -146,6 +149,7 @@ export async function collectStatusScanOverview(params: {
     resolvedConfig: cfg,
     secretDiagnostics,
   } = await loadStatusScanCommandConfig({
+    env,
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
     readConfigSnapshot: async () =>
@@ -161,7 +165,7 @@ export async function collectStatusScanOverview(params: {
         commandName: params.commandName,
         targetIds: (await commandSecretTargetsModuleLoader.load()).getStatusCommandSecretTargetIds(
           loadedConfig,
-          process.env,
+          env,
           { includeChannelTargets: params.includeChannelSecretTargets },
         ),
         mode: "read_only_status",
@@ -298,6 +302,7 @@ export async function collectStatusScanOverview(params: {
       };
 
   return {
+    env,
     coldStart,
     hasConfiguredChannels,
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,

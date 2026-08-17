@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionBoardFace } from "../../../../src/shared/session-types.js";
 import type { BoardTab } from "./types.ts";
 
@@ -16,22 +17,18 @@ export type BoardSessionViews = Record<string, BoardSessionView>;
 const MAX_BOARD_SESSION_VIEWS = 50;
 
 export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return {};
   }
   const normalized: BoardSessionViews = {};
   for (const [sessionKey, rawView] of Object.entries(value)) {
-    if (!sessionKey.trim() || !rawView || typeof rawView !== "object" || Array.isArray(rawView)) {
+    if (!sessionKey.trim() || !isRecord(rawView)) {
       continue;
     }
-    const view = rawView as Record<string, unknown>;
+    const view = rawView;
     const activeTabId = typeof view.activeTabId === "string" ? view.activeTabId.trim() : "";
     const reopenDockByTab: Record<string, BoardVisibleChatDock> = {};
-    if (
-      view.reopenDockByTab &&
-      typeof view.reopenDockByTab === "object" &&
-      !Array.isArray(view.reopenDockByTab)
-    ) {
+    if (isRecord(view.reopenDockByTab)) {
       for (const [tabId, dock] of Object.entries(view.reopenDockByTab).slice(0, 50)) {
         const key = tabId.trim();
         if (key && (dock === "bottom" || dock === "left" || dock === "right")) {

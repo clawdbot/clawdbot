@@ -2,7 +2,7 @@
 // Resolves SecretRefs before applying Gateway credential precedence rules.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
+import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 import {
   GatewaySecretRefUnavailableError,
   resolveExplicitGatewayAuth,
@@ -51,7 +51,7 @@ async function resolveGatewaySecretInputString(params: {
   path: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const value = await resolveSecretInputString({
+  const value = await materializeSecretInput({
     config: params.config,
     value: params.value,
     env: params.env,

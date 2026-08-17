@@ -27,7 +27,7 @@ scenario:
     - docs/gateway/protocol.md
   codeRefs:
     - ui/src/e2e/config-safe-write.e2e.test.ts
-    - ui/src/lib/config/index.ts
+    - ui/src/lib/config/config-write-coordinator.ts
     - ui/src/components/settings-save-indicator.ts
   execution:
     kind: playwright

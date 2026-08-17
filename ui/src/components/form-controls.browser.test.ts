@@ -22,6 +22,7 @@ let mobileContext: BrowserContext;
 function readUiCss(): string {
   const files = [
     "ui/src/styles/base.css",
+    "ui/src/styles/board.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
@@ -380,7 +381,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <span class="sidebar-agent-card__name">Agent</span>
             <span class="settings-sidebar__item-label">Settings</span>
             <span class="sidebar-file-view__path">workspace/file.ts</span>
-            <span class="chat-workbench__dock-zone">Dock here</span>
             <span class="chat-workspace-rail__file-badge">3 files</span>
             <span class="session-menu__shortcut">⌘K</span>
             <div class="file-view__search">
@@ -412,7 +412,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         ".sidebar-agent-card__name",
         ".settings-sidebar__item-label",
         ".sidebar-file-view__path",
-        ".chat-workbench__dock-zone",
         ".chat-workspace-rail__file-badge",
         ".session-menu__shortcut",
         ".file-view__search-counter",
@@ -485,6 +484,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
               <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
+              <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
                 <span class="session-row-trail">3m</span>
@@ -509,6 +509,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
             agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
+            settingsSearch: fontSize(".settings-sidebar__search-input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
           };
         });
@@ -520,6 +521,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         coarsePointer: true,
         agentFilter: 16,
         fileSearch: 16,
+        settingsSearch: 16,
         navItem: 12,
       });
 
@@ -531,13 +533,14 @@ describeBrowserLayout("app chrome interaction styles", () => {
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
       expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);
     } finally {
       await page.close().catch(() => {});
     }
   });
 
-  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
+  it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setViewportSize({ width: 1200, height: 800 });
@@ -560,6 +563,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <div style="height: 200px"></div>
             </main>
             <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+            <div class="board-tabs__track">Hidden horizontal rail</div>
           </body>
         </html>
       `);
@@ -588,6 +592,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
           regularSidebarSelection: style(".sidebar-shell__body").userSelect,
           settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
           settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+          // The board tab rail intentionally hides its scrollbar (a drag/wheel
+          // affordance, not a styling variant); the new blanket
+          // `* { scrollbar-width: thin }` rule in base.css must not win over
+          // its higher-specificity `scrollbar-width: none`.
+          hiddenRailScrollbarWidth: style(".board-tabs__track").scrollbarWidth,
         };
       });
 
@@ -595,10 +604,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
         chatSelection: "text",
         chromeSelection: "none",
         contentScrollbar: "12px",
+        hiddenRailScrollbarWidth: "none",
         inputSelection: "text",
-        regularSidebarScrollbar: "6px",
+        regularSidebarScrollbar: "12px",
         regularSidebarSelection: "none",
-        settingsSidebarScrollbar: "6px",
+        settingsSidebarScrollbar: "12px",
         settingsSidebarSelection: "none",
       });
     } finally {

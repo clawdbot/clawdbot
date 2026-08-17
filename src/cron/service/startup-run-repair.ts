@@ -6,13 +6,13 @@ import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
+import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
-  applyTriggerRunResult,
-  type CronTriggerEvalOutcome,
-} from "./timer.js";
+  applyTriggerNoFireResult,
+} from "./timer-outcomes.js";
+import { applyTriggerRunResult, resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
@@ -142,6 +142,21 @@ export function restoreFinalizedStartupRun(params: {
   }
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const scheduleOwnership = replacementAtMs === undefined ? "current" : "stale";
+  if (params.triggerEval?.fired === false) {
+    applyTriggerNoFireResult(
+      state,
+      job,
+      { startedAt, endedAt, triggerEval: params.triggerEval },
+      {
+        scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        deferredNotifications: params.deferredNotifications,
+      },
+    );
+    return {
+      shouldDelete: false,
+      ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
+    };
+  }
   const shouldDelete = applyJobResult(
     state,
     job,
@@ -209,33 +224,4 @@ export function restoreFinalizedStartupRun(params: {
     shouldDelete,
     ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
   };
-}
-
-export function mergeManualRunSnapshotAfterReload(params: {
-  state: CronServiceState;
-  jobId: string;
-  snapshot: {
-    enabled: boolean;
-    updatedAtMs: number;
-    state: CronJob["state"];
-  } | null;
-  removed: boolean;
-}) {
-  if (!params.state.store) {
-    return;
-  }
-  if (params.removed) {
-    params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
-    return;
-  }
-  if (!params.snapshot) {
-    return;
-  }
-  const reloaded = params.state.store.jobs.find((job) => job.id === params.jobId);
-  if (!reloaded) {
-    return;
-  }
-  reloaded.enabled = params.snapshot.enabled;
-  reloaded.updatedAtMs = params.snapshot.updatedAtMs;
-  reloaded.state = params.snapshot.state;
 }

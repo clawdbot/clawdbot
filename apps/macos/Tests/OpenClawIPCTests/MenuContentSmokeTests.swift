@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -8,40 +7,6 @@ import Testing
 struct MenuContentSmokeTests {
     @Test func `signal failsafe leaves time after bounded cleanup`() {
         #expect(AppTerminationTiming.cleanupDeadlineSeconds < AppTerminationTiming.signalExitFailsafeSeconds)
-    }
-
-    @Test func `menu content builds body local mode`() {
-        let state = AppState(preview: true)
-        state.connectionMode = .local
-        let view = MenuContent(state: state, updater: nil)
-        _ = view.body
-    }
-
-    @Test func `menu content builds body remote mode`() {
-        let state = AppState(preview: true)
-        state.connectionMode = .remote
-        let view = MenuContent(state: state, updater: nil)
-        _ = view.body
-    }
-
-    @Test func `menu content builds body unconfigured mode`() {
-        let state = AppState(preview: true)
-        state.connectionMode = .unconfigured
-        let view = MenuContent(state: state, updater: nil)
-        _ = view.body
-    }
-
-    @Test func `menu content builds body with debug and canvas`() {
-        let state = AppState(preview: true)
-        state.connectionMode = .local
-        state.debugPaneEnabled = true
-        state.canvasEnabled = true
-        state.canvasPanelVisible = true
-        state.swabbleEnabled = true
-        state.voicePushToTalkEnabled = true
-        state.heartbeatsEnabled = true
-        let view = MenuContent(state: state, updater: nil)
-        _ = view.body
     }
 
     @Test func `dock menu exposes primary shortcuts`() throws {
@@ -109,6 +74,42 @@ struct MenuContentSmokeTests {
 
         let initialReply = delegate.applicationShouldTerminate(NSApplication.shared)
         #expect(initialReply == .terminateLater)
+        _ = await startedIterator.next()
+        #expect(replies.isEmpty)
+
+        cleanupRelease.continuation.yield()
+        cleanupRelease.continuation.finish()
+        while replies.isEmpty {
+            await Task.yield()
+        }
+        #expect(replies == [true])
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
+    }
+
+    @Test func `application termination waits for Peekaboo Bridge shutdown`() async {
+        let delegate = AppDelegate()
+        let cleanupStarted = AsyncStream<Void>.makeStream()
+        let cleanupRelease = AsyncStream<Void>.makeStream()
+        let deadlineRelease = AsyncStream<Void>.makeStream()
+        var startedIterator = cleanupStarted.stream.makeAsyncIterator()
+        var replies: [Bool] = []
+        delegate.nodeTerminationCleanup = {}
+        delegate.peekabooBridgeTerminationCleanup = {
+            cleanupStarted.continuation.yield()
+            for await _ in cleanupRelease.stream {
+                return
+            }
+        }
+        delegate.waitForTerminationCleanupDeadline = {
+            for await _ in deadlineRelease.stream {
+                return
+            }
+        }
+        delegate.applicationTerminationReply = { _, allow in
+            replies.append(allow)
+        }
+
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         _ = await startedIterator.next()
         #expect(replies.isEmpty)
 

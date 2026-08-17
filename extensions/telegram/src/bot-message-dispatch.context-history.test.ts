@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
   describeTelegramDispatch,
   createBot,
@@ -19,6 +20,30 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage context-history", () => {
+  it("keeps the host-bound payload object while recovering forum routing", () => {
+    const ctxPayload = {
+      From: "telegram:group:-1003774691294:topic:1",
+      MessageThreadId: 1,
+      SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+      TransportThreadId: 1,
+    } as TelegramMessageContext["ctxPayload"];
+    const context = createContext({
+      ctxPayload,
+      chatId: -1003774691294,
+      isGroup: true,
+      threadSpec: { id: 1, scope: "forum" },
+    });
+
+    const recovered = resolveDispatchTelegramContext({ context });
+
+    expect(recovered.ctxPayload).toBe(ctxPayload);
+    expect(recovered.ctxPayload).toMatchObject({
+      From: "telegram:group:-1003774691294:topic:3731",
+      MessageThreadId: 3731,
+      TransportThreadId: 3731,
+    });
+  });
+
   it("moves recovered room-event history out of the original topic", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
     const recoveredHistoryKey = "-1003774691294:topic:3731";

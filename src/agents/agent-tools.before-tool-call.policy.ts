@@ -51,7 +51,7 @@ import {
   normalizeCodeModeExecBeforeHookParamsForToolKind,
 } from "./code-mode-control-tools.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
@@ -81,7 +81,7 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
     agentId: voiceRun?.agentId,
     voiceSessionId: voiceRun?.voiceSessionId,
     runId: args.ctx?.runId,
-    toolName: normalizeToolName(args.toolName || "tool"),
+    toolName: normalizeToolPolicyName(args.toolName || "tool"),
     toolParams: args.params,
     ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
   });
@@ -97,7 +97,7 @@ export async function runBeforeToolCallHook(args: {
   signal?: AbortSignal;
   approvalMode?: "request" | "report" | "deny" | "defer";
 }): Promise<HookOutcome> {
-  const toolName = normalizeToolName(args.toolName || "tool");
+  const toolName = normalizeToolPolicyName(args.toolName || "tool");
   const params = args.params;
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 

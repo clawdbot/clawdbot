@@ -6,7 +6,7 @@ import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -34,7 +34,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   };
 });
 
-import { noteSecurityWarnings } from "./doctor-security.js";
+import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
@@ -92,7 +92,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     file: Record<string, unknown>,
     run: () => Promise<void>,
   ): Promise<void> {
-    await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
+    await withTestDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
       process.env.HOME = home;
       process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
       closeOpenClawStateDatabaseForTest();
@@ -152,13 +152,32 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   it("warns when exposed without auth", async () => {
     const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    const findings = await collectSecurityWarnings(cfg, {});
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "gateway.bind_no_auth",
+        severity: "critical",
+        title: "CRITICAL",
+        detail: expect.stringContaining("without authentication"),
+        remediation: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("CRITICAL");
-    expect(message).toContain("without authentication");
-    expect(message).toContain("Safer remote access");
-    expect(message).toContain("ssh -N -L 18789:127.0.0.1:18789");
-    expect(message).toContain("openclaw security audit --deep");
+    expect(message).toBe(
+      [
+        '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+        "  Anyone on your network (or internet if port-forwarded) can fully control your agent.",
+        "  Fix: openclaw config set gateway.bind loopback",
+        "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+        "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+        "  Docs: https://docs.openclaw.ai/gateway/remote",
+        "  Fix: openclaw doctor --fix to generate a token",
+        "  Or set token directly: openclaw config set gateway.auth.mode token",
+        "- Run: openclaw security audit --deep",
+      ].join("\n"),
+    );
   });
 
   it("uses env token to avoid critical warning", async () => {
@@ -373,7 +392,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("warns when model provider API keys are stored as plaintext in config", async () => {
-    await noteSecurityWarnings({
+    const cfg = {
       models: {
         providers: {
           openai: {
@@ -381,7 +400,19 @@ describe("noteSecurityWarnings gateway exposure", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as OpenClawConfig;
+    const findings = await collectSecurityWarnings(cfg, {});
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "config.plaintext_secrets",
+        severity: "warn",
+        title: "WARNING",
+        detail: "openclaw.json contains plaintext secret-bearing config fields.",
+        remediation: expect.stringContaining("models.providers.openai.apiKey"),
+      }),
+    ]);
+
+    await noteSecurityWarnings(cfg);
 
     const message = lastMessage();
     expect(message).toContain("plaintext secret-bearing config fields");
@@ -523,27 +554,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await expectAgentExecHostPolicyWarning("*");
   });
 
-  it("does not invent a deny host policy when exec-approvals defaults.security is unset", async () => {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        agents: {},
-      },
-      async () => {
-        await noteSecurityWarnings({
-          tools: {
-            exec: {
-              mode: "ask",
-            },
-          },
-        } as OpenClawConfig);
-      },
-    );
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not invent an on-miss host ask policy when exec-approvals defaults.ask is unset", async () => {
+  it("does not invent host policy defaults when exec-approvals defaults are unset", async () => {
     await withExecApprovalsFile(
       {
         version: 1,

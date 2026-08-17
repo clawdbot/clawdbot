@@ -58,6 +58,7 @@ function extractAgentCommandReply(result: unknown): string | undefined {
 
 /** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
+  agentId?: string;
   sessionKey: string;
   message: string;
   extraSystemPrompt: string;
@@ -87,6 +88,7 @@ export async function runAgentStep(params: {
     // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
     const result = await agentStepDeps.agentCommandFromIngress({
       message,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       transcriptMessage: params.transcriptMessage,
       sessionKey: params.sessionKey,
       deliver: false,
@@ -108,6 +110,7 @@ export async function runAgentStep(params: {
     method: "agent",
     params: {
       message,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
@@ -126,6 +129,7 @@ export async function runAgentStep(params: {
   const result = await waitForAgentRunAndReadUpdatedAssistantReply({
     runId: resolvedRunId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
   });

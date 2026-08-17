@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
+  getProviderUsageAuthWithPluginMock,
   getProviderUsageSnapshotWithPluginMock,
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
@@ -16,6 +17,7 @@ import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
+const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
 describe("provider-usage.load", () => {
@@ -210,6 +212,35 @@ describe("provider-usage.load", () => {
         provider: "openai",
         displayName: "Codex",
         windows: [{ label: "3h", usedPercent: 12 }],
+      },
+    ]);
+  });
+
+  it("keeps successful provider usage when a sibling auth hook rejects", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ provider }) => {
+      if (provider === "anthropic") {
+        throw new Error("auth failed");
+      }
+      return { token: `${provider}-token` };
+    });
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => ({
+      provider,
+      displayName: provider,
+      windows: [{ label: "5h", usedPercent: 12 }],
+    }));
+
+    const summary = await loadProviderUsageSummary({
+      providers: ["anthropic", "openai"],
+      config: {},
+      env: {},
+    });
+
+    expect(summary.providers).toEqual([
+      { provider: "anthropic", displayName: "Claude", windows: [], error: "auth failed" },
+      {
+        provider: "openai",
+        displayName: "openai",
+        windows: [{ label: "5h", usedPercent: 12 }],
       },
     ]);
   });

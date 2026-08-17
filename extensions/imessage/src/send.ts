@@ -1,6 +1,9 @@
 // Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
 import { basename } from "node:path";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   createChannelPartialDeliveryError,
   type MediaPlaceholderTextFact,
@@ -12,6 +15,7 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   extractOriginalFilename,
@@ -22,24 +26,32 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString as stringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import {
+  convertMarkdownTables,
+  stripInlineDirectiveTagsForDelivery,
+} from "openclaw/plugin-sdk/text-chunking";
 import {
   hasExclusiveIMessageLocalDatabase,
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
 import {
-  appendIMessageApprovalReactionHintForOutboundMessage,
-  extractIMessageApprovalPromptBinding,
   type IMessageApprovalConversationKey,
-  registerIMessageApprovalReactionTargetForOutboundMessage,
+  registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
-import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import {
+  createIMessageRpcClient,
+  IMessageRpcRequestError,
+  type IMessageRpcClient,
+} from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
@@ -65,6 +77,12 @@ const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
 type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
+type IMessageApprovalPromptBinding = {
+  approvalId: string;
+  approvalKind: ChannelApprovalKind;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
+
 type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
@@ -84,7 +102,7 @@ type IMessageSendOpts = {
   client?: IMessageRpcClient;
   config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
-  approvalKind?: "exec" | "plugin";
+  approvalPrompt?: IMessageApprovalPromptBinding;
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
@@ -376,16 +394,11 @@ async function resolveFallbackSentMessageGuid(params: {
 }
 
 function shouldRecoverApprovalPromptGuid(params: {
-  message: string;
+  approvalPrompt?: IMessageApprovalPromptBinding;
   filePath?: string;
   replyToId?: string | null;
 }): boolean {
-  return (
-    !params.filePath &&
-    !params.replyToId &&
-    Boolean(params.message.trim()) &&
-    Boolean(extractIMessageApprovalPromptBinding(params.message))
-  );
+  return Boolean(params.approvalPrompt && !params.filePath && !params.replyToId);
 }
 
 function canCheckSentMessageAfterRpcTimeout(params: {
@@ -499,6 +512,29 @@ function resolveIMessageSendFailure(result: Record<string, unknown>): string | n
     : "iMessage action failed";
 }
 
+function normalizeIMessageRpcSendError(error: unknown): unknown {
+  if (!(error instanceof IMessageRpcRequestError)) {
+    return error;
+  }
+  const data = asOptionalRecord(error.data);
+  return data?.disposition === "not_started" && data.retry_safe === true
+    ? new PlatformMessageNotDispatchedError(error.message, { cause: error })
+    : error;
+}
+
+async function requestIMessageRpcSend(
+  client: IMessageRpcClient,
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  try {
+    return await client.request<Record<string, unknown>>(method, params, { timeoutMs });
+  } catch (error) {
+    throw normalizeIMessageRpcSendError(error);
+  }
+}
+
 function isIMessageRpcSendTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /imsg rpc timeout \(send\)/i.test(message);
@@ -516,10 +552,6 @@ async function runIMessageCliJson(
     dbPath,
     timeoutMs,
   });
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
@@ -850,8 +882,12 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message =
-    text && opts.approvalKind ? appendIMessageApprovalReactionHintForOutboundMessage(text) : text;
+  let message = opts.approvalPrompt
+    ? addApprovalReactionHintToText({
+        text,
+        allowedDecisions: opts.approvalPrompt.allowedDecisions,
+      })
+    : text;
   const protectedRoles = protectIMessageFencedRoleMarkers(message);
   message = protectedRoles.text;
   let filePath: string | undefined;
@@ -912,7 +948,7 @@ export async function sendMessageIMessage(
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
       : await createIMessageRpcClient({ cliPath, dbPath, remoteHost });
     try {
-      return await rpcClient.request<Record<string, unknown>>(method, rpcParams, { timeoutMs });
+      return await requestIMessageRpcSend(rpcClient, method, rpcParams, timeoutMs);
     } finally {
       await rpcClient.stop();
     }
@@ -1034,7 +1070,7 @@ export async function sendMessageIMessage(
   };
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
-      await client.request<Record<string, unknown>>("send", nativeParams, { timeoutMs });
+      await requestIMessageRpcSend(client, "send", nativeParams, timeoutMs);
     const response = filePath
       ? await withOriginalIMessageAttachmentPath(filePath, async (attachmentPath) => {
           if (remoteHost) {
@@ -1083,7 +1119,7 @@ export async function sendMessageIMessage(
         throw error;
       } else if (
         !shouldRecoverApprovalPromptGuid({
-          message,
+          approvalPrompt: opts.approvalPrompt,
           filePath,
           replyToId: resolvedReplyToId,
         }) ||
@@ -1125,7 +1161,7 @@ export async function sendMessageIMessage(
     if (
       !approvalBindingMessageId &&
       shouldRecoverApprovalPromptGuid({
-        message,
+        approvalPrompt: opts.approvalPrompt,
         filePath,
         replyToId: effectiveReplyToId,
       })
@@ -1166,7 +1202,7 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
     }
-    if (message && approvalBindingMessageId && opts.approvalKind) {
+    if (message && approvalBindingMessageId && opts.approvalPrompt) {
       const handleForKey =
         target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
       const conversation: IMessageApprovalConversationKey = {
@@ -1175,12 +1211,13 @@ export async function sendMessageIMessage(
         ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
         ...(handleForKey ? { handle: handleForKey } : {}),
       };
-      registerIMessageApprovalReactionTargetForOutboundMessage({
+      registerIMessageApprovalReactionTarget({
         accountId: account.accountId,
         conversation,
         messageId: approvalBindingMessageId,
-        text: message,
-        approvalKind: opts.approvalKind,
+        approvalId: opts.approvalPrompt.approvalId,
+        approvalKind: opts.approvalPrompt.approvalKind,
+        allowedDecisions: opts.approvalPrompt.allowedDecisions,
       });
     }
     return {

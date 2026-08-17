@@ -23,7 +23,7 @@ import { createTaskRecord } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
-import { extractMessageText } from "./commands-subagents-text.js";
+import { extractSubagentMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
@@ -522,7 +522,7 @@ describe("subagents log", () => {
   });
 });
 
-describe("extractMessageText", () => {
+describe("extractSubagentMessageText", () => {
   it("preserves user markers and sanitizes assistant markers", () => {
     const cases = [
       {
@@ -536,7 +536,7 @@ describe("extractMessageText", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = extractMessageText(testCase.message);
+      const result = extractSubagentMessageText(testCase.message);
       expect(result?.text).toBe(testCase.expectedText);
     }
   });

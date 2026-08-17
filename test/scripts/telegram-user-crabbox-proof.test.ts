@@ -12,26 +12,32 @@ import {
   COMMAND_TIMEOUT_MS,
   createContainerizedSutSpawnSpec,
   createCrabboxWarmupArgs,
+  createOpenClawCliSpawnSpec,
   createOpenClawGatewaySpawnSpec,
   parseArgs,
   processTargetExists,
   readCodexProxyPort,
+  readLogAfterOffset,
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
+  resolveTelegramUserProofCredentialRole,
   REMOTE_SETUP_COMMAND_TIMEOUT_MS,
   renderLaunchDesktop,
   renderRemoteProbe,
   renderRemoteSetup,
   renderSelectDesktopChat,
   renderTailscaleSshProxy,
+  restartSessionGateway,
   runCommand,
   runSutContainerAction,
   selectCrabboxSshPort,
   signalCommandTree,
+  signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
   waitForLog,
+  waitForLogAfterOffset,
   writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
@@ -51,6 +57,24 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function writeExecutable(pathname: string, content: string): void {
@@ -123,6 +147,19 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.args).toEqual(["openclaw", "gateway", "--port", "19042"]);
     expect(spec.options.cwd).toBe("/repo");
     expect(spec.options.shell).toBe(false);
+  });
+
+  it("runs held-session audit inspection through the same pinned repo CLI", () => {
+    const spec = createOpenClawCliSpawnSpec({
+      args: ["audit", "--run", "run-1", "--explain", "--json"],
+      env: { OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json" },
+      pnpmExecPath: "/opt/mantis-toolchain/pnpm",
+      repoRoot: "/repo",
+    });
+
+    expect(spec.command).toBe("/opt/mantis-toolchain/pnpm");
+    expect(spec.args).toEqual(["openclaw", "audit", "--run", "run-1", "--explain", "--json"]);
+    expect(spec.options.env?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw.json");
   });
 
   it("routes fork SUT startup through the root-owned validating wrapper", () => {
@@ -352,6 +389,29 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(parseArgs(["--text", "-ping"]).text).toBe("-ping");
   });
 
+  it("requires held sessions for identity inspection and lifecycle restart", () => {
+    expect(() => parseArgs(["inspect"])).toThrow("inspect requires --session");
+    expect(() => parseArgs(["restart"])).toThrow("restart requires --session");
+    expect(parseArgs(["inspect", "--session", "session.json"]).command).toBe("inspect");
+    expect(parseArgs(["restart", "--session", "session.json"]).command).toBe("restart");
+    expect(
+      parseArgs(["send", "--session", "session.json", "--chat", "@sut", "--text", "hello"]).chat,
+    ).toBe("@sut");
+    expect(() => parseArgs(["inspect", "--session", "session.json", "--chat", "@sut"])).toThrow(
+      "--chat is available only for held-session sends",
+    );
+  });
+
+  it("selects the documented Convex credential role for held proof", () => {
+    expect(resolveTelegramUserProofCredentialRole(undefined, {})).toBe("maintainer");
+    expect(resolveTelegramUserProofCredentialRole(undefined, { CI: "true" })).toBe("ci");
+    expect(resolveTelegramUserProofCredentialRole("maintainer", { CI: "1" })).toBe("maintainer");
+    expect(parseArgs(["start", "--credential-role", "ci"]).credentialRole).toBe("ci");
+    expect(() => parseArgs(["start", "--credential-role", "operator"])).toThrow(
+      'Credential role must be one of maintainer or ci, got "operator".',
+    );
+  });
+
   it("accepts an explicit Telegram link-preview setting", () => {
     expect(parseArgs(["start", "--link-preview", "false"]).linkPreview).toBe(false);
     expect(parseArgs(["start", "--link-preview", "true"]).linkPreview).toBe(true);
@@ -368,6 +428,19 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(() => parseArgs(["start", "--mock-response-chunk-delay-ms", "0"])).toThrow(
       "--mock-response-chunk-delay-ms must be a positive integer.",
     );
+  });
+
+  it("accepts only a positive fixed human delay", () => {
+    expect(parseArgs(["start", "--human-delay-fixed-ms", "1200"]).humanDelayFixedMs).toBe(1200);
+    expect(() => parseArgs(["start", "--human-delay-fixed-ms", "0"])).toThrow(
+      "--human-delay-fixed-ms must be a positive integer.",
+    );
+    expect(() => parseArgs(["start", "--human-delay-fixed-ms", "1e3"])).toThrow(
+      "--human-delay-fixed-ms must be a positive integer.",
+    );
+    expect(() =>
+      parseArgs(["send", "--session", "session.json", "--human-delay-fixed-ms", "1200"]),
+    ).toThrow("--human-delay-fixed-ms is available only for start sessions.");
   });
 
   it("rejects duplicate single-value proof controls while keeping repeated expectations", () => {
@@ -445,7 +518,7 @@ describe("telegram user Crabbox proof log polling", () => {
         mode: "password",
         password: { id: "OPENCLAW_GATEWAY_PASSWORD", source: "env" },
       },
-      tailscale: { mode: "funnel", resetOnExit: true },
+      tailscale: { mode: "funnel" },
     });
     expect(config.mcp.servers.fixture).toEqual({
       args: ["/repo/scripts/e2e/mcp-app-conformance-server.mjs"],
@@ -453,6 +526,24 @@ describe("telegram user Crabbox proof log polling", () => {
     });
     expect(JSON.stringify(config)).not.toContain("companion-called");
     expect(JSON.stringify(config)).not.toContain("resource-ok");
+  });
+
+  it("enables execution identity before Telegram Gateway startup", () => {
+    const configRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      mockPort: 19043,
+      outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      testerId: "tester",
+    });
+    tempDirs.push(configRoot.tempRoot);
+
+    const config = JSON.parse(fs.readFileSync(configRoot.configPath, "utf8"));
+    expect(config.logging.audit).toMatchObject({
+      enabled: true,
+      executionIdentity: true,
+      messages: "direct",
+    });
   });
 
   it("injects the requested Telegram link-preview setting before startup", () => {
@@ -478,6 +569,35 @@ describe("telegram user Crabbox proof log polling", () => {
 
     expect(disabledConfig.channels.telegram.linkPreview).toBe(false);
     expect(defaultConfig.channels.telegram).not.toHaveProperty("linkPreview");
+  });
+
+  it("injects the requested fixed human delay before startup", () => {
+    const delayedConfigRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      humanDelayFixedMs: 1200,
+      mockPort: 19043,
+      outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      testerId: "tester",
+    });
+    const defaultConfigRoot = writeSutConfig({
+      gatewayPort: 19044,
+      groupId: "group",
+      mockPort: 19045,
+      outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      testerId: "tester",
+    });
+    tempDirs.push(delayedConfigRoot.tempRoot, defaultConfigRoot.tempRoot);
+
+    const delayedConfig = JSON.parse(fs.readFileSync(delayedConfigRoot.configPath, "utf8"));
+    const defaultConfig = JSON.parse(fs.readFileSync(defaultConfigRoot.configPath, "utf8"));
+
+    expect(delayedConfig.agents.defaults.humanDelay).toEqual({
+      maxMs: 1200,
+      minMs: 1200,
+      mode: "custom",
+    });
+    expect(defaultConfig.agents.defaults).not.toHaveProperty("humanDelay");
   });
 
   it("pins the browser fixture SDK and exposes only the required app capabilities", () => {
@@ -631,6 +751,151 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(tail).not.toContain("old\nold\nold\nold\nold\nold\nold\nold\nold");
   });
 
+  it("observes restart readiness only after the lifecycle log boundary", async () => {
+    const logPath = path.join(makeTempDir(tempDirs, "openclaw-telegram-proof-"), "gateway.log");
+    fs.writeFileSync(logPath, "[gateway] ready\n", "utf8");
+    const offset = fs.statSync(logPath).size;
+    expect(readLogAfterOffset(logPath, offset)).toBe("");
+
+    fs.appendFileSync(logPath, "received SIGUSR1; restarting\ngateway ready\n", "utf8");
+
+    await expect(
+      waitForLogAfterOffset({
+        label: "restart",
+        logPath,
+        offset,
+        pattern: /received SIGUSR1; restarting/u,
+        timeoutMs: 100,
+      }),
+    ).resolves.toContain("gateway ready");
+  });
+
+  posixIt("requests held Gateway restart through its pinned canonical CLI", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
+    const gatewayLog = path.join(root, "gateway.log");
+    const argvPath = path.join(root, "restart-argv.json");
+    const fakePnpm = path.join(root, "pnpm.cjs");
+    const sessionPath = path.join(root, "session.json");
+    fs.writeFileSync(gatewayLog, "gateway ready\n");
+    writeExecutable(
+      fakePnpm,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));
+fs.appendFileSync(${JSON.stringify(gatewayLog)}, "received SIGUSR1; restarting\\ngateway ready\\n");
+process.stdout.write(JSON.stringify({ ok: true, status: "scheduled" }));
+`,
+    );
+    fs.writeFileSync(
+      sessionPath,
+      JSON.stringify({
+        command: "telegram-user-crabbox-session",
+        localSut: {
+          configPath: path.join(root, "openclaw.json"),
+          gatewayLog,
+          gatewayPid: 123,
+          gatewayPort: 19042,
+          stateDir: path.join(root, "state"),
+          tempRoot: root,
+        },
+      }),
+    );
+    vi.stubEnv("MANTIS_PNPM_BIN", fakePnpm);
+    const opts = parseArgs(["restart", "--session", sessionPath, "--timeout-ms", "1000"]);
+
+    await expect(restartSessionGateway(root, opts, root)).resolves.toMatchObject({
+      gatewayPort: 19042,
+      status: "pass",
+    });
+
+    expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toEqual([
+      "openclaw",
+      "gateway",
+      "call",
+      "gateway.restart.request",
+      "--port",
+      "19042",
+      "--params",
+      '{"reason":"telegram-user-crabbox-proof"}',
+      "--json",
+    ]);
+  });
+
+  posixIt("signals a detached Gateway through its launcher process group", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
+    const gatewayPath = path.join(root, "gateway.mjs");
+    const launcherPath = path.join(root, "launcher.mjs");
+    const logPath = path.join(root, "gateway.log");
+    const readyPath = path.join(root, "gateway.ready");
+    writeExecutable(
+      gatewayPath,
+      `import fs from "node:fs";
+const [logPath, readyPath] = process.argv.slice(2);
+process.on("SIGUSR1", () => fs.appendFileSync(logPath, "received SIGUSR1; restarting\\ngateway ready\\n"));
+fs.writeFileSync(readyPath, String(process.pid));
+setInterval(() => {}, 1000);
+`,
+    );
+    writeExecutable(
+      launcherPath,
+      `import { spawn } from "node:child_process";
+const [gatewayPath, logPath, readyPath] = process.argv.slice(2);
+spawn(process.execPath, [gatewayPath, logPath, readyPath], { stdio: "ignore" });
+process.on("SIGUSR1", () => {});
+setInterval(() => {}, 1000);
+`,
+    );
+    const launcher = spawn(process.execPath, [launcherPath, gatewayPath, logPath, readyPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    try {
+      await waitFor(() => fs.existsSync(readyPath));
+
+      signalPidTree(launcher.pid, "SIGUSR1");
+
+      await waitFor(
+        () =>
+          fs.existsSync(logPath) &&
+          fs.readFileSync(logPath, "utf8").includes("received SIGUSR1; restarting"),
+      );
+    } finally {
+      if (launcher.pid) {
+        try {
+          process.kill(-launcher.pid, "SIGKILL");
+        } catch {}
+      }
+    }
+  });
+
+  it("keeps byte-cut log tails UTF-8 safe and reads at least one byte", () => {
+    const logPath = path.join(makeTempDir(tempDirs, "openclaw-telegram-proof-"), "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      Buffer.concat([Buffer.from("x".repeat(100)), Buffer.from("😀"), Buffer.from("y".repeat(20))]),
+    );
+
+    expect(readLogTail(logPath, 23)).toBe("y".repeat(20));
+    expect(readLogTail(logPath, 24)).toBe(`😀${"y".repeat(20)}`);
+    expect(readLogTail(logPath, 0)).toBe("y");
+  });
+
+  it("keeps readiness timeout tails free of split surrogate pairs", async () => {
+    const logPath = path.join(makeTempDir(tempDirs, "openclaw-telegram-proof-"), "gateway.log");
+    fs.writeFileSync(logPath, `${"a".repeat(9)}😀${"b".repeat(3999)}`, "utf8");
+
+    let message = "";
+    try {
+      await waitForLog(logPath, /\[gateway\] ready/u, "gateway", 0);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const tail = message.split("\n").at(-1) ?? "";
+    expect(tail).toBe("b".repeat(3999));
+    expect(hasLoneSurrogate(tail)).toBe(false);
+  });
+
   it("honors short reads when a log shrinks during tailing", () => {
     vi.spyOn(fs, "statSync").mockReturnValue({
       isFile: () => true,
@@ -766,6 +1031,7 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
     writeExecutable(
       scriptPath,
       renderRemoteProbe({
+        chat: "@proof-bot",
         expect: [payload],
         sutUsername: payload,
         text: payload,
@@ -786,6 +1052,7 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
     expect(result.status).toBe(0);
     expect(fs.existsSync(injectedPath)).toBe(false);
     expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toContain(payload);
+    expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toContain("@proof-bot");
   });
 
   it("clamps oversized command timeouts before arming timers", async () => {
@@ -802,6 +1069,68 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     setTimeoutSpy.mockRestore();
+  });
+
+  it("keeps command failure tails free of split surrogate pairs", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
+    const scriptPath = path.join(root, "unicode-failure.mjs");
+    fs.writeFileSync(
+      scriptPath,
+      `
+await new Promise((resolve) => {
+  process.stdout.write("a".repeat(3) + "😀" + "b".repeat(65_535), resolve);
+});
+await new Promise((resolve) => {
+  process.stderr.write("😀" + "c".repeat(262_143), resolve);
+});
+process.exitCode = 2;
+`,
+    );
+    let message = "";
+    try {
+      await runCommand({
+        args: [scriptPath],
+        command: process.execPath,
+        cwd: root,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const marker = "[stdout truncated to last 65536 characters]\n";
+    const tail = message.split(marker).at(-1) ?? "";
+    expect(message).toContain(marker);
+    expect(tail.startsWith("b".repeat(100))).toBe(true);
+    expect(tail.endsWith("c".repeat(100))).toBe(true);
+    expect(tail).not.toContain("😀");
+    expect(hasLoneSurrogate(tail)).toBe(false);
+  });
+
+  it("decodes command output statefully across split stream chunks", async () => {
+    const script = [
+      'const emoji = Buffer.from("😀", "utf8");',
+      "process.stdout.write(emoji.subarray(0, 2));",
+      "process.stderr.write(emoji.subarray(0, 2));",
+      "setTimeout(() => {",
+      "  process.stdout.write(emoji.subarray(2));",
+      "  process.stderr.write(emoji.subarray(2));",
+      "  process.exit(2);",
+      "}, 100);",
+    ].join("\n");
+    let message = "";
+    try {
+      await runCommand({
+        args: ["-e", script],
+        command: process.execPath,
+        cwd: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const output = message.split("failed with exit code 2\n").at(-1) ?? "";
+    expect(output.match(/😀/gu)).toHaveLength(2);
+    expect(output).not.toContain("�");
   });
 
   posixIt("kills timed-out command process groups when the leader exits first", async () => {
@@ -1069,7 +1398,7 @@ setInterval(() => {}, 1000);
     }
   });
 
-  posixIt("cleans local SUT children when gateway startup fails", async () => {
+  posixIt("keeps local SUT startup tails Unicode-safe and cleans child processes", async () => {
     const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const outputDir = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const mockScript = path.join(root, "scripts/e2e/mock-openai-server.mjs");
@@ -1096,13 +1425,15 @@ setInterval(() => {}, 1000);
     writeExecutable(
       gatewayScript,
       `
-process.stderr.write("gateway startup failed\\n");
+const output = "😀" + "x".repeat(7998) + "😀" + "y".repeat(3999);
+process.stderr.write(output);
 process.exit(2);
 `,
     );
 
-    await expect(
-      startLocalSut(
+    let message = "";
+    try {
+      await startLocalSut(
         {
           gatewayPort: 19042,
           groupId: "group",
@@ -1126,9 +1457,14 @@ process.exit(2);
             webhookUrlSet: false,
           }),
         },
-      ),
-    ).rejects.toThrow("gateway exited before ready");
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
 
+    expect(message).toContain("gateway exited before ready");
+    expect(message.endsWith("y".repeat(3999))).toBe(true);
+    expect(hasLoneSurrogate(message)).toBe(false);
     await waitFor(() => fs.existsSync(mockTermPath));
     const mockPid = Number.parseInt(fs.readFileSync(mockPidPath, "utf8"), 10);
     await waitFor(() => !isProcessAlive(mockPid));

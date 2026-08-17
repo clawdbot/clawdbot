@@ -6,11 +6,10 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry as loadInternalSessionEntry,
-  patchSessionEntry as patchInternalSessionEntry,
+  patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
-import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
+import type * as ConfigSessionTypes from "../config/sessions/types.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,
@@ -29,12 +28,14 @@ import {
   type SessionEntry,
 } from "./session-store-runtime.js";
 
+type InternalSessionEntry = ConfigSessionTypes.InternalSessionEntry;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
 const sessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof SessionEntry
   ? false
   : true = true;
-const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof ConfigSessionEntry
+const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof ConfigSessionTypes.SessionEntry
   ? false
   : true = true;
 void sessionEntryKeepsRecoveryPrivate;

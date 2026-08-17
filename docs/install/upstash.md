@@ -39,27 +39,30 @@ The keepalive options reduce idle tunnel drops during onboarding.
 
 ## Install OpenClaw
 
-Inside the Box:
+Inside the Box, use the following command on npm 12 or npm 11.16+. On npm 11.12
+and earlier, omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
 
 ```bash
-sudo npm install -g openclaw
+sudo npm install -g openclaw --allow-scripts=openclaw
 ```
 
 ## Run onboarding
 
 ```bash
-openclaw onboard --install-daemon
+openclaw onboard --no-install-daemon
 ```
 
 Follow the prompts. Copy the dashboard URL and token when onboarding finishes.
 
 ## Start the Gateway
 
-Configure the Gateway for the Box network and start it in the background:
+Keep the Gateway on loopback for the SSH tunnel, then start one unsupervised
+process in the background:
 
 ```bash
-openclaw config set gateway.bind lan
-nohup openclaw gateway > gateway.log 2>&1 &
+openclaw config set gateway.bind loopback
+nohup openclaw gateway run > gateway.log 2>&1 &
+openclaw doctor --json
 ```
 
 With the SSH tunnel active, open the dashboard URL locally:
@@ -74,8 +77,12 @@ Set this command as the Box init script so the Gateway restarts when the Box
 starts:
 
 ```bash
-nohup openclaw gateway > gateway.log 2>&1 &
+nohup openclaw gateway run > gateway.log 2>&1 &
 ```
+
+Onboarding deliberately skips daemon installation in this guide. The Box init
+script is the single owner of Gateway startup, so two processes do not contend
+for the same lock and port.
 
 ## Troubleshooting
 

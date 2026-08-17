@@ -1061,7 +1061,17 @@ extension GatewayConnection {
     }
 
     static func defaultActivationBindingKey() -> SymmetricKey? {
-        GatewayActivationBindingKeyStore.loadOrCreate()
+        self.activationBindingKey(
+            launchPolicy: .current,
+            loadOrCreate: GatewayActivationBindingKeyStore.loadOrCreate)
+    }
+
+    static func activationBindingKey(
+        launchPolicy: AppLaunchRuntimePlan,
+        loadOrCreate: () -> SymmetricKey?) -> SymmetricKey?
+    {
+        guard launchPolicy.allowsGatewayUIKeychainAccess else { return nil }
+        return loadOrCreate()
     }
 
     private static func activationOwnershipFingerprint(

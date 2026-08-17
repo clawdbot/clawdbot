@@ -4,9 +4,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGatewayCli } from "./register.js";
 
 const mocks = vi.hoisted(() => ({
-  callGatewayCli: vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
-    ok: true,
-  })),
+  callGatewayCli: vi.fn(async (method: string, _opts: unknown, _params?: unknown) => {
+    if (method === "gateway.suspend.prepare") {
+      return {
+        status: "ready",
+        suspensionId: "suspension-1",
+        expiresAtMs: 1_800_000_000_000,
+        activeCount: 0,
+        blockers: [],
+      };
+    }
+    if (method === "gateway.suspend.resume") {
+      return { ok: true, status: "running", resumed: true };
+    }
+    return { ok: true };
+  }),
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
   formatHealthChannelLines: vi.fn(() => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
@@ -73,6 +85,7 @@ vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  readNonObservingHealthConfig: async () => ({}),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -203,6 +216,15 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "gives setup detection enough transport grace",
+      argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
+      assert: () => {
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("openclaw.setup.detect");
+        expect((opts as { timeout?: string } | undefined)?.timeout).toBe("40000");
+      },
+    },
+    {
       name: "projects gateway call --port into local config",
       argv: ["gateway", "call", "health", "--port", "19084", "--json"],
       assert: () => {
@@ -214,6 +236,32 @@ describe("gateway register option collisions", () => {
       argv: ["gateway", "--port", "19085", "call", "health", "--json"],
       assert: () => {
         expectLocalGatewayCall("health", 19085);
+      },
+    },
+    {
+      name: "projects gateway suspend --port and request id",
+      argv: ["gateway", "suspend", "--request-id", "host-operation", "--port", "19086", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("gateway.suspend.prepare", 19086, {
+          requestId: "host-operation",
+        });
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({ status: "ready", requestId: "host-operation" }),
+        );
+      },
+    },
+    {
+      name: "inherits parent --port for gateway resume",
+      argv: ["gateway", "--port", "19087", "resume", "suspension-1", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("gateway.suspend.resume", 19087, {
+          suspensionId: "suspension-1",
+        });
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+          ok: true,
+          status: "running",
+          resumed: true,
+        });
       },
     },
     {
@@ -291,7 +339,7 @@ describe("gateway register option collisions", () => {
 
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      "Gateway call failed: Error: Use either --url or --port, not both.",
+      "Gateway call failed: Use either --url or --port, not both.",
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });

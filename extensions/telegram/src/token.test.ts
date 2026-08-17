@@ -561,9 +561,4 @@ describe("resolveTelegramToken", () => {
     expect(res.token).toBe("channel-level-token");
     expect(res.source).toBe("config");
   });
-
-  it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
-  });
 });

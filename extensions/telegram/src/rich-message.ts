@@ -36,16 +36,12 @@ export type TelegramInputRichMessage = {
   skip_entity_detection?: boolean;
 };
 
-export function isEmptyTelegramRichMessage(richMessage: TelegramInputRichMessage): boolean {
-  return richMessage.blocks.length === 0;
-}
-
 type TelegramRichMessageOptions = {
   skipEntityDetection?: boolean;
   tableMode?: MarkdownTableMode;
 };
 
-export type TelegramRichTextChunk = {
+type TelegramRichTextChunk = {
   richMessage: TelegramInputRichMessage;
   plainText: string;
   degradationReasons: readonly TelegramRichBlocksDegradationReason[];
@@ -77,7 +73,7 @@ export type TelegramRichMessageContextParams = Pick<
   "disable_notification" | "direct_messages_topic_id" | "message_thread_id" | "reply_parameters"
 >;
 
-export type TelegramEditRichMessageTextParams = {
+type TelegramEditRichMessageTextParams = {
   business_connection_id?: string;
   chat_id?: number | string;
   message_id?: number;

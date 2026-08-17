@@ -9,6 +9,11 @@ import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinkin
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 
+export type GatewayModelThinkingProfile = {
+  thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;
+  thinkingDefault: ThinkLevel;
+};
+
 export type SessionActorProfileIdentity = {
   label?: string;
   avatarUrl?: string;
@@ -18,13 +23,7 @@ export type SessionListRowContext = {
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
   storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
-  thinkingMetadataByModelRef: Map<
-    string,
-    {
-      levels: ReturnType<typeof listThinkingLevelOptions>;
-      defaultLevel: ThinkLevel;
-    }
-  >;
+  thinkingMetadataByModelRef: Map<string, GatewayModelThinkingProfile>;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>;

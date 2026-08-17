@@ -408,26 +408,18 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     vi.clearAllMocks();
   });
 
-  it("serializes concurrent onboarding runs sharing one state directory", async () => {
+  it("rejects concurrent onboarding runs sharing one state directory", async () => {
     await withStateDir("state-concurrent-onboard-", async (stateDir) => {
-      let activeWorkspaceSetups = 0;
-      let maxActiveWorkspaceSetups = 0;
       let workspaceSetupCalls = 0;
       let releaseFirstSetup!: () => void;
       const firstSetupEntered = new Promise<void>((resolve) => {
         ensureWorkspaceAndSessionsMock.mockImplementation(async () => {
           workspaceSetupCalls += 1;
-          activeWorkspaceSetups += 1;
-          maxActiveWorkspaceSetups = Math.max(maxActiveWorkspaceSetups, activeWorkspaceSetups);
-          try {
-            if (workspaceSetupCalls === 1) {
-              resolve();
-              await new Promise<void>((release) => {
-                releaseFirstSetup = release;
-              });
-            }
-          } finally {
-            activeWorkspaceSetups -= 1;
+          if (workspaceSetupCalls === 1) {
+            resolve();
+            await new Promise<void>((release) => {
+              releaseFirstSetup = release;
+            });
           }
         });
       });
@@ -446,9 +438,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         await firstSetupEntered;
         const readsBeforeSecond = readConfigFileSnapshotMock.mock.calls.length;
         const writesBeforeSecond = capturedReplaceConfigFileCalls.length;
-        const second = runNonInteractiveSetup(options, runtime);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
+        await expect(runNonInteractiveSetup(options, runtime)).rejects.toMatchObject({
+          name: "SetupTargetLockedError",
+          code: "setup_target_locked",
+          holderPid: process.pid,
         });
 
         expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond);
@@ -456,8 +449,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledOnce();
 
         releaseFirstSetup();
-        await Promise.all([first, second]);
-        expect(maxActiveWorkspaceSetups).toBe(1);
+        await first;
+        await runNonInteractiveSetup(options, runtime);
         expect(configWritePluginLeaseDepths).toHaveLength(2);
         expect(configWritePluginLeaseDepths.every((depth) => depth > 0)).toBe(true);
       } finally {
@@ -497,7 +490,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const warningRuntime = { ...runtime, error: vi.fn() };
       const passwordRef = { source: "env" as const, provider: "default", id: "GATEWAY_PASSWORD" };
       const seededAgents = [
-        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+        { id: "alpha", default: true, model: "anthropic/claude-3-5-sonnet" },
         { id: "beta", model: "openai/gpt-4o" },
       ];
       const seededBindings = [
@@ -526,7 +519,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           port: 24680,
           bind: "loopback",
           auth: { mode: "password", password: passwordRef },
-          tailscale: { mode: "serve", resetOnExit: true },
+          tailscale: { mode: "serve" },
         },
       } as OpenClawConfig);
 
@@ -603,7 +596,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         gateway: {
           bind: "lan",
           auth: { mode: "password", password: "test-password" },
-          tailscale: { mode: "serve", resetOnExit: true },
+          tailscale: { mode: "serve" },
         },
       } as OpenClawConfig);
 
@@ -620,7 +613,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           gatewayAuth: "token",
           gatewayToken: token,
           tailscale: "off",
-          tailscaleResetOnExit: false,
         },
         runtime,
       );
@@ -630,7 +622,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           mode?: string;
           bind?: string;
           auth?: { mode?: string; token?: string };
-          tailscale?: { mode?: string; resetOnExit?: boolean };
+          tailscale?: { mode?: string };
         };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
@@ -643,7 +635,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
-      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off", resetOnExit: false });
+      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off" });
       expect(cfg?.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);
@@ -853,29 +845,39 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("explains local health failure when no daemon was requested", async () => {
+  it("completes explicit no-daemon setup when no gateway is listening", async () => {
     await withStateDir("state-local-health-hint-", async (stateDir) => {
       waitForGatewayReachableMock = vi.fn(async () => ({
         ok: false,
-        detail: "socket closed: 1006 abnormal closure",
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
+      const log = vi.fn();
+
+      await runNonInteractiveSetup(
+        { ...createLocalDaemonSetupOptions(stateDir), installDaemon: false },
+        { ...runtime, log },
+      );
+
+      expect(log.mock.calls.flat().join("\n")).toMatch(
+        /Setup complete; gateway was not installed or started because daemon installation was explicitly skipped\.[\s\S]*Gateway did not become reachable[\s\S]*Classification: not-listening[\s\S]*only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
+      );
+    });
+  }, 60_000);
+
+  it("still fails when an existing gateway is expected but unreachable", async () => {
+    await withStateDir("state-local-health-required-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
       }));
 
       await expect(
         runNonInteractiveSetup(
-          {
-            nonInteractive: true,
-            mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
-            authChoice: "skip",
-            skipSkills: true,
-            skipHealth: false,
-            installDaemon: false,
-            gatewayBind: "loopback",
-          },
+          { ...createLocalDaemonSetupOptions(stateDir), installDaemon: undefined },
           runtime,
         ),
       ).rejects.toThrow(
-        /only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
+        /Gateway did not become reachable[\s\S]*Classification: not-listening[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
       );
     });
   }, 60_000);

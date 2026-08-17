@@ -21,19 +21,27 @@ export function resolveNodeHostExecutable(
   },
 ): { executable: string; pathEnv?: string } | undefined {
   const env = options.env ?? process.env;
-  if (options.strategy === "direct") {
-    const resolved = resolveExecutableFromPathEnv(
-      executable,
-      options.pathEnv ?? env.PATH ?? env.Path ?? "",
+  const resolve = (includeExtensionless: boolean) => {
+    if (options.strategy === "direct") {
+      const resolved = resolveExecutableFromPathEnv(
+        executable,
+        options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        env,
+        { includeExtensionless },
+      );
+      return resolved ? { executable: resolved } : undefined;
+    }
+    return resolveExecutableFromUserShellPathInternal(executable, {
       env,
-      { includeExtensionless: options.includeExtensionless },
-    );
-    return resolved ? { executable: resolved } : undefined;
+      pathEnv: options.pathEnv,
+      includeExtensionless,
+      strategy: options.strategy,
+    });
+  };
+  if (options.includeExtensionless !== undefined || process.platform !== "win32") {
+    return resolve(options.includeExtensionless ?? true);
   }
-  return resolveExecutableFromUserShellPathInternal(executable, {
-    env,
-    pathEnv: options.pathEnv,
-    includeExtensionless: options.includeExtensionless,
-    strategy: options.strategy,
-  });
+  // npm installs a non-runnable bare shim beside its .cmd launcher. Search every
+  // PATH source for PATHEXT launchers before retaining bare-only native hosts.
+  return resolve(false) ?? resolve(true);
 }

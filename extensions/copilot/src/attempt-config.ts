@@ -6,6 +6,8 @@ import {
   resolveUserPath,
   TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   COPILOT_ASK_USER_AVAILABLE_TOOLS,
   COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
@@ -27,6 +29,8 @@ import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
+
+export { toCopilotError };
 export function createResult(
   params: AttemptParamsLike,
   state: {
@@ -56,6 +60,7 @@ export function createResult(
     toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
+    yieldAcknowledgment?: string;
   },
 ): AttemptResultWithSdkSessionId {
   const promptError = state.promptError;
@@ -133,6 +138,7 @@ export function createResult(
     sessionIdUsed: state.sessionIdUsed ?? readNonEmptyString(params.sessionId) ?? "copilot-session",
     toolMetas,
     yieldDetected: state.yieldDetected === true,
+    ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),
   };
 }
 export function createPromptError(
@@ -334,9 +340,7 @@ export function createSystemMessageContent(
 export function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
   return params.modelRun === true || params.promptMode === "none";
 }
-export function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
+export { readNonEmptyString };
 export function readResolvedAttemptPath(value: unknown): string | undefined {
   const raw = readNonEmptyString(value)?.trim();
   if (!raw) {
@@ -439,9 +443,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     auth,
     provider,
   };
-}
-export function toCopilotError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {

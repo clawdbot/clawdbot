@@ -85,6 +85,26 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
 
+  it("reports truncation when the line limit omits complete records", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const content = "one\ntwo\nthree\n";
+
+    await fs.writeFile(file, content);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 2, maxBytes: 100 });
+
+    expect(result).toMatchObject({
+      lines: ["two", "three"],
+      cursor: Buffer.byteLength(content),
+      size: Buffer.byteLength(content),
+      truncated: true,
+      reset: false,
+    });
+  });
+
   it("falls back only within the active profile's rolling log family", async () => {
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const missing = path.join(tempDir, "openclaw-dev-2026-01-22.log");

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -78,9 +79,10 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   pathname: string,
+  location = pathname,
 ): T {
   assertOpenClawStateDatabaseFreshOpenAllowed(options);
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
@@ -131,4 +133,31 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
         { ...options, path: existingPath },
         existingPath,
       );
+}
+
+/** Read existing shared state without creating or updating its SQLite sidecars. */
+export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const pathname = resolveReadOnlyPath(options);
+  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, options, pathname);
+  if (reused.reused) {
+    return reused.value;
+  }
+  const existingPath = existingPathOrUndefined(pathname);
+  if (existingPath === undefined) {
+    return undefined;
+  }
+  const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
+  try {
+    return withFreshOpenClawStateDatabaseReadOnly(
+      operation,
+      { ...options, path: existingPath },
+      existingPath,
+      prepared.location,
+    );
+  } finally {
+    prepared.cleanup();
+  }
 }

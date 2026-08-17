@@ -113,7 +113,7 @@ function releaseSyncPrefixRoot(options: { prefix: string; parentDir?: string }) 
   });
 }
 
-export async function withTempDir<T>(
+export async function withTestDir<T>(
   options: {
     prefix: string;
     parentDir?: string;

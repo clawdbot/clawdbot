@@ -4,11 +4,13 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
   hasCompletedTerminalDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -31,6 +33,7 @@ import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
@@ -207,12 +210,27 @@ export function resolveFollowupDeliveryDecision(params: {
         ? markReplyPayloadForSourceSuppressionDelivery(accounting.terminalFailurePayload)
         : accounting.terminalFailurePayload
       : undefined
-    : buildEmptyInteractiveReplyPayload({
+    : (buildSessionsYieldAcknowledgmentPayload({
+        yielded: result.meta?.yielded === true,
+        yieldAcknowledgment: result.meta?.yieldAcknowledgment,
+        isInteractive,
+        isHeartbeat: opts?.isHeartbeat,
+        silentExpected: turn.queued.run.silentExpected,
+        isSubagentSession:
+          turn.session.kind === "session" && isSubagentSessionKey(turn.session.key),
+        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
+        // Child spawns are side effects, not user-visible messages. They must not
+        // suppress the explicit waiting reply for the parent turn.
+        hasVisibleMessageDelivery:
+          hasCommittedSourceReplyDeliveryEvidence(result) ||
+          hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+          result.didSendDeterministicApprovalPrompt === true,
+      }) ??
+      buildEmptyInteractiveReplyPayload({
         isInteractive,
         isHeartbeat: opts?.isHeartbeat,
         silentExpected: turn.queued.run.silentExpected,
         allowEmptyAssistantReplyAsSilent: turn.queued.run.allowEmptyAssistantReplyAsSilent,
-        isMessageToolOnly: sourcePolicy.sourceReplyDeliveryMode === "message_tool_only",
         hasPendingContinuation:
           result.meta?.yielded === true || (result.meta?.pendingToolCalls?.length ?? 0) > 0,
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
@@ -224,7 +242,7 @@ export function resolveFollowupDeliveryDecision(params: {
           Surface: turn.queued.originatingChannel,
         },
         cfg: turn.config,
-      });
+      }));
   const hasTerminalPayload = payloads.some(
     (payload) =>
       payload.isReasoning !== true &&
@@ -251,6 +269,7 @@ export function resolveFollowupDeliveryDecision(params: {
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
+    agentDir: turn.queued.run.agentDir,
     sessionRaw: turn.session.current()?.responseUsage,
     channel: resolveOriginMessageProvider({
       originatingChannel: turn.queued.originatingChannel,

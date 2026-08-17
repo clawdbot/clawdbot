@@ -6,7 +6,7 @@ import {
   formatMediaUnderstandingBody,
 } from "../../packages/media-understanding-common/src/format.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
@@ -103,7 +103,7 @@ describe("runCapability video provider wiring", () => {
     let seenBaseUrl: string | undefined;
     let seenHeaders: Record<string, string> | undefined;
 
-    await withTempDir({ prefix: "openclaw-video-auth-" }, async (isolatedAgentDir) => {
+    await withTestDir({ prefix: "openclaw-video-auth-" }, async (isolatedAgentDir) => {
       await withVideoFixture("openclaw-video-merge", async ({ ctx, media, cache }) => {
         const cfg = {
           models: {
@@ -174,7 +174,7 @@ describe("runCapability video provider wiring", () => {
   });
 
   it("auto-selects moonshot for video when google is unavailable", async () => {
-    await withTempDir({ prefix: "openclaw-video-agent-" }, async (isolatedAgentDir) => {
+    await withTestDir({ prefix: "openclaw-video-agent-" }, async (isolatedAgentDir) => {
       await withEnvAsync(
         {
           GEMINI_API_KEY: undefined,
@@ -244,7 +244,7 @@ describe("runCapability video provider wiring", () => {
   it("uses the provider video default when the active provider has no model", async () => {
     let seenModel: string | undefined;
 
-    await withTempDir({ prefix: "openclaw-video-active-provider-" }, async (isolatedAgentDir) => {
+    await withTestDir({ prefix: "openclaw-video-active-provider-" }, async (isolatedAgentDir) => {
       await withVideoFixture("openclaw-video-active-default", async ({ ctx, media, cache }) => {
         const cfg = {
           models: {
@@ -301,7 +301,7 @@ describe("runCapability video provider wiring", () => {
   it("preserves self-defaulting video providers without registry model metadata", async () => {
     let seenModel: string | undefined;
 
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-video-no-default-provider-" },
       async (isolatedAgentDir) => {
         await withVideoFixture("openclaw-video-no-default", async ({ ctx, media, cache }) => {
@@ -360,7 +360,7 @@ describe("runCapability video provider wiring", () => {
   it("resolves provider registry defaultModels.video when a config entry has no explicit model", async () => {
     let seenModel: string | undefined;
 
-    await withTempDir({ prefix: "openclaw-video-entry-default-" }, async (isolatedAgentDir) => {
+    await withTestDir({ prefix: "openclaw-video-entry-default-" }, async (isolatedAgentDir) => {
       await withVideoFixture("openclaw-video-entry-default", async ({ ctx, media, cache }) => {
         const cfg = {
           models: {
@@ -412,10 +412,10 @@ describe("runCapability video provider wiring", () => {
 
   it("does not use provider api config as video auth modelApi", async () => {
     const modelAuth = await import("../agents/model-auth.js");
-    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
-    resolveApiKeyForProvider.mockClear();
+    const resolveApiKeyForProviderCore = vi.mocked(modelAuth.resolveApiKeyForProviderCore);
+    resolveApiKeyForProviderCore.mockClear();
 
-    await withTempDir({ prefix: "openclaw-video-provider-api-" }, async (isolatedAgentDir) => {
+    await withTestDir({ prefix: "openclaw-video-provider-api-" }, async (isolatedAgentDir) => {
       await withVideoFixture("openclaw-video-provider-api", async ({ ctx, media, cache }) => {
         let seenApiKey: string | undefined;
         const cfg = {
@@ -464,7 +464,7 @@ describe("runCapability video provider wiring", () => {
       });
     });
 
-    const firstCall = resolveApiKeyForProvider.mock.calls[0]?.[0];
+    const firstCall = resolveApiKeyForProviderCore.mock.calls[0]?.[0];
     expect(firstCall?.provider).toBe("openai");
     expect(firstCall?.modelApi).toBeUndefined();
   });

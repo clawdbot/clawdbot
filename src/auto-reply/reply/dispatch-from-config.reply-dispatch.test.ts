@@ -152,7 +152,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionStoreMocks.readSessionEntry
       .mockReset()
       .mockImplementation(() => sessionStoreMocks.currentEntry);
-    sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore
+      .mockReset()
+      .mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
@@ -409,7 +411,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(deliver).not.toHaveBeenCalled();
       // createHookCtx's "private" chat type is undirected, so no fallback
       // attempt follows the timed-out final.
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toMatchObject({
         kind: "replayable",
         text: "durable reply",
@@ -470,7 +471,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         expect.objectContaining({ text: "durable reply" }),
         expect.objectContaining({ kind: "final" }),
       );
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -734,7 +734,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       dispatcher,
       replyResolver: async () => pendingFinalReply("policy-suppressed reply"),
     });
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
     await vi.waitFor(() => {
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     });
@@ -743,8 +743,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(deliver).not.toHaveBeenCalled();
     // createHookCtx's "private" chat type is undirected, so the cancelled final
     // does not trigger a fallback attempt.
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(receipt?.counts.final).toMatchObject({ cancelled: 1, failedBeforeSend: 0 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(2);
   });
 

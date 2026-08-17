@@ -137,6 +137,43 @@ describe("sessions lifecycle commands", () => {
     );
   });
 
+  it.each([
+    ["archive", sessionsArchiveCommand, {}],
+    ["delete", sessionsDeleteCommand, { yes: true }],
+  ] as const)(
+    "rejects a key-only listed session before %s mutation",
+    async (_operation, command, options) => {
+      mocks.callGateway.mockResolvedValueOnce(listResult([{ key: "agent:main:key-only" }]));
+      const runtime = createRuntime();
+
+      await command({ keys: ["agent:main:key-only"], ...options, json: true }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.callGateway.mock.calls[0]?.[0]).toBe("sessions.list");
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: `Session ${_operation} did not complete for every requested key.`,
+          },
+          operation: _operation,
+          dryRun: false,
+          results: [
+            {
+              key: "agent:main:key-only",
+              ok: false,
+              status: "failed",
+              error: "Session has no durable identity; lifecycle mutation was not attempted.",
+            },
+          ],
+        },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it("deletes archived sessions with the same gated artifact contract as Control UI", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(
@@ -282,6 +319,10 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: false,
+        error: {
+          type: "cli_error",
+          message: "Session delete did not complete for every requested key.",
+        },
         operation: "delete",
         dryRun: false,
         results: [
@@ -321,6 +362,10 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: false,
+        error: {
+          type: "cli_error",
+          message: "Session delete did not complete for every requested key.",
+        },
         operation: "delete",
         dryRun: false,
         results: [

@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
@@ -42,18 +45,18 @@ function expectAgentStoreAbsent(agentId: string): void {
   );
 }
 
-async function listAgentIdsViaRpc(
+async function listAgentsViaRpc(
   includeSystem = false,
   catalogContext: Partial<GatewayRequestContext> = {},
-): Promise<string[]> {
+): Promise<AgentsListResult> {
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  let ids: string[] | undefined;
+  let result: AgentsListResult | undefined;
   await agentsHandlers["agents.list"]?.({
     req: {} as never,
     params: {},
     respond: (ok, payload) => {
       if (ok) {
-        ids = (payload as { agents: Array<{ id: string }> }).agents.map((agent) => agent.id);
+        result = payload as AgentsListResult;
       }
     },
     context: {
@@ -67,7 +70,18 @@ async function listAgentIdsViaRpc(
       : null,
     isWebchatConnect: () => false,
   });
-  return ids ?? [];
+  if (!result) {
+    throw new Error("agents.list did not return a result");
+  }
+  return result;
+}
+
+async function listAgentIdsViaRpc(
+  includeSystem = false,
+  catalogContext: Partial<GatewayRequestContext> = {},
+): Promise<string[]> {
+  const result = await listAgentsViaRpc(includeSystem, catalogContext);
+  return result.agents.map((agent) => agent.id);
 }
 
 async function setAgentsConfig(agentsConfig: Record<string, unknown> | undefined): Promise<void> {
@@ -99,13 +113,46 @@ test("agents.list reads published model facts without starting provider discover
   expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 
+test("agents.list returns the roster when optional prepared model facts are unavailable", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  const readPreparedGatewayModelCatalog = vi.fn(async () => {
+    throw new Error("prepared model catalog requires an explicit owner");
+  });
+
+  await expect(listAgentIdsViaRpc(false, { readPreparedGatewayModelCatalog })).resolves.toEqual([
+    "ops",
+    "research",
+  ]);
+
+  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledOnce();
+});
+
+test("agents.list includes durable provenance only for matching roster rows", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  recordAgentProvenance("research", { createdVia: "agent", creatorAgentId: "ops" }, { nowMs: 42 });
+
+  const result = await listAgentsViaRpc();
+
+  expect(result.agents.map((agent) => agent.id)).toEqual(["ops", "research"]);
+  expect(result.agents[0]).not.toHaveProperty("createdVia");
+  expect(result.agents[0]).not.toHaveProperty("creatorAgentId");
+  expect(result.agents[0]).not.toHaveProperty("createdAt");
+  expect(result.agents[1]).toMatchObject({
+    createdVia: "agent",
+    creatorAgentId: "ops",
+    createdAt: 42,
+  });
+});
+
 beforeEach(async () => {
+  testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
   await setAgentsConfig(undefined);
 });
 
 afterEach(() => {
+  testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
   closeOpenClawAgentDatabasesForTest();
@@ -149,6 +196,45 @@ test("unknown-agent session reads return missing results without provisioning an
 
   expectAgentStoreAbsent(UNKNOWN_AGENT_ID);
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+});
+
+test("bare ownerless reads fail closed without blocking scoped preview siblings", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  expect(getRuntimeConfig().agents).toMatchObject({
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  });
+  const sessionKey = "agent:ops:preview-valid";
+  const sessionId = "session-ops-preview-valid";
+  const storePath = resolveStorePath(undefined, { agentId: "ops" });
+  await replaceSessionEntry(
+    { agentId: "ops", sessionKey, storePath },
+    { sessionId, updatedAt: 42 },
+  );
+  await seedLinearSessionTranscript({
+    agentId: "ops",
+    contents: ["scoped preview remains readable"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const described = await directSessionReq<{ session: unknown }>("sessions.describe", {
+    key: "global",
+  });
+  expect(described).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+  });
+
+  const preview = await directSessionReq<{
+    previews: Array<{ key: string; status: string; items: unknown[] }>;
+  }>("sessions.preview", { keys: ["global", sessionKey] });
+  expect(preview).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+  });
 });
 
 test("sessions.describe reads a pre-existing store after its agent is removed from config", async () => {

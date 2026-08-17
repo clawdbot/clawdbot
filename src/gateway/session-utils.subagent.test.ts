@@ -29,7 +29,7 @@ import { withEnv } from "../test-utils/env.js";
 import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
   listSessionsFromStore,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
@@ -1292,6 +1292,10 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
     const main = result.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toEqual([parentKey]);
+    expect(main?.hasActiveSubagentRun).toBe(true);
+    expect(result.sessions.find((session) => session.key === parentKey)?.hasActiveSubagentRun).toBe(
+      true,
+    );
   });
 
   test("falls back to persisted subagent timing after run archival", () => {
@@ -1388,7 +1392,7 @@ describe("listSessionsFromStore subagent metadata", () => {
   });
 });
 
-describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+describe("loadCombinedSessionStoreForGatewayCore includes disk-only agents (#32804)", () => {
   test("fixed stores retain a colliding unsuffixed database on the default owner", async () => {
     await withStateDirEnv("openclaw-fixed-store-collision-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "ops.json");
@@ -1416,7 +1420,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         }),
       ).toBe(false);
 
-      const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
+      const { diagnostics, store } = loadCombinedSessionStoreForGatewayCore(cfg);
       expect(store["agent:main:main"]?.sessionId).toBe("s-main-unscoped");
       expect(store["agent:ops:main"]).toBeUndefined();
       expect(diagnostics).toContainEqual(
@@ -1447,7 +1451,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         "ops",
       );
 
-      const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
+      const { diagnostics, store } = loadCombinedSessionStoreForGatewayCore(cfg);
       expect(store["agent:ops:main"]?.sessionId).toBe("s-ops-registered");
       expect(store["agent:main:main"]).toBeUndefined();
       expect(diagnostics).toContainEqual(
@@ -1495,11 +1499,16 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         { sessionId: "s-legacy-ops", spawnedBy: "agent:ops:main", updatedAt: 400 },
         "ops",
       );
-      const dynamicIncognitoKey = "dashboard:incognito-dynamic";
+      const dynamicIncognitoKey = "agent:dynamic:dashboard:incognito-child";
       await seedSessionEntry(
         resolveIncognitoOpenClawAgentSqlitePath({ agentId: "dynamic" }),
         dynamicIncognitoKey,
-        { incognito: true, sessionId: "s-incognito-dynamic", updatedAt: 500 },
+        {
+          incognito: true,
+          parentSessionKey: "agent:ops:main",
+          sessionId: "s-incognito-dynamic",
+          updatedAt: 500,
+        },
         "dynamic",
       );
       await seedSessionEntry(
@@ -1516,32 +1525,32 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         }),
       ).toBe(false);
 
-      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      const { store } = loadCombinedSessionStoreForGatewayCore(cfg);
       expect(store["agent:ops:main"]?.sessionId).toBe("s-ops");
       expect(store["agent:worker:main"]?.sessionId).toBe("s-worker");
       expect(store["agent:dynamic:main"]?.sessionId).toBe("s-dynamic");
 
-      const configuredOnly = loadCombinedSessionStoreForGateway(cfg, {
+      const configuredOnly = loadCombinedSessionStoreForGatewayCore(cfg, {
         configuredAgentsOnly: true,
       }).store;
       expect(configuredOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
       expect(configuredOnly["agent:ops:legacy"]?.spawnedBy).toBe("agent:ops:main");
       expect(configuredOnly["agent:dynamic:main"]).toBeUndefined();
-      expect(configuredOnly[dynamicIncognitoKey]).toBeUndefined();
+      expect(configuredOnly[dynamicIncognitoKey]?.sessionId).toBe("s-incognito-dynamic");
 
-      const opsOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "ops" }).store;
+      const opsOnly = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "ops" }).store;
       expect(opsOnly["agent:ops:main"]?.sessionId).toBe("s-ops");
       expect(opsOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
       expect(opsOnly["agent:worker:main"]).toBeUndefined();
       expect(opsOnly["agent:dynamic:main"]).toBeUndefined();
 
-      const explicitDynamic = loadCombinedSessionStoreForGateway(cfg, {
+      const explicitDynamic = loadCombinedSessionStoreForGatewayCore(cfg, {
         agentId: "dynamic",
         configuredAgentsOnly: true,
       }).store;
       expect(explicitDynamic["agent:dynamic:main"]?.sessionId).toBe("s-dynamic");
 
-      const mainOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "main" }).store;
+      const mainOnly = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "main" }).store;
       expect(mainOnly["agent:ops:legacy"]).toBeUndefined();
     });
   });
@@ -1574,7 +1583,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         },
       } as OpenClawConfig;
 
-      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      const { store } = loadCombinedSessionStoreForGatewayCore(cfg);
       expect(store["agent:main:main"]?.sessionId).toBe("s-main");
       expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
     });
@@ -1610,7 +1619,9 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         },
       } as OpenClawConfig;
 
-      const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
+      const { store, storePath } = loadCombinedSessionStoreForGatewayCore(cfg, {
+        agentId: "codex",
+      });
 
       expect(
         canPrewarmCombinedSessionStoresForGateway(cfg, {
@@ -1623,7 +1634,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
       expect(store["agent:main:main"]).toBeUndefined();
 
-      const mainOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "main" }).store;
+      const mainOnly = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "main" }).store;
       expect(mainOnly["agent:main:main"]?.sessionId).toBe("s-main");
     });
   });

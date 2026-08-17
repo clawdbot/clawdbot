@@ -46,6 +46,8 @@ vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
 
+const TEST_MESSAGE_CHANNEL = "test-channel";
+
 function recordMcpLoopbackToolCallResult(params: {
   captureKey: string;
   toolName: string;
@@ -148,6 +150,81 @@ beforeEach(() => {
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("passes native compaction as an argument and requires backend acknowledgement", async () => {
+    const raw = `${JSON.stringify({ type: "system", subtype: "compacting" })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(raw);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.prompt = "/compact";
+    context.params.controlOperation = "compact";
+    context.bootstrapPromptWarningLines = ["must not decorate the control command"];
+    context.backendResolved.textTransforms = { input: [{ from: "/compact", to: "mutated" }] };
+    context.backendResolved.manualCompaction = {
+      input: "arg",
+      buildPrompt: () => "/compact",
+      validateOutput: (output) =>
+        output.includes('"subtype":"compacting"')
+          ? { ok: true }
+          : { ok: false, reason: "native compaction was not acknowledged" },
+    };
+
+    const result = await executePreparedCliRun(context);
+
+    expect(requireSupervisorSpawnInput()).toEqual(
+      expect.objectContaining({
+        argv: ["agent-cli", "/compact"],
+        input: "",
+        noOutputTimeoutMs: context.params.timeoutMs,
+      }),
+    );
+    expect(result).toMatchObject({ text: "", rawText: "", finalPromptText: "/compact" });
+  });
+
+  it("rejects a zero-exit native compaction without backend acknowledgement", async () => {
+    const raw = `${JSON.stringify({ type: "system", subtype: "local_command" })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(raw);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.prompt = "/compact";
+    context.params.controlOperation = "compact";
+    context.backendResolved.manualCompaction = {
+      input: "arg",
+      buildPrompt: () => "/compact",
+      validateOutput: () => ({
+        ok: false,
+        reason: "native compaction was not acknowledged",
+      }),
+    };
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "native compaction was not acknowledged",
+    );
+  });
+
   it("runs prepared backend staging inside the serialized execution queue", async () => {
     const firstSpawnEntered = createDeferred();
     const releaseFirstSpawn = createDeferred();
@@ -1680,7 +1757,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
               name: "mcp__openclaw__message",
               input: {
                 action: "send",
-                channel: "telegram",
+                channel: TEST_MESSAGE_CHANNEL,
                 target: "chat123",
                 message: "done",
               },
@@ -1702,7 +1779,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "send",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "done",
         },
@@ -1732,7 +1809,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
         text: "done",
       }),
@@ -1752,7 +1829,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
               name: "mcp__openclaw__message",
               input: {
                 action: "send",
-                channel: "telegram",
+                channel: TEST_MESSAGE_CHANNEL,
                 target: "chat123",
                 text: "done",
               },
@@ -1792,7 +1869,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
         text: "done",
       }),
@@ -1806,7 +1883,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       name: "mcp__openclaw__message",
       input: {
         action: "send",
-        channel: "telegram",
+        channel: TEST_MESSAGE_CHANNEL,
         target: `chat${index}`,
         message: "done",
       },
@@ -1856,7 +1933,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       name: "mcp__openclaw__message",
       input: {
         action: "send",
-        channel: "telegram",
+        channel: TEST_MESSAGE_CHANNEL,
         target: `chat${index}`,
         message: "done",
       },
@@ -1918,7 +1995,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
             name: "mcp__openclaw__message",
             input: {
               action: "send",
-              channel: "telegram",
+              channel: TEST_MESSAGE_CHANNEL,
               target: "chat123",
               message: "done",
             },
@@ -1965,7 +2042,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
             name: "mcp__openclaw__message",
             input: {
               action: "send",
-              channel: "telegram",
+              channel: TEST_MESSAGE_CHANNEL,
               target: "chat123",
               message: "done",
               dryRun: true,
@@ -2011,7 +2088,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "send",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "done",
         },
@@ -2043,7 +2120,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
-      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
+      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield(
+        "private continuation",
+        "Research started; results will follow.",
+      );
       markMcpLoopbackRequestFinished(captureHandle);
       input.onStdout?.("yield acknowledged");
       return createManagedRun({
@@ -2061,6 +2141,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const result = await executePreparedCliRun(context);
 
     expect(result.yielded).toBe(true);
+    expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
   });
 
   it("keeps mutation delivery out of sent-reply dedupe evidence", async () => {
@@ -2073,7 +2154,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "edit",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "done",
         },
@@ -2103,7 +2184,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   it("preserves the current provider for implicit message send targets", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
     context.mcpDeliveryCapture = true;
-    context.params.messageChannel = "slack";
+    context.params.messageChannel = TEST_MESSAGE_CHANNEL;
     context.params.currentChannelId = "C123";
     context.params.currentThreadTs = "1700000000.000100";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -2136,7 +2217,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
-        provider: "slack",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "C123",
       }),
     ]);
@@ -2152,7 +2233,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "send",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "done",
           mediaUrl: "https://example.com/photo.png",
@@ -2180,7 +2261,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
         text: "done",
         mediaUrls: ["https://example.com/photo.png"],
@@ -2198,7 +2279,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "send",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "done",
         },
@@ -2224,7 +2305,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
         text: "done",
       }),
@@ -2241,7 +2322,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "poll",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           pollQuestion: "Lunch?",
           pollOption: ["Pizza", "Sushi"],
@@ -2268,7 +2349,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
       }),
     ]);
@@ -2279,7 +2360,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       action: "reply",
       args: {
         action: "reply",
-        channel: "telegram",
+        channel: TEST_MESSAGE_CHANNEL,
         target: "chat123",
         message: "done",
       },
@@ -2288,7 +2369,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       action: "sticker",
       args: {
         action: "sticker",
-        channel: "telegram",
+        channel: TEST_MESSAGE_CHANNEL,
         target: "chat123",
         stickerId: "sticker-1",
       },
@@ -2326,7 +2407,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
       }),
     ]);
@@ -2342,7 +2423,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "thread-create",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "new thread",
         },
@@ -2368,7 +2449,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
       }),
     ]);
@@ -2377,7 +2458,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   it("records current-target evidence for confirmed implicit reply delivery", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
     context.mcpDeliveryCapture = true;
-    context.params.messageChannel = "telegram";
+    context.params.messageChannel = TEST_MESSAGE_CHANNEL;
     context.params.currentChannelId = "chat123";
     supervisorSpawnMock.mockImplementationOnce(async (...spawnArgs: unknown[]) => {
       const input = spawnArgs[0] as SupervisorSpawnInput;
@@ -2410,7 +2491,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
-        provider: "telegram",
+        provider: TEST_MESSAGE_CHANNEL,
         to: "chat123",
       }),
     ]);
@@ -2508,7 +2589,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "send",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "x".repeat(20 * 1024),
         },
@@ -2532,7 +2613,11 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTargets).toEqual([
-      expect.objectContaining({ tool: "message", provider: "telegram", to: "chat123" }),
+      expect.objectContaining({
+        tool: "message",
+        provider: TEST_MESSAGE_CHANNEL,
+        to: "chat123",
+      }),
     ]);
   });
 
@@ -2583,7 +2668,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         toolName: "message",
         args: {
           action: "send",
-          channel: "telegram",
+          channel: TEST_MESSAGE_CHANNEL,
           target: "chat123",
           message: "done",
         },

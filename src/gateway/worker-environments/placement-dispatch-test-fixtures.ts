@@ -9,7 +9,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
@@ -21,7 +21,6 @@ export type DispatchStage =
   | "workspace"
   | "preflight"
   | "create"
-  | "tunnel:ready"
   | "sync"
   | "attach"
   | "tunnel:attached"
@@ -34,13 +33,15 @@ export const REQUEST: WorkerDispatchRequest = {
   sessionKey: "agent:main:session-1",
   agentId: "main",
   profileId: "development",
+  executionMode: "worker-turn",
 };
 
-export function seedStartingPlacement(
+export function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): WorkerSessionPlacementRecord {
-  let current = store.startDispatch(REQUEST);
+  let current = store.startDispatch({ ...REQUEST, executionMode });
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "requested",
@@ -55,6 +56,15 @@ export function seedStartingPlacement(
     expectedGeneration: current.generation,
     patch: { workerBundleHash: BUNDLE_HASH },
   });
+  return current;
+}
+
+export function seedStartingPlacement(
+  store: PlacementStore,
+  environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
+): WorkerSessionPlacementRecord {
+  let current = seedSyncingPlacement(store, environmentId, executionMode);
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
@@ -70,9 +80,13 @@ export function seedStartingPlacement(
 
 export function seedActivePlacement(
   store: PlacementStore,
-  params: { environmentId: string; ownerEpoch: number },
+  params: {
+    environmentId: string;
+    ownerEpoch: number;
+    executionMode?: WorkerDispatchRequest["executionMode"];
+  },
 ): WorkerSessionPlacementRecord {
-  const current = seedStartingPlacement(store, params.environmentId);
+  const current = seedStartingPlacement(store, params.environmentId, params.executionMode);
   return store.transition({
     sessionId: REQUEST.sessionId,
     from: "starting",
@@ -83,9 +97,9 @@ export function seedActivePlacement(
 }
 
 export function createDispatchEnvironmentFixtures(generation = 1) {
-  const environmentId = workerEnvironmentIdForIdempotencyKey(
+  const environmentId = deriveEnvironmentIntent(
     `session-dispatch:${REQUEST.sessionId}:${generation}`,
-  );
+  ).environmentId;
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,

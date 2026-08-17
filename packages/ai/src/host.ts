@@ -36,6 +36,8 @@ export interface AiProviderStreamHookContext {
   provider: string;
   modelId: string;
   model: Model;
+  /** Wire-format API before simple completion projects an internal transport alias. */
+  sourceApi?: Api;
 }
 
 /** Narrow plugin-runtime port used by package-owned transports. */
@@ -180,8 +182,6 @@ export interface AiTransportHost {
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
-  /** Prepares the provider-owned Google simple-completion alias when needed. */
-  prepareGoogleSimpleCompletionModel(registry: ApiRegistry, model: Model): Model;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -261,7 +261,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   transformTransportMessages: (messages, model, normalizeToolCallId) =>
     transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
-  prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},

@@ -56,7 +56,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
       let entry: InternalSessionEntry = {
         abortedLastRun: false,
         lifecycleRunId: "recovery-run",
-        restartRecoveryBeforeAgentReplyState: "admitted",
         restartRecoveryDeliveryRunId: "recovery-run",
         sessionId,
         startedAt: 1,

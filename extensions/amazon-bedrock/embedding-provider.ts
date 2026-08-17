@@ -292,16 +292,6 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-const testing = {
-  parseCohereBatch,
-  parseSingle,
-  stripInferenceProfilePrefix,
-};
-
-if (process.env.VITEST === "true") {
-  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
-}
-
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------

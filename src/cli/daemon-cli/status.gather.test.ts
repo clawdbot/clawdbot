@@ -23,14 +23,14 @@ const callGatewayStatusProbe = vi.fn<
     ok: boolean;
     url?: string;
     error?: string | null;
-    server?: { version?: string | null; connId?: string | null };
+    server?: { version?: string | null; buildId?: string | null; connId?: string | null };
     version?: string | null;
   }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
-  server: { version: "2026.5.6", connId: "conn-1" },
+  server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
 }));
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -152,10 +152,13 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
-const createConfigIOCalls = vi.fn((configPath: string, pluginValidation?: "full" | "skip") => ({
-  configPath,
-  pluginValidation,
-}));
+const createConfigIOCalls = vi.fn(
+  (configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => ({
+    configPath,
+    pluginValidation,
+    observe,
+  }),
+);
 const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
@@ -176,15 +179,17 @@ let cliLoadedConfig: Record<string, unknown> = {
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({
     configPath,
+    observe,
     pluginValidation,
   }: {
     configPath: string;
+    observe?: boolean;
     pluginValidation?: "full" | "skip";
   }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     const warnings = isDaemon ? daemonConfigWarnings : cliConfigWarnings;
-    createConfigIOCalls(configPath, pluginValidation);
+    createConfigIOCalls(configPath, pluginValidation, observe);
     return {
       readConfigFileSnapshot: async () => {
         readConfigFileSnapshotCalls(configPath);
@@ -473,7 +478,11 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
-    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.rpc?.server).toEqual({
+      version: "2026.5.6",
+      buildId: "build-2026.5.6",
+      connId: "conn-1",
+    });
     expect(status.cli?.version).toBe(VERSION);
     if (process.argv[1]) {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
@@ -1002,7 +1011,7 @@ describe("gatherDaemonStatus", () => {
     try {
       const status = await gatherStatus({ probe: false, deep: true });
 
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full");
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
       expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
       expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
       expect(status.config?.daemon).toBe(status.config?.cli);
@@ -1078,6 +1087,44 @@ describe("gatherDaemonStatus", () => {
     };
 
     const status = await gatherStatus({ allowExecSecretRefs: false });
+
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      token?: string;
+      password?: string;
+      allowRpcConfigCredentials?: boolean;
+    };
+    expect(probeInput.token).toBeUndefined();
+    expect(probeInput.password).toBeUndefined();
+    expect(probeInput.allowRpcConfigCredentials).toBe(false);
+    expect(status.rpc?.authWarning).toContain(
+      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+    );
+  });
+
+  it("skips remote password exec SecretRef auth despite an ambient password", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          password: { source: "exec", provider: "vault", id: "gateway/remote-password" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
 
     expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as {
@@ -1229,7 +1276,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
-  it("keeps remote probe auth strict when remote token is missing", async () => {
+  it("keeps configured remote password authoritative for remote probes", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1251,7 +1298,7 @@ describe("gatherDaemonStatus", () => {
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBe("env-password"); // pragma: allowlist secret
+    expect(probeInput.password).toBe("remote-password"); // pragma: allowlist secret
   });
 
   it("skips TLS runtime loading when probe is disabled", async () => {

@@ -53,6 +53,17 @@ threads. Core passes `params.pluginHarnessToolPolicyRestricted` as the prepared
 decision that the native surface must be isolated. Default tool-profile narrowing
 does not set this flag.
 
+Harnesses with an independently managed native surface can also declare
+`conversationToolPolicySafeDenyTools` using canonical OpenClaw tool names. Core
+preserves the native surface only when every expanded deny is a known core tool
+in that audited safe list and passes the matching names in
+`params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
+native equivalents for those names. Finite allowlists, undeclared or unknown
+tool names, wildcards, and groups containing any undeclared name remain
+native-surface restrictions. Omit the list to retain the conservative behavior
+where every explicit restriction isolates the native surface. Because omissions
+fail closed, new tools cannot silently relax the policy boundary.
+
 Omit the declaration when any native capability can bypass those layers.
 OpenClaw then visibly rejects explicitly restricted turns before invoking the
 harness. The operator can switch the session to the embedded runtime or upgrade
@@ -122,9 +133,16 @@ Two secret-free provider-owned facts describe the selected route:
 
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.
+Add `fallbackRuntime: "openclaw"` only when the built-in runtime can reproduce
+the exact prepared request without dropping authored behavior. Core then uses
+that fallback for explicit and persisted selections as well as multi-route
+retry sets. Leave it absent for provider, route, or authentication failures
+that must remain fail-closed.
+
 When auth preparation yields multiple retry routes, one harness must support
 all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
-own the full set; an explicit or persisted plugin selection fails closed.
+own the full set; an explicit or persisted plugin selection fails closed unless
+the plugin declares the lossless OpenClaw fallback.
 
 ## Register a harness
 
@@ -170,12 +188,21 @@ export default definePluginEntry({
 
 ### Isolated completion
 
-The optional `runIsolatedCompletion(params)` capability serves product paths
+The optional `runIsolatedCompletionV2(params)` capability serves product paths
 that require one fresh prompt-only inference call with a literal empty
-model-callable tool surface. Core passes the exact prepared `model`, `auth`,
-provider, model id, system prompt, user prompt, timeout, abort signal, and stream
-parameters. The harness must not re-resolve credentials, switch routes, reuse a
-native thread, attach tools, invoke agent lifecycle hooks, or deliver output.
+model-callable tool surface. Core passes provider and model ids, prompts,
+deadline controls, and one prepared `authorization`:
+
+- `owner: "host"` contains the exact transport `model` and resolved `auth`.
+- `owner: "harness"` contains the prepared runtime auth plan and a credential
+  snapshot restricted to the single profile selected for that call. Core owns
+  automatic fallback order and invokes the harness separately for each candidate.
+
+Host-authorized calls must use the supplied model and credential without
+substitution. Harness-authorized calls may resolve only the supplied prepared
+route and scoped profiles, or the harness's native account when the plan leaves
+auth to the harness. The harness must not switch routes, reuse a native thread,
+attach tools, invoke agent lifecycle hooks, or deliver output.
 
 Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
 content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
@@ -187,9 +214,15 @@ Plugin callers select this behavior through
 the harness callback is the provider-side enforcement SPI, not a second caller
 API.
 
+The legacy `runIsolatedCompletion(params)` host-auth-only capability is
+deprecated and remains available for external plugins through 2026-10-12.
+Implement V2 for harness-owned or native authentication; OpenClaw never invents
+a host credential when only the legacy capability is present.
+
 Native agent servers often have ambient built-in tools even when OpenClaw sends
-an empty tool list. In that case, use a separate provider transport that can
-serialize a true zero-tool request, or leave the capability unsupported.
+an empty tool list. Disable and attest those native capabilities for the fresh
+turn, use a separate transport that can serialize a true zero-tool request, or
+leave the capability unsupported.
 
 ### Delegated execution
 

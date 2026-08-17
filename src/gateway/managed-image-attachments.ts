@@ -9,15 +9,15 @@ import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
+  asNonNegativeFiniteNumber,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import pLimit from "p-limit";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
-import { resolveSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
@@ -38,7 +38,7 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -65,9 +65,10 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveSessionHistoryTranscriptPathAsync,
 } from "./session-utils.js";
 
@@ -314,10 +315,6 @@ function maxBytesForManagedMediaKind(
   imageLimits: ManagedImageAttachmentLimits,
 ): number {
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
-}
-
-function asNonNegativeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function createManagedMediaByteLimitError(params: {
@@ -691,9 +688,11 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   const nowMs = params?.nowMs ?? Date.now();
   const transientMaxAgeMs = params?.transientMaxAgeMs ?? DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS;
   const sessionKeyFilter = params?.sessionKey ?? null;
-  const agentIdFilter = params?.agentId?.trim() || undefined;
-  const defaultAgentId =
-    sessionKeyFilter === "global" ? resolveDefaultAgentId(getRuntimeConfig()) : undefined;
+  const agentIdFilter = params?.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const globalCompatibilityOwnerAgentId =
+    sessionKeyFilter === "global" && agentIdFilter
+      ? tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), "global")
+      : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const entries = listManagedImageRecordEntries({ stateDir });
 
@@ -715,9 +714,12 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     if (
       sessionKeyFilter === "global" &&
       record.sessionKey === "global" &&
-      ((agentIdFilter &&
-        resolveManagedImageRecordAgentId(record, defaultAgentId) !== agentIdFilter) ||
-        (!agentIdFilter && typeof record.agentId === "string" && record.agentId.trim()))
+      (!agentIdFilter ||
+        resolveManagedSessionOwnerAgentId(
+          record.sessionKey,
+          record.agentId,
+          globalCompatibilityOwnerAgentId,
+        ) !== agentIdFilter)
     ) {
       retainedCount += 1;
       continue;
@@ -775,12 +777,16 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
-function resolveManagedImageRecordAgentId(
-  record: ManagedImageRecord,
-  defaultAgentId: string | undefined,
+function resolveManagedSessionOwnerAgentId(
+  sessionKey: string,
+  explicitAgentId?: string,
+  compatibilityAgentId?: string,
 ): string | undefined {
-  const explicitAgentId = record.agentId?.trim();
-  return explicitAgentId || defaultAgentId;
+  const ownerAgentId =
+    explicitAgentId?.trim() ||
+    parseAgentSessionKey(sessionKey)?.agentId ||
+    compatibilityAgentId?.trim();
+  return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
 }
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
@@ -964,7 +970,11 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
-    agentId ?? resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+    resolveManagedSessionOwnerAgentId(sessionKey, agentId) ??
+    tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+  if (!ownerAgentId) {
+    return { kind: "unavailable", reason: "read-failed" };
+  }
   const discovery =
     storeAvailabilityCache?.get(ownerAgentId) ??
     resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
@@ -977,7 +987,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
   const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
   const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
-  type SessionEntry = ReturnType<typeof loadSessionEntryReadOnly>["entry"];
+  type SessionEntry = ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
   let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
   for (const target of discovery.targets) {
     const exact = loadExactSessionEntryReadOnlyResult({
@@ -993,7 +1003,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
     let targetEntry = exact.value?.entry;
     if (!targetEntry) {
       try {
-        targetEntry = resolveSqliteSessionEntry(
+        targetEntry = resolveSessionEntry(
           {
             agentId: ownerAgentId,
             clone: false,
@@ -1017,7 +1027,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   let entry: SessionEntry = matched?.entry;
   let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
   if (!entry && usesRuntimeState) {
-    const loaded = loadSessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
+    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
     const exact = loadExactSessionEntryReadOnlyResult({
       agentId: ownerAgentId,
       clone: false,
@@ -1192,7 +1202,7 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
     artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
     sessionKey: record.sessionKey,
     type: kind,
-    title: record.alt,
+    title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
     ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
     ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
     url: `${canonicalUrl}?${params.toString()}`,
@@ -1203,6 +1213,8 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
 /** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
 export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   sessionKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
   artifactId: string;
   stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
@@ -1212,6 +1224,15 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   }
   const record = readManagedImageRecord(parsed.attachmentId, params.stateDir);
   if (!record || record.sessionKey !== params.sessionKey) {
+    return null;
+  }
+  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const recordAgentId = resolveManagedSessionOwnerAgentId(
+    record.sessionKey,
+    record.agentId,
+    params.defaultAgentId,
+  );
+  if (requestedAgentId && recordAgentId !== requestedAgentId) {
     return null;
   }
   const kind = resolveManagedRecordKind(record);
@@ -1483,7 +1504,6 @@ export async function createManagedOutgoingMediaBlocks(params: {
               : attachmentMetadata?.name?.trim() || label,
         },
       };
-      insertManagedImageRecord(record, stateDir);
       let playback: "native" | "transcode" | undefined;
       if (mediaKind === "audio" || mediaKind === "video") {
         const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
@@ -1501,6 +1521,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         }
       }
       const block = buildManagedMediaBlock(record, playback);
+      insertManagedImageRecord(record, stateDir);
       const durationMs = asNonNegativeFiniteNumber(attachmentMetadata?.durationMs);
       const width = asNonNegativeFiniteNumber(attachmentMetadata?.width);
       const height = asNonNegativeFiniteNumber(attachmentMetadata?.height);
@@ -1551,6 +1572,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   res: ServerResponse,
   opts: {
     auth: ResolvedGatewayAuth;
+    basePath?: string;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -1558,7 +1580,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
-  const match = requestUrl.pathname.match(
+  const requestPath =
+    opts.basePath && requestUrl.pathname.startsWith(`${opts.basePath}/`)
+      ? requestUrl.pathname.slice(opts.basePath.length)
+      : requestUrl.pathname;
+  const match = requestPath.match(
     /^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/(full|thumbnail)$/,
   );
   if (!match) {

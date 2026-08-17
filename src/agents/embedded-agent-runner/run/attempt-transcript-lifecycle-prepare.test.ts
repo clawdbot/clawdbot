@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("prepareEmbeddedAttemptTranscriptLifecycle", () => {
   it("carries the admitted writer fence into nested transcript writes", async () => {
@@ -20,7 +24,10 @@ describe("prepareEmbeddedAttemptTranscriptLifecycle", () => {
           expectedWriterRunId: "run-a",
           sessionId: "session-a",
           sessionKey: "agent:main:test",
-          storePath: "/tmp/openclaw.sqlite",
+          storePath: path.join(
+            tempDirs.make("openclaw-attempt-transcript-lifecycle-"),
+            "openclaw.sqlite",
+          ),
         },
       },
       externalAbortController,

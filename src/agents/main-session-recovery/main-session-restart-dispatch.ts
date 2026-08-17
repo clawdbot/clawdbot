@@ -16,20 +16,17 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { findRestartRecoveryUnsafeReplyHook } from "../../plugins/restart-recovery-hook-safety.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../tool-outcome-instructions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
   repairMainSessionRecoveryMutation,
@@ -46,10 +43,12 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
-const RESTART_RECOVERY_RESUME_MESSAGE =
-  "[System] Your previous turn was interrupted by a gateway restart while " +
-  "OpenClaw was waiting on tool/model work. Continue from the existing " +
-  "transcript and finish the interrupted response.";
+const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
+  "Your previous turn was interrupted by a gateway restart while " +
+    "OpenClaw was waiting on tool/model work. Continue from the existing " +
+    "transcript and finish the interrupted response. Treat a tool result marked interrupted or " +
+    `missing as having an unknown outcome. ${TOOL_FAILURE_INSTRUCTION}`,
+);
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
 
@@ -67,58 +66,6 @@ export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntr
     entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
     entry.restartRecoverySourceIngress !== "internal"
   );
-}
-
-export function resolveRestartRecoveryResumeBlockReason(params: {
-  cfg?: OpenClawConfig;
-  entry: SessionEntry;
-  sessionKey: string;
-}): string | undefined {
-  const beforeAgentReplyState = params.entry.restartRecoveryBeforeAgentReplyState;
-  const sourceIngress = params.entry.restartRecoverySourceIngress;
-  const hasLegacyClaimWithoutOwnership =
-    sourceIngress === undefined &&
-    normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
-  // Durable claims written before source ownership existed may have entered
-  // through a channel or Control UI. Treat those claims as external so an
-  // upgrade cannot bypass a newly active policy or side-effect hook.
-  const requiresHookSafetyProof =
-    hasLegacyClaimWithoutOwnership ||
-    beforeAgentReplyState === "admitted" ||
-    beforeAgentReplyState === "continue" ||
-    beforeAgentReplyState === "handled-reply" ||
-    sourceIngress === "channel" ||
-    sourceIngress === "control-ui";
-  if (!requiresHookSafetyProof) {
-    return undefined;
-  }
-  if (!params.cfg) {
-    return "pre-hook recovery runtime config is unavailable";
-  }
-  let pluginRegistry: ReturnType<typeof loadAgentRuntimePluginRegistryHandle>;
-  try {
-    const agentId = resolveAgentIdFromSessionKey(
-      params.sessionKey,
-      resolveDefaultAgentId(params.cfg),
-    );
-    pluginRegistry = loadAgentRuntimePluginRegistryHandle({
-      config: params.cfg,
-      workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
-      allowGatewaySubagentBinding: true,
-    });
-  } catch {
-    return "pre-hook recovery runtime plugins could not be loaded";
-  }
-  if (!pluginRegistry) {
-    return "pre-hook recovery runtime plugins could not be loaded";
-  }
-  // A stored hook result proves that invocation completed, but not that the
-  // same plugin code and config are still loaded after restart. Fail closed
-  // until hook activation owns a stable cross-process implementation digest.
-  const unsafeHook = withPluginRuntimeRegistryScope(pluginRegistry, () =>
-    findRestartRecoveryUnsafeReplyHook({ trigger: "user" }),
-  );
-  return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
 }
 
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
@@ -381,6 +328,7 @@ function scheduleRestartRecoveryReservationRollback(
 }
 
 export async function resumeMainSession(params: {
+  agentId: string;
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -418,7 +366,15 @@ export async function resumeMainSession(params: {
     log.warn(`refusing message-tool-only recovery without channel authority: ${params.sessionKey}`);
     return "failed";
   }
-  const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
+  const claimedRunWasAdmittedBeforeRestart =
+    claimedRunId !== undefined &&
+    params.entry.restartRecoveryRuns?.some(
+      (run) => run.runId === claimedRunId && run.lifecycleGeneration !== lifecycleGeneration,
+    ) === true;
+  const recoveryRunId =
+    claimedRunId && claimedRunId !== sourceRunId && !claimedRunWasAdmittedBeforeRestart
+      ? claimedRunId
+      : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
@@ -510,6 +466,7 @@ export async function resumeMainSession(params: {
         : "skipped";
     }
     const agentParams: AgentRunRequest = {
+      agentId: params.agentId,
       message: buildResumeMessage(sanitizedPendingText),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,

@@ -312,31 +312,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("uses provider-scoped failover matching for business-denial payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openrouter",
-      model: "claude-3.5-sonnet",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "Key limit exceeded",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "openrouter/claude-3.5-sonnet ended with a provider error: Key limit exceeded",
-      reason: "billing",
-      code: "embedded_error_payload",
-      rawError: "Key limit exceeded",
-    });
-  });
-
   it("does not retry unclassified non-GPT error payloads", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
@@ -418,7 +393,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("does not fallback after structured replay state records potential side effects", () => {
+  it("does not fallback after a yielded empty result records potential side effects", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
       model: "gpt-5.5",
@@ -427,7 +402,8 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         meta: {
           durationMs: 42,
           replayInvalid: true,
-          agentHarnessResultClassification: "reasoning-only",
+          yielded: true,
+          stopReason: "end_turn",
         },
       },
     });

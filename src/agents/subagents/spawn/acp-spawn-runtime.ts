@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -15,7 +16,7 @@ import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../../../channels/thread-bindings-policy.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -151,7 +152,9 @@ export async function initializeAcpSpawnRuntime(params: {
   modelExplicit?: boolean;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.targetAgentId,
+  });
   let sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
@@ -271,4 +274,3 @@ export async function bindPreparedAcpThread(params: {
 
   return { binding, sessionEntry };
 }
-import fs from "node:fs/promises";

@@ -4,12 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
-
-// The live-updater fixture copies this closure without workspace packages.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 type SymlinkType = Parameters<typeof fs.symlinkSync>[2];
 type PluginSdkFileParams = { pluginSdkDir: string; repoRoot: string };

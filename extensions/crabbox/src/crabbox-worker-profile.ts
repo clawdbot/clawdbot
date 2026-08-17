@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { WorkerProviderError, type WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export { nonEmptyString };
 
 const PROFILE_KEYS = new Set([
   "binary",
@@ -31,25 +34,25 @@ type CrabboxProfile = {
   binary?: string;
   class: string;
   desktop?: boolean;
+  heartbeatIntervalMs: number;
   idleTimeout: string;
   provider: string;
   ttl: string;
   setup?: string;
 };
 
-type IsExecutable = (candidate: string) => boolean;
+const CRABBOX_MACHINE_OPTIONS = [
+  { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
+  { id: "fast", label: "Fast", description: "General maintainer testing" },
+  { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+  { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+] as const;
 
-export function nonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
+type IsExecutable = (candidate: string) => boolean;
 
 function requirePositiveDuration(value: unknown, key: string): string {
   const duration = nonEmptyString(value);
-  if (!duration || !isPositiveGoDuration(duration)) {
+  if (!duration || parsePositiveGoDurationNanoseconds(duration) === undefined) {
     throw new WorkerProviderError(
       `Crabbox profile ${key} must be a positive Go duration such as 60m`,
     );
@@ -57,21 +60,21 @@ function requirePositiveDuration(value: unknown, key: string): string {
   return duration;
 }
 
-function isPositiveGoDuration(duration: string): boolean {
+function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
   if (!GO_DURATION_PATTERN.test(duration)) {
-    return false;
+    return undefined;
   }
   let total = 0n;
   for (const match of duration.matchAll(GO_DURATION_TOKEN_PATTERN)) {
     const numberText = match[1];
     const unit = match[2] ? DURATION_UNIT_NANOSECONDS[match[2]] : undefined;
     if (!numberText || unit === undefined) {
-      return false;
+      return undefined;
     }
     const [wholeText = "", fractionText = ""] = numberText.split(".", 2);
     const whole = wholeText.replace(/^0+/u, "") || "0";
     if (whole.length > 19) {
-      return false;
+      return undefined;
     }
     total += BigInt(whole) * unit;
     const fraction = fractionText.slice(0, 18);
@@ -79,10 +82,22 @@ function isPositiveGoDuration(duration: string): boolean {
       total += (BigInt(fraction) * unit) / 10n ** BigInt(fraction.length);
     }
     if (total > MAX_GO_DURATION_NANOSECONDS) {
-      return false;
+      return undefined;
     }
   }
-  return total > 0n;
+  return total > 0n ? total : undefined;
+}
+
+function heartbeatIntervalMs(idleTimeout: string): number {
+  const idleNanoseconds = parsePositiveGoDurationNanoseconds(idleTimeout);
+  if (idleNanoseconds === undefined) {
+    throw new Error("Crabbox heartbeat requires a positive idle timeout");
+  }
+  const idleTimeoutMs = Number(idleNanoseconds) / 1_000_000;
+  const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
+  // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
+  // coordinator idle expiry without changing the profile contract.
+  return Math.min(referenceIntervalMs, Math.max(1, Math.floor(idleTimeoutMs / 2)));
 }
 
 export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
@@ -119,7 +134,42 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
   }
-  return { binary, class: machineClass, desktop, idleTimeout, provider, setup, ttl };
+  return {
+    binary,
+    class: machineClass,
+    desktop,
+    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeout),
+    idleTimeout,
+    provider,
+    setup,
+    ttl,
+  };
+}
+
+export function listCrabboxMachineOptions(profile: WorkerProfile) {
+  const configuredClass = parseCrabboxProfile(profile).class;
+  const options = CRABBOX_MACHINE_OPTIONS.map((option) =>
+    option.id === configuredClass
+      ? {
+          id: option.id,
+          label: option.label,
+          description: option.description,
+          default: true,
+        }
+      : option,
+  );
+  if (options.some((option) => option.id === configuredClass)) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      id: configuredClass,
+      label: configuredClass,
+      description: "Configured instance type",
+      default: true,
+    },
+  ];
 }
 
 export function buildCrabboxWarmupArgs(

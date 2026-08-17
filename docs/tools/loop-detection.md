@@ -152,7 +152,7 @@ spend and lockups while preserving normal tool access.
   <Card title="Sub-agents" href="/tools/subagents" icon="users">
     Spawning isolated agents to bound runaway behavior.
   </Card>
-  <Card title="Configuration reference" href="/gateway/config-tools#toolsloopdetection" icon="gear">
+  <Card title="Configuration reference" href="/gateway/config-tools#tools-loopdetection" icon="gear">
     Full `tools.loopDetection` schema and merging semantics.
   </Card>
 </CardGroup>

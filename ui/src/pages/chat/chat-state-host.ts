@@ -8,7 +8,11 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatComposerMemoryFallback,
+  ChatGuardianNotice,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -53,6 +57,7 @@ export type ChatPageHost = ChatHost &
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     chatToolMessages: Record<string, unknown>[];
+    guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;
@@ -63,6 +68,7 @@ export type ChatPageHost = ChatHost &
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
+    chatModelCatalogError: string | null;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
@@ -76,7 +82,7 @@ export type ChatPageHost = ChatHost &
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
-    chatStreamSegments: Array<{ text: string; ts: number }>;
+    chatStreamSegments: ChatStreamSegment[];
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;
@@ -119,7 +125,6 @@ export type ChatPageHost = ChatHost &
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;
     renderLifecycle: RenderLifecycle;
-    onModelChanged: () => Promise<void> | void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
@@ -149,4 +154,5 @@ export type ChatPageHost = ChatHost &
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
     refreshSessionPullRequests?: (options?: { refresh?: boolean }) => Promise<void>;
+    retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

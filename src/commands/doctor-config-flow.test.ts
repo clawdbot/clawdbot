@@ -4,6 +4,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -21,6 +23,13 @@ const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
+const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
+  vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
+    config: cfg,
+    changes: [] as string[],
+    warnings: [] as string[],
+  })),
+);
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
 );
@@ -32,12 +41,9 @@ const noteImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
     }
   }),
 );
-const legacyConfigMigrationForTest = vi.hoisted(() => {
-  function readNullableRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  }
+const legacyConfigMigrationForTest = await vi.hoisted(async () => {
+  const { asNullableRecord: readNullableRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
 
   function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
     const current = readNullableRecord(parent[key]);
@@ -266,6 +272,10 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+vi.mock("./doctor-tailscale.js", () => ({
+  prepareTailscaleConfigMigration: prepareTailscaleConfigMigrationMock,
+}));
+
 vi.mock("./doctor/repair-sequencing.js", async () => {
   const actual = await vi.importActual<typeof import("./doctor/repair-sequencing.js")>(
     "./doctor/repair-sequencing.js",
@@ -341,19 +351,15 @@ vi.mock("../config/validation.js", () => ({
   validateConfigObjectWithPlugins: vi.fn((config: unknown) => ({ ok: true, config })),
 }));
 
-vi.mock("../config/legacy.js", () => {
+vi.mock("../config/legacy.js", async () => {
+  const { asNullableRecord: readNullableRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
   type LegacyRule = {
     path: string[];
     message: string;
     match?: (value: unknown, root: Record<string, unknown>) => boolean;
     requireSourceLiteral?: boolean;
   };
-
-  function readNullableRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  }
 
   function getPathValue(root: Record<string, unknown>, pathParts: readonly string[]): unknown {
     let cursor: unknown = root;
@@ -867,12 +873,9 @@ vi.mock("./doctor/channel-capabilities.js", () => {
   };
 });
 
-vi.mock("../plugins/doctor-contract-registry.js", () => {
-  function readNullableRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  }
+vi.mock("../plugins/doctor-contract-registry.js", async () => {
+  const { asNullableRecord: readNullableRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
 
   function hasLegacyTalkFields(value: unknown): boolean {
     const talk = readNullableRecord(value);
@@ -1068,12 +1071,9 @@ vi.mock("../plugins/setup-registry.js", () => ({
   })),
 }));
 
-vi.mock("./doctor/shared/channel-doctor.js", () => {
-  function readNullableRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  }
+vi.mock("./doctor/shared/channel-doctor.js", async () => {
+  const { asNullableRecord: readNullableRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
 
   function hasOwnStringArray(value: unknown): boolean {
     return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry);
@@ -1258,12 +1258,9 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
   };
 });
 
-vi.mock("./doctor/shared/preview-warnings.js", () => {
-  function readNullableRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  }
+vi.mock("./doctor/shared/preview-warnings.js", async () => {
+  const { asNullableRecord: readNullableRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
 
   function hasStringEntries(value: unknown): boolean {
     return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry);
@@ -1514,7 +1511,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
 });
 
 vi.mock("./doctor-config-analysis.js", () => {
-  function formatConfigPath(parts: Array<string | number>): string {
+  function formatConfigKeyPath(parts: Array<string | number>): string {
     if (parts.length === 0) {
       return "<root>";
     }
@@ -1549,10 +1546,11 @@ vi.mock("./doctor-config-analysis.js", () => {
 
   return {
     collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
-    formatConfigPath,
+    formatConfigKeyPath,
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteMcpOriginWarning: vi.fn(),
     noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
@@ -1661,6 +1659,12 @@ describe("doctor config flow", () => {
     runDoctorRepairSequenceMock.mockReset();
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
@@ -1671,7 +1675,7 @@ describe("doctor config flow", () => {
     const result = await runDoctorConfigWithInput({
       config: {
         gateway: { auth: { mode: "token", token: 123 } },
-        agents: { entries: { openclaw: { default: true } } },
+        agents: { entries: { openclaw: {} } },
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1681,11 +1685,50 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("previews and applies the legacy Tailscale Serve migration through Doctor", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "secret" },
+        tailscale: { mode: "off" },
+      },
+    };
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
+      config: {
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          bind: "loopback" as const,
+          tailscale: { ...cfg.gateway?.tailscale, mode: "serve" as const },
+        },
+      },
+      changes: ["Migrated legacy Tailscale Serve to managed ingress."],
+      warnings: [],
+    }));
+
+    const preview = await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const repair = await runDoctorConfigWithInput({
+      config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(preview.shouldWriteConfig).toBe(false);
+    expect(preview.cfg.gateway?.bind).toBe("lan");
+    expect(repair.shouldWriteConfig).toBe(true);
+    expect(repair.cfg.gateway?.bind).toBe("loopback");
+    expect(repair.cfg.gateway?.tailscale?.mode).toBe("serve");
+    expect(prepareTailscaleConfigMigrationMock).toHaveBeenCalledTimes(2);
+  });
+
   it("plans persistence of the injected main roster during doctor repair", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
         agents: {
-          entries: { main: { default: true, workspace: "/tmp/migrated-main" } },
+          entries: { main: { workspace: "/tmp/migrated-main" } },
         },
         gateway: { mode: "local" },
       },
@@ -1697,15 +1740,80 @@ describe("doctor config flow", () => {
     expect(result.shouldWriteConfig).toBe(true);
     expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
     expect(result.cfg.agents?.entries).toEqual({
-      main: { default: true, workspace: "/tmp/migrated-main" },
+      main: { workspace: "/tmp/migrated-main" },
     });
-    expect(terminalNoteMock).toHaveBeenCalledWith(
-      "Prepared agents.entries with exactly one explicit default agent for persistence.",
-      "Doctor changes",
+    // Repair panels defer to the atomic write runner; the flow itself must not
+    // claim the roster change happened before anything reached disk.
+    expect(result.pendingChangePanels).toContain(
+      "Prepared the canonical agent roster without retired default markers for persistence.",
     );
-    expect(terminalNoteMock).not.toHaveBeenCalledWith(
-      expect.stringContaining("Persisted agents.entries"),
-      expect.anything(),
+    expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
+    expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
+      false,
+    );
+  });
+
+  it("previews and persists pre-parse context-budget cleanup with every path reported", async () => {
+    const canonical = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                contextTokens: 64_000,
+                contextWindow: 128_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: { defaults: {}, entries: { ops: {} } },
+    };
+    const legacy = {
+      models: {
+        providers: {
+          openai: {
+            contextTokens: 64_000,
+            contextWindow: 128_000,
+            models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+          },
+        },
+      },
+      agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
+    };
+
+    await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
+    expect(previewText).toContain(
+      "models.providers.openai.contextTokens → models.providers.openai.models[0].contextTokens",
+    );
+    expect(previewText).toContain("Removed agents.defaults.contextTokens");
+    expect(previewText).toContain("Removed agents.entries.ops.contextTokens");
+    expect(previewText).toContain("models.providers.<provider>.models[].contextTokens");
+
+    terminalNoteMock.mockClear();
+    const repaired = await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repaired.shouldWriteConfig).toBe(true);
+    expect(repaired.cfg).toMatchObject(canonical);
+    expect(repaired.pendingChangePanels?.join("\n")).toContain(
+      "Removed models.providers.openai.contextWindow after baking it into explicit model entries.",
+    );
+    expect(terminalNoteMock.mock.calls.map(([message]) => message).join("\n")).toContain(
+      "agents.entries.ops.contextTokens cannot be represented per model",
     );
   });
 
@@ -1721,24 +1829,37 @@ describe("doctor config flow", () => {
   });
 
   it("removes a legacy list when Doctor persists keyed roster entries", async () => {
-    const result = await runDoctorConfigWithInput({
-      config: { agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] } },
-      parsedConfig: {
-        agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] },
+    const rawConfig = {
+      agents: {
+        list: [
+          { id: "ops", default: true, workspace: "/srv/ops" },
+          { id: "research", model: "openai/research" },
+        ],
       },
+    };
+    const result = await runDoctorConfigWithInput({
+      config: migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig,
+      parsedConfig: rawConfig,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(true);
+    expect(result.explicitSetPaths).toEqual([
+      ["agents", "entries"],
+      ["agents", "ownership"],
+    ]);
     expect(result.cfg.agents?.entries).toEqual({
-      ops: { default: true, workspace: "/srv/ops" },
+      ops: { workspace: "/srv/ops" },
+      research: { model: "openai/research" },
     });
+    expect(result.cfg.agents?.ownership).toBe("explicit");
+    expect(result.cfg.agents?.entries?.ops).not.toHaveProperty("default");
     expect(result.cfg.agents).not.toHaveProperty("list");
   });
 
   it("materializes ambient roles for a multi-agent configured default", async () => {
-    const config = {
+    const rawConfig = {
       agents: {
         entries: {
           ops: { default: true },
@@ -1748,9 +1869,10 @@ describe("doctor config flow", () => {
       channels: { telegram: { enabled: true } },
       talk: { provider: "test" },
     };
+    const config = migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig;
     const result = await runDoctorConfigWithInput({
       config,
-      parsedConfig: config,
+      parsedConfig: rawConfig,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1762,25 +1884,26 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents?.defaults).toMatchObject({
       heartbeat: { agentId: "ops" },
       systemAgent: { agentId: "ops" },
+      authInheritance: { agentId: "ops" },
     });
     expect(result.cfg.talk).toMatchObject({ provider: "test", agentId: "ops" });
+    expect(result.cfg.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(result.cfg.agents?.ownership).toBe("explicit");
   });
 
   it("preserves shared all-agent heartbeat enrollment during materialization", async () => {
-    const config = {
+    const rawConfig = {
       agents: {
         defaults: { heartbeat: { every: "1h" } },
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
+        entries: { ops: { default: true }, research: {} },
       },
       channels: { telegram: { enabled: true } },
       talk: { provider: "test" },
     };
+    const config = migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig;
     const result = await runDoctorConfigWithInput({
       config,
-      parsedConfig: config,
+      parsedConfig: rawConfig,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1794,11 +1917,12 @@ describe("doctor config flow", () => {
   it("does not rematerialize explicit roles or touch single-agent configs", async () => {
     const materialized = {
       agents: {
+        ownership: "explicit" as const,
         defaults: {
           heartbeat: { agentId: "ops" },
           systemAgent: { agentId: "ops" },
         },
-        entries: { ops: { default: true }, research: {} },
+        entries: { ops: { workspace: "/srv/ops" }, research: {} },
       },
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
       channels: { telegram: { enabled: true } },
@@ -1812,7 +1936,7 @@ describe("doctor config flow", () => {
     });
     const singleAgent = await runDoctorConfigWithInput({
       config: {
-        agents: { entries: { ops: { default: true } } },
+        agents: { entries: { ops: {} } },
         channels: { telegram: { enabled: true } },
         talk: { provider: "test" },
       },
@@ -1833,16 +1957,16 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.shouldWriteConfig).toBe(false);
     expect(result.cfg.agents?.entries).toEqual({
-      main: { default: true },
+      main: {},
       broken: null,
     });
   });
 
   it("detects a legacy roster after environment resolution", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { ops: { default: true } } } },
+      config: { agents: { entries: { ops: {} } } },
       parsedConfig: { agents: { list: [{ id: "${AGENT_ID}", default: true }] } },
       sourceConfigBeforeMigrations: {
         agents: { list: [{ id: "ops", default: true }] },
@@ -1852,12 +1976,12 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.cfg.agents).toEqual({ entries: { ops: { default: true } } });
+    expect(result.cfg.agents).toEqual({ entries: { ops: {} } });
   });
 
   it("preserves a roster supplied by an included config during repair", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { ops: { default: true } } } },
+      config: { agents: { entries: { ops: {} } } },
       parsedConfig: { $include: "./agents.json" },
       agentRosterIncludeOwned: true,
       repair: true,
@@ -1866,12 +1990,12 @@ describe("doctor config flow", () => {
 
     expect(result.shouldWriteConfig).toBe(false);
     expect(result.explicitSetPaths).toBeUndefined();
-    expect(result.cfg.agents?.entries).toEqual({ ops: { default: true } });
+    expect(result.cfg.agents?.entries).toEqual({ ops: {} });
   });
 
   it("preserves ownership of an explicitly empty included roster", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { main: { default: true } } } },
+      config: { agents: { entries: { main: {} } } },
       parsedConfig: { $include: "./agents.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
       agentRosterIncludeOwned: true,
@@ -1880,13 +2004,13 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
-    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+    expect(result.cfg.agents?.entries).toEqual({ main: {} });
   });
 
   it("persists an injected roster when a root include contributes only channels", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         channels: { telegram: { enabled: true } },
       },
       parsedConfig: { $include: "./channels.json" },
@@ -1896,7 +2020,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+    expect(result.cfg.agents?.entries).toEqual({ main: {} });
   });
 
   it("repairs a locally authored roster when unrelated includes exist", async () => {
@@ -1904,7 +2028,7 @@ describe("doctor config flow", () => {
       config: {
         agents: {
           defaults: { workspace: "/tmp/ops" },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       parsedConfig: { $include: "./channels.json", agents: { entries: {} } },
@@ -1919,32 +2043,32 @@ describe("doctor config flow", () => {
     expect(result.shouldWriteConfig).toBe(true);
     expect(result.cfg.agents).toEqual({
       defaults: { workspace: "/tmp/ops" },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     });
   });
 
   it("repairs a missing roster when only a nested channel include exists", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { main: { default: true } } } },
+      config: { agents: { entries: { main: {} } } },
       parsedConfig: { channels: { $include: "./channels.json" } },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+    expect(result.cfg.agents?.entries).toEqual({ main: {} });
   });
 
   it("does not persist an implicit roster when no config file exists", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { main: { default: true } } } },
+      config: { agents: { entries: { main: {} } } },
       exists: false,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(false);
-    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+    expect(result.cfg.agents?.entries).toEqual({ main: {} });
   });
 
   it("enables Doctor-only state migrations only for explicit repair", async () => {
@@ -2148,6 +2272,40 @@ describe("doctor config flow", () => {
       params: { refresh: true },
       timeoutMs: 3000,
     });
+  });
+
+  it("emits warning-only stale channel cleanup without changing config", async () => {
+    const input = {
+      agents: { entries: { ops: {} } },
+      channels: { matrix: { enabled: true } },
+    };
+    const channelDoctor = await import("./doctor/shared/channel-doctor.js");
+    vi.mocked(channelDoctor.collectChannelDoctorStaleConfigMutations).mockResolvedValueOnce([
+      {
+        config: { ...input, channels: { matrix: { enabled: false } } },
+        changes: [],
+        warnings: ["- matrix stale cleanup warning"],
+      },
+    ]);
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      warningNotes: [],
+      authProfilesRepaired: false,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: input,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      "- matrix stale cleanup warning",
+      "Doctor warnings",
+    );
+    expect(result.cfg).toEqual(input);
+    expect(result.shouldWriteConfig).toBe(false);
   });
 
   it("previews and repairs hooks token reuse of gateway auth", async () => {
@@ -2849,7 +3007,7 @@ describe("doctor config flow", () => {
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           channels: {
@@ -2883,9 +3041,14 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
 
-      const outputs = noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
-        .map((call) => call[0]);
+      // Repair-mode change panels defer to the write runner; sanitized change
+      // text travels through pendingChangePanels instead of immediate notes.
+      const outputs = [
+        ...noteSpy.mock.calls
+          .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+          .map((call) => call[0]),
+        ...(result.pendingChangePanels ?? []),
+      ];
       const joinedOutputs = outputs.join("\n");
       expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
       expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
@@ -3534,11 +3697,11 @@ describe("doctor config flow", () => {
   });
 
   it.each([
-    [false, "Doctor changes preview", false],
-    [true, "Doctor changes", true],
+    [false, false],
+    [true, true],
   ] as const)(
     "previews and repairs retired internal hook registrations (repair=%s)",
-    async (repair, panelTitle, shouldWriteConfig) => {
+    async (repair, shouldWriteConfig) => {
       const noteSpy = resetTerminalNoteMock();
       try {
         const result = await runDoctorConfigWithInput({
@@ -3559,13 +3722,21 @@ describe("doctor config flow", () => {
         ).toBeUndefined();
         expect(result.cfg.hooks?.internal?.enabled).toBeUndefined();
         expect(result.shouldWriteConfig).toBe(shouldWriteConfig);
-        expect(
-          noteSpy.mock.calls.some(
-            ([message, title]) =>
-              title === panelTitle &&
-              message.includes("Removed retired hooks.internal.handlers registrations"),
-          ),
-        ).toBe(true);
+        const removalLine = "Removed retired hooks.internal.handlers registrations";
+        if (repair) {
+          // Repair panels defer until the atomic write commits.
+          expect(
+            (result.pendingChangePanels ?? []).some((panel) => panel.includes(removalLine)),
+          ).toBe(true);
+          expect(noteSpy.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
+        } else {
+          expect(
+            noteSpy.mock.calls.some(
+              ([message, title]) =>
+                title === "Doctor changes preview" && message.includes(removalLine),
+            ),
+          ).toBe(true);
+        }
       } finally {
         noteSpy.mockClear();
       }
@@ -3597,10 +3768,10 @@ describe("doctor config flow", () => {
     }
   });
 
-  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+  it("defers the applied panel to the config write when --fix is passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           heartbeat: {
@@ -3611,8 +3782,11 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
       const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
-      expect(changeTitles).toContain("Doctor changes");
+      // The flow itself prints nothing as applied; the write runner reports
+      // "Doctor changes" only after the atomic write commits.
+      expect(changeTitles).not.toContain("Doctor changes");
       expect(changeTitles).not.toContain("Doctor changes preview");
+      expect(result.pendingChangePanels?.length).toBeGreaterThan(0);
     } finally {
       noteSpy.mockClear();
     }
@@ -3695,14 +3869,16 @@ describe("doctor config flow", () => {
           });
           noteSpy.mockClear();
 
-          await loadAndMaybeMigrateDoctorConfig({
+          const secondRun = await loadAndMaybeMigrateDoctorConfig({
             options: { nonInteractive: true, repair: true },
             confirm: async () => false,
           });
-          const secondRunTalkNormalizationLines = noteSpy.mock.calls
-            .filter((call) => call[1] === "Doctor changes")
-            .map((call) => call[0])
-            .filter((line) => line.includes("Normalized talk.provider/providers shape"));
+          const secondRunTalkNormalizationLines = [
+            ...noteSpy.mock.calls
+              .filter((call) => call[1] === "Doctor changes")
+              .map((call) => call[0]),
+            ...(secondRun.pendingChangePanels ?? []),
+          ].filter((line) => line.includes("Normalized talk.provider/providers shape"));
           expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();

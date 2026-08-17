@@ -42,7 +42,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   private renderContent() {
     const avatarUrl = this.avatarUrl?.startsWith("/")
       ? this.avatarAuthReady
-        ? this.avatarLoader.resolve(this.avatarUrl, this.authToken)
+        ? this.avatarLoader.resolve(this.avatarUrl, this.authToken ? [this.authToken] : [])
         : null
       : this.avatarUrl;
     const menuLabel = this.switcherAvailable

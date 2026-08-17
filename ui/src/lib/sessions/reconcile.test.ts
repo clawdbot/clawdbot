@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
+import {
+  preserveRosterPresentationMetadata,
+  reconcileSessionChanged,
+  reconcileSessionHistory,
+} from "./reconcile.ts";
 
 function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -12,6 +16,48 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
     sessions,
   };
 }
+
+describe("preserveRosterPresentationMetadata", () => {
+  it("does not preserve presentation metadata without a known matching session identity", () => {
+    const key = "agent:main:dashboard:replacement";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "replacement-session", updatedAt: 20 },
+        {
+          key,
+          kind: "direct",
+          updatedAt: 10,
+          derivedTitle: "Previous session title",
+          lastMessagePreview: "Previous session preview",
+        },
+      ),
+    ).toEqual({
+      key,
+      kind: "direct",
+      sessionId: "replacement-session",
+      updatedAt: 20,
+    });
+  });
+
+  it("does not infer archive state from row timestamps", () => {
+    const key = "agent:main:dashboard:archived";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "s1", updatedAt: 10, archived: false },
+        {
+          key,
+          kind: "direct",
+          sessionId: "s1",
+          updatedAt: 20,
+          archived: true,
+          archivedAt: 20,
+        },
+      ),
+    ).toEqual({ key, kind: "direct", sessionId: "s1", updatedAt: 10, archived: false });
+  });
+});
 
 test("sessions.changed removes a label when the event carries null", () => {
   const result: SessionsListResult = {
@@ -41,6 +87,80 @@ test("sessions.changed removes a label when the event carries null", () => {
   expect(reconciled.applied).toBe(true);
   expect(reconciled.result?.sessions[0]?.label).toBeUndefined();
   expect(reconciled.result?.sessions[0]?.displayName).toBeUndefined();
+});
+
+test("reconciling the same sessions.changed twice keeps result identity on the second pass", () => {
+  const result: SessionsListResult = {
+    ts: 1,
+    path: "",
+    count: 1,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+  };
+  const payload = {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    updatedAt: 2,
+    label: "Renamed",
+  };
+
+  const first = reconcileSessionChanged(result, payload);
+  expect(first.applied).toBe(true);
+  expect(first.result).not.toBe(result);
+  expect(first.result?.sessions[0]?.label).toBe("Renamed");
+
+  // The capability handler and the chat page both drive the same event; the
+  // second reconcile must return the identical result object so downstream
+  // result === state.result publish gates skip the duplicate re-render.
+  const second = reconcileSessionChanged(first.result ?? null, payload);
+  expect(second.result).toBe(first.result);
+});
+
+test("sessions.changed deletes every null-tombstoned field, not a hand-kept list", () => {
+  // The gateway tombstones more fields than the old per-field cascade knew
+  // about; these five leaked literal null into rows typed optional-not-null.
+  const result: SessionsListResult = {
+    ts: 1,
+    path: "",
+    count: 1,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        toolOverrides: { profile: "coding" },
+        controlOwnerSessionKey: "agent:main:owner",
+        restartRecoveryStatus: "pending",
+        goal: "ship it",
+      } as never,
+    ],
+  };
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    updatedAt: 2,
+    toolOverrides: null,
+    observerDigest: null,
+    controlOwnerSessionKey: null,
+    restartRecoveryStatus: null,
+    goal: null,
+  } as never);
+
+  expect(reconciled.applied).toBe(true);
+  const row = reconciled.result?.sessions[0] as Record<string, unknown> | undefined;
+  for (const field of [
+    "toolOverrides",
+    "observerDigest",
+    "controlOwnerSessionKey",
+    "restartRecoveryStatus",
+    "goal",
+  ]) {
+    expect(row?.[field], field).toBeUndefined();
+  }
+  // updatedAt stays legitimately nullable and must not be deleted by the loop.
+  expect(row?.updatedAt).toBe(2);
 });
 
 test("sessions.changed invalidates the complete creator facet until canonical refresh", () => {
@@ -80,6 +200,30 @@ test("sessions.changed preserves the creator facet when ownership is unchanged",
   });
 
   expect(reconciled.result?.creators).toEqual([{ id: createdActor.id, label: createdActor.label }]);
+});
+
+test("sessions.changed applies reassignment and invalidates the complete owner facet", () => {
+  const key = "agent:main:main";
+  const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
+  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdActor }]);
+  result.creators = [{ id: createdActor.id, label: createdActor.label }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "owner",
+    updatedAt: 1,
+    owner: {
+      actor: { type: "agent", id: "research", label: "Research" },
+      assignedBy: createdActor,
+      assignedAt: 2,
+    },
+  });
+
+  expect(reconciled.result?.sessions[0]?.owner).toMatchObject({
+    actor: { id: "research" },
+    assignedAt: 2,
+  });
+  expect(reconciled.result?.creators).toBeUndefined();
 });
 
 describe("reconcileSessionChanged", () => {

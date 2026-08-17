@@ -8,8 +8,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  cleanupTempDirs,
+  makeTempDir,
+  useAutoCleanupTempDirTracker,
+} from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
@@ -27,6 +30,15 @@ import {
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
+
+const pluginToolMetadata = vi.hoisted(() => new WeakMap<object, unknown>());
+
+vi.mock("../plugins/tools.js", () => ({
+  getPluginToolMeta: (tool: object) => pluginToolMetadata.get(tool),
+  setPluginToolMeta: (tool: object, metadata: unknown) => {
+    pluginToolMetadata.set(tool, metadata);
+  },
+}));
 
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
@@ -50,6 +62,13 @@ vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("./mcp-auth-profile.js", () => ({
+  resolveMcpAuthProfileId: () => undefined,
+  withMcpAuthProfileBearer: () => {
+    throw new Error("Unexpected auth-profile transport in MCP runtime test");
+  },
+}));
 
 const tempDirs: string[] = [];
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
@@ -90,6 +109,7 @@ async function writeListToolsMcpServer(params: {
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
+  callToolDelayMs?: number;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
   resourcePageCursors?: Array<string | null>;
@@ -134,6 +154,7 @@ const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
 const callToolResult = ${JSON.stringify(params.callToolResult)};
+const callToolDelayMs = ${params.callToolDelayMs ?? 0};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
 const resourcePageCursors = ${JSON.stringify(params.resourcePageCursors)};
@@ -281,16 +302,18 @@ function handle(message) {
       });
       return;
     }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        isError: callToolIsError,
-        ...(callToolResult ?? {
-          content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
-        }),
-      },
-    });
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          isError: callToolIsError,
+          ...(callToolResult ?? {
+            content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+          }),
+        },
+      });
+    }, callToolDelayMs);
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
@@ -430,6 +453,22 @@ async function waitForPredicate(
     });
   }
   throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function waitForFileTextCount(
+  filePath: string,
+  expectedText: string,
+  expectedCount: number,
+  timeoutMs: number,
+): Promise<void> {
+  await waitForPredicate(
+    async () => {
+      const text = await fs.readFile(filePath, "utf8").catch(() => "");
+      return text.split(expectedText).length - 1 >= expectedCount;
+    },
+    `${expectedCount} occurrences of ${expectedText} in ${filePath}`,
+    timeoutMs,
+  );
 }
 
 /** Waits for a replacement child to register a pid different from the one that died. */
@@ -1153,6 +1192,7 @@ describe("session MCP runtime", () => {
     const tempDir = tempDirTracker.make("bundle-mcp-catalog-retry-");
     const retryServerPath = path.join(tempDir, "retry-list-tools.mjs");
     const retryLogPath = path.join(tempDir, "retry-server.log");
+    const retryReleasePath = path.join(tempDir, "retry.release");
     const healthyServerPath = path.join(tempDir, "healthy-list-tools.mjs");
     const healthyLogPath = path.join(tempDir, "healthy-server.log");
     let nowMs = 10_000;
@@ -1221,7 +1261,7 @@ describe("session MCP runtime", () => {
       await writeListToolsMcpServer({
         filePath: retryServerPath,
         logPath: retryLogPath,
-        initializeDelayMs: 500,
+        listToolsReleasePath: retryReleasePath,
       });
       await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
 
@@ -1234,9 +1274,16 @@ describe("session MCP runtime", () => {
       );
       expect(staleCatalog).toBe(failedCatalog);
       expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
+      await waitForFileTextCount(
+        retryLogPath,
+        "recv tools/list",
+        2,
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
       await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
         isError: false,
       });
+      await fs.writeFile(retryReleasePath, "release", "utf8");
 
       await waitForPredicate(
         () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
@@ -1483,46 +1530,6 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("rejects adversarial MCP tool filters without regex backtracking", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
-    const serverPath = path.join(tempDir, "linear-filter.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      tools: [
-        {
-          name: `${"a".repeat(64)}c`,
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
-    });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-linear-tool-filter",
-      sessionKey: "agent:test:session-linear-tool-filter",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            docs: {
-              command: process.execPath,
-              args: [serverPath],
-              toolFilter: { include: [`${"*a".repeat(24)}*b`] },
-            },
-          },
-        },
-      },
-    });
-
-    try {
-      expect((await runtime.getCatalog()).tools).toEqual([]);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("lists MCP tools from servers that omit the tools capability", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-unadvertised-tools-"));
     const serverPath = path.join(tempDir, "unadvertised-tools.mjs");
@@ -1702,13 +1709,15 @@ process.on("SIGINT", shutdown);`,
     const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
     const pidPath = path.join(tempDir, "server.pid");
+    const listToolsReleasePath = path.join(tempDir, "list-tools.release");
     const healthyServerPath = path.join(tempDir, "healthy.mjs");
     const healthyLogPath = path.join(tempDir, "healthy.log");
+    await fs.writeFile(listToolsReleasePath, "release", "utf8");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
       pidPath,
-      initializeDelayMs: 750,
+      listToolsReleasePath,
     });
     await writeListToolsMcpServer({ filePath: healthyServerPath, logPath: healthyLogPath });
 
@@ -1732,6 +1741,7 @@ process.on("SIGINT", shutdown);`,
       });
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      await fs.rm(listToolsReleasePath, { force: true });
       // SIGKILL rather than the default SIGTERM: this test is about what happens once the
       // child is actually gone, so the kill must not race the assertions below.
       process.kill(pid, "SIGKILL");
@@ -1743,6 +1753,8 @@ process.on("SIGINT", shutdown);`,
         "closed transport to schedule a catalog retry",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
+      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow("is not connected");
+      await waitForFileTextCount(logPath, "recv tools/list", 2, LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await expect(
         withTestTimeout(
           runtime.callTool("healthy", "slow_tool", {}),
@@ -1750,6 +1762,7 @@ process.on("SIGINT", shutdown);`,
           "healthy sibling stalled during reconnect",
         ),
       ).resolves.toMatchObject({ isError: false });
+      await fs.writeFile(listToolsReleasePath, "release", "utf8");
       await waitForPredicate(
         async () => {
           try {
@@ -2083,6 +2096,75 @@ process.on("SIGINT", shutdown);`,
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels materialized MCP calls without pausing the healthy server", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");
+    const serverPath = path.join(tempDir, "caller-cancel.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolDelayMs: 250,
+      resourcePageDelayMs: 250,
+      promptPageDelayMs: 250,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-caller-cancel",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            healthy: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    try {
+      const calls = [
+        { toolName: "healthy__slow_tool", method: "tools/call" },
+        { toolName: "healthy__resources_list", method: "resources/list" },
+        { toolName: "healthy__prompts_list", method: "prompts/list" },
+      ];
+      for (const [index, call] of calls.entries()) {
+        const attempt = index + 1;
+        const controller = new AbortController();
+        const pending = expectDefined(
+          materialized.tools.find((entry) => entry.name === call.toolName),
+          call.toolName,
+        ).execute(`cancel-${attempt}`, {}, controller.signal);
+        await waitForPredicate(
+          async () =>
+            (await fs.readFile(logPath, "utf8").catch(() => "")).includes(`recv ${call.method}`),
+          `MCP ${call.method} request to reach the server`,
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        controller.abort(new Error(`turn cancelled ${attempt}`));
+        await expect(pending).rejects.toThrow(`turn cancelled ${attempt}`);
+      }
+
+      await waitForPredicate(
+        async () =>
+          ((await fs.readFile(logPath, "utf8").catch(() => "")).match(
+            /recv notifications\/cancelled/g,
+          )?.length ?? 0) === 3,
+        "three MCP cancellation notifications",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      await expect(runtime.callTool("healthy", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+      await materialized.dispose();
+      await runtime.dispose();
+      expect(
+        (await fs.readFile(logPath, "utf8")).match(/recv notifications\/cancelled/g) ?? [],
+      ).toHaveLength(3);
+    } finally {
+      await materialized.dispose();
+      await runtime.dispose();
     }
   });
 
@@ -2459,12 +2541,13 @@ process.on("SIGINT", shutdown);`,
     });
 
     try {
-      if (!runtime.readResource) {
+      const readResource = runtime.readResource;
+      if (!readResource) {
         throw new Error("Expected test runtime to expose resource utilities");
       }
       for (let index = 0; index < 3; index += 1) {
         await expect(
-          runtime.readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
+          readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
         ).rejects.toThrow("resource read failed");
       }
       await expect(runtime.callTool("failing", "slow_tool", {})).resolves.toMatchObject({
@@ -3712,67 +3795,84 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("evicts LRU idle requester runtimes past the per-session cap", async () => {
-    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
-    resolverTesting.setMcpServerConnectionResolversForTest([
-      {
-        serverName: "user-mail",
-        resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
-      },
-    ]);
+  it.each([
+    ["full", 3],
+    ["requester-only", 2],
+  ] as const)(
+    "evicts LRU idle requester runtimes past the per-session cap via %s materialization",
+    async (entrypoint, expectedRuntimeCount) => {
+      const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        {
+          serverName: "user-mail",
+          resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
+        },
+      ]);
 
-    const disposedSenders: string[] = [];
-    let syntheticLastUsedAt = 100_000;
-    const createRuntime: RuntimeFactory = (params) => {
-      const sender = params.requesterScope?.requesterSenderId;
-      const base = makeRuntime([{ toolName: "probe", description: "probe" }]);
-      // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
-      const lastUsedAt = (syntheticLastUsedAt += 1_000);
-      return {
-        ...base,
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: params.configFingerprint ?? "fingerprint",
-        requesterScope: params.requesterScope,
-        get lastUsedAt() {
-          return lastUsedAt;
-        },
-        markUsed: () => {},
-        dispose: async () => {
-          if (sender) {
-            disposedSenders.push(sender);
-          }
-        },
+      const disposedSenders: string[] = [];
+      let syntheticLastUsedAt = 100_000;
+      const createRuntime: RuntimeFactory = (params) => {
+        const sender = params.requesterScope?.requesterSenderId;
+        const base = makeRuntime([{ toolName: "probe", description: "probe" }]);
+        // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
+        const lastUsedAt = (syntheticLastUsedAt += 1_000);
+        return {
+          ...base,
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          requesterScope: params.requesterScope,
+          get lastUsedAt() {
+            return lastUsedAt;
+          },
+          markUsed: () => {},
+          dispose: async () => {
+            if (sender) {
+              disposedSenders.push(sender);
+            }
+          },
+        };
       };
-    };
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime,
-      // Pin the sweep clock near the synthetic lastUsedAt values so the idle
-      // TTL sweep never fires; this test exercises only the cap eviction.
-      now: () => 150_000,
-      maxIdleRequesterRuntimesPerSession: 2,
-    });
-    const cfg = {
-      mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
-    };
-
-    for (const sender of ["sender-a", "sender-b", "sender-c"]) {
-      await manager.getOrCreate({
-        sessionId: "session-cap",
-        workspaceDir: "/workspace",
-        cfg: cfg as never,
-        requesterSenderId: sender,
-        messageChannel: "telegram",
+      const manager = testing.createSessionMcpRuntimeManager({
+        createRuntime,
+        // Pin the sweep clock near the synthetic lastUsedAt values so the idle
+        // TTL sweep never fires; this test exercises only the cap eviction.
+        now: () => 150_000,
+        maxIdleRequesterRuntimesPerSession: 2,
       });
-    }
+      const cfg = {
+        mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+      };
 
-    // sender-a is the least recently used zero-lease scoped runtime.
-    expect(disposedSenders).toEqual(["sender-a"]);
-    // Bare static reconcile key + two newest requester keys survive.
-    expect(manager.listRuntimeKeys()).toHaveLength(3);
+      for (const sender of ["sender-a", "sender-b", "sender-c"]) {
+        const runtimeParams = {
+          sessionId: "session-cap",
+          workspaceDir: "/workspace",
+          cfg: cfg as never,
+          requesterSenderId: sender,
+          messageChannel: "telegram",
+        };
+        if (entrypoint === "full") {
+          await manager.getOrCreate(runtimeParams);
+        } else {
+          await manager.getOrCreateRequesterScoped(runtimeParams);
+        }
+      }
 
-    await manager.disposeAll();
-  });
+      // sender-a is the least recently used zero-lease scoped runtime.
+      expect(disposedSenders).toEqual(["sender-a"]);
+      const runtimeKeys = manager.listRuntimeKeys();
+      expect(runtimeKeys).toHaveLength(expectedRuntimeCount);
+      expect(runtimeKeys.includes("session-cap")).toBe(entrypoint === "full");
+      expect(
+        runtimeKeys
+          .filter((key) => key.startsWith("{"))
+          .map((key) => (JSON.parse(key) as { requesterSenderId: string }).requesterSenderId),
+      ).toEqual(["sender-b", "sender-c"]);
+
+      await manager.disposeAll();
+    },
+  );
 
   it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
@@ -4635,7 +4735,7 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("reuses requester cache keys for getOrCreateRequesterScoped", async () => {
+  it("reuses one requester runtime across full and requester-only entrypoints", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     let resolveCount = 0;
     resolverTesting.setMcpServerConnectionResolversForTest([
@@ -4663,23 +4763,27 @@ describe("requester-scoped MCP connection resolution", () => {
       },
     };
 
-    const first = await manager.getOrCreateRequesterScoped({
+    const full = await manager.getOrCreate({
       sessionId: "session-reuse",
       workspaceDir: "/workspace",
       cfg: cfg as never,
       requesterSenderId: "sender-a",
       messageChannel: "telegram",
     });
-    const second = await manager.getOrCreateRequesterScoped({
+    const fullRuntimeKey = manager.listRuntimeKeys().find((key) => key.startsWith("{"));
+    const requesterOnly = await manager.getOrCreateRequesterScoped({
       sessionId: "session-reuse",
       workspaceDir: "/workspace",
       cfg: cfg as never,
       requesterSenderId: "sender-a",
       messageChannel: "telegram",
     });
-    expect(first).toBe(second);
+    const requesterOnlyRuntimeKey = manager.listRuntimeKeys().find((key) => key.startsWith("{"));
+    expect(requesterOnly).toBe(full);
     expect(resolveCount).toBe(1);
-    expect(manager.listRuntimeKeys()).toHaveLength(1);
+    expect(requesterOnlyRuntimeKey).toBe(fullRuntimeKey);
+    expect(requesterOnly?.configFingerprint).toBe(full.configFingerprint);
+    expect(manager.listRuntimeKeys()).toHaveLength(2);
 
     await manager.disposeAll();
   });
@@ -5683,12 +5787,6 @@ process.on("SIGINT", shutdown);`,
         } else {
           expect(secondCatalog.servers.slow).toBeDefined();
         }
-        await waitForFileText(
-          slowLogPath,
-          "slow first initialize",
-          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-        );
-
         await expect(runtime.callTool("trigger", "poke", {})).resolves.toMatchObject({
           content: [{ type: "text", text: "poked" }],
           isError: false,

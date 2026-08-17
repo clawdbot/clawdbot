@@ -1,12 +1,13 @@
 ---
 name: crabbox
-description: "Crabbox/Testbox remote proof for OpenClaw: trusted-source routing, untrusted isolation, Linux/macOS/Windows/WSL2, live E2E, desktop, diagnostics, cleanup."
+description: "Remote environment and isolation proof for OpenClaw: clean-machine E2E, untrusted code, package/install, live providers and channels, desktop, cross-OS, diagnostics, and cleanup."
 ---
 
 # Crabbox
 
-Remote OpenClaw proof. Heavy tests. Builds. Typecheck/lint fan-out. Docker.
-Packages. Live providers. Desktop. Cross-OS.
+Use Crabbox when the remote environment is part of the proof. It is not the
+default compute backend for trusted development tests, type checks, lint, or
+builds; run those locally unless the operator explicitly requests remote proof.
 
 Backends:
 
@@ -20,31 +21,32 @@ Crabbox.”
 
 ## Route First
 
-Source trust before test size.
+Route by required environment, not command size.
 
-- Trusted + one/few focused tests + ready deps: local.
-- Trusted + heavy proof: Blacksmith Testbox.
+- Trusted development tests, checks, and builds: local by default.
+- Clean-machine, install/package, Docker, E2E, live, desktop, or cross-OS proof:
+  Blacksmith Testbox or the direct provider that supplies the required environment.
 - Untrusted contributor/fork: secretless fork CI or sanitized direct AWS.
 - Never untrusted code on credential-hydrated Testbox.
 - Never run untrusted repo wrapper/config locally.
-- No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop.
+- Do not acquire a remote box merely to offload CPU or parallelize a local gate.
+- No speculative warmup. Acquire when the first environment-sensitive command
+  is ready. Reuse id. Stop.
 
-Need direct AWS semantics? Pass `--provider aws`. Need normal trusted OpenClaw
-heavy proof? Pass `--provider blacksmith-testbox`.
+Need direct AWS semantics? Pass `--provider aws`. Need a clean trusted OpenClaw
+environment? Pass `--provider blacksmith-testbox`.
 
 ## Preflight
 
-Run from repo root.
+Run from repo root only after routing selects remote proof. For repo-managed
+runs, start with the wrapper help; it validates the available wrapper surface.
 
 ```sh
-command -v crabbox
-../crabbox/bin/crabbox --version
 node scripts/crabbox-wrapper.mjs run --help | sed -n '1,100p'
-command -v blacksmith
-blacksmith --version
 ```
 
-Set checked binary once. PATH copy may be stale.
+Read `.crabbox.yaml`; never guess the provider default. Resolve the direct CLI
+only for direct AWS, SSH, desktop, or admin operations:
 
 ```sh
 if [ -x ../crabbox/bin/crabbox ]; then
@@ -54,8 +56,6 @@ else
 fi
 "$CRABBOX" --version
 ```
-
-Read `.crabbox.yaml`; never guess provider default.
 
 No binary? Clean sibling checkout only:
 
@@ -72,9 +72,9 @@ mkdir -p ../crabbox/bin
 
 Dirty/missing/nonstandard sibling: stop. No overwrite.
 
-## Trusted Testbox
+## Trusted Clean-Machine Testbox
 
-One-shot heavy gate:
+One-shot environment-sensitive proof:
 
 ```sh
 node scripts/crabbox-wrapper.mjs run \
@@ -84,7 +84,7 @@ node scripts/crabbox-wrapper.mjs run \
   OPENCLAW_TEST_PROJECTS_PARALLEL=6 \
   OPENCLAW_VITEST_MAX_WORKERS=1 \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
-  pnpm check:changed
+  <clean-machine-or-e2e-command>
 ```
 
 Several commands: warm once, save id, reuse, stop.
@@ -95,34 +95,36 @@ node scripts/crabbox-wrapper.mjs warmup \
 node scripts/crabbox-wrapper.mjs run \
   --provider blacksmith-testbox --id <tbx_id> --timing-json -- \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
-  pnpm test <path-or-filter>
+  <environment-sensitive-command>
 blacksmith testbox stop --id <tbx_id>
 ```
 
 Rules:
 
+- Warm from the task checkout; ownership is checkout-path scoped.
 - One lease, one active command. No sync/reclaim during run.
 - Sync current checkout every run. `--no-sync` only unchanged intentional rerun.
-- `--reclaim` only deliberate checkout-path ownership transfer.
+- `--reclaim` only deliberate checkout-path ownership transfer. It does not
+  retarget the remote checkout — never cross repos.
+- Sparse-sync temp checkout may claim a kept Testbox; repo-path reuse needs
+  `--reclaim`.
 - Base/head change: stop. Rewarm. No stale-lease override.
+- Warmup must print a lease id. Silent success is unusable — verify before
+  reuse, else fall back to one-shot `run`.
+- Wrapper lease reuse requires its local SSH key; missing after
+  restart/handoff: warm fresh.
+- Direct lease: `blacksmith testbox run`. Crabbox wrapper reuse needs a
+  wrapper-created lease.
 - Raw SHA unreliable for `warmup --ref`; use branch/tag.
 - `blacksmith testbox list` hides states. Use `list --all` or
   `status --id <tbx_id>`.
 - Testbox status/stop: `--id`. No status `--json`.
-- Delegated provider rejects `--fresh-pr`, `--full-resync`, `--script*`,
-  `--env-helper`, capture/download flags.
-
-Autoreview parallel tests:
-
-- Current helper: short POSIX test home. Nothing extra.
-- Old helper + macOS `ControlPath too long`: put `TMPDIR=/tmp` on outer process.
-
-```sh
-TMPDIR=/tmp OPENCLAW_TESTBOX=1 "$AUTOREVIEW" \
-  --parallel-tests "pnpm check:changed"
-```
-
-- Do not put `TMPDIR` inside quoted test command. Home already created.
+- Delegated provider rejects `--fresh-pr`, `--stop-after`, `--full-resync`,
+  `--script*`, `--env-helper`, capture/download flags. Sync current checkout;
+  workflow owns lifecycle.
+- Compound commands: `bash -lc`, never `sh -lc`. Job env uses Bash `declare`.
+- Testbox owns Chromium; never pass Crabbox `--browser` to
+  `provider=blacksmith-testbox`.
 
 ## Untrusted AWS
 
@@ -248,7 +250,8 @@ history. No safe injection path? Report live auth blocked. No fake-key upgrade t
 
 ## Real E2E
 
-“Test in Crabbox” means user path, not merely remote unit tests.
+“Test in Crabbox” means user path, not merely remote unit tests. No
+harness/bypass/shortcut unless explicitly asked.
 
 1. Reproduce entrypoint when feasible.
 2. Patch. Narrow local test.
@@ -318,6 +321,8 @@ Before handoff, prove CLI/app from neutral `~`:
 ```
 
 Visible desktop alone proves nothing. Keep browser windowed unless capture task.
+Before sharing a WebVNC link, screenshot first; verify the real app/path works
+and the target UI is not broken.
 Never commit proof assets to product repo.
 
 ## Failure Triage
@@ -344,7 +349,14 @@ blacksmith testbox status --id <tbx_id>
 - Cleanup unclear: list exact provider. Stop only owned ids.
 - Wrapper broken, Blacksmith healthy: direct Blacksmith only to isolate wrapper.
 
-Crabbox stop wrapper: no `--timing-json`.
+Run semantics:
+
+- Final timing JSON = proof complete. Portal sync hanging after it: interrupt
+  the wrapper only.
+- Wrapper stop has no `--timing-json`:
+  `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
+- Dirty-sync generator proof: compare hashes before/after; `git diff` includes
+  the synced patch.
 
 ## Boundary
 

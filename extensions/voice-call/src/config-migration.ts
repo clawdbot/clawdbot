@@ -5,11 +5,6 @@ import {
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-/** Read finite numeric config values. */
-function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
-  return asFiniteNumber(obj?.[key]);
-}
-
 /** Merge legacy provider-specific values into the canonical providers map. */
 function mergeProviderConfig(
   providersValue: unknown,
@@ -55,11 +50,11 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   if (streamingSttModel) {
     legacyStreamingOpenAICompat.model = streamingSttModel;
   }
-  const streamingSilenceDurationMs = getNumber(streaming, "silenceDurationMs");
+  const streamingSilenceDurationMs = asFiniteNumber(streaming?.silenceDurationMs);
   if (streamingSilenceDurationMs !== undefined) {
     legacyStreamingOpenAICompat.silenceDurationMs = streamingSilenceDurationMs;
   }
-  const streamingVadThreshold = getNumber(streaming, "vadThreshold");
+  const streamingVadThreshold = asFiniteNumber(streaming?.vadThreshold);
   if (streamingVadThreshold !== undefined) {
     legacyStreamingOpenAICompat.vadThreshold = streamingVadThreshold;
   }
@@ -138,14 +133,14 @@ export function migrateVoiceCallLegacyConfigInput(params: {
       `Moved ${configPathPrefix}.streaming.sttModel → ${configPathPrefix}.streaming.providers.openai.model.`,
     );
   }
-  if (getNumber(streaming, "silenceDurationMs") !== undefined) {
+  if (asFiniteNumber(streaming?.silenceDurationMs) !== undefined) {
     changes.push(
       `Moved ${configPathPrefix}.streaming.silenceDurationMs → ${configPathPrefix}.streaming.providers.openai.silenceDurationMs.`,
     );
   } else if (typeof streaming?.silenceDurationMs === "number") {
     changes.push(`Removed invalid ${configPathPrefix}.streaming.silenceDurationMs.`);
   }
-  if (getNumber(streaming, "vadThreshold") !== undefined) {
+  if (asFiniteNumber(streaming?.vadThreshold) !== undefined) {
     changes.push(
       `Moved ${configPathPrefix}.streaming.vadThreshold → ${configPathPrefix}.streaming.providers.openai.vadThreshold.`,
     );

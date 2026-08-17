@@ -110,7 +110,7 @@ export type ConfigIoDeps = {
 export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
   shellEnvFallback?: "load" | "defer";
 };
@@ -126,6 +126,8 @@ export type ConfigSnapshotReadOptions = {
     candidate: OpenClawConfig,
     current: OpenClawConfig,
   ) => boolean | Promise<boolean>;
+  /** Controls whether snapshot validation resolves plugin metadata and defaults. */
+  pluginValidation?: "full" | "skip" | "core-only";
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   suppressFutureVersionWarning?: boolean;

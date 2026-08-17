@@ -5,10 +5,10 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   assertCanonicalSessionKeyWriteMatchesDatabase,
@@ -82,10 +82,22 @@ export function ensureTranscriptSessionRoot(
   updatedAt: number,
   options: { allowStoredAlias?: boolean } = {},
 ): void {
+  const db = getSessionKysely(database.db);
   if (!options.allowStoredAlias) {
     assertCanonicalSqliteSessionKeysCurrent(database);
     assertCanonicalSessionKeyWriteMatchesDatabase(database, scope.sessionKey);
-    const db = getSessionKysely(database.db);
+    const persistedSessionKey = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", scope.sessionId),
+    )?.session_key;
+    if (persistedSessionKey && persistedSessionKey !== scope.sessionKey) {
+      throw new Error(
+        `Transcript session ${scope.sessionId} is owned by ${persistedSessionKey}, not ${scope.sessionKey}; resolve the transcript target again before retrying.`,
+      );
+    }
     const lookupKeys = uniqueStrings([
       scope.sessionKey,
       ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(scope.sessionKey)),
@@ -98,7 +110,7 @@ export function ensureTranscriptSessionRoot(
         .where("session_key", "in", lookupKeys),
     ).rows;
     for (const candidate of candidates) {
-      const entry = parseSqliteSessionEntryJson(candidate);
+      const entry = parseSessionEntryJson(candidate);
       if (!entry) {
         const retainedWindow =
           candidate.entry_json === "{}"
@@ -147,7 +159,6 @@ export function ensureTranscriptSessionRoot(
       }
     }
   }
-  const db = getSessionKysely(database.db);
   const insertedNode = executeSqliteQuerySync(
     database.db,
     db
@@ -169,7 +180,7 @@ export function ensureTranscriptSessionRoot(
         .set({ entry_valid: -1 })
         .where("session_key", "=", scope.sessionKey),
     );
-    publishSqliteSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database);
   }
   executeSqliteQuerySync(
     database.db,
@@ -186,7 +197,6 @@ export function ensureTranscriptSessionRoot(
       })
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
-          session_key: scope.sessionKey,
           updated_at: updatedAt,
         }),
       ),
@@ -267,7 +277,7 @@ export function touchTranscriptMutationInTransaction(
   }
 }
 
-export function deleteSqliteTranscriptEventsInTransaction(
+export function deleteTranscriptEventsInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): boolean {

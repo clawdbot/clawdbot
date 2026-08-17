@@ -616,7 +616,7 @@ describe("talk.catalog handler", () => {
       expect.objectContaining({ surface: "gateway-relay" }),
     );
     expect(mocks.resolveRealtimeVoiceProviderCapabilities).toHaveBeenCalledWith(
-      expect.objectContaining({ surface: "gateway-relay" }),
+      expect.objectContaining({ agentId: expect.any(String), surface: "gateway-relay" }),
     );
     expect(isConfigured).toHaveBeenCalledWith(expect.not.objectContaining({ surface: "bridge" }));
     const catalog = expectRespondOk(respond);
@@ -1841,6 +1841,68 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("uses talk.agentId for a bare realtime session in an explicit fleet", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: {},
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-talk-owner",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      model: "gpt-realtime",
+      voice: "alloy",
+      expiresAt: 1_797_986_400,
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+      talk: {
+        agentId: "research",
+        realtime: {
+          provider: "openai",
+          providers: { openai: {} },
+        },
+      },
+    };
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        sessionKey: "incident-42",
+      },
+      respond,
+      context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
+    });
+
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research" }),
+    );
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
+      agentId: "research",
+      sessionKey: "incident-42",
+    });
+    expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
+  });
+
   it.each([
     {
       label: "request override from a configured GA model",
@@ -2206,11 +2268,39 @@ describe("talk.session unified handlers", () => {
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
+        agentId: "worker",
         spawnedBy: "agent:main:parent",
         includeGlobal: true,
         includeUnknown: true,
       },
     });
+  });
+
+  it("resolves a bare managed-room session through the persisted fixed-store owner", async () => {
+    const createRespond = vi.fn();
+    const config: OpenClawConfig = {
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+        defaults: { sessionStore: { agentId: "ops" } },
+      },
+    };
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "global",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      respond: createRespond,
+      context: { getRuntimeConfig: () => config },
+    });
+
+    expectRespondOk(createRespond, { transport: "managed-room" });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+      expect.objectContaining({ p: expect.objectContaining({ key: "global", agentId: "ops" }) }),
+    );
   });
 
   it("rejects unscoped managed-room session keys without admin scope", async () => {
@@ -2886,7 +2976,7 @@ describe("talk.client.create handler", () => {
       expect.objectContaining({ providerConfigOverrides: { model: "gpt-live-1" } }),
     );
     expect(mocks.resolveRealtimeVoiceProviderCapabilities).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-live-1" }),
+      expect.objectContaining({ agentId: "main", model: "gpt-live-1" }),
     );
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
     expectRecordFields(createInput, {

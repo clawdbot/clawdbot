@@ -1,15 +1,19 @@
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -31,6 +35,10 @@ export function readChatPaneMutationAccess(
       method: "sessions.patch",
       params: { key: sessionKey, thinkingLevel: null },
     }),
+    permission: readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, permissionMode: "guarded" },
+    }),
     unarchive: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, archived: false },
@@ -44,8 +52,23 @@ export function renderChatPaneComposerControls(params: {
   agentDefaultModel: string | undefined;
   modelAccess: SessionMethodAccess;
   effortAccess: SessionMethodAccess;
+  permissionAccess: SessionMethodAccess;
+  canSelectFull: boolean;
+  onModelSetup: () => void;
 }) {
-  const { state, selectedSession, agentDefaultModel, modelAccess, effortAccess } = params;
+  const {
+    state,
+    selectedSession,
+    agentDefaultModel,
+    modelAccess,
+    effortAccess,
+    permissionAccess,
+    canSelectFull,
+    onModelSetup,
+  } = params;
+  const hasModelSnapshot =
+    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  const refreshModelCatalog = () => refreshChatModelCatalogOnDemand(state);
   return html`
     <div class="chat-composer-model-control">
       ${renderChatModelControls({
@@ -55,6 +78,17 @@ export function renderChatPaneComposerControls(params: {
         gatewayAvailable: Boolean(state.client),
         loading: state.chatLoading,
         modelCatalog: state.chatModelCatalog,
+        modelCatalogState: {
+          hasSnapshot: hasModelSnapshot,
+          onRetry: () => void refreshModelCatalog(),
+          status: state.chatModelCatalogError
+            ? "error"
+            : state.chatModelsLoading
+              ? hasModelSnapshot
+                ? "refreshing"
+                : "loading"
+              : "ready",
+        },
         modelOverrides: state.sessions.state.modelOverrides,
         modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
         modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
@@ -67,10 +101,12 @@ export function renderChatPaneComposerControls(params: {
         sessionsResult: state.sessionsResult,
         stream: state.chatStream,
         onRequestUpdate: () => state.requestUpdate?.(),
+        onModelSetup,
         onFastModeSelect: (next, targetSessionKey) =>
           effortAccess.allowed
             ? switchChatFastMode(state, next, targetSessionKey)
             : Promise.resolve(false),
+        onModelPickerOpen: refreshModelCatalog,
         onModelSelect: (next, targetSessionKey) =>
           modelAccess.allowed
             ? switchChatModel(state, next, targetSessionKey)
@@ -79,6 +115,31 @@ export function renderChatPaneComposerControls(params: {
           effortAccess.allowed
             ? switchChatThinkingLevel(state, next, targetSessionKey)
             : Promise.resolve(false),
+      })}
+      ${renderChatPermissionPicker({
+        canSelectFull,
+        disabled: !permissionAccess.allowed,
+        disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
+        mode: selectedSession?.permissionMode,
+        sessionRoot: selectedSession?.sessionRoot,
+        onSelect: async (permissionMode) => {
+          if (!permissionAccess.allowed) {
+            return;
+          }
+          try {
+            state.chatError = null;
+            await state.sessions.patch(
+              state.sessionKey,
+              { permissionMode },
+              scopedAgentParamsForSession(state, state.sessionKey),
+            );
+          } catch (error) {
+            state.chatError = t("chat.permissionControls.updateFailed", {
+              error: String(error),
+            });
+            state.requestUpdate?.();
+          }
+        },
       })}
     </div>
   `;

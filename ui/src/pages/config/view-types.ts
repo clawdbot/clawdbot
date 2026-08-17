@@ -1,3 +1,4 @@
+import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
@@ -75,6 +76,8 @@ export type ConfigProps = {
   /** Set when the form renders under a composite page's custom rows; an empty
    *  schema section stays silent instead of claiming the page is empty. */
   embeddedEditor?: boolean;
+  /** Control UI rows that belong to the active schema section but are not Gateway config. */
+  sectionPrelude?: TemplateResult;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -128,6 +131,7 @@ export type ConfigProps = {
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
   hiddenSessionCatalogIds: ReadonlySet<string>;
+  hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;

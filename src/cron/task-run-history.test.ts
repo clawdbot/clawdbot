@@ -11,9 +11,11 @@ import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import {
+  cronQuietTriggerTaskDetail,
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordToRunLogEntry,
+  cronTaskRecordToTriggerEval,
   parseCronRunLogEntryObject,
 } from "./task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
@@ -465,6 +467,26 @@ describe("cron task run history", () => {
     expect(entry?.failureNotificationDelivery).toBeUndefined();
   });
 
+  it("keeps quiet-trigger recovery detail out of run history", () => {
+    const task = taskFromEntry(
+      { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
+      1,
+      "/internal/cron/store",
+    );
+    task.detail = cronQuietTriggerTaskDetail("/internal/cron/store", {
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+
+    expect(cronTaskRecordToTriggerEval(task)).toEqual({
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+    expect(cronTaskRecordToRunLogEntry(task)).toBeNull();
+  });
+
   it("locks the serialized detail shape: kind first, status second", () => {
     // External tooling may prefix-match serialized detail; keep the codec's
     // field order stable so those prefixes stay meaningful.
@@ -536,13 +558,18 @@ describe("cron task run history", () => {
       usage: undefined,
     });
     expect(parseCronRunLogEntryObject({ ...base, usage: [] })?.usage).toBeUndefined();
-    expect(parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0 } })?.usage).toEqual({
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
+    ).toEqual({
       input_tokens: 0,
       output_tokens: undefined,
       total_tokens: undefined,
       cache_read_tokens: undefined,
       cache_write_tokens: undefined,
     });
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { future_tokens: 1 } })?.usage,
+    ).toBeUndefined();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
   });

@@ -9,7 +9,7 @@ import {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
-import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveModelRoutes } from "./provider-policy-api.js";
@@ -20,6 +20,15 @@ const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
+
+type OpenAITestCatalogResult = {
+  provider: ModelProviderConfig;
+  outcomes: readonly {
+    provider: string;
+    profileId?: string;
+    status: "ready" | "auth-rejected" | "unavailable";
+  }[];
+};
 
 async function runCatalogWithFetchGuard(params: {
   fetchGuard: LiveModelCatalogFetchGuard;
@@ -32,7 +41,7 @@ async function runCatalogWithFetchGuard(params: {
   };
   accountId?: string;
   baseUrl?: string;
-}): Promise<ModelProviderConfig> {
+}): Promise<OpenAITestCatalogResult> {
   if (params.auth.mode === "oauth") {
     mocks.resolveApiKeyForProvider.mockResolvedValue({
       ...params.auth,
@@ -67,7 +76,7 @@ async function runCatalogWithFetchGuard(params: {
     if (!result || "provider" in result || !result.providers.openai) {
       throw new Error("expected OpenAI live provider catalog");
     }
-    return result.providers.openai;
+    return { provider: result.providers.openai, outcomes: result.outcomes ?? [] };
   } finally {
     fetchSpy.mockRestore();
   }
@@ -78,11 +87,13 @@ async function buildOpenAILiveProviderConfig(params: {
   baseUrl?: string;
   fetchGuard: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
-  return await runCatalogWithFetchGuard({
-    fetchGuard: params.fetchGuard,
-    auth: { mode: "api_key", apiKey: params.apiKey, source: "profile" },
-    baseUrl: params.baseUrl,
-  });
+  return (
+    await runCatalogWithFetchGuard({
+      fetchGuard: params.fetchGuard,
+      auth: { mode: "api_key", apiKey: params.apiKey, source: "profile" },
+      baseUrl: params.baseUrl,
+    })
+  ).provider;
 }
 
 async function buildOpenAICodexLiveProviderConfig(params: {
@@ -90,16 +101,18 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   accountId?: string;
   fetchGuard: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
-  return await runCatalogWithFetchGuard({
-    fetchGuard: params.fetchGuard,
-    auth: {
-      mode: "oauth",
-      apiKey: params.discoveryApiKey,
-      profileId: "openai:chatgpt",
-      source: "profile",
-    },
-    accountId: params.accountId,
-  });
+  return (
+    await runCatalogWithFetchGuard({
+      fetchGuard: params.fetchGuard,
+      auth: {
+        mode: "oauth",
+        apiKey: params.discoveryApiKey,
+        profileId: "openai:chatgpt",
+        source: "profile",
+      },
+      accountId: params.accountId,
+    })
+  ).provider;
 }
 
 vi.mock("./openai-chatgpt-provider.runtime.js", () => ({
@@ -277,7 +290,7 @@ describe("buildOpenAIProvider", () => {
       groupLabel: "OpenAI",
       groupHint: "ChatGPT/Codex sign-in or API key",
     });
-    expect(apiKey?.starterModel).toBe("openai/gpt-5.6");
+    expect(apiKey?.starterModel).toBe("openai/gpt-5.6-sol");
   });
 
   it("preserves existing model selection during non-interactive API key setup", async () => {
@@ -365,7 +378,7 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
-  it("keeps a network-free OpenAI static catalog", async () => {
+  it("keeps a network-free OpenAI static catalog without the duplicate GPT-5.6 alias", async () => {
     const provider = buildOpenAIProvider();
 
     const result = await provider.staticCatalog?.run({
@@ -393,22 +406,20 @@ describe("buildOpenAIProvider", () => {
       image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
     });
     expect(gpt56Models?.map((model) => model.id)).toEqual([
-      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ]);
     expect(gpt56Models?.map((model) => model.contextWindow)).toEqual([
-      1_050_000, 1_050_000, 1_050_000, 1_050_000,
+      1_050_000, 1_050_000, 1_050_000,
     ]);
     expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([
       "none",
       "none",
       "none",
-      "none",
     ]);
     expect(gpt56Models?.map((model) => model.compat?.supportedReasoningEfforts)).toEqual(
-      Array.from({ length: 4 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
+      Array.from({ length: 3 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
     );
     expect(gpt54Models).toMatchObject([
       {
@@ -448,8 +459,6 @@ describe("buildOpenAIProvider", () => {
         cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
       },
     ]);
-    expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6");
-    expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
@@ -557,7 +566,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(provider.apiKey).toBe("sk-openai");
-    expect(provider.models.map((model) => model.id)).toContain("gpt-5.6");
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(provider.models.map((model) => model.id)).toEqual(
       expect.arrayContaining([
@@ -1152,6 +1161,29 @@ describe("buildOpenAIProvider", () => {
     expect(provider.auth).toBe("oauth");
     expect(provider.models).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports when the account catalog rejects saved OAuth credentials", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: new Response("unauthorized", { status: 401 }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release: async () => undefined,
+    }));
+
+    const result = await runCatalogWithFetchGuard({
+      fetchGuard,
+      auth: {
+        mode: "oauth",
+        apiKey: "rejected-oauth-token",
+        profileId: "openai:chatgpt",
+        source: "profile",
+      },
+    });
+
+    expect(result.provider.models).toEqual([]);
+    expect(result.outcomes).toEqual([
+      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+    ]);
   });
 
   it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
@@ -2273,7 +2305,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expectFields(extraParams, {
-      transport: "auto",
+      transport: "sse",
     });
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
@@ -2580,7 +2612,7 @@ describe("buildOpenAIProvider", () => {
     expect(allowedHostedToolTypes).toEqual(new Set());
   });
 
-  it("preserves explicit OpenAI responses transport overrides", () => {
+  it("defaults direct OpenAI API-key traffic to SSE and preserves explicit WebSocket", () => {
     const provider = buildOpenAIProvider();
 
     const explicit = {
@@ -2592,12 +2624,38 @@ describe("buildOpenAIProvider", () => {
       provider.prepareExtraParams?.({
         provider: "openai",
         modelId: "gpt-5.4",
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        config: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                auth: "api-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        extraParams: { effort: "high" },
+      } as never),
+    ).toEqual({ effort: "high", transport: "sse" });
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
         extraParams: explicit,
       } as never),
     ).toBe(explicit);
   });
 
-  it("does not infer Codex transport from an unselected OAuth profile", () => {
+  it("uses SSE for an unselected OAuth profile and native defaults for a Codex route", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -2618,7 +2676,7 @@ describe("buildOpenAIProvider", () => {
       } as never),
     ).toEqual({
       effort: "high",
-      transport: "auto",
+      transport: "sse",
     });
     expect(
       provider.prepareExtraParams?.({
@@ -2647,15 +2705,6 @@ describe("buildOpenAIProvider", () => {
         extraParams: explicit,
       } as never),
     ).toBe(explicit);
-  });
-
-  it("shares OpenAI responses wrapper composition across provider variants", () => {
-    const provider = buildOpenAIProvider();
-    const codexProvider = buildOpenAIProvider();
-
-    expect(provider.wrapStreamFn).toBe(codexProvider.wrapStreamFn);
-    expect(provider.buildReplayPolicy).toBe(codexProvider.buildReplayPolicy);
-    expect(provider.resolveTransportTurnState).toBe(codexProvider.resolveTransportTurnState);
   });
 
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {

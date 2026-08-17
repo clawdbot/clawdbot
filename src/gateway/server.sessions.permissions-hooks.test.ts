@@ -14,12 +14,12 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
-import { requireRecord } from "./test-helpers.assertions.js";
+import { requireGatewayRecord } from "./test-helpers.assertions.js";
 import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -62,7 +62,7 @@ async function createPermissionCheckpointStore() {
     throw new Error("expected legacy checkpoint fixture");
   }
 
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: "agent:main:main", storePath },
     sessionStoreEntry(fixture.sessionId, {
       sessionFile: fixture.sessionFile,
@@ -92,7 +92,7 @@ async function createPermissionCheckpointStore() {
       ],
     }),
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { sessionKey: "agent:main:discord:group:dev", storePath },
     sessionStoreEntry("sess-group"),
   );
@@ -160,6 +160,15 @@ test("webchat session mutations follow operator scope policy", async () => {
       missingScope: "operator.admin",
     },
     {
+      method: "sessions.move",
+      params: {
+        key: "agent:main:main",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      missingScope: "operator.admin",
+    },
+    {
       method: "sessions.pluginPatch",
       params: {
         key: "agent:main:main",
@@ -186,7 +195,7 @@ test("webchat session mutations follow operator scope policy", async () => {
   }
 
   expect(
-    listSessionEntries({ storePath })
+    listSessionEntriesCore({ storePath })
       .map(({ sessionKey }) => sessionKey)
       .toSorted(),
   ).toEqual(["agent:main:discord:group:dev", "agent:main:main"]);
@@ -217,19 +226,19 @@ test("session:patch hook fires with correct context", async () => {
   });
 
   expect(patched.ok).toBe(true);
-  const event = requireRecord(
+  const event = requireGatewayRecord(
     requireFirstCallArg(sessionHookMocks.triggerInternalHook),
     "internal hook event",
   );
   expect(event.type).toBe("session");
   expect(event.action).toBe("patch");
   expect(event.sessionKey).toBe("agent:main:main");
-  const context = requireRecord(event.context, "internal hook context");
-  const sessionEntry = requireRecord(context.sessionEntry, "session entry");
+  const context = requireGatewayRecord(event.context, "internal hook context");
+  const sessionEntry = requireGatewayRecord(context.sessionEntry, "session entry");
   expect(sessionEntry.sessionId).toBe("sess-hook-test");
   expect(sessionEntry.label).toBe("updated-label");
-  expect(requireRecord(context.patch, "session patch").label).toBe("updated-label");
-  requireRecord(context.cfg, "config");
+  expect(requireGatewayRecord(context.patch, "session patch").label).toBe("updated-label");
+  requireGatewayRecord(context.cfg, "config");
 
   ws.close();
 });
@@ -295,7 +304,7 @@ test("session:patch hook only fires after successful patch", async () => {
   });
 
   expect(validPatch.ok).toBe(true);
-  const event = requireRecord(
+  const event = requireGatewayRecord(
     requireFirstCallArg(sessionHookMocks.triggerInternalHook),
     "internal hook event",
   );

@@ -94,6 +94,7 @@ export async function advanceCloudDraftSession(params: {
       key: recovery.sessionKey,
       agentId: recovery.agentId,
       profileId: recovery.profileId,
+      machineClass: recovery.machineClass,
       message: recovery.message,
       attachments: recovery.attachments,
       messageId: recovery.messageId,

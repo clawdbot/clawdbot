@@ -6,15 +6,25 @@ import type { HealthSummary } from "../health/types.js";
 /**
  * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
  */
-const { collectGatewayHealthSnapshotMock, getUpdateAvailableMock, getUpdateScheduleMock } =
-  vi.hoisted(() => ({
-    collectGatewayHealthSnapshotMock: vi.fn(),
-    getUpdateAvailableMock: vi.fn(),
-    getUpdateScheduleMock: vi.fn(),
-  }));
+const {
+  collectGatewayHealthSnapshotMock,
+  getRuntimeConfigMock,
+  getUpdateAvailableMock,
+  getUpdateScheduleMock,
+} = vi.hoisted(() => ({
+  collectGatewayHealthSnapshotMock: vi.fn(),
+  getRuntimeConfigMock: vi.fn(),
+  getUpdateAvailableMock: vi.fn(),
+  getUpdateScheduleMock: vi.fn(),
+}));
 
 vi.mock("../health/collector.js", () => ({
   collectGatewayHealthSnapshot: collectGatewayHealthSnapshotMock,
+}));
+
+vi.mock("../../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.js")>()),
+  getRuntimeConfig: getRuntimeConfigMock,
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
@@ -61,6 +71,7 @@ async function loadHealthState() {
   getUpdateAvailableMock.mockReturnValue(null);
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
+  getRuntimeConfigMock.mockReset().mockReturnValue({ agents: { entries: { main: {} } } });
   return await import("./health-state.js");
 }
 
@@ -103,6 +114,7 @@ describe("buildGatewaySnapshot update metadata", () => {
       channel: "dev",
     });
     expect(snapshot.updateSchedule).toBeUndefined();
+    expect(snapshot.sessionDefaults).toMatchObject({ ownership: "sole", selectionRequired: false });
     expect(getUpdateScheduleMock).not.toHaveBeenCalled();
   });
 

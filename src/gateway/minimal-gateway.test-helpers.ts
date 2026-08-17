@@ -40,7 +40,7 @@ export function buildMinimalGatewayHelloOkPayload(params?: {
   connId?: string;
   methods?: string[];
   snapshot?: Record<string, unknown>;
-  auth?: { role: string; scopes: string[] };
+  auth?: { role: string; scopes: string[]; deviceToken?: string };
   policy?: {
     maxPayload: number;
     maxBufferedBytes: number;
@@ -84,8 +84,9 @@ export async function startMinimalRealGateway(
     visibility?: import("../config/sessions.js").SessionEntry["visibility"];
   }> = [],
 ) {
-  const [bootstrap, profiles, sessionStore, testState] = await Promise.all([
+  const [bootstrap, deviceIdentity, profiles, sessionStore, testState] = await Promise.all([
     import("../infra/device-bootstrap.js"),
+    import("../infra/device-identity.js"),
     import("../shared/device-bootstrap-profile.js"),
     import("../config/sessions/session-accessor.sqlite-entry.js"),
     import("../test-utils/openclaw-test-state.js"),
@@ -104,6 +105,7 @@ export async function startMinimalRealGateway(
     },
   });
   const sessionListRequests: Record<string, unknown>[] = [];
+  const sessionResolveRequests: Record<string, unknown>[] = [];
   const hellos: unknown[] = [];
   const connectFailures: unknown[] = [];
   const clients: WebSocket[] = [];
@@ -112,9 +114,34 @@ export async function startMinimalRealGateway(
   while (port === 18789) {
     port = await getFreePort();
   }
+  const startServer = async () => {
+    const methods = await import("./server-methods.js");
+    const originalList = methods.coreGatewayHandlers["sessions.list"]!;
+    const originalResolve = methods.coreGatewayHandlers["sessions.resolve"]!;
+    methods.coreGatewayHandlers["sessions.list"] = async (options) => {
+      sessionListRequests.push(options.params as Record<string, unknown>);
+      return await originalList(options);
+    };
+    methods.coreGatewayHandlers["sessions.resolve"] = async (options) => {
+      sessionResolveRequests.push(options.params as Record<string, unknown>);
+      return await originalResolve(options);
+    };
+    const gateway = await import("./server.js");
+    return await gateway
+      .startGatewayServer(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      })
+      .finally(() => {
+        methods.coreGatewayHandlers["sessions.list"] = originalList;
+        methods.coreGatewayHandlers["sessions.resolve"] = originalResolve;
+      });
+  };
   try {
     for (const session of sessions) {
-      await sessionStore.upsertSqliteSessionEntry(
+      await sessionStore.upsertSessionEntryCore(
         {
           agentId: session.agentId,
           sessionKey: toAgentRequestSessionKey(session.key)!,
@@ -123,21 +150,7 @@ export async function startMinimalRealGateway(
         { sessionId: session.key, updatedAt: Date.now(), visibility: session.visibility },
       );
     }
-    const methods = await import("./server-methods.js");
-    const original = methods.coreGatewayHandlers["sessions.list"]!;
-    methods.coreGatewayHandlers["sessions.list"] = async (options) => {
-      sessionListRequests.push(options.params as Record<string, unknown>);
-      return await original(options);
-    };
-    const gateway = await import("./server.js");
-    server = await gateway
-      .startGatewayServer(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      })
-      .finally(() => (methods.coreGatewayHandlers["sessions.list"] = original));
+    server = await startServer();
   } catch (error) {
     await state.cleanup();
     throw error;
@@ -147,20 +160,34 @@ export async function startMinimalRealGateway(
     url: `ws://127.0.0.1:${port}`,
     token,
     sessionListRequests,
+    sessionResolveRequests,
     hellos,
     connectFailures,
-    connectBootstrap: async (mismatched = false) => {
-      const helpers = await import("./test-helpers.js");
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      clients.push(ws);
-      const bootstrapToken = (
+    issueNodeBootstrapToken: async () =>
+      (
         await bootstrap.issueDeviceBootstrapToken({
           baseDir: state.stateDir,
           profile: profiles.NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         })
-      ).token;
+      ).token,
+    createDeviceIdentity: (label: string) =>
+      deviceIdentity.loadOrCreateDeviceIdentity({
+        path: state.statePath(`device-${label}.sqlite`),
+      }),
+    restart: async () => {
+      await server!.close({ reason: "test reconnect", restartExpectedMs: 0 });
+      server = await startServer();
+    },
+    connectBootstrap: async (mismatched = false) => {
+      const helpers = await import("./test-helpers.js");
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      clients.push(ws);
+      const bootstrapToken = await bootstrap.issueDeviceBootstrapToken({
+        baseDir: state.stateDir,
+        profile: profiles.NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
       const response = await helpers.connectReq(ws, {
-        bootstrapToken,
+        bootstrapToken: bootstrapToken.token,
         ...(mismatched ? { deviceToken: "mismatched-device-token" } : {}),
         skipDefaultAuth: true,
         role: "node",

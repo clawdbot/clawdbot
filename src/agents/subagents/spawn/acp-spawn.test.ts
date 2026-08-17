@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -16,7 +16,6 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
-import { resolveThinkingDefault } from "../../model-selection.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -114,7 +113,7 @@ const hoisted = vi.hoisted(() => {
       listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
       loadSessionEntryReadOnly: loadMockEntry,
-      upsertSessionEntry: async (scope: unknown, patch: SessionEntry) =>
+      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
         await upsertSessionEntryMock(scope, patch),
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
@@ -197,7 +196,7 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/paths.js", () => ({
-  resolveStorePath: hoisted.resolveStorePathMock,
+  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
@@ -206,7 +205,7 @@ vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveStorePath: hoisted.resolveStorePathMock,
+  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/config.js", () => ({
@@ -235,8 +234,7 @@ vi.mock("../registry/subagent-registry.js", () => ({
   registerSubagentRun: hoisted.registerSubagentRunMock,
 }));
 
-vi.mock("../registry/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../registry/subagent-registry-read.js")>()),
+vi.mock("../registry/subagent-registry-read.js", () => ({
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
 }));
 
@@ -244,7 +242,7 @@ vi.mock("../../../tasks/runtime-internal.js", () => ({
   listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
-const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
+const { spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
 type SpawnContext = Parameters<typeof spawnAcpDirect>[1];
 type SpawnResult = Awaited<ReturnType<typeof spawnAcpDirect>>;
@@ -405,7 +403,7 @@ function expectFailedSpawn(
 
 function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status: "accepted" }> {
   expect(result.status).toBe("accepted");
-  if (!isSpawnAcpAcceptedResult(result)) {
+  if (result.status !== "accepted") {
     throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
@@ -691,16 +689,6 @@ function enableTelegramCurrentConversationBindings(): void {
 }
 
 describe("spawnAcpDirect", () => {
-  beforeAll(() => {
-    resolveThinkingDefault({
-      cfg: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-      },
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-    });
-  });
-
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
@@ -882,7 +870,7 @@ describe("spawnAcpDirect", () => {
       inheritedToolPolicyVersion: 1,
       parentSessionKey: "agent:main:main",
       createdVia: "spawn",
-      createdActor: { type: "agent", id: "agent:main:main" },
+      createdActor: { type: "agent", id: "main" },
       createdAt: expect.any(Number),
     });
     expectBindingCallFields({
@@ -918,6 +906,16 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
+    // ACP registration must leave taskRowOwnership absent so the registry
+    // falls back to best-effort task-row creation (subagent-registry-run-launch.ts).
+    // Native/in-process spawn forwards "required" instead (subagent-spawn.ts);
+    // if ACP ever claimed "required" here, a failed task-row write would abort
+    // an ACP run the registry never actually owns.
+    const registeredAcpRun = expectRecordFields(
+      firstMockCall(hoisted.registerSubagentRunMock, "ACP subagent registration")[0],
+      {},
+    );
+    expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",
@@ -1150,6 +1148,7 @@ describe("spawnAcpDirect", () => {
           },
         ],
         defaults: {
+          thinkingDefault: "off",
           subagents: {
             allowAgents: ["codex"],
             maxSpawnDepth: 2,
@@ -1173,7 +1172,7 @@ describe("spawnAcpDirect", () => {
       agent: "codex",
       runtimeOptions: {
         model: "anthropic/claude-sonnet-4-6",
-        thinking: "adaptive",
+        thinking: "off",
       },
     });
   });
@@ -3323,15 +3322,24 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("session");
-    expectBindingCallFields({
+    const binding = expectBindingCallFields({
       placement: "current",
       conversation: {
         channel: "telegram",
         accountId: "default",
-        conversationId: "2",
-        parentConversationId: "-1003342490704",
       },
     });
+    const conversation = expectRecordFields(binding.conversation, {});
+    const conversationId =
+      typeof conversation.conversationId === "string" ? conversation.conversationId : "";
+    const parentConversationId =
+      typeof conversation.parentConversationId === "string"
+        ? conversation.parentConversationId
+        : undefined;
+    const canonicalTopicId = parentConversationId
+      ? `${parentConversationId}:topic:${conversationId}`
+      : conversationId;
+    expect(canonicalTopicId).toBe("-1003342490704:topic:2");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");

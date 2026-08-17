@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";

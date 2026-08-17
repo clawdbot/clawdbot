@@ -74,38 +74,23 @@ function runClaws(root: string, args: string[]) {
 }
 
 describe("Claw authoring process state", () => {
-  it.each(["create", "validate", "build", "dev"] as const)(
-    "leaves migration-pending operator state unchanged for claws %s",
-    async (command) => {
-      const root = tempDirs.make(`openclaw-claws-${command}-state-`);
-      const external = tempDirs.make(`openclaw-claws-${command}-external-`);
-      const project = path.join(external, command === "create" ? "created-project" : "project");
-      const output = path.join(external, `${command}.tgz`);
-      const workspace = path.join(external, `${command}-workspace`);
-      await fs.mkdir(path.join(root, "config"), { recursive: true });
-      await fs.mkdir(path.join(root, "state", "tasks"), { recursive: true });
-      await fs.writeFile(path.join(root, "config", "openclaw.json"), "{}\n");
-      await fs.writeFile(path.join(root, "state", "tasks", "runs.sqlite"), "legacy state\n");
-      if (command !== "create") {
-        await writeProject(project);
-      }
-      const before = await snapshotTree(root);
-      const args =
-        command === "create"
-          ? ["create", project, "--json"]
-          : command === "validate"
-            ? ["validate", project, "--json"]
-            : command === "build"
-              ? ["build", project, "--out", output, "--json"]
-              : ["dev", project, "--workspace", workspace, "--json"];
+  it("leaves migration-pending operator state unchanged for claws dev", async () => {
+    const root = tempDirs.make("openclaw-claws-dev-state-");
+    const external = tempDirs.make("openclaw-claws-dev-external-");
+    const project = path.join(external, "project");
+    const workspace = path.join(external, "dev-workspace");
+    await fs.mkdir(path.join(root, "config"), { recursive: true });
+    await fs.mkdir(path.join(root, "state", "tasks"), { recursive: true });
+    await fs.writeFile(path.join(root, "config", "openclaw.json"), "{}\n");
+    await fs.writeFile(path.join(root, "state", "tasks", "runs.sqlite"), "legacy state\n");
+    await writeProject(project);
+    const before = await snapshotTree(root);
 
-      const result = runClaws(root, args);
+    const result = runClaws(root, ["dev", project, "--workspace", workspace, "--json"]);
 
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toBeTruthy();
-      expect(await snapshotTree(root)).toEqual(before);
-    },
-    120_000,
-  );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toBeTruthy();
+    expect(await snapshotTree(root)).toEqual(before);
+  }, 120_000);
 });

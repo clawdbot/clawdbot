@@ -9,7 +9,6 @@ import {
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
 import {
-  listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
@@ -69,21 +68,6 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 }
 
 describe("runtime postbuild static assets", () => {
-  it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toEqual([
-      "dist/extensions/acpx/mcp-command-line.mjs",
-      "dist/extensions/acpx/mcp-proxy.mjs",
-      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "dist/extensions/diffs/assets/viewer-runtime.js",
-      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
-      "dist/extensions/onepassword/onepassword-op-path.js",
-      "dist/extensions/onepassword/onepassword-secret-id.js",
-      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
-      "dist/extensions/vault/vault-secret-id.js",
-      "dist/extensions/vault/vault-secret-ref-resolver.js",
-    ]);
-  });
-
   it("discovers repo static asset metadata without scanning extension directories", () => {
     const payload = expectNoNodeFsScans<{
       outputs: string[];
@@ -142,6 +126,29 @@ describe("runtime postbuild static assets", () => {
         dest: "dist/extensions/demo/assets/runtime.js",
       },
     ]);
+  });
+
+  it.each([
+    { name: "top-level array", packageJson: [] },
+    { name: "array openclaw section", packageJson: { openclaw: [] } },
+    { name: "array build section", packageJson: { openclaw: { build: [] } } },
+    {
+      name: "non-record asset entries",
+      packageJson: {
+        openclaw: {
+          build: {
+            staticAssets: [[], "asset", null, { source: 42, output: [] }],
+          },
+        },
+      },
+    },
+  ])("ignores malformed $name metadata", async ({ packageJson }) => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-malformed-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify(packageJson), "utf8");
+
+    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
   });
 
   it("excludes external plugin (bundledDist: false) static assets by default", async () => {

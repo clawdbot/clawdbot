@@ -101,7 +101,7 @@ export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceType = "subagent task" | "cron job";
+type SubagentAnnounceType = "subagent task" | "cron job";
 export type SubagentAnnounceFlowOutcome = NonNullable<
   SubagentAnnounceDeliveryResult["disposition"]
 >;
@@ -160,6 +160,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -205,6 +206,7 @@ export async function runSubagentAnnounceFlow(params: {
   let childSessionLifecycleRevision: string | undefined;
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
+    let targetRequesterAgentId = params.requesterAgentId;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     const childSessionEntry = !childSessionEffectsAllowed()
       ? undefined
@@ -255,7 +257,10 @@ export async function runSubagentAnnounceFlow(params: {
     if (failedTerminalOutcome && !params.terminalReply) {
       reply = undefined;
     }
-    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+      cfg: subagentAnnounceDeps.getRuntimeConfig(),
+      agentId: targetRequesterAgentId,
+    });
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
@@ -479,9 +484,13 @@ export async function runSubagentAnnounceFlow(params: {
             return "retryable";
           }
           targetRequesterSessionKey = fallback.requesterSessionKey;
+          targetRequesterAgentId = fallback.requesterAgentId;
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+            cfg: subagentAnnounceDeps.getRuntimeConfig(),
+            agentId: targetRequesterAgentId,
+          });
           requesterIsSubagent = requesterIsInternalSession();
         }
       }
@@ -521,7 +530,10 @@ export async function runSubagentAnnounceFlow(params: {
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
     if (!requesterIsSubagent) {
-      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+      const { entry } = loadRequesterSessionEntry(
+        targetRequesterSessionKey,
+        targetRequesterAgentId,
+      );
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
     const candidateCompletionDirectOrigin =
@@ -551,6 +563,7 @@ export async function runSubagentAnnounceFlow(params: {
     };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
+      requesterAgentId: targetRequesterAgentId,
       announceId,
       triggerMessage,
       steerMessage: triggerMessage,

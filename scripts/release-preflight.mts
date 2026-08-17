@@ -2,6 +2,7 @@
 // Checks or refreshes generated release artifacts before a release publish.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { coerceErrorMessage as formatError } from "./lib/error-format.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -96,14 +97,6 @@ const releaseTasks: ReleaseTask[] = [
     check: pnpmCommand("plugin-sdk:check-exports"),
   },
   {
-    id: "plugin-sdk-api",
-    name: "plugin SDK API contract manifest",
-    scopes: ["plugin-sdk"],
-    fix: pnpmCommand("plugin-sdk:api:gen"),
-    fixAfter: ["plugin-sdk-exports"],
-    check: pnpmCommand("plugin-sdk:api:check"),
-  },
-  {
     id: "plugin-sdk-surface",
     name: "plugin SDK surface budget",
     scopes: ["plugin-sdk"],
@@ -179,7 +172,7 @@ if (macosVersionErrors.length !== 0 || checkFailures.length !== 0) {
   }
   printCommandFailures(checkFailures);
   console.error(
-    "\nCorrect manual version metadata first. Run `pnpm release:prep` for intentional generated version/config/API changes, then commit the resulting files. If native locale artifacts lag, wait for or dispatch Native App Locale Refresh before freezing the release SHA.",
+    "\nCorrect manual version metadata first. Run `pnpm release:prep` for intentional generated version/config changes, then commit the resulting files. If native locale artifacts lag, wait for or dispatch Native App Locale Refresh before freezing the release SHA.",
   );
   process.exit(1);
 }
@@ -251,10 +244,6 @@ function readPlistString(infoPlist: string, key: string) {
     };
   }
   return { value: matches[0]![1]?.trim() ?? "" };
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function runTaskGraph({

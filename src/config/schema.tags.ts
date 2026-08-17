@@ -49,6 +49,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
   "gateway.controlUi.toolTitles": ["advanced"],
+  "gateway.controlUi.github.token": ["security", "auth", "network", "advanced"],
   "gateway.controlUi.sessionObserver": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
@@ -65,6 +66,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
   "gateway.nodes.allowSkills": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.workerRuns.enabled": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.mcp.servers": ["tools", "network", "advanced"],
   "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],

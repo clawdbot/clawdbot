@@ -1,13 +1,13 @@
 /** Handles /mcp commands for showing and mutating configured MCP servers. */
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
-} from "../../config/mcp-config.js";
+} from "../../agents/mcp-config-mutation.js";
+import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { redactSensitiveArgv } from "../../config/redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../../config/redact-snapshot.js";
-import { buildConfigSchema } from "../../config/schema.js";
+import { buildConfigSchemaCore } from "../../config/schema.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -56,7 +56,7 @@ function redactMcpServersForDisplay(servers: Record<string, unknown>): Record<st
   );
   const redactedRoot = redactConfigObject(
     { mcp: { servers: argvRedacted } },
-    buildConfigSchema().uiHints,
+    buildConfigSchemaCore().uiHints,
   ) as {
     mcp?: { servers?: Record<string, unknown> };
   };
@@ -100,6 +100,7 @@ function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecAppr
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "mcp-show-private-route",
     request: {
       command: params.command.commandBodyNormalized,

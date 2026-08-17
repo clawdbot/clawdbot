@@ -5,6 +5,7 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
@@ -68,6 +69,8 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
+import { materializeProviderContext } from "./images.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -90,6 +93,7 @@ type StreamSettleResult = {
   lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
   currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
   currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+  successfulNestedToolNames: string[];
   attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   cacheBreak: PromptCacheBreak | null;
   lastCallUsage: NormalizedUsage | undefined;
@@ -424,6 +428,15 @@ export async function settleEmbeddedAttemptStream(input: {
     lastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
+    successfulNestedToolNames: [
+      ...new Set(
+        input.toolSearchTargetTranscriptProjections
+          // Receipt evidence admits only projections explicitly recorded as successful.
+          .filter((projection) => Object.is(projection.isError, false))
+          .map((projection) => projection.toolName.trim())
+          .filter(Boolean),
+      ),
+    ],
     attemptUsage,
     cacheBreak,
     lastCallUsage,
@@ -441,6 +454,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   providerThinkingLevel: ProviderThinkLevel | undefined;
   sessionAgentId: string;
   workspaceDir: string;
+  workspaceOnly: boolean;
   agentDir: string;
   abortSignal: AbortSignal;
   getProviderRuntimeHandle: () => ProviderRuntimePluginHandle;
@@ -496,6 +510,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
   });
+  const directProviderStreamFn = providerStreamFn
+    ? wrapStreamFnWithMessageTransform(
+        providerStreamFn,
+        (messages) => messages,
+        ({ context, ...provider }) =>
+          materializeProviderContext({
+            ...provider,
+            context,
+            workspaceDir: input.workspaceDir,
+            workspaceOnly: input.workspaceOnly,
+            localRoots: input.workspaceOnly
+              ? undefined
+              : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+            sandbox:
+              input.sandbox?.enabled && input.sandbox.fsBridge
+                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+                : undefined,
+          }),
+      )
+    : undefined;
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -503,13 +537,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
   });
   const streamStrategy = describeEmbeddedAgentStreamStrategy({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn,
+    providerStreamFn: directProviderStreamFn,
     model: attempt.model,
     resolvedApiKey: transportApiKey,
   });
   session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn,
+    providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,
@@ -599,6 +633,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
         `(${attempt.provider}/${attempt.modelId})`,
     );
   }
+  session.agent.transport = effectiveAgentTransport;
   return {
     effectiveAgentTransport,
     effectiveExtraParams,

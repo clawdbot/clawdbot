@@ -22,7 +22,7 @@ import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
 } from "./components/chat-message.ts";
-import * as chatThread from "./components/chat-thread.ts";
+import * as chatThread from "./components/chat-thread-interactions.ts";
 import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
@@ -709,7 +709,7 @@ afterEach(() => {
     owner.remove();
   }
   confirmationOwners.clear();
-  chatThread.resetChatThreadPresentationState();
+  chatThread.resetThreadPresentation();
   window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
   vi.unstubAllGlobals();
 });
@@ -947,7 +947,7 @@ describe("chat pane connection lifecycle", () => {
     });
 
     expect(request).toHaveBeenCalledWith(
-      "chat.history",
+      "chat.startup",
       expect.objectContaining({ limit: 100, sessionKey: state.sessionKey }),
     );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));

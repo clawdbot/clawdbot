@@ -11,6 +11,8 @@ import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { buildSlackChannelIdCandidates } from "./group-policy.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
@@ -282,6 +284,7 @@ function resolveSlackChannelReadPolicy(params: {
   account: ResolvedSlackAccount;
   cfg: OpenClawConfig;
   channelId: string;
+  teamId?: string;
   channelName?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   metadataResolved?: boolean;
@@ -290,6 +293,8 @@ function resolveSlackChannelReadPolicy(params: {
   const channels = params.account.config.channels;
   const channelKeys = Object.keys(channels ?? {});
   const channelConfig = resolveSlackChannelConfig({
+    teamId: params.teamId,
+    allowUnscoped: getSlackInstallationKind(params.account.accountId) !== "enterprise",
     channelId: params.channelId,
     channelName: params.channelName,
     channels,
@@ -344,7 +349,7 @@ function resolveSlackChannelReadPolicy(params: {
       params.account.config.dm?.enabled !== false &&
       params.account.config.dm?.groupEnabled === true &&
       (params.currentConversation ||
-        isSlackGroupDmTargetConfigured(params.account, params.channelId)),
+        isSlackGroupDmTargetConfigured(params.account, params.channelId, params.teamId)),
     shouldResolveName,
   };
 }
@@ -461,16 +466,26 @@ async function assertSlackReadTargetAllowed(params: {
   }
 }
 
-function isSlackGroupDmTargetConfigured(account: ResolvedSlackAccount, channelId: string): boolean {
+function isSlackGroupDmTargetConfigured(
+  account: ResolvedSlackAccount,
+  channelId: string,
+  teamId?: string,
+): boolean {
   const entries = account.config.dm?.groupChannels ?? [];
   if (entries.length === 0) {
     return true;
   }
+  const candidates = new Set(
+    buildSlackChannelIdCandidates(channelId, teamId, {
+      allowUnscoped: getSlackInstallationKind(account.accountId) !== "enterprise",
+    }).map((candidate) => candidate.toLowerCase()),
+  );
   const target = channelId.trim().toLowerCase();
   return entries.some((entry) => {
     const candidate = String(entry).trim().toLowerCase();
     return (
       candidate === "*" ||
+      candidates.has(candidate) ||
       candidate === target ||
       candidate === `slack:${target}` ||
       candidate === `channel:${target}` ||
@@ -658,6 +673,7 @@ export async function handleSlackAction(
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         const textIsSlackMrkdwn = readBooleanParam(params, "textIsSlackMrkdwn");
         const textIsSlackPlainText = readBooleanParam(params, "textIsSlackPlainText");
+        const forceDocument = readBooleanParam(params, "forceDocument") === true;
         const preparedMessages = context?.preparedMessages;
         const authoredTextPlacement = readStringParam(params, "authoredTextPlacement") as
           | "none"
@@ -697,6 +713,7 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          ...(forceDocument ? { forceDocument: true } : {}),
         };
         const sendOpts = {
           ...baseSendOpts,
@@ -792,6 +809,7 @@ export async function handleSlackAction(
         });
         const filename = readStringParam(params, "filename");
         const title = readStringParam(params, "title");
+        const forceDocument = readBooleanParam(params, "forceDocument") === true;
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         if (replyBroadcast) {
           throw new Error(
@@ -816,6 +834,7 @@ export async function handleSlackAction(
             mediaLocalRoots: context?.mediaLocalRoots,
             mediaReadFile: context?.mediaReadFile,
             threadTs: threadTs ?? undefined,
+            ...(forceDocument ? { forceDocument: true } : {}),
             ...(filename ? { uploadFileName: filename } : {}),
             ...(title ? { uploadTitle: title } : {}),
           },

@@ -1,3 +1,4 @@
+import { clearVolatileTabAliases } from "./session-tab-ephemeral-aliases.js";
 export type SessionTabInteractionIdentity = {
   sessionKey: string;
   targetId: string;
@@ -72,4 +73,3 @@ export function forgetColdNativeActivity(identity: string): void {
 export function readColdNativeActivity(identity: string): number | undefined {
   return coldNativeActivity().get(identity);
 }
-import { clearVolatileTabAliases } from "./session-tab-ephemeral-aliases.js";

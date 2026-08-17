@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -272,10 +273,10 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           meta: { provider: "xai", capability: "realtime-voice" },
         });
         if (!attempt.ready) {
-          rejectStartup(error instanceof Error ? error : new Error(String(error)));
+          rejectStartup(toStringifiedError(error));
           return;
         }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+        this.config.onError?.(toStringifiedError(error));
       });
 
       ws.on("close", (code, reasonBuffer) => {
@@ -330,7 +331,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           attempt.resolve();
           return;
         }
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       });
     await attempt.promise;
   }
@@ -341,7 +342,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }> {
     const apiKey = this.config.resolveApiKey
       ? await this.config.resolveApiKey()
-      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg);
+      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg, this.config.agentId);
     const model = this.config.model ?? XAI_REALTIME_DEFAULT_MODEL;
     const url = toXaiRealtimeWsUrl(
       this.config.baseUrl,
@@ -418,7 +419,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       ) {
         return;
       }
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.config.onError?.(toStringifiedError(error));
       await this.attemptReconnect(reason, nextConnection);
     }
   }

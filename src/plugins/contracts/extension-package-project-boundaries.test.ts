@@ -227,12 +227,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/acp-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./channel-secret-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./channel-streaming"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-streaming.d.ts",
-    );
     expect(packageJson.exports?.["./cli-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/cli-runtime.d.ts",
     );
@@ -291,10 +285,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/infra-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/text-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./zod"]?.types).toBe("./dist/src/plugin-sdk/zod.d.ts");
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );

@@ -10,6 +10,7 @@ import {
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
@@ -155,6 +156,7 @@ async function runNewWithPreviousSessionEntry(params: {
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
+  agentId?: string;
   sessionKey?: string;
   workspaceDirOverride?: string;
   timestamp?: Date;
@@ -166,6 +168,15 @@ async function runNewWithPreviousSessionEntry(params: {
     } satisfies OpenClawConfig);
   const legacySessionFile = params.previousSessionEntry.sessionFile;
   const marker = parseSqliteSessionFileMarker(legacySessionFile);
+  const sessionKey = params.sessionKey ?? "agent:main:main";
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (params.agentId && sessionKeyAgentId && params.agentId !== sessionKeyAgentId) {
+    throw new Error("session-memory fixture agentId must match its agent-scoped sessionKey");
+  }
+  const agentId = params.agentId ?? sessionKeyAgentId;
+  if (!agentId) {
+    throw new Error("session-memory fixture requires an agent owner");
+  }
   const storePath =
     marker?.storePath ?? baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
   if (legacySessionFile && !marker) {
@@ -188,9 +199,9 @@ async function runNewWithPreviousSessionEntry(params: {
         });
       await replaceTranscriptEvents(
         {
-          agentId: "main",
+          agentId,
           sessionId: params.previousSessionEntry.sessionId,
-          sessionKey: params.sessionKey ?? "agent:main:main",
+          sessionKey,
           storePath,
         },
         events,
@@ -201,16 +212,12 @@ async function runNewWithPreviousSessionEntry(params: {
     ...baseConfig,
     session: { ...baseConfig.session, store: storePath },
   } satisfies OpenClawConfig;
-  const event = createHookEvent(
-    "command",
-    params.action ?? "new",
-    params.sessionKey ?? "agent:main:main",
-    {
-      cfg,
-      previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
-      ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
-    },
-  );
+  const event = createHookEvent("command", params.action ?? "new", sessionKey, {
+    agentId,
+    cfg,
+    previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
+    ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
+  });
   if (params.timestamp) {
     event.timestamp = params.timestamp;
   }

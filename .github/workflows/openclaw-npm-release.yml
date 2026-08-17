@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      use_github_hosted_runners:
+        description: Use GitHub-hosted Ubuntu for npm preflight
+        required: false
+        default: false
+        type: boolean
       preflight_run_id:
         description: Existing successful preflight workflow run id to promote without rebuilding
         required: false
@@ -47,6 +52,11 @@ on:
           - beta
           - latest
           - extended-stable
+      plugin_sdk_api_acknowledgement:
+        description: 8-character digest from the Plugin SDK API diff report when the release changes the SDK
+        required: false
+        default: ""
+        type: string
       bypass_extended_stable_guard:
         description: Testing only; relax the extended-stable patch and protected-main month policy on the canonical extended-stable branch
         required: true
@@ -59,7 +69,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
@@ -71,7 +81,7 @@ jobs:
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
     # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     permissions:
       contents: read
     steps:
@@ -327,6 +337,63 @@ jobs:
       # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
       # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
       # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
+      - name: Checkout trusted Plugin SDK API tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/plugin-sdk-release-tooling
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            src
+            packages
+            patches
+            scripts
+
+      - name: Verify Plugin SDK API changes
+        env:
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts
+          target_sha="$(git rev-parse HEAD)"
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "Trusted Plugin SDK API tooling checkout does not match the workflow SHA." >&2
+            exit 1
+          fi
+          if [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
+            echo "Trusted Plugin SDK API tooling checkout was modified by the release target." >&2
+            exit 1
+          fi
+          if ! git -C "$tooling_dir" cat-file -e "${target_sha}^{commit}" 2>/dev/null; then
+            timeout --signal=TERM --kill-after=10s 120s git -C "$tooling_dir" fetch \
+              --no-tags --depth=1 origin "$target_sha"
+          fi
+          previous_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+          previous_tag="v${previous_version}"
+          git -C "$tooling_dir" rev-parse --verify "${previous_tag}^{commit}" >/dev/null
+          pnpm --dir "$tooling_dir" install --frozen-lockfile --ignore-scripts --filter openclaw
+          diff_args=(
+            --base "$previous_tag"
+            --head "$target_sha"
+            --evidence "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-evidence.json"
+            --json "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-diff.json"
+            --summary "$GITHUB_STEP_SUMMARY"
+          )
+          pnpm --dir "$tooling_dir" run plugin-sdk:api:diff -- "${diff_args[@]}"
+
+      - name: Upload Plugin SDK API release diff
+        if: always() && hashFiles('.artifacts/plugin-sdk-api-release-evidence.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/plugin-sdk-api-release-diff.json
+            .artifacts/plugin-sdk-api-release-evidence.json
+          retention-days: 30
+
       - name: Verify release contents
         env:
           OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR: ${{ steps.core_package_tarballs.outputs.dir }}
@@ -593,6 +660,9 @@ jobs:
           ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" AI_PACKAGE_VERSION="$AI_PACKAGE_VERSION" AI_TARBALL_NAME="$AI_TARBALL_NAME" AI_TARBALL_SHA256="$AI_TARBALL_SHA256" GATEWAY_PROTOCOL_PACKAGE_VERSION="$GATEWAY_PROTOCOL_PACKAGE_VERSION" GATEWAY_PROTOCOL_TARBALL_NAME="$GATEWAY_PROTOCOL_TARBALL_NAME" GATEWAY_PROTOCOL_TARBALL_SHA256="$GATEWAY_PROTOCOL_TARBALL_SHA256" GATEWAY_CLIENT_PACKAGE_VERSION="$GATEWAY_CLIENT_PACKAGE_VERSION" GATEWAY_CLIENT_TARBALL_NAME="$GATEWAY_CLIENT_TARBALL_NAME" GATEWAY_CLIENT_TARBALL_SHA256="$GATEWAY_CLIENT_TARBALL_SHA256" node <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
+          const pluginSdkApi = JSON.parse(
+            fs.readFileSync(".artifacts/plugin-sdk-api-release-evidence.json", "utf8"),
+          );
           const manifest = {
             version: 1,
             releaseTag: process.env.RELEASE_TAG,
@@ -602,6 +672,7 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
+            pluginSdkApi,
             corePackageTarballs: [
               ...(process.env.AI_TARBALL_NAME
                 ? [
@@ -881,16 +952,6 @@ jobs:
           # tarball, so real publishes do not need the repository's full history.
           fetch-depth: ${{ inputs.preflight_run_id != '' && 1 || 0 }}
 
-      - name: Checkout trusted validation verifier
-        if: ${{ inputs.full_release_validation_run_id != '' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted-workflow
-          fetch-depth: 0
-          filter: blob:none
-          persist-credentials: false
-
       - name: Validate Tideclaw alpha publish target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
         env:
@@ -931,19 +992,57 @@ jobs:
 
           echo "Publishing openclaw@${PACKAGE_VERSION}"
 
+      - name: Checkout trusted validation verifier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-workflow
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+          sparse-checkout: scripts
+
       - name: Verify preflight run metadata
+        id: preflight_run
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
           RUN_KIND: preflight
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
           RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          preflight_head_sha="$(jq -r .headSha <<<"$RUN_JSON")"
+          preflight_head_branch="$(jq -r .headBranch <<<"$RUN_JSON")"
+          extended_stable_preflight=false
+          if [[ "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH" ]]; then
+            extended_stable_preflight=true
+          fi
+          if [[ "$preflight_head_branch" != "main" && "refs/heads/${preflight_head_branch}" != "$WORKFLOW_REF" && "$extended_stable_preflight" != "true" ]]; then
+            echo "OpenClaw npm preflight run must come from main or the active protected release branch." >&2
+            exit 1
+          fi
+          if ! git -C trusted-workflow cat-file -e "${preflight_head_sha}^{commit}" 2>/dev/null; then
+            timeout --signal=TERM --kill-after=10s 120s git -C trusted-workflow fetch \
+              --no-tags --depth=1 origin "$preflight_head_sha"
+          fi
+          if [[ "$extended_stable_preflight" != "true" ]] && ! git -C trusted-workflow merge-base --is-ancestor "$preflight_head_sha" "$WORKFLOW_SHA"; then
+            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
+            exit 1
+          fi
+          preflight_run_attempt="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}" --jq .run_attempt)"
+          if [[ ! "$preflight_run_attempt" =~ ^[1-9][0-9]*$ ]]; then
+            echo "OpenClaw npm preflight run has an invalid attempt." >&2
+            exit 1
+          fi
+          echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=${preflight_run_attempt}" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
         if: ${{ inputs.full_release_validation_run_id != '' }}
@@ -991,38 +1090,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
+          rm -rf preflight-tarball plugin-sdk-api-evidence
+          mkdir -p preflight-tarball plugin-sdk-api-evidence
 
-          download_preflight_artifact() {
-            local preferred_name fallback_name
-            preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
-            rm -rf preflight-tarball
-            mkdir -p preflight-tarball
+          download_named_artifact() {
+            local artifact_name="$1"
+            local artifact_dir="$2"
+            for attempt in 1 2 3; do
+              if gh run download "${PREFLIGHT_RUN_ID}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${artifact_name}" \
+                --dir "${artifact_dir}"; then
+                return 0
+              fi
+              if [[ "$attempt" != "3" ]]; then
+                echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
+                sleep $((attempt * 10))
+              fi
+            done
+            return 1
+          }
 
-            download_named_artifact() {
-              local artifact_name="$1"
-              for attempt in 1 2 3; do
-                if gh run download "${PREFLIGHT_RUN_ID}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --name "${artifact_name}" \
-                  --dir preflight-tarball; then
-                  return 0
-                fi
-                if [[ "$attempt" != "3" ]]; then
-                  echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
-                  sleep $((attempt * 10))
-                fi
-              done
-              return 1
-            }
-
-            if download_named_artifact "${preferred_name}"; then
-              echo "Downloaded ${preferred_name}."
-              return 0
-            fi
-
+          if download_named_artifact "${preferred_name}" preflight-tarball; then
+            echo "Downloaded ${preferred_name}."
+          else
             echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
             mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
               --jq '.artifacts[] | select(.expired != true) | .name' |
@@ -1034,11 +1130,12 @@ jobs:
               exit 1
             fi
             fallback_name="${matches[0]}"
-            download_named_artifact "${fallback_name}"
+            download_named_artifact "${fallback_name}" preflight-tarball
             echo "Downloaded fallback preflight artifact ${fallback_name}."
-          }
-
-          download_preflight_artifact
+          fi
+          download_named_artifact \
+            "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}" \
+            plugin-sdk-api-evidence
 
       - name: Validate release tag and package metadata
         if: ${{ inputs.preflight_run_id == '' }}
@@ -1061,6 +1158,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -1092,6 +1191,24 @@ jobs:
             echo "Prepared preflight npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $ARTIFACT_RELEASE_NPM_DIST_TAG" >&2
             exit 1
           fi
+          IMMUTABLE_PLUGIN_SDK_API_EVIDENCE="plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
+          if [[ ! -f "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE" ]] || ! cmp -s \
+            <(jq -S '.pluginSdkApi' "$MANIFEST_FILE") \
+            <(jq -S '.' "$IMMUTABLE_PLUGIN_SDK_API_EVIDENCE"); then
+            echo "Prepared Plugin SDK API evidence does not match its immutable artifact." >&2
+            exit 1
+          fi
+          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+          current_selector_ref="v${current_selector_version}"
+          current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
+          node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
+            --manifest "$MANIFEST_FILE" \
+            --head "$EXPECTED_RELEASE_SHA" \
+            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+            --current-selector-ref "$current_selector_ref" \
+            --current-selector-sha "$current_selector_sha" \
+            --target-ref "$RELEASE_TAG" \
+            --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
           if [[ ! -f "$ARTIFACT_TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball named in manifest is missing: $ARTIFACT_TARBALL_NAME" >&2
             exit 1

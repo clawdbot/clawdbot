@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -43,7 +45,7 @@ vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) 
     await importOriginal<typeof import("../../auto-reply/reply/provider-dispatcher.js")>();
   return {
     ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
+    dispatchReplyWithBufferedBlockDispatcherCore,
   };
 });
 
@@ -68,7 +70,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
   return {
     ...actual,
-    sendDurableMessageBatch,
+    sendDurableMessageBatchCore: sendDurableMessageBatch,
   };
 });
 
@@ -91,6 +93,32 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const cfg = {} as OpenClawConfig;
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -122,6 +150,7 @@ function createDispatch(
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: visibleFinalReceipt,
     };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
@@ -228,6 +257,44 @@ describe("channel turn pipeline", () => {
 
     expect(events).toEqual(["message_sent", "onDelivered", "after-deliver"]);
     expect(onDelivered).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      channel: "slack",
+      routeSessionKey: "agent:main:slack:channel:c1",
+      dispatchSessionKey: "agent:main:slack:channel:c1:thread:123.456",
+    },
+    {
+      channel: "discord",
+      routeSessionKey: "agent:main:discord:channel:c1",
+      dispatchSessionKey: "agent:main:discord:channel:c1:thread:t1",
+    },
+  ])("carries $channel route system-event ownership privately into dispatch", async (scenario) => {
+    const { channel, routeSessionKey, dispatchSessionKey } = scenario;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
+      expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
+      await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchTestAssembledTurn({
+      channel,
+      routeSessionKey,
+      ctxPayload: createCtx({
+        SessionKey: dispatchSessionKey,
+        Surface: channel,
+        Provider: channel,
+      }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: async () => ({ visibleReplySent: true }),
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("does not emit a second failure when a post-send observer throws", async () => {
@@ -530,6 +597,54 @@ describe("channel turn pipeline", () => {
     expect(deliver).toHaveBeenCalledWith({ text: "reply from pipeline" }, { kind: "final" });
   });
 
+  it("records transform suppression without blocking a later visible channel payload", async () => {
+    const deliver = vi.fn(async (payload: ReplyPayload) => ({
+      messageIds: [`local:${payload.text}`],
+      visibleReplySent: true,
+      content: payload.text,
+    }));
+    const onDelivered = vi.fn();
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+      expect(dispatcher.sendFinalReply({ text: "private reply" })).toBe(false);
+      expect(dispatcher.sendFinalReply({ text: "public reply" })).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      return {
+        queuedFinal: dispatcher.getQueuedCounts().final > 0,
+        counts: dispatcher.getQueuedCounts(),
+      };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    const result = await dispatchTestAssembledTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver, onDelivered, observeMessageSent: true },
+      replyPipeline: {
+        transformReplyPayload: (payload) => (payload.text === "private reply" ? null : payload),
+      },
+    });
+
+    expect(deliver).toHaveBeenCalledExactlyOnceWith({ text: "public reply" }, { kind: "final" });
+    expect(onDelivered).toHaveBeenCalledWith(
+      { text: "private reply" },
+      { kind: "final" },
+      {
+        visibleReplySent: false,
+        suppression: { reason: "channel_transform" },
+      },
+    );
+    expect(emitMessageSent).toHaveBeenCalledTimes(1);
+    expectDispatched(result);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+  });
+
   it("records inbound session before dispatching delivery", async () => {
     const events: string[] = [];
     const deliver = vi.fn(async () => {
@@ -653,6 +768,7 @@ describe("channel turn pipeline", () => {
       return {
         queuedFinal: true,
         counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: visibleFinalReceipt,
       };
     });
 
@@ -862,15 +978,14 @@ describe("channel turn pipeline", () => {
     ]);
   });
 
-  it("still warns when a visible turn has zero counts and no observed delivery", async () => {
+  it("does not warn when an active run accepts deferred steer ownership", async () => {
     const events: string[] = [];
     const log = vi.fn();
     const recordInboundSession = createRecordInboundSession(events);
-    // Guard against over-suppression: a genuinely empty visible dispatch must still warn.
     const runDispatch = vi.fn(async () => ({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
-      observedReplyDelivery: false,
+      deferredToActiveRun: "steer" as const,
     }));
 
     const result = await runPreparedChannelTurn({
@@ -881,21 +996,16 @@ describe("channel turn pipeline", () => {
       recordInboundSession,
       runDispatch,
       log,
-      messageId: "msg-empty",
+      messageId: "msg-deferred-steer",
       record: {
         onRecordError: vi.fn(),
       },
     });
 
     expectDispatched(result);
-    expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
-    expect(log.mock.calls).toContainEqual([
-      expect.objectContaining({
-        stage: "dispatch",
-        event: "warning",
-        messageId: "msg-empty",
-        reason: "zero-count-visible-dispatch",
-      }),
+    expect(result.dispatchResult?.deferredToActiveRun).toBe("steer");
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
     ]);
   });
 });

@@ -12,6 +12,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
@@ -30,6 +31,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
@@ -40,7 +42,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 
@@ -784,21 +785,25 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  return tools.flatMap((tool) => {
+  const converted = tools.flatMap((tool) => {
     try {
-      return {
+      const name = tool.name;
+      const description = tool.description;
+      const value = {
         type: "function",
         function: {
-          name: tool.name,
-          description: tool.description,
+          name,
+          description,
           parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
           strict: false,
         },
-      };
+      } satisfies FunctionTool & { type: "function" };
+      return { name, description, value };
     } catch {
       return [];
     }
   });
+  return sortPromptCacheToolsByName(converted).map(({ value }) => value);
 }
 
 function stripSymbolKeys(value: unknown): unknown {

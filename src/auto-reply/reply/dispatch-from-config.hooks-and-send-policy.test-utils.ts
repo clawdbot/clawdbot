@@ -660,7 +660,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
-  it("does not treat an active-run accepted turn as an empty completion", async () => {
+  it("reports an active-run accepted turn as deferred instead of empty", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -688,6 +688,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      deferredToActiveRun: "followup",
     });
   });
 
@@ -1166,10 +1167,39 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
-  it("does not deliver no-visible fallback when dispatcher already queued a block", async () => {
+  it("does not duplicate a final accepted by a legacy dispatcher", async () => {
     setNoAbort();
-    // Channel-owned admissions outside the dispatch pipeline have unknown
-    // settlement; the foreign-admission backstop keeps the fallback quiet.
+    const dispatcher = createDispatcher();
+    delete dispatcher.supportsSettledReceipt;
+    dispatcher.waitForIdle = vi.fn(async () => {});
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: { defaults: { silentReply: { group: "disallow" } } },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "Legacy final answer." })),
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
+      text: "Legacy final answer.",
+    });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it("does not infer receipt visibility from a custom dispatcher's queued block", async () => {
+    setNoAbort();
     const dispatcher = createDispatcher();
     dispatcher.getQueuedCounts = vi.fn(() => ({ tool: 0, block: 1, final: 0 }));
     const replyResolver = vi.fn(async () => undefined);
@@ -1196,11 +1226,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(result.queuedFinal).toBe(true);
     expect(result.counts.block).toBe(1);
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("keeps no-visible fallback eligible when core fallback delivery fails", async () => {
@@ -2668,6 +2697,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
             approvalSlug: "117ba06d",
             allowedDecisions: ["allow-once", "allow-always", "deny"],
           },
+        },
+      },
+    },
+    {
+      label: "unavailable exec approvals",
+      payload: {
+        text: "Exec approval is unavailable.",
+        channelData: {
+          execApprovalUnavailable: { reason: "no-approval-route" },
         },
       },
     },

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   cloudSessionRecoveryExactStorageKey,
@@ -19,6 +20,7 @@ export type CloudSessionRecovery = {
   message: string;
   attachments?: unknown[];
   profileId: string;
+  machineClass?: string;
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
@@ -29,6 +31,7 @@ export type CloudSessionRecovery = {
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
 const CLOUD_CREATE_STRING_FIELDS = [
+  "category",
   "model",
   "thinkingLevel",
   "worktreeBaseRef",
@@ -43,10 +46,10 @@ export function parseCloudSessionCreateParams(
   sessionKey: string,
   agentId: string,
 ): CloudSessionCreateParams | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const allowed = new Set<string>([
     "key",
     "agentId",
@@ -74,9 +77,7 @@ export function parseCloudSessionCreateParams(
 function parseStoredCloudSessionRecovery(raw: string): Partial<CloudSessionRecovery> | null {
   try {
     const value: unknown = JSON.parse(raw);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Partial<CloudSessionRecovery>)
-      : null;
+    return isRecord(value) ? (value as Partial<CloudSessionRecovery>) : null;
   } catch {
     return null;
   }
@@ -105,6 +106,8 @@ function validateCloudSessionRecovery(
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !isNonEmptyString(value.profileId) ||
+    (value.machineClass !== undefined &&
+      (!isNonEmptyString(value.machineClass) || value.machineClass.length > 128)) ||
     !isNonEmptyString(value.agentId) ||
     !cloudSessionRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
     (value.phase !== "creating" && value.phase !== "dispatching" && value.phase !== "sending") ||

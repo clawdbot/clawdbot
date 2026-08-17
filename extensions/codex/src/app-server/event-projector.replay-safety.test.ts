@@ -327,7 +327,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onAgentEvent,
       onToolResult,
     });

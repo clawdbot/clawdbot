@@ -3,7 +3,7 @@
  */
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
-import { normalizeToolName } from "../../tool-policy.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -108,14 +108,16 @@ export function buildToolSearchRunPlan(params: {
   }
   const explicitControlAllowlistNames = new Set(
     params.explicitAllowlistSources.flatMap((source) =>
-      source.entries.map((entry) => normalizeToolName(entry)),
+      source.entries.map((entry) => normalizeToolPolicyName(entry)),
     ),
   );
   const autoAddedControlNames = new Set(
     (params.controlsEnabled
       ? (params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES)
       : []
-    ).filter((controlName) => !explicitControlAllowlistNames.has(normalizeToolName(controlName))),
+    ).filter(
+      (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
+    ),
   );
   const explicitlyAllowedClientToolNames = collectExplicitlyAllowedClientToolNames({
     clientTools: params.clientTools,

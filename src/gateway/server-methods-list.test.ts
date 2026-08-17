@@ -18,12 +18,18 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
 
-  it("advertises node presence activity updates", () => {
+  it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
+    expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
+    expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
   });
 
   it("advertises skill invalidation updates", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
+  });
+
+  it("advertises portal replace-set updates", () => {
+    expect(GATEWAY_EVENTS).toContain("portal.changed");
   });
 
   it("advertises session observer digests", () => {
@@ -66,7 +72,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-42)).toEqual([
+    expect(listGatewayMethods().slice(-55)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -109,6 +115,19 @@ describe("listGatewayMethods", () => {
       "secrets.store.list",
       "secrets.store.set",
       "secrets.store.delete",
+      "users.prefs.get",
+      "users.prefs.set",
+      "projects.add",
+      "projects.searchRemote",
+      "desktop.observe",
+      "desktop.launch",
+      "device.scopes.requestUpgrade",
+      "device.scopes.waitUpgrade",
+      "portal.list",
+      "portal.open",
+      "portal.close",
+      "sessions.move",
+      "sessions.assignOwner",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -176,10 +195,24 @@ describe("listGatewayMethods", () => {
 
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
+    expect(methods).not.toContain("node.runnerInventory.update");
     expect(methods).not.toContain("config.openFile");
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("registers the hidden node protocol feature publication method", () => {
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "node.runnerInventory.update",
+    );
+
+    expect(coreGatewayHandlers["node.runnerInventory.update"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "node.runnerInventory.update",
+      scope: "node",
+      advertise: false,
+    });
   });
 
   it("preserves the legacy advertised method order", () => {
@@ -200,7 +233,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-49)).toEqual([
+    expect(coreMethods.slice(-62)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -250,6 +283,19 @@ describe("listGatewayMethods", () => {
       "secrets.store.list",
       "secrets.store.set",
       "secrets.store.delete",
+      "users.prefs.get",
+      "users.prefs.set",
+      "projects.add",
+      "projects.searchRemote",
+      "desktop.observe",
+      "desktop.launch",
+      "device.scopes.requestUpgrade",
+      "device.scopes.waitUpgrade",
+      "portal.list",
+      "portal.open",
+      "portal.close",
+      "sessions.move",
+      "sessions.assignOwner",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -271,6 +317,22 @@ describe("listGatewayMethods", () => {
     );
     expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
     expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
+    expect(methods.indexOf("users.prefs.get")).toBe(methods.indexOf("secrets.store.delete") + 1);
+    expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
+    expect(methods.indexOf("projects.add")).toBe(methods.indexOf("users.prefs.set") + 1);
+    expect(methods.indexOf("projects.searchRemote")).toBe(methods.indexOf("projects.add") + 1);
+    expect(methods.indexOf("desktop.observe")).toBe(methods.indexOf("projects.searchRemote") + 1);
+    expect(methods.indexOf("desktop.launch")).toBe(methods.indexOf("desktop.observe") + 1);
+    expect(methods.indexOf("device.scopes.requestUpgrade")).toBe(
+      methods.indexOf("desktop.launch") + 1,
+    );
+    expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
+      methods.indexOf("device.scopes.requestUpgrade") + 1,
+    );
+    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
+    expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
+    expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
+    expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {
@@ -315,6 +377,21 @@ describe("listGatewayMethods", () => {
     ).toMatchObject({
       scope: "operator.admin",
       controlPlaneWrite: true,
+    });
+  });
+
+  it("classifies project cloning as a described control-plane write", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    expect(descriptors.find((descriptor) => descriptor.name === "projects.add")).toMatchObject({
+      scope: "operator.write",
+      controlPlaneWrite: true,
+    });
+    expect(
+      descriptors.find((descriptor) => descriptor.name === "projects.searchRemote"),
+    ).toMatchObject({
+      scope: "operator.read",
+      description: "Search GitHub repositories that can be cloned as managed projects.",
     });
   });
 

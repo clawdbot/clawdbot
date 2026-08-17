@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
+import {
+  buildCodexMcpServersConfig,
+  loadCodexBundleMcpThreadConfigCore,
+} from "./codex-mcp-config.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
 
 const mocks = vi.hoisted(() => ({
@@ -94,11 +97,11 @@ describe("buildCodexMcpServersConfig", () => {
   });
 });
 
-describe("loadCodexBundleMcpThreadConfig", () => {
+describe("loadCodexBundleMcpThreadConfigCore", () => {
   it("forwards a prepared manifest registry to bundle loading", () => {
     const manifestRegistry = { plugins: [] };
 
-    loadCodexBundleMcpThreadConfig({ workspaceDir: "/workspace", manifestRegistry });
+    loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace", manifestRegistry });
 
     expect(mocks.loadCalls).toEqual([
       expect.objectContaining({ workspaceDir: "/workspace", manifestRegistry }),
@@ -128,7 +131,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       },
     });
 
-    const loaded = loadCodexBundleMcpThreadConfig({ workspaceDir: "/workspace" });
+    const loaded = loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace" });
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);
     expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({ command: "node" });
@@ -154,7 +157,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       diagnostics: [],
     };
 
-    const loaded = loadCodexBundleMcpThreadConfig({
+    const loaded = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {
         plugins: {
@@ -192,7 +195,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       diagnostics: [],
     };
 
-    const loaded = loadCodexBundleMcpThreadConfig({
+    const loaded = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {},
       toolOverrides: {
@@ -232,10 +235,10 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     };
 
     expect(
-      loadCodexBundleMcpThreadConfig({ workspaceDir: "/workspace", cfg }).configPatch,
+      loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace", cfg }).configPatch,
     ).toBeUndefined();
     expect(
-      loadCodexBundleMcpThreadConfig({
+      loadCodexBundleMcpThreadConfigCore({
         workspaceDir: "/workspace",
         cfg,
         toolOverrides: { mcpServers: { docs: true } },
@@ -250,7 +253,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
   it("leaves user mcp.servers to the Codex user MCP projection path", () => {
     // User MCP config is projected elsewhere; this loader only injects bundled
     // MCP servers so the same server does not appear twice in Codex.
-    const loaded = loadCodexBundleMcpThreadConfig({
+    const loaded = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
@@ -290,7 +293,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       { toolsEnabled: true, toolsAllow: [] },
       { toolsEnabled: true, toolsAllow: ["memory_search"] },
     ]) {
-      const loaded = loadCodexBundleMcpThreadConfig({
+      const loaded = loadCodexBundleMcpThreadConfigCore({
         workspaceDir: "/workspace",
         cfg,
         ...params,
@@ -304,7 +307,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
   });
 
   it("omits the config patch when no MCP servers are configured", () => {
-    const loaded = loadCodexBundleMcpThreadConfig({
+    const loaded = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {},
       toolsEnabled: true,
@@ -338,7 +341,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       diagnostics: [],
     };
 
-    const loaded = loadCodexBundleMcpThreadConfig({
+    const loaded = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {},
       toolsEnabled: true,
@@ -355,7 +358,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       },
       diagnostics: [],
     };
-    const withoutScopedConfig = loadCodexBundleMcpThreadConfig({
+    const withoutScopedConfig = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {},
       toolsEnabled: true,
@@ -388,12 +391,12 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       diagnostics: [],
     };
 
-    const a = loadCodexBundleMcpThreadConfig({
+    const a = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {},
       toolsEnabled: true,
     });
-    const b = loadCodexBundleMcpThreadConfig({
+    const b = loadCodexBundleMcpThreadConfigCore({
       workspaceDir: "/workspace",
       cfg: {},
       toolsEnabled: true,

@@ -8,7 +8,7 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
@@ -36,7 +36,7 @@ describe("gateway exec approvals QA", () => {
   });
 
   it("protects policy snapshots and resolves a pending request from another reviewer", async () => {
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     const token = "gateway-exec-approvals-qa-token";
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {

@@ -43,6 +43,11 @@ import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
+import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import {
+  bindSourceReplyDeliveryRuntime,
+  readSourceReplyDeliveryRuntime,
+} from "./source-reply-delivery-runtime.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -89,7 +94,6 @@ export async function runEmbeddedFallbackCandidate(params: {
   >;
   notifyAgentRunStart: () => void;
   notifyUserAboutCompaction: boolean;
-  sourceRepliesAreToolOnly: boolean;
   messageToolDeliveryState: MessageToolDeliveryState;
   preserveProgressCallbackStartOrder: boolean;
   presentation: EmbeddedPresentation;
@@ -101,12 +105,14 @@ export async function runEmbeddedFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params.candidateRun);
+  const candidateRun = {
+    ...params.candidateRun,
+    ...params.candidateFastMode,
+    thinkLevel: params.candidateThinkLevel,
+  };
   const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
-    run: {
-      ...params.candidateRun,
-      ...params.candidateFastMode,
-      thinkLevel: params.candidateThinkLevel,
-    },
+    run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
     hasRepliedRef: turn.opts?.hasRepliedRef,
@@ -116,6 +122,9 @@ export async function runEmbeddedFallbackCandidate(params: {
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
   });
+  if (sourceReplyDeliveryRuntime) {
+    bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
+  }
   const agentHarnessPolicy = params.sessionRuntimeOverride
     ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
     : resolveAgentHarnessPolicy({
@@ -187,6 +196,8 @@ export async function runEmbeddedFallbackCandidate(params: {
     }),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
+  const toolAuthorityRoute = { provider: embeddedRunProvider, model: params.model };
+  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -195,14 +206,16 @@ export async function runEmbeddedFallbackCandidate(params: {
       sessionKey: turn.sessionKey,
       milestone: "before_embedded_run",
     });
-    const result = await params.timing.measure("embedded_run", () =>
-      runEmbeddedAgent({
+    let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
+    const result = await params.timing.measure("embedded_run", () => {
+      const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
         preparedRunAdmission: params.preparedRunAdmission,
         ...embeddedContext,
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
         trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
         cronCreatorAuthorityUnavailableReason:
           turn.opts?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable,
         groupId: resolveGroupSessionKey(turn.sessionCtx)?.id,
@@ -227,9 +240,13 @@ export async function runEmbeddedFallbackCandidate(params: {
         onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
+        explicitSkillSelections: turn.followupRun.explicitSkillSelections,
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        // Heartbeat ambient routes are delivery context, never implicit message recipients.
+        // Omit false so subagent sessions keep their downstream default.
+        ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -246,6 +263,10 @@ export async function runEmbeddedFallbackCandidate(params: {
           turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
+        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
+          turn.followupRun,
+          toolAuthorityRoute,
+        ),
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
@@ -354,22 +375,27 @@ export async function runEmbeddedFallbackCandidate(params: {
               await turn.opts?.onReasoningEnd?.();
             }
           : undefined,
-        onAgentEvent: createAgentRunEventHandler({
-          turn,
-          lifecycleBackstop,
-          notifyAgentRunStart: params.notifyAgentRunStart,
-          sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
-          messageToolDeliveryState: params.messageToolDeliveryState,
-          provider: params.provider,
-          model: params.model,
-          runId: params.runId,
-          effectiveSessionId: params.effectiveRun.sessionId,
-          notifyUserAboutCompaction: params.notifyUserAboutCompaction,
-          onCompactionCompleted: () => {
-            attemptCompactionCount += 1;
-            return attemptCompactionCount;
-          },
-        }),
+        onAgentEvent: (event) => {
+          eventHandler ??= createAgentRunEventHandler({
+            turn,
+            lifecycleBackstop,
+            notifyAgentRunStart: params.notifyAgentRunStart,
+            sourceRepliesAreToolOnly:
+              (sourceReplyDeliveryRuntime?.currentMode ??
+                turn.followupRun.run.sourceReplyDeliveryMode) === "message_tool_only",
+            messageToolDeliveryState: params.messageToolDeliveryState,
+            provider: params.provider,
+            model: params.model,
+            runId: params.runId,
+            effectiveSessionId: params.effectiveRun.sessionId,
+            notifyUserAboutCompaction: params.notifyUserAboutCompaction,
+            onCompactionCompleted: () => {
+              attemptCompactionCount += 1;
+              return attemptCompactionCount;
+            },
+          });
+          return eventHandler(event);
+        },
         // Flush-before-tool requires a handler even when regular block streaming is off.
         onBlockReply: params.presentation.blockReplyHandler,
         onBlockReplyFlush:
@@ -413,8 +439,9 @@ export async function runEmbeddedFallbackCandidate(params: {
               };
             })()
           : undefined,
-      }),
-    );
+      };
+      return runEmbeddedAgent(embeddedRunParams);
+    });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {

@@ -23,7 +23,7 @@ import {
 } from "./main-session-recovery-state.js";
 import {
   hasCurrentProcessOwner,
-  log,
+  mainSessionRecoveryLog,
   normalizeFiniteTimestamp,
   normalizeStringSet,
   resolveRestartRecoveryStorePaths,
@@ -125,9 +125,11 @@ export async function markRestartAbortedMainSessions(params: {
         storePaths.add(path.resolve(target.storePath));
       }
     } catch (err) {
-      log.warn(`failed to resolve configured session stores for restart marker: ${String(err)}`);
+      mainSessionRecoveryLog.warn(
+        `failed to resolve configured session stores for restart marker: ${String(err)}`,
+      );
     }
-    for (const sessionKey of sessionKeys) {
+    for (const sessionKey of preferSessionIdMatch ? [] : sessionKeys) {
       try {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
@@ -141,7 +143,7 @@ export async function markRestartAbortedMainSessions(params: {
           }
         }
       } catch (err) {
-        log.warn(
+        mainSessionRecoveryLog.warn(
           `failed to resolve session store for restart marker ${sessionKey}: ${String(err)}`,
         );
       }
@@ -203,7 +205,7 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   if (result.marked > 0) {
-    log.warn(
+    mainSessionRecoveryLog.warn(
       `marked ${result.marked} interrupted main session(s) for restart recovery${
         params.reason ? ` (${params.reason})` : ""
       }`,
@@ -269,7 +271,9 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   }
 
   if (result.marked > 0) {
-    log.warn(`marked ${result.marked} startup-orphaned main session(s) for restart recovery`);
+    mainSessionRecoveryLog.warn(
+      `marked ${result.marked} startup-orphaned main session(s) for restart recovery`,
+    );
   }
   return result;
 }

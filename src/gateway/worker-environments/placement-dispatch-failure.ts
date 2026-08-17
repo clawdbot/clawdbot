@@ -1,4 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
@@ -16,10 +18,7 @@ export type WorkerStartingDispatchPlacement = Extract<
   WorkerDispatchPlacement,
   { state: "starting" }
 >;
-export type WorkerDrainingDispatchPlacement = Extract<
-  WorkerDispatchPlacement,
-  { state: "draining" }
->;
+type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerReconcilingDispatchPlacement = Extract<
   WorkerDispatchPlacement,
   { state: "reconciling" }
@@ -31,8 +30,14 @@ export type WorkerDispatchPlacementStore = Pick<
   | "acceptIdleWorkspaceReconciliation"
   | "claimReclaimWorkspaceResult"
   | "claimTurn"
+  | "closeWorkerTurnToolState"
+  | "beginPlacementMove"
+  | "completePlacementMoveSourceToLocal"
+  | "completePlacementMoveToWorker"
+  | "getPlacementMove"
+  | "listPlacementMoves"
+  | "recordPlacementMoveError"
   | "fail"
-  | "finishReclaim"
   | "get"
   | "loadWorkspaceReconciliation"
   | "beginWorkspaceReconciliation"
@@ -42,6 +47,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "listPendingWorkspaceResults"
   | "markWorkspaceResultPending"
   | "workspaceResultInstanceId"
+  | "validateWorkspaceResultClaim"
   | "recordStagedWorkspaceResult"
   | "recordWorkspaceResultConflict"
   | "acceptWorkspaceResult"
@@ -53,6 +59,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "releaseTurn"
   | "startDispatch"
   | "startDrain"
+  | "startWorkspaceResultDrain"
   | "startReconcile"
   | "transition"
   | "updateWorkspaceBaseManifest"
@@ -60,13 +67,21 @@ export type WorkerDispatchPlacementStore = Pick<
 
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
-  "attachSession" | "create" | "destroy" | "get" | "reconcileOnce" | "startTunnel" | "stopTunnel"
+  | "attachSession"
+  | "create"
+  | "createFromProfileSnapshot"
+  | "destroy"
+  | "get"
+  | "reconcileOnce"
+  | "startTunnel"
+  | "stopTunnel"
 >;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  executionMode: WorkerPlacementExecutionMode;
   activate: () => WorkerActiveDispatchPlacement;
 }) => Promise<WorkerActiveDispatchPlacement>;
 
@@ -82,6 +97,27 @@ export function isUnavailableEnvironment(
     environment.state === "destroyed" ||
     environment.state === "failed" ||
     environment.state === "orphaned"
+  );
+}
+
+export function isCurrentActiveWorkerEnvironment(
+  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+): boolean {
+  return Boolean(
+    environment &&
+    environment.state === "attached" &&
+    placement.environmentId &&
+    environment.environmentId === placement.environmentId &&
+    placement.activeOwnerEpoch !== null &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    placement.workerBundleHash &&
+    environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
+    // A persisted bundle hash can still match a worker using an older launch shape.
+    // Recovery may reuse only the currently admitted execution-context dialect.
+    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId,
   );
 }
 
@@ -218,6 +254,15 @@ export function createPlacementFailureActions(deps: {
     const current = placements.get(placement.sessionId);
     if (current?.state !== "draining") {
       return;
+    }
+    if (current.turnClaim) {
+      await placements.closeWorkerTurnToolState({
+        sessionId: current.sessionId,
+        claimId: current.turnClaim.claimId,
+        runId: current.turnClaim.runId,
+        placementGeneration: current.turnClaim.generation,
+        owner: placementTurnOwner(current),
+      });
     }
     const reconciling = startReconcile(current);
     const teardownErrors = await cleanupEnvironment({

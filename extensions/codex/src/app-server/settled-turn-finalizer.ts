@@ -39,6 +39,7 @@ export async function runCodexSettledTurnFinalization(
   const bounded = await runBoundedCodexAppServerTurn({
     config: attempt.config,
     model: { mode: "required", id: attempt.modelId },
+    modelProvider: "openai",
     profile: attempt.authProfileId,
     timeoutMs: attempt.runTimeoutOverrideMs ?? attempt.timeoutMs,
     signal: attempt.abortSignal,
@@ -129,13 +130,10 @@ export async function runCodexSettledTurnFinalization(
     throw new Error("Codex settled-turn final answer transcript attestation mismatch");
   }
   const persistedAssistant = persistedMessage;
-  const persistedAssistantRecord = persistedAssistant as unknown as {
-    idempotencyKey?: unknown;
-  };
+  const persistedIdempotencyKey =
+    "idempotencyKey" in persistedAssistant ? persistedAssistant.idempotencyKey : undefined;
   const assistantTranscriptIdempotencyKey =
-    typeof persistedAssistantRecord.idempotencyKey === "string"
-      ? persistedAssistantRecord.idempotencyKey.trim()
-      : "";
+    typeof persistedIdempotencyKey === "string" ? persistedIdempotencyKey.trim() : "";
   return {
     assistant: persistedAssistant,
     assistantTranscriptOwned: true,

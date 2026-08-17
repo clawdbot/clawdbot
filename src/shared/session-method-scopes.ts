@@ -5,17 +5,15 @@ export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
 
 const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "label",
+  "icon",
   "category",
   "boardFace",
   "pinned",
   "archived",
   "unread",
   "model",
+  "permissionMode",
 ]);
-
-// Beta v4 clients may still send this ignored field to sessions.patch. It is
-// not a sessions.patchMany mutation and must not gain admin scope while retiring.
-const SESSIONS_PATCH_RETIRED_COMPATIBILITY_FIELDS: ReadonlySet<string> = new Set(["icon"]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
@@ -28,6 +26,7 @@ const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
   "agentId",
   "deleteTranscript",
+  "expectedSessionId",
   "archivedOnly",
 ]);
 
@@ -37,11 +36,13 @@ function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOper
     // precise validation error instead of a misleading missing-scope error.
     return "operator.write";
   }
+  if (params.permissionMode === "full") {
+    return "operator.admin";
+  }
   return Object.keys(params).every(
     (key) =>
       SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS.has(key) ||
-      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key) ||
-      SESSIONS_PATCH_RETIRED_COMPATIBILITY_FIELDS.has(key),
+      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key),
   )
     ? "operator.write"
     : "operator.admin";
@@ -52,6 +53,9 @@ function resolveSessionsPatchManyRequiredScope(params: unknown): SessionMutation
     // Malformed params cannot mutate anything; schema validation should report
     // the exact closed/non-empty patch failure under the least privilege scope.
     return "operator.write";
+  }
+  if (params.patch.permissionMode === "full") {
+    return "operator.admin";
   }
   return Object.keys(params.patch).every((key) => SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key))
     ? "operator.write"
@@ -70,7 +74,8 @@ function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOpe
     (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
     (typeof params.parentSessionKey === "string" &&
       isIncognitoSessionKey(params.parentSessionKey)) ||
-    Object.hasOwn(params, "execNode")
+    Object.hasOwn(params, "execNode") ||
+    params.permissionMode === "full"
   ) {
     return "operator.admin";
   }
@@ -93,6 +98,9 @@ export function resolveDynamicSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
+  if (method === "sessions.recover") {
+    return "operator.write";
+  }
   if (method === "sessions.create") {
     return resolveSessionsCreateRequiredScope(params);
   }

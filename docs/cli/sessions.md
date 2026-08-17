@@ -29,15 +29,20 @@ openclaw sessions --json
 
 Flags:
 
-| Flag                 | Description                                                            |
-| -------------------- | ---------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (default: configured default agent).        |
-| `--all-agents`       | Aggregate all configured agent stores.                                 |
-| `--store <path>`     | Explicit store path (cannot combine with `--agent` or `--all-agents`). |
-| `--active <minutes>` | Only show sessions updated within the past N minutes.                  |
-| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).        |
-| `--json`             | Machine-readable output.                                               |
-| `--verbose`          | Verbose logging.                                                       |
+| Flag                 | Description                                                                   |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents).           |
+| `--all-agents`       | Aggregate all configured agent stores.                                        |
+| `--store <path>`     | Legacy store selector path (cannot combine with `--agent` or `--all-agents`). |
+| `--active <minutes>` | Only show sessions updated within the past N minutes.                         |
+| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).               |
+| `--json`             | Machine-readable output.                                                      |
+| `--verbose`          | Verbose logging.                                                              |
+
+`--store` accepts the documented legacy selector form, including `sessions.json`
+and suffixless custom selectors. OpenClaw resolves that selector to its physical
+SQLite target, verifies the target exists and is usable, and reports the physical
+path it actually read.
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
@@ -63,8 +68,8 @@ skipped.
 {
   "path": null,
   "stores": [
-    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/sessions/sessions.json" },
-    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/sessions/sessions.json" }
+    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite" },
+    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite" }
   ],
   "allAgents": true,
   "count": 2,
@@ -222,6 +227,12 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
+- `maxEntries` caps the total live session row count. Protected rows are
+  reported as `keep` and count toward the cap, but they are never automatic
+  eviction targets. If protected rows prevent cleanup from reaching the cap,
+  the store remains above it. `--enforce` does not remove that protection;
+  unarchive, unpin, wait for active work to finish, or explicitly delete
+  sessions you no longer want to retain.
 
 Flags:
 
@@ -231,7 +242,7 @@ Flags:
 | `--enforce`          | Apply maintenance even when `session.maintenance.mode` is `warn`.                                                                                                                                                                                                                                          |
 | `--fix-missing`      | Remove legacy entries whose archived transcript artifacts are missing or header-only/empty, even if they would not normally age/count out yet.                                                                                                                                                             |
 | `--fix-dm-scope`     | When `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying removes those rows from SQLite and preserves their legacy transcript artifacts as deleted archives. |
-| `--active-key <key>` | Protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                                                               |
+| `--active-key <key>` | Protect a specific active key from automatic maintenance. It still counts toward `maxEntries`. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                         |
 | `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                                |
 | `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                               |
 | `--store <path>`     | Run against a specific legacy store selector path.                                                                                                                                                                                                                                                         |
@@ -289,8 +300,8 @@ openclaw sessions compact "agent:work:main" --agent work --json
 - Without `--max-lines`, the Gateway LLM-summarizes the transcript. The CLI
   does not impose a client deadline by default; the Gateway owns the
   configured compaction lifecycle.
-- With `--max-lines <n>`, it truncates to the last `n` transcript lines and
-  archives the prior transcript as a `.bak` sidecar.
+- With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
+  last `n` lines. This path does not create a backup archive.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
@@ -334,7 +345,6 @@ Example truncate response (`--max-lines 200`):
   "ok": true,
   "key": "agent:main:main",
   "compacted": true,
-  "archived": "/home/user/.openclaw/agents/main/sessions/transcripts/<id>.jsonl.bak",
   "kept": 200
 }
 ```

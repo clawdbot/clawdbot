@@ -11,7 +11,7 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
-const loadSessionEntryReadOnlyMock = vi.fn();
+const loadGatewaySessionEntryReadOnlyMock = vi.fn();
 const readSessionMessageCountAsyncMock = vi.fn();
 const loadGatewaySessionRowMock = vi.fn();
 const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
@@ -49,7 +49,8 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-  loadSessionEntryReadOnly: (...args: unknown[]) => loadSessionEntryReadOnlyMock(...args),
+  loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
+    loadGatewaySessionEntryReadOnlyMock(...args),
   loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
   resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
     resolveDeletedAgentIdFromSessionKeyMock(...args),
@@ -113,7 +114,7 @@ function createRequestContext(overrides: Record<string, unknown> = {}): GatewayR
 describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    loadSessionEntryReadOnlyMock.mockReset();
+    loadGatewaySessionEntryReadOnlyMock.mockReset();
     readSessionMessageCountAsyncMock.mockReset().mockResolvedValue(0);
     loadGatewaySessionRowMock.mockReset();
     resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);

@@ -7,7 +7,7 @@ import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   updateSessionEntry,
@@ -24,25 +24,21 @@ import {
 import type { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagents/registry/subagent-active-context.js";
 import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
-import {
-  assembleAttemptContextEngine,
-  type AttemptContextEngine,
-} from "./attempt-context-engine-helpers.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
-import {
-  loadAttemptSessionEntryAfterQuotaMaintenance,
-  repairAttemptToolUseResultPairing,
-} from "./attempt-transcript-helpers.js";
+import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -205,7 +201,7 @@ type PersistedSender = {
 };
 
 function readPersistedSender(message: AgentMessage): PersistedSender | undefined {
-  const openclaw = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const openclaw = Reflect.get(message, "__openclaw");
   if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
     return undefined;
   }
@@ -461,16 +457,21 @@ export async function prepareEmbeddedAttemptHistory(input: {
     });
 
     if (attempt.sessionKey && !isSettledTurnFinalization) {
-      const storePath = resolveStorePath(attempt.config?.session?.store, {
+      const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });
       const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
+        agentId: input.sessionAgentId,
         storePath,
         sessionKey: attempt.sessionKey,
       });
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
-        const subagents = listSessionEntriesReadOnly({ storePath, clone: false })
+        const subagents = listSessionEntriesReadOnly({
+          agentId: input.sessionAgentId,
+          storePath,
+          clone: false,
+        })
           .map(({ entry }) => entry)
           .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
           .map((entry) => ({
@@ -485,7 +486,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
           }),
         );
         await updateSessionEntry(
-          { storePath, sessionKey: attempt.sessionKey },
+          { agentId: input.sessionAgentId, storePath, sessionKey: attempt.sessionKey },
           async (entry) => {
             if (entry.quotaSuspension?.state !== "resuming") {
               return null;
@@ -505,6 +506,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
         cfg: attempt.config,
         controllerSessionKey: attempt.sessionKey,
+        controllerAgentId: input.sessionAgentId,
         hasSessionsYield: input.capabilityToolNames.has("sessions_yield"),
       });
       if (activeSubagentPromptAddition) {
@@ -537,7 +539,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.
       return input.transcriptPolicy.repairToolUseResultPairing
-        ? repairAttemptToolUseResultPairing(truncated, input.isOpenAIResponsesApi)
+        ? sanitizeToolUseResultPairingForModel(truncated, input.isOpenAIResponsesApi)
         : truncated;
     })();
     input.cacheTrace?.recordStage("session:limited", { messages: limited });
@@ -575,10 +577,11 @@ export async function prepareEmbeddedAttemptHistory(input: {
       });
       const messageBudget = Math.max(1, promptBudget - renderedPromptTokens);
       const transcriptReadFence = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const assembled = await assembleAttemptContextEngine({
+      const assembled = await assembleHarnessContextEngine({
         contextEngine: input.activeContextEngine,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
+        agentId: input.sessionAgentId,
         messages: activeSession.messages,
         tokenBudget: messageBudget,
         availableTools: new Set(input.capabilityToolNames),
@@ -598,7 +601,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         throw new Error("context engine assemble returned no result");
       }
       const assembledMessages = input.transcriptPolicy.repairToolUseResultPairing
-        ? repairAttemptToolUseResultPairing(assembled.messages, input.isOpenAIResponsesApi)
+        ? sanitizeToolUseResultPairingForModel(assembled.messages, input.isOpenAIResponsesApi)
         : assembled.messages;
       if (assembledMessages !== activeSession.messages) {
         activeSession.agent.state.messages = assembledMessages;

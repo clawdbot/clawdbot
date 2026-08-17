@@ -74,6 +74,17 @@
         "cwd"
       ]
     },
+    "portal": {
+      "emoji": "🌐",
+      "title": "Portal",
+      "detailKeys": [
+        "action",
+        "port",
+        "id",
+        "title",
+        "path"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -1062,6 +1073,18 @@
         "model"
       ]
     },
+    "view_image": {
+      "emoji": "🖼️",
+      "title": "View Image",
+      "detailKeys": [
+        "path",
+        "paths",
+        "url",
+        "urls",
+        "prompt",
+        "model"
+      ]
+    },
     "image_generate": {
       "emoji": "🎨",
       "title": "Image Generation",
@@ -1148,10 +1171,7 @@
     },
     "sessions_yield": {
       "emoji": "⏸️",
-      "title": "Yield",
-      "detailKeys": [
-        "message"
-      ]
+      "title": "Yield"
     },
     "tts": {
       "emoji": "🔊",

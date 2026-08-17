@@ -1,9 +1,17 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
+import {
+  isAuditLedgerEnabled,
+  isExecutionIdentityCollectionEnabled,
+  resolveAuditMessageMode,
+} from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
+import {
+  configureChannelAdmissionDecisionSink,
+  configureChannelAdmissionEvidenceCollection,
+} from "../channels/message-access/admission-evidence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -29,8 +37,10 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
@@ -89,6 +99,15 @@ export function startGatewayEventSubscriptions(params: {
   const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
     auditRecorder.recordExecutionIdentity,
   );
+  const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
+    isExecutionIdentityCollectionEnabled(runtimeConfig),
+  );
+  const clearChannelAdmissionDecisionSink = configureChannelAdmissionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
+  const clearMessageActionDecisionSink = configureMessageActionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
     subscribers: params.sessionMessageSubscribers,
@@ -96,6 +115,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,
   });
@@ -235,7 +255,10 @@ export function startGatewayEventSubscriptions(params: {
               resolveVisibleActiveSessionRunState({
                 context: params,
                 ...session,
-                defaultAgentId: resolveDefaultAgentId(getRuntimeConfig()),
+                defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(
+                  getRuntimeConfig(),
+                  session.requestedKey,
+                ),
               }),
           }),
       );
@@ -346,6 +369,9 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
     clearExecutionIdentityAdmissionSink();
+    clearChannelAdmissionEvidenceCollection();
+    clearChannelAdmissionDecisionSink();
+    clearMessageActionDecisionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())

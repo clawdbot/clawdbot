@@ -75,26 +75,31 @@ If you already manage Node yourself:
 
 <Tabs>
   <Tab title="npm">
+    On npm 12 or npm 11.16+:
+
     ```bash
-    npm install -g openclaw@latest
+    npm install -g openclaw@latest --allow-scripts=openclaw
     openclaw onboard --install-daemon
     ```
 
+    On npm 11.12 and earlier, use the same command without
+    `--allow-scripts=openclaw`. Do not use npm 11.13–11.15 for this install;
+    upgrade to npm 11.16+ first.
+
     <Note>
-    npm 12 blocks package lifecycle scripts by default, so the command above
-    skips OpenClaw's `preinstall` and `postinstall` steps — npm reports them
-    as `blocked because they are not covered by allowScripts`. Allow them
-    explicitly:
+    npm 12 blocks unapproved package lifecycle scripts by default. The
+    `--allow-scripts=openclaw` option explicitly allows OpenClaw's `preinstall`
+    and `postinstall` steps; without it, npm reports them as `blocked because
+    they are not covered by allowScripts`.
 
-    ```bash
-    npm install -g openclaw@latest --allow-scripts openclaw
-    ```
-
-    npm 11.16.x only warns that the scripts are `not yet covered by
-    allowScripts` and still runs them. If you want to clear that warning, be
-    aware that the `npm approve-scripts openclaw` command it suggests does not
-    work for a global install — it fails with `ENOMATCH  No installed packages
-    match: openclaw`. npm 11.12 and earlier have no such policy.
+    npm 11.16 accepts the option but otherwise only warns that the scripts are
+    `not yet covered by allowScripts` and still runs them. npm 11.12 and earlier
+    have neither the policy nor the option, so their command must be unflagged.
+    npm 11.13–11.15 also lack the option, but they are transitional upstream
+    releases outside this documented install contract; upgrade rather than
+    relying on their unflagged behavior. The `npm approve-scripts openclaw`
+    command suggested by npm 11.16 does not work for a global install — it fails
+    with `ENOMATCH  No installed packages match: openclaw`.
     </Note>
 
     <Note>
@@ -117,12 +122,14 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="bun">
     ```bash
-    bun add -g openclaw@latest
+    bun add -g --trust openclaw@latest
     openclaw onboard --install-daemon
     ```
 
     <Note>
-    Bun can install the global package, but the resulting `openclaw` executable requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
+    `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
+    can install the global package, but the resulting `openclaw` executable
+    requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
     </Note>
 
   </Tab>
@@ -151,20 +158,23 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
 ### Containers and package managers
 
 <CardGroup cols={2}>
-  <Card title="Docker" href="/install/docker" icon="container">
-    Containerized or headless deployments.
-  </Card>
-  <Card title="Podman" href="/install/podman" icon="container">
-    Rootless container alternative to Docker.
-  </Card>
-  <Card title="Nix" href="/install/nix" icon="snowflake">
-    Declarative install via Nix flake.
-  </Card>
   <Card title="Ansible" href="/install/ansible" icon="server">
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
+  </Card>
+  <Card title="ClawDock" href="/install/clawdock" icon="container">
+    Community Docker Compose setup and shell helpers.
+  </Card>
+  <Card title="Docker" href="/install/docker" icon="container">
+    Containerized or headless deployments.
+  </Card>
+  <Card title="Nix" href="/install/nix" icon="snowflake">
+    Declarative install via Nix flake.
+  </Card>
+  <Card title="Podman" href="/install/podman" icon="container">
+    Rootless container alternative to Docker.
   </Card>
 </CardGroup>
 
@@ -186,12 +196,13 @@ If you want managed startup after install:
 
 Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
 provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
-Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
-[Render](/install/render).
+Northflank, Oracle Cloud, Raspberry Pi, and more), deploy declaratively on
+[Render](/install/render), or try the experimental [Cloudflare Containers](/install/cloudflare)
+template.
 
 <CardGroup cols={3}>
-  <Card title="VPS" href="/vps">
-    Pick a provider.
+  <Card title="Cloudflare" href="/install/cloudflare">
+    Experimental Worker + Container deployment.
   </Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">
     Shared Docker steps.
@@ -199,11 +210,23 @@ Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
   <Card title="Kubernetes" href="/install/kubernetes">
     K8s deployment.
   </Card>
+  <Card title="macOS VM" href="/install/macos-vm">
+    Isolated local or hosted macOS deployment.
+  </Card>
+  <Card title="Upstash Box" href="/install/upstash">
+    Managed Linux host with SSH-tunneled access.
+  </Card>
+  <Card title="VPS" href="/vps">
+    Pick a provider.
+  </Card>
 </CardGroup>
 
-## Update, migrate, or uninstall
+## Back up, update, migrate, or uninstall
 
 <CardGroup cols={3}>
+  <Card title="Backups" href="/install/backups" icon="archive">
+    Create, verify, and restore state archives.
+  </Card>
   <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Keep OpenClaw up to date.
   </Card>

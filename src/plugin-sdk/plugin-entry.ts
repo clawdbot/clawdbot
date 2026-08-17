@@ -1,5 +1,4 @@
 // Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
-export type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
   OpenClawPluginConfigSchema,
@@ -7,6 +6,7 @@ import type {
   ProviderBuiltInModelSuppressionContext as ProviderBuiltInModelSuppressionContextType,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
+export type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type {
   AgentHarness,
@@ -135,6 +135,7 @@ export type {
   WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
+  WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -163,8 +164,10 @@ export type {
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
   PluginHookInboundMessageMetadata,
+  PluginHookLocation,
   PluginHookMediaFact,
   PluginHookMessageReceivedEvent,
+  PluginHookProviderUpdate,
   PluginHookSkillArtifact,
   PluginHookSkillBundleFile,
   PluginHookSkillBundleSnapshot,

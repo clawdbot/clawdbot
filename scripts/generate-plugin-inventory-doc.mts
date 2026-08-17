@@ -258,7 +258,7 @@ function resolveDescription({ manifest, packageJson }: PluginSourceEntry) {
     documentExtractors: "Adds document extraction for local attachments.",
     imageGenerationProviders: "Adds image generation provider support.",
     mediaUnderstandingProviders: "Adds media understanding provider support.",
-    memoryEmbeddingProviders: "Adds memory embedding provider support.",
+    embeddingProviders: "Adds embedding provider support, including memory search.",
     migrationProviders: "Adds migration import support.",
     musicGenerationProviders: "Adds music generation provider support.",
     realtimeTranscriptionProviders: "Adds realtime transcription provider support.",
@@ -568,6 +568,53 @@ function enumerateTopLevelPluginManifests() {
     });
 }
 
+type ExternalPluginDocsInventorySeedEntry = {
+  openclaw?: {
+    channel?: NonNullable<PluginPackageJson["openclaw"]>["channel"];
+    channelHostConfig?: {
+      docsInventory?: {
+        package?: PluginPackageJson;
+        manifest?: PluginManifest;
+      };
+    };
+  };
+};
+
+function collectExternalPluginDocsInventoryEntries(): PluginSourceEntry[] {
+  const seed = readJsonPath(path.join(ROOT, "scripts/lib/official-external-channel-seed.json")) as {
+    entries?: ExternalPluginDocsInventorySeedEntry[];
+  };
+  const entries: PluginSourceEntry[] = [];
+  for (const entry of Array.isArray(seed.entries) ? seed.entries : []) {
+    const inventory = entry?.openclaw?.channelHostConfig?.docsInventory;
+    const packageMetadata = inventory?.package;
+    const manifest = inventory?.manifest;
+    if (!inventory) {
+      continue;
+    }
+    if (
+      typeof packageMetadata?.name !== "string" ||
+      typeof manifest?.id !== "string" ||
+      !entry?.openclaw?.channel
+    ) {
+      throw new Error("external plugin docs inventory metadata is incomplete");
+    }
+    entries.push({
+      dirName: manifest.id,
+      id: manifest.id,
+      manifest,
+      packageJson: {
+        ...packageMetadata,
+        openclaw: {
+          ...packageMetadata.openclaw,
+          channel: entry.openclaw.channel,
+        },
+      },
+    });
+  }
+  return entries;
+}
+
 function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
@@ -575,6 +622,27 @@ function collectPluginRecords() {
   assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
   const records = sourceEntries.map((entry) => createPluginRecord(entry, excludedDirs));
 
+  const sourceIds = new Set(sourceEntries.map((entry) => entry.id));
+  for (const {
+    dirName,
+    id,
+    manifest,
+    packageJson,
+  } of collectExternalPluginDocsInventoryEntries()) {
+    if (sourceIds.has(id)) {
+      continue;
+    }
+    records.push({
+      description: resolveDescription({ dirName, id, manifest, packageJson }),
+      docs: resolveDocs({ dirName, id, manifest, packageJson }),
+      id,
+      installRoute: resolveInstallRoute(packageJson, "external"),
+      name: humanizeId(id),
+      packageName: packageJson.name ?? "-",
+      status: "external",
+      surface: resolvePluginSurface(manifest),
+    });
+  }
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 

@@ -8,10 +8,10 @@ import {
 import {
   resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -145,19 +145,36 @@ export async function isDmAllowedWithIngress(
   senderShip: string,
   allowlist: string[] | undefined,
 ): Promise<boolean> {
-  const access = await resolveStableChannelMessageIngress({
-    channelId: "tlon",
-    accountId: "default",
-    identity: tlonIngressIdentity,
-    subject: { stableId: senderShip },
-    conversation: {
-      kind: "direct",
-      id: "direct",
-    },
-    dmPolicy: "allowlist",
+  const access = await resolveTlonMessageIngress({
+    senderShip,
     allowFrom: allowlist ?? [],
+    conversation: { kind: "direct", id: "direct" },
+    dmPolicy: "allowlist",
   });
   return access.senderAccess.allowed;
+}
+
+export async function resolveTlonMessageIngress(params: {
+  senderShip: string;
+  allowFrom: string[];
+  conversation: { kind: "direct" | "group"; id: string };
+  accountId?: string;
+  dmPolicy?: "open" | "allowlist";
+  groupPolicy?: "open" | "allowlist";
+  contextBinding?: ChannelIngressContextBinding;
+}) {
+  return await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: params.accountId ?? "default",
+    identity: tlonIngressIdentity,
+    subject: { stableId: params.senderShip },
+    conversation: params.conversation,
+    contextBinding: params.contextBinding,
+    dmPolicy: params.dmPolicy ?? "allowlist",
+    groupPolicy: params.groupPolicy ?? "open",
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.allowFrom,
+  });
 }
 
 export async function resolveTlonCommandAuthorizationWithIngress(params: {
@@ -242,8 +259,6 @@ export async function resolveAuthorizedMessageText(params: {
   const citedContent = await resolveAllCites(content);
   return citedContent + rawText;
 }
-
-export const formatErrorMessage = sharedFormatErrorMessage;
 
 // Helper to recursively extract text from inline content
 function renderInlineItem(

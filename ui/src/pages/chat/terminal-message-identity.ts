@@ -1,7 +1,10 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
-const liveTerminalRunIds = new WeakMap<object, string>();
+type LiveTerminalIdentity = { runId: string; afterBoundaryRunId?: string };
+
+const liveTerminalIdentities = new WeakMap<object, LiveTerminalIdentity>();
 const authoritativeTerminals = new WeakMap<object, AuthoritativeTerminal>();
 
 type AuthoritativeTerminal = {
@@ -15,17 +18,33 @@ type AuthoritativeTerminal = {
 export function rememberLiveTerminalRun(
   message: unknown,
   runId: string | null | undefined,
+  afterBoundaryRunId?: string,
 ): unknown {
   if (runId && message && typeof message === "object") {
-    liveTerminalRunIds.set(message, runId);
+    liveTerminalIdentities.set(message, {
+      runId,
+      ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
+    });
   }
   return message;
 }
 
 export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   return Boolean(
-    message && typeof message === "object" && liveTerminalRunIds.get(message) === runId,
+    message && typeof message === "object" && liveTerminalIdentities.get(message)?.runId === runId,
   );
+}
+
+export function readLiveTerminalRunId(message: unknown): string | null {
+  return message && typeof message === "object"
+    ? (liveTerminalIdentities.get(message)?.runId ?? null)
+    : null;
+}
+
+export function readLiveTerminalAfterBoundaryRunId(message: unknown): string | null {
+  return message && typeof message === "object"
+    ? (liveTerminalIdentities.get(message)?.afterBoundaryRunId ?? null)
+    : null;
 }
 
 export function rememberAuthoritativeTerminal(options: {
@@ -40,10 +59,7 @@ export function rememberAuthoritativeTerminal(options: {
   payload: unknown;
   runIdBeforeApply: string | null;
 }): void {
-  const payload =
-    options.payload && typeof options.payload === "object" && !Array.isArray(options.payload)
-      ? (options.payload as Record<string, unknown>)
-      : null;
+  const payload = asNullableRecord(options.payload);
   const identity = readSessionMessageIdentity(payload?.message, {
     messageId: payload?.messageId,
   });

@@ -11,6 +11,11 @@ on:
         description: Successful OpenClaw NPM Release preflight run id, required for OpenClaw npm or all-publishable plugin publication
         required: false
         type: string
+      plugin_sdk_api_acknowledgement:
+        description: 8-character digest from the Plugin SDK API diff report when the release changes the SDK
+        required: false
+        default: ""
+        type: string
       full_release_validation_run_id:
         description: Successful Full Release Validation run id for this tag/SHA, required for OpenClaw npm or all-publishable plugin publication
         required: false
@@ -63,7 +68,7 @@ on:
         default: true
         type: boolean
       publish_docker_only:
-        description: Publish Docker only after independently verifying an already-published extended-stable npm package
+        description: Publish Docker only after independently verifying an already-published beta or extended-stable npm package
         required: true
         default: false
         type: boolean
@@ -89,12 +94,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: openclaw-release-publish-${{ inputs.tag }}
+  group: openclaw-release-publish-${{ inputs.npm_dist_tag }}
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   resolve_release_target:
@@ -179,8 +184,8 @@ jobs:
               echo "publish_docker_only requires publish_openclaw_npm=false." >&2
               exit 1
             fi
-            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
-              echo "publish_docker_only is reserved for an already-published extended-stable release." >&2
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "beta" && "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
+              echo "publish_docker_only supports already-published beta or extended-stable releases only." >&2
               exit 1
             fi
           fi
@@ -321,6 +326,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -332,11 +338,12 @@ jobs:
 
           download_named_artifact() {
             local artifact_name="$1"
+            local artifact_dir="${2:-$preflight_dir}"
             for attempt in 1 2 3; do
               if gh run download "${PREFLIGHT_RUN_ID}" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --name "${artifact_name}" \
-                --dir "${preflight_dir}"; then
+                --dir "${artifact_dir}"; then
                 return 0
               fi
               if [[ "$attempt" != "3" ]]; then
@@ -348,23 +355,62 @@ jobs:
           }
 
           if download_named_artifact "${preferred_name}"; then
-            echo "name=${preferred_name}" >> "$GITHUB_OUTPUT"
-            exit 0
+            resolved_name="${preferred_name}"
+          else
+            echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
+            mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
+              --jq '.artifacts[] | select(.expired != true) | .name' |
+              grep '^openclaw-npm-preflight-' || true)
+            if [[ "${#matches[@]}" != "1" ]]; then
+              echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
+              printf 'Available preflight candidates:\n' >&2
+              printf -- '- %s\n' "${matches[@]:-<none>}" >&2
+              exit 1
+            fi
+            resolved_name="${matches[0]}"
+            download_named_artifact "${resolved_name}"
           fi
+          echo "name=${resolved_name}" >> "$GITHUB_OUTPUT"
 
-          echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
-          mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
-            --jq '.artifacts[] | select(.expired != true) | .name' |
-            grep '^openclaw-npm-preflight-' || true)
-          if [[ "${#matches[@]}" != "1" ]]; then
-            echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
-            printf 'Available preflight candidates:\n' >&2
-            printf -- '- %s\n' "${matches[@]:-<none>}" >&2
+          preflight_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
+          preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
+          if [[ ! "$preflight_attempt" =~ ^[1-9][0-9]*$ ]]; then
+            echo "OpenClaw npm preflight run has an invalid attempt: ${preflight_attempt:-<missing>}." >&2
             exit 1
           fi
-          fallback_name="${matches[0]}"
-          download_named_artifact "${fallback_name}"
-          echo "name=${fallback_name}" >> "$GITHUB_OUTPUT"
+          preflight_head_sha="$(jq -r '.head_sha // ""' <<<"$preflight_run")"
+          preflight_head_branch="$(jq -r '.head_branch // ""' <<<"$preflight_run")"
+          preflight_conclusion="$(jq -r '.conclusion // ""' <<<"$preflight_run")"
+          preflight_event="$(jq -r '.event // ""' <<<"$preflight_run")"
+          preflight_path="$(jq -r '.path // ""' <<<"$preflight_run")"
+          if [[ ! "$preflight_head_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "OpenClaw npm preflight run must have an exact head SHA." >&2
+            exit 1
+          fi
+          extended_stable_preflight=false
+          expected_extended_stable_branch=""
+          if [[ "$RELEASE_TAG" =~ ^v([0-9]{4})\.([1-9][0-9]*)\. ]]; then
+            expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
+          fi
+          if [[ "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$expected_extended_stable_branch" ]]; then
+            extended_stable_preflight=true
+          fi
+          if [[ "$preflight_head_branch" != "main" && "refs/heads/${preflight_head_branch}" != "$GITHUB_REF" && "$extended_stable_preflight" != "true" ]]; then
+            echo "OpenClaw npm preflight run must come from main or the active protected release branch." >&2
+            exit 1
+          fi
+          if [[ "$preflight_conclusion" != "success" || "$preflight_event" != "workflow_dispatch" || "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" ]]; then
+            echo "OpenClaw npm preflight evidence must come from a successful OpenClaw NPM Release workflow dispatch." >&2
+            exit 1
+          fi
+          echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
+          echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
+          sdk_evidence_dir="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence"
+          rm -rf "$sdk_evidence_dir"
+          mkdir -p "$sdk_evidence_dir"
+          download_named_artifact \
+            "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${preflight_attempt}" \
+            "$sdk_evidence_dir"
 
       - name: Resolve full release validation run
         id: full_run
@@ -417,6 +463,8 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/plugin-sdk-api-release-evidence.mjs"
 
       - name: Checkout release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -439,6 +487,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          PLUGIN_SDK_API_VALIDATOR: ${{ runner.temp }}/release-validation-tooling/plugin-sdk-api-release-evidence.mjs
+          PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_artifact.outputs.head_sha }}
+          PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_artifact.outputs.head_branch }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
@@ -465,6 +518,42 @@ jobs:
             echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
             exit 1
           fi
+          immutable_sdk_evidence="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
+          if [[ ! -f "$immutable_sdk_evidence" ]]; then
+            echo "Immutable Plugin SDK API evidence artifact is missing." >&2
+            exit 1
+          fi
+          if ! cmp -s <(jq -S '.pluginSdkApi' "$manifest") <(jq -S '.' "$immutable_sdk_evidence"); then
+            echo "Preflight manifest Plugin SDK API evidence does not match its immutable artifact." >&2
+            exit 1
+          fi
+          current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
+          current_selector_ref="v${current_selector_version}"
+          if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+              "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
+          fi
+          current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
+          extended_stable_preflight=false
+          expected_extended_stable_branch=""
+          if [[ "$RELEASE_TAG" =~ ^v([0-9]{4})\.([1-9][0-9]*)\. ]]; then
+            expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
+          fi
+          if [[ "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$PREFLIGHT_WORKFLOW_BRANCH" == "$expected_extended_stable_branch" && "$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA" ]]; then
+            extended_stable_preflight=true
+          fi
+          if [[ "$extended_stable_preflight" != "true" ]] && ! git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"; then
+            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
+            exit 1
+          fi
+          node "$PLUGIN_SDK_API_VALIDATOR" \
+            --manifest "$manifest" \
+            --head "$EXPECTED_SHA" \
+            --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+            --current-selector-ref "$current_selector_ref" \
+            --current-selector-sha "$current_selector_sha" \
+            --target-ref "$RELEASE_TAG" \
+            --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
           if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
             echo "Preflight manifest tarball is missing: $tarball_name" >&2
             exit 1
@@ -842,6 +931,7 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -2221,6 +2311,7 @@ jobs:
                 -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
                 -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
+                -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
               echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -2389,14 +2480,15 @@ jobs:
       - name: Verify exact npm and selector readback matches preflight bytes
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_TARBALL_SHA256: ${{ needs.resolve_release_target.outputs.preflight_tarball_sha256 }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           exact_version="$(npm view "openclaw@${version}" version)"
-          selector_version="$(npm view openclaw@extended-stable version)"
+          selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
           if [[ "${exact_version}" != "${version}" || "${selector_version}" != "${version}" ]]; then
-            echo "npm exact-version or extended-stable selector readback does not match ${version}." >&2
+            echo "npm exact-version or ${RELEASE_NPM_DIST_TAG} selector readback does not match ${version}." >&2
             exit 1
           fi
           tarball_url="$(npm view "openclaw@${version}" dist.tarball)"

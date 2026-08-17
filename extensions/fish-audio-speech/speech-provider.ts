@@ -11,12 +11,15 @@ import type {
 } from "openclaw/plugin-sdk/speech";
 import {
   asBoolean,
-  asFiniteNumber,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumberInRange,
+  asOptionalRecord,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
@@ -71,8 +74,7 @@ function normalizeLatency(value: unknown): FishAudioLatency {
 }
 
 function normalizeNumber(value: unknown, min: number, max: number): number | undefined {
-  const number = asFiniteNumber(value);
-  return number != null && number >= min && number <= max ? number : undefined;
+  return asFiniteNumberInRange(value, { min, max });
 }
 
 function resolveReferenceId(raw: Record<string, unknown> | undefined): string | undefined {
@@ -209,12 +211,9 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
       if (!ctx.policy.allowNormalization) {
         return { handled: true };
       }
-      const value = ctx.value.trim().toLowerCase();
-      if (["true", "1", "yes", "on"].includes(value)) {
-        return { handled: true, overrides: { ...ctx.currentOverrides, normalize: true } };
-      }
-      if (["false", "0", "no", "off"].includes(value)) {
-        return { handled: true, overrides: { ...ctx.currentOverrides, normalize: false } };
+      const normalize = parseBooleanValue(ctx.value);
+      if (normalize !== undefined) {
+        return { handled: true, overrides: { ...ctx.currentOverrides, normalize } };
       }
       return { handled: true, warnings: [`invalid Fish Audio normalize "${ctx.value}"`] };
     }

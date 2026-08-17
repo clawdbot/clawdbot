@@ -2,7 +2,7 @@
  * Shared session persistence and prompt-body helpers for agent attempt
  * execution paths.
  */
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -30,7 +30,7 @@ export async function persistAgentSession(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
   let rejectedMissingEntry = false;
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);

@@ -14,6 +14,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
@@ -184,6 +185,8 @@ export type EmbeddedAgentRunMeta = {
   terminalReplyKind?: "silent-empty";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
+  /** Explicit user-facing waiting status supplied to sessions_yield. */
+  yieldAcknowledgment?: string;
   error?: {
     kind:
       | "context_overflow"
@@ -218,6 +221,7 @@ export type EmbeddedAgentRunMeta = {
 
 export type EmbeddedAgentRunResult = {
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;
@@ -259,6 +263,7 @@ export type EmbeddedAgentRunResult = {
 export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
+  compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
   reason?: string;
   /** Structured failure metadata used by model fallback classification. */
   failure?: {
@@ -268,8 +273,11 @@ export type EmbeddedAgentCompactResult = {
     rawError?: string;
   };
   result?: {
-    summary: string;
-    firstKeptEntryId: string;
+    /** Identifies summaryless provider compaction in RPC and UI consumers. */
+    kind?: "server-endpoint";
+    /** Server-endpoint compaction has no transcript summary or first-kept entry. */
+    summary?: string;
+    firstKeptEntryId?: string;
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;

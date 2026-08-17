@@ -5,6 +5,10 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import {
+  classifySystemAgentApprovalText,
+  type SystemAgentApprovalIntent,
+} from "./operator-approval.js";
+import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
@@ -19,8 +23,6 @@ import {
  * model is usable the closed list is the whole decision — "other" (the safe
  * default) keeps the proposal pending and the conversation re-asks.
  */
-export type SystemAgentApprovalIntent = "approve" | "decline" | "other";
-
 export type SystemAgentApprovalClassifier = (params: {
   message: string;
   /** Human-readable proposal description when the host knows it. */
@@ -31,34 +33,6 @@ export type SystemAgentApprovalClassifier = (params: {
 
 const APPROVAL_INTENT_TIMEOUT_MS = 10_000;
 const APPROVAL_INTENT_MAX_TOKENS = 8;
-
-// Approvals arm a mutation, so the deterministic list is whole-message only;
-// declines merely drop a proposal, so a leading match ("no thanks") suffices.
-const APPROVE_RE =
-  /^(?:y|yes|yeah|yep|yup|sure|ok|okay|approve|approved|apply|confirm|confirmed|do it|go ahead|sounds good|yes please|please do)$/i;
-const DECLINE_RE = /^(?:n|no|nope|nah|skip|not now|cancel|stop|abort|later|decline|don'?t)\b/i;
-
-function normalizeApprovalText(message: string): string {
-  return message
-    .trim()
-    .replace(/[.!?,\s]+$/u, "")
-    .toLowerCase();
-}
-
-/** Closed-list classification: exact affirmatives, prefix declines. */
-export function classifySystemAgentApprovalText(message: string): SystemAgentApprovalIntent {
-  const normalized = normalizeApprovalText(message);
-  if (!normalized) {
-    return "other";
-  }
-  if (APPROVE_RE.test(normalized)) {
-    return "approve";
-  }
-  if (DECLINE_RE.test(normalized)) {
-    return "decline";
-  }
-  return "other";
-}
 
 const APPROVAL_INTENT_SYSTEM_PROMPT = [
   "You classify one chat message from a user who was just asked to approve a pending configuration change.",

@@ -44,6 +44,7 @@ type SubagentRunReadSqliteRow = Pick<
   outcome_status: string | null;
   delivery_status: string | null;
   delivery_suspended_at: number | null;
+  requester_agent_id: string | null;
 };
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
@@ -317,6 +318,7 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
+        subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
         ),
@@ -354,6 +356,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       childSessionKey,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
       requesterSessionKey,
+      requesterAgentId: row.requester_agent_id?.trim() || undefined,
       model: row.model || undefined,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,

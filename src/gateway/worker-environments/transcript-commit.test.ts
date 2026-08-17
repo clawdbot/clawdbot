@@ -13,7 +13,7 @@ import {
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -40,6 +40,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
   runId: "run-worker-transcript",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-worker-transcript",
+    runId: "run-worker-transcript",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch: RUN_EPOCH },
+  },
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],
@@ -175,7 +182,7 @@ describe("worker transcript commit application", () => {
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
       },
     };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       {
         lifecycleRevision: "worker-original-revision",

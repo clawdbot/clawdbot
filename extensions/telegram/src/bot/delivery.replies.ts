@@ -22,21 +22,18 @@ import {
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
-import { mergeTelegramPartialDeliveryError } from "../chunk-delivery.js";
 import {
-  markdownToTelegramChunks,
-  markdownToTelegramHtml,
-  splitTelegramHtmlChunks,
-  telegramHtmlToPlainTextFallback,
-  wrapFileReferencesInHtml,
-} from "../format.js";
+  createTelegramChunkDeliveryTracker,
+  mergeTelegramPartialDeliveryError,
+} from "../chunk-delivery.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
@@ -49,13 +46,7 @@ import {
   type TelegramOutboundMediaSender,
 } from "../outbound-media.js";
 import type { TelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
-import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
-import {
-  isEmptyTelegramRichMessage,
-  splitTelegramRichMessageTextChunks,
-  TELEGRAM_RICH_TEXT_LIMIT,
-  type TelegramInputRichMessage,
-} from "../rich-message.js";
+import { TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { isTelegramEmptyContentError } from "../rich-plain-fallback.js";
 import {
   isTelegramCaptionTooLongError,
@@ -67,20 +58,20 @@ import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import {
+  planTelegramTextDeliveryPages,
+  type TelegramTextDeliveryPage,
+} from "../telegram-text-delivery.js";
+import {
   buildTelegramSendParams,
   sendTelegramText,
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./native-quote.js";
-import {
-  markReplyApplied,
-  resolveReplyToForSend,
-  sendChunkedTelegramReplyText,
-  type DeliveryProgress as ReplyThreadDeliveryProgress,
-} from "./reply-threading.js";
 
-type DeliveryProgress = ReplyThreadDeliveryProgress & {
+type DeliveryProgress = {
+  hasReplied: boolean;
+  hasDelivered: boolean;
   deliveredCount: number;
   promptContext?: TelegramPromptContextProjectionSequence;
 };
@@ -100,96 +91,36 @@ type TelegramReplyQuoteForSend = {
   entities?: unknown[];
 };
 
-type TelegramDeliveryTextChunk = {
-  text: string;
-  plainText: string;
-  textMode: "html" | "markdown";
-  richMessage?: TelegramInputRichMessage;
-  richDegradationReasons?: readonly TelegramRichBlocksDegradationReason[];
-};
-
-type ChunkTextFn = (markdown: string) => TelegramDeliveryTextChunk[];
-
-function buildChunkTextResolver(params: {
-  textLimit: number;
-  chunkMode: ChunkMode;
-  tableMode?: MarkdownTableMode;
-  richMessages?: boolean;
-  skipEntityDetection?: boolean;
-  textMode?: "html";
-}): ChunkTextFn {
-  // Caller-authored HTML keeps legacy parse_mode HTML semantics even on rich
-  // accounts; the rich blocks path is markdown-only.
-  if (params.richMessages === true && params.textMode !== "html") {
-    return (text: string) =>
-      splitTelegramRichMessageTextChunks({
-        text,
-        textLimit: Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT),
-        tableMode: params.tableMode,
-        skipEntityDetection: params.skipEntityDetection,
-      }).map((chunk) => ({
-        // text/textMode describe the non-rich fallback body, not the rich wire
-        // payload; plain text keeps the fallback parse-safe for both inputs.
-        text: chunk.plainText,
-        plainText: chunk.plainText,
-        textMode: "markdown" as const,
-        richMessage: chunk.richMessage,
-        richDegradationReasons: chunk.degradationReasons,
-      }));
-  }
-  if (params.textMode === "html") {
-    return (html: string) =>
-      splitTelegramHtmlChunks(html, params.textLimit).map((text) => ({
-        text,
-        plainText: telegramHtmlToPlainTextFallback(text),
-        textMode: "html" as const,
-      }));
-  }
-  return (markdown: string) => {
-    const markdownChunks =
-      params.chunkMode === "newline"
-        ? chunkMarkdownTextWithMode(markdown, params.textLimit, params.chunkMode)
-        : [markdown];
-    const chunks: ReturnType<typeof markdownToTelegramChunks> = [];
-    for (const chunk of markdownChunks) {
-      const nested = markdownToTelegramChunks(chunk, params.textLimit, {
-        tableMode: params.tableMode,
-      });
-      if (!nested.length && chunk) {
-        chunks.push({
-          html: wrapFileReferencesInHtml(
-            markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
-          ),
-          text: chunk,
-        });
-        continue;
-      }
-      chunks.push(...nested);
-    }
-    return chunks.map((chunk) => ({
-      text: chunk.html,
-      plainText: chunk.text,
-      textMode: "html" as const,
-    }));
-  };
-}
+type ChunkTextFn = (text: string) => TelegramTextDeliveryPage[];
 
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
 }
 
-function filterEmptyTelegramTextChunks<
-  T extends { text: string; plainText?: string; richMessage?: TelegramInputRichMessage },
->(chunks: readonly T[]): T[] {
+function resolveReplyToForSend(params: {
+  replyToId?: number;
+  replyToMode: ReplyToMode;
+  progress: DeliveryProgress;
+}): number | undefined {
+  return params.replyToId && (params.replyToMode === "all" || !params.progress.hasReplied)
+    ? params.replyToId
+    : undefined;
+}
+
+function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void {
+  if (replyToId && !progress.hasReplied) {
+    progress.hasReplied = true;
+  }
+}
+
+function filterEmptyTelegramTextChunks(chunks: readonly TelegramTextDeliveryPage[]) {
   // Telegram rejects whitespace-only text payloads; drop them before sendMessage so
   // hook-mutated or model-emitted empty replies become a no-op instead of a 400.
   // Rich chunks gate on the rich payload: valid rich content (media/divider HTML)
   // can have an empty plain projection and must still send.
-  return chunks.filter((chunk) =>
-    chunk.richMessage
-      ? !isEmptyTelegramRichMessage(chunk.richMessage) || Boolean(chunk.plainText?.trim())
-      : chunk.text.trim().length > 0,
+  return chunks.filter(
+    (chunk) => chunk.richMessage?.blocks.length || chunk.htmlText?.trim() || chunk.plainText.trim(),
   );
 }
 
@@ -258,14 +189,8 @@ async function deliverTextReply(params: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
-  await sendChunkedTelegramReplyText({
-    chunks,
-    progress: params.progress,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-    replyMarkup: params.replyMarkup,
-    replyQuoteText: params.replyQuoteText,
-    quoteOnlyOnFirstChunk: params.quoteOnlyOnFirstChunk,
+  const messageIds: string[] = [];
+  const tracker = createTelegramChunkDeliveryTracker({
     invalidate: () => params.progress.promptContext?.invalidate(),
     onRejected: (error) =>
       params.runtime.error?.(
@@ -276,44 +201,56 @@ async function deliverTextReply(params: {
       params.runtime.log?.(
         `telegram reply chunk rendered empty; skipping: ${formatErrorMessage(error)}`,
       ),
-    markDelivered,
-    sendChunk: async ({ chunk, isFirstChunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
-      const includeQuoteMetadata = params.quoteOnlyOnFirstChunk !== true || isFirstChunk;
+    partialDeliveryResult: () => ({ messageIds: [...messageIds], visibleReplySent: true }),
+  });
+  const suppressReply = chunks.length > 1 && isSingleUseReplyToMode(params.replyToMode);
+  let hasAcceptedChunk = false;
+  for (const chunk of chunks) {
+    const first = !hasAcceptedChunk;
+    const replyToMessageId = suppressReply ? undefined : resolveReplyToForSend(params);
+    const includeQuote = params.quoteOnlyOnFirstChunk !== true || first;
+    try {
       await params.onPlatformSendDispatch?.();
-      const messageId = await sendTelegramText(
+      await sendTelegramText(
         params.bot,
         params.chatId,
-        chunk.text,
+        chunk.htmlText ?? chunk.plainText,
         params.runtime,
         {
           replyToMessageId,
-          replyQuoteMessageId: includeQuoteMetadata ? params.replyQuoteMessageId : undefined,
-          replyQuoteText,
-          replyQuotePosition: includeQuoteMetadata ? params.replyQuotePosition : undefined,
-          replyQuoteEntities: includeQuoteMetadata ? params.replyQuoteEntities : undefined,
+          replyQuoteMessageId: includeQuote ? params.replyQuoteMessageId : undefined,
+          replyQuoteText: replyToMessageId && includeQuote ? params.replyQuoteText : undefined,
+          replyQuotePosition: includeQuote ? params.replyQuotePosition : undefined,
+          replyQuoteEntities: includeQuote ? params.replyQuoteEntities : undefined,
           thread: params.thread,
-          textMode: chunk.textMode,
+          textMode: chunk.htmlText ? "html" : "markdown",
           plainText: chunk.plainText,
           richMessages: params.richMessages,
           richMessage: chunk.richMessage,
-          richDegradationReasons: chunk.richDegradationReasons,
+          richDegradationReasons: chunk.degradationReasons,
           linkPreview: params.linkPreview,
           tableMode: params.tableMode,
           silent: params.silent,
-          replyMarkup,
+          replyMarkup: first ? params.replyMarkup : undefined,
+          onAcceptedMessage: async (messageId, plainText) => {
+            messageIds.push(String(messageId));
+            await tracker.recordAccepted(messageId, async () => {
+              firstDeliveredMessageId ??= messageId;
+              params.recordMessageId(messageId);
+              await params.progress.promptContext?.accept({ messageId, text: plainText });
+            });
+          },
         },
       );
-      return messageId;
-    },
-    recordChunk: async (result, chunk) => {
-      const messageId = result;
-      if (firstDeliveredMessageId == null) {
-        firstDeliveredMessageId = messageId;
-      }
-      params.recordMessageId(messageId);
-      await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
-    },
-  });
+    } catch (error) {
+      tracker.reject(error);
+      continue;
+    }
+    hasAcceptedChunk = true;
+    markReplyApplied(params.progress, suppressReply && first ? params.replyToId : replyToMessageId);
+    markDelivered(params.progress);
+  }
+  tracker.finish();
   return firstDeliveredMessageId;
 }
 
@@ -749,6 +686,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+  ownerAgentId?: string;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -800,25 +738,35 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
-  const recordMessageId = (messageId: number) =>
+  const recordMessageId = (messageId: number) => {
+    if (params.accountId || params.ownerAgentId) {
+      recordSentMessage(params.chatId, messageId, params.cfg, {
+        accountId: params.accountId,
+        agentId: params.ownerAgentId,
+      });
+      return;
+    }
     recordSentMessage(params.chatId, messageId, params.cfg);
+  };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
-  const chunkText = buildChunkTextResolver({
-    textLimit:
-      params.richMessages === true
-        ? Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT)
-        : Math.min(params.textLimit, 4000),
-    chunkMode: params.chunkMode ?? "length",
-    tableMode: params.tableMode,
-    richMessages: params.richMessages,
-    skipEntityDetection: params.linkPreview === false,
-    ...(params.textMode ? { textMode: params.textMode } : {}),
-  });
+  const chunkText: ChunkTextFn = (text) =>
+    planTelegramTextDeliveryPages({
+      text,
+      maxChars:
+        params.richMessages === true
+          ? Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT)
+          : Math.min(params.textLimit, 4000),
+      chunkMode: params.chunkMode ?? "length",
+      tableMode: params.tableMode,
+      richMessages: params.richMessages,
+      skipEntityDetection: params.linkPreview === false,
+      ...(params.textMode ? { textMode: params.textMode } : {}),
+    });
   const candidateReplies: ReplyPayload[] = [];
   for (const reply of params.replies) {
     if (!reply || typeof reply !== "object") {

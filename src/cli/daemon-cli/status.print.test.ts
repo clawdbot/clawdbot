@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -10,6 +10,7 @@ import { printDaemonStatus } from "./status.print.js";
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
   error: vi.fn<(line: string) => void>(),
+  writeJson: vi.fn<(value: unknown) => void>(),
 }));
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
@@ -100,11 +101,85 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    runtime.writeJson.mockReset();
     renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
+  });
+
+  it("preserves Gateway server metadata while sanitizing JSON output", () => {
+    const servers = [
+      { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
+      { version: "2026.5.6", connId: "conn-1" },
+    ];
+    for (const server of servers) {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            command: { programArguments: ["node"], environment: { OPENCLAW_STATE_DIR: "/tmp" } },
+          },
+          rpc: { ok: true, server },
+          extraServices: [],
+        },
+        { json: true, deep: true },
+      );
+    }
+
+    expect(
+      runtime.writeJson.mock.calls.map(
+        ([payload]) => (payload as { rpc?: { server?: unknown } }).rpc?.server,
+      ),
+    ).toEqual(servers);
+  });
+
+  it("prints host desktop state and auth type", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: { enabled: true, state: "attached", port: 5900, security: "VncAuth" },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(
+      runtime.log,
+      "Host desktop: attached · 127.0.0.1:5900 · security VncAuth",
+    );
+  });
+
+  it("prints a managed host desktop failure without a fake listener address", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "failed",
+          port: 46_001,
+          display: 99,
+          error: "startxfce4 not installed",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
   });
 
   it("prints the applied Gateway heap limit and derivation", () => {
@@ -138,7 +213,7 @@ describe("printDaemonStatus", () => {
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases in human status",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const logFile = path.join(home, "logs", "gateway.log");
         await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
         await fs.promises.writeFile(logFile, "ready", "utf8");

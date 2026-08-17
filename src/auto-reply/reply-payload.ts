@@ -1,3 +1,8 @@
+import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  readNonBlankString,
+  readNonBlankString as normalizeTtsSupplementSpokenText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
@@ -6,6 +11,7 @@ import type {
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 
 export type ReplyMediaAttachment = {
   type?: "image" | "audio" | "video" | "file";
@@ -95,6 +101,17 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+export function readAskUserQuestionId(
+  payload: Pick<ReplyPayload, "channelData">,
+): string | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+    return undefined;
+  }
+  const questionId = (askUser as { questionId?: unknown }).questionId;
+  return typeof questionId === "string" && questionId ? questionId : undefined;
+}
+
 // Private device-pair -> Gateway live-display envelope key. Do not re-export
 // through Plugin SDK; this is not a third-party plugin contract.
 const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
@@ -104,14 +121,6 @@ type PairingQrReplyChannelData = {
   expiresAtMs: number;
 };
 
-function normalizePairingQrSetupCode(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
@@ -120,7 +129,7 @@ export function readPairingQrReplyChannelData(
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const setupCode = readNonBlankString(record.setupCode);
   const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
@@ -144,7 +153,8 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING =
+  "⚠️ Media failed. Try sending a smaller supported file or a different format.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
@@ -155,10 +165,6 @@ export function appendReplyMediaFailureWarning(text: string | undefined): string
     return text;
   }
   return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
-}
-
-function normalizeTtsSupplementSpokenText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
@@ -233,16 +239,20 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Persisted assistant speech facts; never serialized into channel payloads. */
+  tts?: AssistantDeliveryTtsFacts;
+  /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
+  ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact channel/account transform owner that already accepted this payload. */
+  channelReplyTransformOwner?: object;
+  /** Exact dispatcher that already ran its full normalization before side effects. */
+  replyDispatcherNormalizationOwner?: object;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
-  /** Foreground freshness prevented a visible final after transcript persistence. */
-  foregroundDeliverySuppression?: {
-    reason: "stale-foreground";
-  };
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */

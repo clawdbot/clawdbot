@@ -23,7 +23,7 @@ function runCapability(domain: string, action: string, ...argv: string[]): Promi
 }
 
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
-  mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+  mocks.resolveApiKeyForProviderCore.mockResolvedValueOnce({
     apiKey: mode === "token" ? "profile-openai-token" : "profile-openai-key",
     source: mode === "token" ? "profile:openai:token" : "profile:openai:qa",
     mode,
@@ -46,9 +46,13 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   getRuntimeConfigSourceSnapshot: vi.fn(() => null),
   setRuntimeConfigSnapshot: vi.fn(),
-  loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
-  listProfilesForProvider: vi.fn(() => []),
-  resolveApiKeyForProvider: vi.fn(),
+  loadAuthProfileStoreForRuntime: vi.fn<
+    typeof import("../agents/auth-profiles.js").loadAuthProfileStoreForRuntime
+  >(() => ({ version: 1, profiles: {}, order: {} })),
+  listProfilesForProvider: vi.fn<
+    typeof import("../agents/auth-profiles.js").listProfilesForProvider
+  >(() => []),
+  resolveApiKeyForProviderCore: vi.fn(),
   loadManifestMetadataSnapshot: vi.fn(() => ({ manifestRegistry: { plugins: [] } })),
   planEffectiveModelCatalogRows: vi.fn<
     typeof import("../model-catalog/index.js").planEffectiveModelCatalogRows
@@ -67,7 +71,9 @@ const mocks = vi.hoisted(() => ({
       return store;
     },
   ),
-  resolveMemorySearchConfig: vi.fn(() => null),
+  resolveMemorySearchConfig: vi.fn<
+    typeof import("../agents/memory-search.js").resolveMemorySearchConfig
+  >(() => null),
   loadModelCatalog: vi.fn(async () => []),
   prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
     selection: {
@@ -184,7 +190,12 @@ const mocks = vi.hoisted(() => ({
     entries: [],
   })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-  isWebSearchProviderConfigured: vi.fn(() => false),
+  listWebSearchProviders: vi.fn<typeof import("../web-search/runtime.js").listWebSearchProviders>(
+    () => [],
+  ),
+  isWebSearchProviderConfigured: vi.fn<
+    typeof import("../web-search/runtime.js").isWebSearchProviderConfigured
+  >(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   getModelsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
   getMemoryEmbeddingCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
@@ -279,7 +290,15 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: () => ({}),
-  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentEffectiveModelPrimary: (
+    cfg: {
+      agents?: {
+        defaults?: { model?: string };
+        entries?: Record<string, { model?: string }>;
+      };
+    },
+    agentId: string,
+  ) => cfg.agents?.entries?.[agentId]?.model ?? cfg.agents?.defaults?.model,
   resolveAgentModelFallbacksOverride: () => [],
 }));
 
@@ -304,8 +323,8 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider:
-    mocks.resolveApiKeyForProvider as typeof import("../agents/model-auth.js").resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore:
+    mocks.resolveApiKeyForProviderCore as typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => ({
@@ -372,9 +391,9 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/memory-embedding-providers.js", () => ({
-  listMemoryEmbeddingProviders:
-    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
+vi.mock("../plugins/memory-embedding-provider-runtime.js", () => ({
+  listRegisteredMemoryEmbeddingProviderAdapters:
+    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-provider-runtime.js").listRegisteredMemoryEmbeddingProviderAdapters,
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
@@ -422,7 +441,7 @@ vi.mock("../tts/provider-registry.js", () => ({
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
-  listWebSearchProviders: vi.fn(() => []),
+  listWebSearchProviders: mocks.listWebSearchProviders,
   isWebSearchProviderConfigured:
     mocks.isWebSearchProviderConfigured as typeof import("../web-search/runtime.js").isWebSearchProviderConfigured,
   runWebSearch: vi.fn(),
@@ -520,15 +539,18 @@ describe("capability cli", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
+    mocks.loadConfig.mockReset().mockReturnValue({});
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.loadModelCatalog
       .mockReset()
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
-    mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
+    mocks.loadAuthProfileStoreForRuntime
+      .mockReset()
+      .mockReturnValue({ version: 1, profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
-    mocks.resolveApiKeyForProvider.mockReset().mockRejectedValue(new Error("no auth profile"));
+    mocks.resolveApiKeyForProviderCore.mockReset().mockRejectedValue(new Error("no auth profile"));
     mocks.loadManifestMetadataSnapshot
       .mockReset()
       .mockReturnValue({ manifestRegistry: { plugins: [] } });
@@ -607,6 +629,7 @@ describe("capability cli", () => {
         { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
       ]);
     mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
+    mocks.listWebSearchProviders.mockReset().mockReturnValue([]);
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.getModelsCommandSecretTargetIds.mockClear();
@@ -795,6 +818,7 @@ describe("capability cli", () => {
 
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
       config: mocks.loadConfig(),
+      ...(command === "providers" ? { agentId: "main" } : {}),
       readOnly: true,
     });
   });
@@ -812,6 +836,120 @@ describe("capability cli", () => {
       expect.objectContaining({ provider: "openai", configured: true }),
     );
     expect(mocks.getProviderEnvVars).toHaveBeenCalledWith("openai");
+  });
+
+  it("scopes provider state and model selection to an explicit agent", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: {
+          alpha: { model: "anthropic/claude-sonnet-4-6" },
+          beta: { model: "openai/gpt-5.4" },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-sonnet-4-6", provider: "anthropic", name: "Claude" },
+      { id: "gpt-5.4", provider: "openai", name: "GPT" },
+    ] as never);
+    mocks.loadAuthProfileStoreForRuntime.mockImplementation(
+      (agentDir) =>
+        ({
+          profiles:
+            agentDir === "/tmp/agent-alpha"
+              ? { "anthropic:alpha": { provider: "anthropic" } }
+              : { "openai:beta": { provider: "openai" } },
+          order: {},
+        }) as never,
+    );
+    mocks.listProfilesForProvider.mockImplementation((store, provider) =>
+      Object.entries(store.profiles as Record<string, { provider: string }>)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([id]) => id),
+    );
+
+    await runCapability("model", "providers", "--agent", "alpha", "--json");
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      agentId: "alpha",
+      readOnly: true,
+    });
+    expect(mocks.resolveAgentDir.mock.calls.map((call) => call[1])).toEqual(["alpha", "alpha"]);
+    expect(firstJsonOutput()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "anthropic", configured: true, selected: true }),
+        expect.objectContaining({ provider: "openai", configured: false, selected: false }),
+      ]),
+    );
+  });
+
+  it("uses the configured system agent for embedding provider state", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.resolveMemorySearchConfig.mockImplementation(
+      (_cfg, agentId) =>
+        (agentId === "beta"
+          ? { provider: "openai", model: "text-embedding-3-small" }
+          : null) as never,
+    );
+
+    await runCapability("embedding", "providers", "--json");
+
+    expect(mocks.resolveMemorySearchConfig).toHaveBeenCalledWith(cfg, "beta");
+    expect(mocks.resolveAgentDir.mock.calls.every((call) => call[1] === "beta")).toBe(true);
+    expect(firstJsonOutput()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "openai", configured: true, selected: true }),
+      ]),
+    );
+  });
+
+  it("requires an explicit owner for agent-backed provider state in explicit fleets", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+
+    await expect(runCapability("audio", "providers", "--json")).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("inference provider inspection has no explicit owner");
+    expectRuntimeErrorContains("Pass --agent <id> or set agents.defaults.systemAgent.agentId");
+    expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
+  });
+
+  it("scopes web search auth inspection to the selected agent", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+    const provider = {
+      id: "openai",
+      envVars: ["OPENAI_API_KEY"],
+      requiresCredential: true,
+    };
+    mocks.listWebSearchProviders.mockReturnValue([provider] as never);
+
+    await runCapability("web", "providers", "--agent", "beta", "--json");
+
+    expect(firstJsonOutput()).toMatchObject({ search: [{ id: "openai" }], fetch: [] });
+    expect(mocks.isWebSearchProviderConfigured).toHaveBeenCalledWith({
+      provider,
+      config: mocks.loadConfig(),
+      agentDir: "/tmp/agent-beta",
+    });
   });
 
   it("inspects runtime-declared manifest models without live discovery", async () => {
@@ -1532,7 +1670,7 @@ describe("capability cli", () => {
       runCapability("image", "describe", "--file", "photo.jpg", "--json"),
     ).rejects.toThrow("exit 1");
     expect(runtimeErrorMessages()).toEqual([
-      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+      `No description returned for image: ${path.resolve("photo.jpg")}`,
     ]);
   });
 
@@ -1739,7 +1877,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --output-format must be one of png, jpeg, or webp",
+      "--output-format must be one of png, jpeg, or webp",
     );
 
     mocks.runtime.error.mockClear();
@@ -1755,7 +1893,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --openai-background must be one of transparent, opaque, or auto",
+      "--openai-background must be one of transparent, opaque, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1771,7 +1909,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --background must be one of transparent, opaque, or auto",
+      "--background must be one of transparent, opaque, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1787,7 +1925,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --quality must be one of low, medium, high, or auto",
+      "--quality must be one of low, medium, high, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1803,7 +1941,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --openai-moderation must be one of low or auto",
+      "--openai-moderation must be one of low or auto",
     );
   });
 
@@ -2524,7 +2662,7 @@ describe("capability cli", () => {
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
     expect(runtimeErrorMessages()).toEqual([
-      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+      `No transcript returned for audio: ${path.resolve("memo.m4a")}`,
     ]);
   });
 
@@ -2553,7 +2691,7 @@ describe("capability cli", () => {
     await expect(
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
-    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
+    expect(runtimeErrorMessages()).toEqual(["Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {
@@ -2616,7 +2754,7 @@ describe("capability cli", () => {
       "--json",
     );
 
-    expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         cfg: rawConfig,
@@ -2640,7 +2778,7 @@ describe("capability cli", () => {
 
     await runCapability("tts", "convert", "--text", "hello", "--json");
 
-    expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         cfg: rawConfig,
@@ -2730,7 +2868,7 @@ describe("capability cli", () => {
     };
     expect(cfg.tts?.providers?.openai?.apiKey).toBe("config-key");
     expect(cfg.channels?.discord?.tts?.providers?.openai).toEqual({ speakerVoice: "nova" });
-    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
   });
 
   it("does not hydrate local TTS provider config from token auth profiles", async () => {

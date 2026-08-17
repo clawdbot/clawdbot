@@ -59,6 +59,7 @@ openclaw sandbox explain --json
 ```
 
 Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
 
 ## Why recreate is needed
 

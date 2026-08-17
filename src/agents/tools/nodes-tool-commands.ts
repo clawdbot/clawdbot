@@ -17,7 +17,7 @@ import {
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
@@ -181,7 +181,7 @@ export async function executeNodeCommandAction(params: {
     }
     case "invoke": {
       const node = readToolStringParam(params.input, "node", { required: true });
-      const nodeId = await resolveNodeId(params.gatewayOpts, node);
+      const nodeId = await resolveAgentNodeId(params.gatewayOpts, node);
       const invokeCommand = readToolStringParam(params.input, "invokeCommand", { required: true });
       const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
@@ -248,7 +248,7 @@ async function invokeNodeCommandPayload(params: {
   command: string;
   commandParams?: Record<string, unknown>;
 }): Promise<unknown> {
-  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
+  const nodeId = await resolveAgentNodeId(params.gatewayOpts, params.node);
   const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
     nodeId,
     command: params.command,

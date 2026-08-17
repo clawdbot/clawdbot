@@ -8,7 +8,7 @@ import type { OperationalRunInstanceRef } from "../../agents/admitted-run-contex
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   assertSupportedTurn,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -77,13 +77,12 @@ function toolResultMessage(details: unknown, timestamp: number): AgentMessage {
 }
 
 function buildDescriptor(
-  initialMessages: WorkerLaunchDescriptor["assignment"]["initialMessages"],
+  initialMessages: WorkerLaunchPlan["assignment"]["initialMessages"],
   agentRuntimeIdentityToken: string,
   operationalRunInstance: OperationalRunInstanceRef,
-): WorkerLaunchDescriptor {
+): WorkerLaunchPlan {
   return {
-    version: 2,
-    socketPath: "/tmp/worker.sock",
+    version: 3,
     admission: {
       environmentId: "environment",
       credential: "worker-fixture-credential",
@@ -115,7 +114,7 @@ function buildDescriptor(
   };
 }
 
-function fitLaunchDescriptor(messages: WorkerLaunchDescriptor["assignment"]["initialMessages"]) {
+function fitLaunchDescriptor(messages: WorkerLaunchPlan["assignment"]["initialMessages"]) {
   const operationalRunInstance = createTestAdmittedRunContext("run").operationalRunInstance;
   return {
     operationalRunInstance,
@@ -292,13 +291,13 @@ describe("fitLaunchDescriptor", () => {
     if (plan.kind !== "launch") {
       throw new Error("expected launch plan");
     }
-    expect(plan.descriptor.assignment.initialMessages).toHaveLength(2);
-    expect(plan.descriptor.assignment.initialMessages[1]).toMatchObject({
+    expect(plan.plan.assignment.initialMessages).toHaveLength(2);
+    expect(plan.plan.assignment.initialMessages[1]).toMatchObject({
       role: "assistant",
       providerReplay: PROVIDER_REPLAY,
     });
-    expect(plan.descriptor.assignment.agentRuntimeIdentityToken).toBe(runtimeIdentityToken.value);
-    expect(plan.descriptor.assignment.operationalRunInstance).toBe(fitted.operationalRunInstance);
+    expect(plan.plan.assignment.agentRuntimeIdentityToken).toBe(runtimeIdentityToken.value);
+    expect(plan.plan.assignment.operationalRunInstance).toBe(fitted.operationalRunInstance);
     expect(runtimeIdentityToken.mint).toHaveBeenCalledOnce();
     expect(runtimeIdentityToken.mint.mock.calls[0]?.[0].operationalRunInstance).toBe(
       fitted.operationalRunInstance,
@@ -321,10 +320,10 @@ describe("fitLaunchDescriptor", () => {
     if (plan.kind !== "launch") {
       throw new Error("expected launch plan");
     }
-    expect(plan.descriptor.assignment.initialMessages).toEqual([
+    expect(plan.plan.assignment.initialMessages).toEqual([
       expect.objectContaining({ role: "assistant", providerReplay: PROVIDER_REPLAY }),
     ]);
-    expect(plan.descriptor.assignment.operationalRunInstance).toBe(fitted.operationalRunInstance);
+    expect(plan.plan.assignment.operationalRunInstance).toBe(fitted.operationalRunInstance);
     expect(runtimeIdentityToken.mint.mock.calls[0]?.[0].operationalRunInstance).toBe(
       fitted.operationalRunInstance,
     );

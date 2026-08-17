@@ -94,7 +94,31 @@ export async function settlePendingFinalDelivery(
         current === "suppressed" ||
         (current === "unknown" && state === "unknown");
       settled = terminal ? current : state;
-      if (settled === current) {
+      const pending = internalEntry.pendingFinalDelivery;
+      const existingNotice = internalEntry.pendingDeliveryNotice;
+      const owedNotice =
+        settled === "unknown" &&
+        (current === "queued" || current === "unknown") &&
+        pending.context &&
+        pending.intentId &&
+        !(existingNotice?.intentId === pending.intentId && existingNotice.state === "owed") &&
+        (!existingNotice || existingNotice.createdAt <= pending.createdAt)
+          ? {
+              pendingDeliveryNotice: {
+                createdAt: pending.createdAt,
+                context: pending.context,
+                intentId: pending.intentId,
+                state: "owed" as const,
+              },
+            }
+          : undefined;
+      const clearsNotice =
+        settled !== "queued" &&
+        settled !== "unknown" &&
+        existingNotice?.intentId === pending.intentId;
+      // The pre-I/O claim preserves crash-window ambiguity. Any authoritative
+      // fate for that intent must clear debt before a later turn can surface it.
+      if (settled === current && !owedNotice && !clearsNotice) {
         return null;
       }
       wakeRecovery =
@@ -114,6 +138,7 @@ export async function settlePendingFinalDelivery(
           ...internalEntry.pendingFinalDelivery,
           deliveries: deliveries.with(index, { id: completion.deliveryId, state: settled }),
         },
+        ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
         updatedAt: Date.now(),
       };
     },
@@ -178,7 +203,7 @@ export async function completeDurableDelivery(
 }
 
 /** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-export async function suppressDurableDelivery(
+async function suppressDurableDelivery(
   completion: DurableDeliveryCompletion,
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
@@ -195,8 +220,10 @@ export async function rejectDurableDelivery(
   error: string,
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
+  // Proven no-send: terminal suppression, not the unknown state that owes an
+  // uncertainty notice for a send the provider asserts never began.
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "unknown", undefined, stateDir)
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, stateDir)
     : conversationResult(
         markConversationDeliveryRejected(
           scopeForCompletion(completion),
@@ -216,4 +243,21 @@ export async function failDurableDelivery(
     : conversationResult(
         markConversationDeliveryUnknown(scopeForCompletion(completion), completion.operationId),
       );
+}
+
+type DurableDeliveryTerminalEvidence =
+  | { result: OutboundDeliveryResult }
+  | { platformSendStarted: boolean };
+
+/** Settles the completion owner from the final evidence held by its lifecycle owner. */
+export async function settleDurableDelivery(
+  completion: DurableDeliveryCompletion,
+  evidence: DurableDeliveryTerminalEvidence,
+  stateDir?: string,
+): Promise<DurableDeliveryCompletionResult> {
+  return "result" in evidence
+    ? completeDurableDelivery(completion, evidence.result, stateDir)
+    : evidence.platformSendStarted
+      ? failDurableDelivery(completion, stateDir)
+      : suppressDurableDelivery(completion, stateDir);
 }

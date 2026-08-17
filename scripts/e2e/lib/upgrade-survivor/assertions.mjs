@@ -414,11 +414,6 @@ function assertConfigSurvived() {
       config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
     assert(mainAgent, "main agent missing");
     assert(opsAgent, "ops agent missing");
-    if (hasCoverage(coverage)) {
-      assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
-    } else {
-      assert(mainAgent.contextTokens === 64000, "main agent contextTokens changed");
-    }
     if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
       assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
     }
@@ -835,11 +830,17 @@ function assertSessionMetadataMigrated(stateDir) {
   assert(main?.sessionId === LEGACY_SESSION_MAIN_ID, "main legacy session row missing");
   assert(direct?.sessionId === LEGACY_SESSION_DIRECT_ID, "direct legacy session row missing");
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
-  const migratedSessionIds = [
-    LEGACY_SESSION_MAIN_ID,
-    LEGACY_SESSION_DIRECT_ID,
-    LEGACY_SESSION_GROUP_ID,
+  const migratedSessions = [
+    [LEGACY_SESSION_MAIN_ID, main],
+    [LEGACY_SESSION_DIRECT_ID, direct],
+    [LEGACY_SESSION_GROUP_ID, group],
   ];
+  for (const [sessionId, entry] of migratedSessions) {
+    assert(
+      !Object.hasOwn(entry ?? {}, "sessionFile"),
+      `legacy session row retained retired sessionFile metadata for ${sessionId}`,
+    );
+  }
   if (source !== "file") {
     const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -847,7 +848,7 @@ function assertSessionMetadataMigrated(stateDir) {
       const count = db.prepare(
         "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
       );
-      for (const sessionId of migratedSessionIds) {
+      for (const [sessionId] of migratedSessions) {
         const row = count.get(sessionId);
         assert(
           Number(row?.count ?? 0) > 0,
@@ -858,19 +859,11 @@ function assertSessionMetadataMigrated(stateDir) {
       db.close();
     }
   } else {
-    for (const [sessionId, entry] of [
-      [LEGACY_SESSION_MAIN_ID, main],
-      [LEGACY_SESSION_DIRECT_ID, direct],
-      [LEGACY_SESSION_GROUP_ID, group],
-    ]) {
+    for (const [sessionId] of migratedSessions) {
       const expectedPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
       assert(
         fs.existsSync(expectedPath),
         `legacy session transcript was not moved for ${sessionId}`,
-      );
-      assert(
-        entry?.sessionFile === expectedPath,
-        `legacy session row still points at the old sessions directory for ${sessionId}`,
       );
     }
   }

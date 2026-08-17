@@ -1,3 +1,4 @@
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 /**
  * Runtime dependency barrel for the Browser agent tool.
  *
@@ -9,11 +10,14 @@ import { getRuntimeConfig } from "./sdk-config.js";
 export { getRuntimeConfig };
 /** Resolve global image downscaling for screenshots returned to agent tools. */
 export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
-  const configured = getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx;
-  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+  const maxDimensionPx = resolveOptionalIntegerOption(
+    getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx,
+    { min: 1 },
+  );
+  if (maxDimensionPx === undefined) {
     return undefined;
   }
-  return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
+  return { maxDimensionPx };
 }
 export {
   callGatewayTool,

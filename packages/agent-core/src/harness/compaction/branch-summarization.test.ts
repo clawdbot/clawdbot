@@ -5,7 +5,7 @@ import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
 
-function createModel(contextWindow: number, maxTokens = 8000): Model {
+function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
   return {
     id: "branch-summary-model",
     name: "Branch Summary Model",

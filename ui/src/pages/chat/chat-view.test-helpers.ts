@@ -1,14 +1,19 @@
 import type { ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 
-export function createTestTranscript(): ChatTranscriptController {
-  return new ChatTranscriptController({
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: () => undefined,
-    updateComplete: Promise.resolve(true),
-  } satisfies ReactiveControllerHost);
+export function createTestTranscript(
+  rowHeightCache?: ConstructorParameters<typeof ChatTranscriptController>[1],
+): ChatTranscriptController {
+  return new ChatTranscriptController(
+    {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost,
+    rowHeightCache,
+  );
 }
 
 export function createPasteEvent(

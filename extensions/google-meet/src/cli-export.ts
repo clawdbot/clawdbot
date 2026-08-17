@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
   formatDuration,
@@ -522,6 +523,17 @@ function defaultExportDirectory(): string {
   return `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
 
+async function publishMeetExportFile(outputPath: string, content: string | Buffer): Promise<void> {
+  const absolutePath = path.resolve(outputPath);
+  await writeExternalFileWithinRoot({
+    rootDir: path.dirname(absolutePath),
+    path: path.basename(absolutePath),
+    write: async (tempPath) => {
+      await fsp.writeFile(tempPath, content);
+    },
+  });
+}
+
 export async function writeMeetExportBundle(params: {
   outputDir?: string;
   artifacts: GoogleMeetArtifactsResult;
@@ -532,7 +544,7 @@ export async function writeMeetExportBundle(params: {
   calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
   const outputDir = params.outputDir?.trim() || defaultExportDirectory();
-  await mkdir(outputDir, { recursive: true });
+  await fsp.mkdir(outputDir, { recursive: true });
   const zipFile = params.zip ? `${outputDir.replace(/\/$/, "")}.zip` : undefined;
   const fileNames = googleMeetExportFileNames();
   const files = [
@@ -562,7 +574,7 @@ export async function writeMeetExportBundle(params: {
     },
   ];
   for (const file of files) {
-    await writeFile(path.join(outputDir, file.name), file.content, "utf8");
+    await publishMeetExportFile(path.join(outputDir, file.name), file.content);
   }
   const result: { outputDir: string; files: string[]; zipFile?: string } = {
     outputDir,
@@ -573,7 +585,7 @@ export async function writeMeetExportBundle(params: {
     for (const file of files) {
       zip.file(file.name, file.content);
     }
-    await writeFile(zipFile, await zip.generateAsync({ type: "nodebuffer" }));
+    await publishMeetExportFile(zipFile, await zip.generateAsync({ type: "nodebuffer" }));
     result.zipFile = zipFile;
   }
   return result;

@@ -9,8 +9,9 @@ import {
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import { projectMcpCallToolResultContent } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -36,36 +37,18 @@ function mapMcpPayloadToAgentToolResult(payload: unknown): AgentToolResult<unkno
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  const rawContent = Array.isArray(payload.content) ? payload.content : [];
-  const content: AgentToolResult<unknown>["content"] = [];
-  for (const block of rawContent) {
-    if (!isRecord(block)) {
-      continue;
-    }
-    if (block.type === "text" && typeof block.text === "string") {
-      content.push({ type: "text", text: block.text });
-    } else if (
-      block.type === "image" &&
-      typeof block.data === "string" &&
-      typeof block.mimeType === "string"
-    ) {
-      content.push({ type: "image", data: block.data, mimeType: block.mimeType });
-    }
-  }
-  const structuredText = isRecord(payload.structuredContent)
-    ? JSON.stringify(payload.structuredContent, null, 2)
-    : "";
-  if (structuredText) {
-    content.push({ type: "text", text: structuredText });
-  }
+  const content = projectMcpCallToolResultContent({
+    content: payload.content,
+    structuredContent: payload.structuredContent,
+  });
   return {
     content,
-    details: payload,
+    details: payload.isError === true ? { ...payload, status: "error" } : payload,
   };
 }
 
 function normalizePolicyNames(values: readonly string[] | undefined): Set<string> {
-  return new Set((values ?? []).map((value) => normalizeToolName(value)).filter(Boolean));
+  return new Set((values ?? []).map((value) => normalizeToolPolicyName(value)).filter(Boolean));
 }
 
 function toolPolicyAllows(params: {
@@ -76,9 +59,9 @@ function toolPolicyAllows(params: {
   denylist: ReturnType<typeof compileGlobPatterns>;
   registered: boolean;
 }): boolean {
-  const pluginId = normalizeToolName(params.pluginId);
-  const toolName = normalizeToolName(params.toolName);
-  const exposedToolName = normalizeToolName(params.exposedToolName ?? params.toolName);
+  const pluginId = normalizeToolPolicyName(params.pluginId);
+  const toolName = normalizeToolPolicyName(params.toolName);
+  const exposedToolName = normalizeToolPolicyName(params.exposedToolName ?? params.toolName);
   if (
     matchesAnyGlobPattern(pluginId, params.denylist) ||
     matchesAnyGlobPattern(toolName, params.denylist) ||
@@ -152,7 +135,7 @@ function resolveUniqueToolName(params: {
   for (let index = 0; index < 100; index += 1) {
     const suffix = index === 0 ? "" : `_${index + 1}`;
     const candidate = prependToolNameFragment(params.baseName, nodeFragment, suffix);
-    const normalized = normalizeToolName(candidate);
+    const normalized = normalizeToolPolicyName(candidate);
     if (
       isProviderSafeToolName(candidate) &&
       normalized &&
@@ -171,19 +154,19 @@ export function createNodePluginTools(params: {
   agentSessionKey?: string;
 }): AnyAgentTool[] {
   const existingNormalized = new Set(
-    [...(params.existingToolNames ?? [])].map((name) => normalizeToolName(name)),
+    [...(params.existingToolNames ?? [])].map((name) => normalizeToolPolicyName(name)),
   );
   const allowlist = normalizePolicyNames(params.toolAllowlist);
   const denylist = compileGlobPatterns({
     raw: params.toolDenylist,
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   const entries: MaterializedNodeToolEntry[] = [];
   const nameCounts = new Map<string, number>();
   for (const entry of listConnectedNodePluginTools()) {
     const descriptor = entry.descriptor;
     const command = descriptor.command?.trim();
-    const normalizedName = normalizeToolName(descriptor.name);
+    const normalizedName = normalizeToolPolicyName(descriptor.name);
     if (!command || !normalizedName) {
       continue;
     }
@@ -216,7 +199,7 @@ export function createNodePluginTools(params: {
     ) {
       continue;
     }
-    existingNormalized.add(normalizeToolName(toolName));
+    existingNormalized.add(normalizeToolPolicyName(toolName));
     const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
     const tool: AnyAgentTool = {
       name: toolName,

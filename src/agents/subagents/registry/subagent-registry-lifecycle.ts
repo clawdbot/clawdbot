@@ -1,91 +1,246 @@
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
-/**
- * Subagent registry lifecycle transitions.
- *
- * Completes/fails task runs, clears delivery state, emits lifecycle events, and cleans attached resources.
- */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
-import { createSubagentRegistryLifecycleCleanupBase } from "./subagent-registry-lifecycle-cleanup-base.js";
-import { createSubagentRegistryLifecycleCleanup } from "./subagent-registry-lifecycle-cleanup.js";
-import { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
-import { createSubagentRegistryLifecycleCompletion } from "./subagent-registry-lifecycle-completion.js";
 import {
-  createSubagentRegistryLifecycleState,
-  type SubagentRegistryLifecycleParams,
-} from "./subagent-registry-lifecycle-contracts.js";
-import { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
-import { createSubagentRegistryLifecycleRequesterWake } from "./subagent-registry-lifecycle-requester-wake.js";
+  ensureCompletionState,
+  ensureDeliveryState,
+  getDeliveryLastError,
+} from "./subagent-delivery-state.js";
+import {
+  finalizeResumedAnnounceGiveUp,
+  retryDeferredCompletedAnnounces,
+  startSubagentAnnounceCleanupFlow,
+} from "./subagent-registry-lifecycle-announce-cleanup.js";
+import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
+import type {
+  CleanupBookkeepingParams,
+  ScheduledRequesterSettleWake,
+  SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle-context.js";
+import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
+import {
+  completeCleanupBookkeeping,
+  scheduleRequesterSettleWake,
+} from "./subagent-registry-lifecycle-wake.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
-import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
-export function createSubagentRegistryLifecycleController(params: SubagentRegistryLifecycleParams) {
-  const state = createSubagentRegistryLifecycleState();
-  const common = createSubagentRegistryLifecycleCommon(params, state);
-  const delivery = createSubagentRegistryLifecycleDelivery(params, state, common);
-  const requesterWake = createSubagentRegistryLifecycleRequesterWake(
-    params,
-    state,
-    common,
-    delivery,
-  );
-  const cleanupBase = createSubagentRegistryLifecycleCleanupBase(
-    params,
-    state,
-    common,
-    delivery,
-    requesterWake,
-  );
-  const cleanup = createSubagentRegistryLifecycleCleanup(
-    params,
-    state,
-    common,
-    delivery,
-    requesterWake,
-    cleanupBase,
-  );
-  const completion = createSubagentRegistryLifecycleCompletion(
-    params,
-    state,
-    common,
-    delivery,
-    cleanupBase,
-    cleanup,
-  );
-  const completeSubagentRun = async (completeParams: SubagentCompletionRequest) => {
+export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
+
+export class SubagentLifecycleController {
+  private readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly pendingRequesterSettleWakeRearms = new Set<string>();
+  private readonly scheduledRequesterSettleWakeRuns = new Set<string>();
+  private readonly scheduledRequesterSettleWakeTimers = new Map<
+    string,
+    ScheduledRequesterSettleWake
+  >();
+  private readonly terminalCompletionLocks = new Map<string, Promise<void>>();
+  private readonly terminalGenerations = new WeakMap<SubagentRunRecord, number>();
+  private readonly cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
+  private readonly progressEndedEntries = new WeakSet<SubagentRunRecord>();
+  private readonly cleanupFailureCounts = new WeakMap<SubagentRunRecord, number>();
+
+  constructor(readonly options: SubagentLifecycleOptions) {}
+
+  newerGenerationOwnsSession(entry: SubagentRunRecord): boolean {
+    return (
+      entry.killReconciliation?.supersededAt !== undefined ||
+      Array.from(this.options.runs.values()).some(
+        (candidate) =>
+          candidate.runId !== entry.runId &&
+          candidate.childSessionKey === entry.childSessionKey &&
+          compareSubagentRunGeneration(candidate, entry) > 0,
+      )
+    );
+  }
+
+  async acquireTerminalCompletionLock(runId: string): Promise<() => void> {
+    const previous = this.terminalCompletionLocks.get(runId) ?? Promise.resolve();
+    let releaseLock = () => {};
+    const current = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    this.terminalCompletionLocks.set(runId, current);
+    await previous;
+    return () => {
+      releaseLock();
+      if (this.terminalCompletionLocks.get(runId) === current) {
+        this.terminalCompletionLocks.delete(runId);
+      }
+    };
+  }
+
+  clearScheduledResumeTimers = () => {
+    for (const timer of this.scheduledResumeTimers) {
+      clearTimeout(timer);
+    }
+    this.scheduledResumeTimers.clear();
+    for (const scheduled of this.scheduledRequesterSettleWakeTimers.values()) {
+      clearTimeout(scheduled.timer);
+    }
+    this.scheduledRequesterSettleWakeTimers.clear();
+    this.pendingRequesterSettleWakeRearms.clear();
+  };
+
+  addScheduledResumeTimer = (timer: ReturnType<typeof setTimeout>): void =>
+    void this.scheduledResumeTimers.add(timer);
+  deleteScheduledResumeTimer = (timer: ReturnType<typeof setTimeout>): void =>
+    void this.scheduledResumeTimers.delete(timer);
+
+  bumpCleanupGeneration(entry: SubagentRunRecord): number {
+    const generation = (this.cleanupGenerations.get(entry) ?? 0) + 1;
+    this.cleanupGenerations.set(entry, generation);
+    return generation;
+  }
+
+  isCleanupGeneration = (entry: SubagentRunRecord, generation: number): boolean =>
+    this.cleanupGenerations.get(entry) === generation;
+  isCleanupGenerationCurrent = (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): boolean =>
+    this.options.runs.get(runId) === entry &&
+    entry.pauseReason !== "sessions_yield" &&
+    this.isCleanupGeneration(entry, generation) &&
+    !this.newerGenerationOwnsSession(entry);
+  isCleanupAttemptCurrent = (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): boolean =>
+    entry.cleanupHandled === true && this.isCleanupGenerationCurrent(runId, entry, generation);
+  isEndedHookOwnerCurrent = (runId: string, entry: SubagentRunRecord): boolean => {
+    const current = this.options.runs.get(runId);
+    return (current === undefined || current === entry) && !this.newerGenerationOwnsSession(entry);
+  };
+
+  bumpTerminalGeneration(entry: SubagentRunRecord): number {
+    const generation = (this.terminalGenerations.get(entry) ?? 0) + 1;
+    this.terminalGenerations.set(entry, generation);
+    return generation;
+  }
+
+  isTerminalCallbackCurrent = (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): boolean =>
+    this.options.runs.get(runId) === entry &&
+    entry.pauseReason !== "sessions_yield" &&
+    this.terminalGenerations.get(entry) === generation;
+  hasProgressEnded = (entry: SubagentRunRecord): boolean => this.progressEndedEntries.has(entry);
+  markProgressEnded = (entry: SubagentRunRecord): void => void this.progressEndedEntries.add(entry);
+  clearCleanupFailureCount = (entry: SubagentRunRecord): void =>
+    void this.cleanupFailureCounts.delete(entry);
+
+  incrementCleanupFailureCount(entry: SubagentRunRecord): number {
+    const count = (this.cleanupFailureCounts.get(entry) ?? 0) + 1;
+    this.cleanupFailureCounts.set(entry, count);
+    return count;
+  }
+
+  getRequesterSettleWakeTimer = (runId: string): ScheduledRequesterSettleWake | undefined =>
+    this.scheduledRequesterSettleWakeTimers.get(runId);
+  setRequesterSettleWakeTimer = (runId: string, value: ScheduledRequesterSettleWake): void =>
+    void this.scheduledRequesterSettleWakeTimers.set(runId, value);
+  deleteRequesterSettleWakeTimer = (runId: string): void =>
+    void this.scheduledRequesterSettleWakeTimers.delete(runId);
+  hasScheduledRequesterSettleWakeRun = (runId: string): boolean =>
+    this.scheduledRequesterSettleWakeRuns.has(runId);
+  markRequesterSettleWakeRunScheduled = (runId: string): void =>
+    void this.scheduledRequesterSettleWakeRuns.add(runId);
+  unmarkRequesterSettleWakeRunScheduled = (runId: string): void =>
+    void this.scheduledRequesterSettleWakeRuns.delete(runId);
+  markRequesterSettleWakeRearm = (runId: string): void =>
+    void this.pendingRequesterSettleWakeRearms.add(runId);
+  takeRequesterSettleWakeRearm = (runId: string): boolean =>
+    this.pendingRequesterSettleWakeRearms.delete(runId);
+
+  completeSubagentRun = async (completeParams: SubagentCompletionRequest) => {
     // Task finalization can make the run disappear from suspension blockers
     // before browser/MCP retirement and cleanup delivery hand off. Own this
     // entire transition as an independent root so that boundary stays atomic.
     // Callers can detach while retaining parent ALS, so nesting is intentional.
     await runWithGatewayIndependentRootWorkAdmission(async () => {
-      await completion.completeSubagentRunAttempt(completeParams);
+      await completeSubagentRunAttempt(this, completeParams);
     });
   };
 
-  return {
-    clearScheduledResumeTimers: common.clearScheduledResumeTimers,
-    completeCleanupBookkeeping: cleanup.completeCleanupBookkeeping,
-    completeSubagentRun,
-    finalizeResumedAnnounceGiveUp: cleanup.finalizeResumedAnnounceGiveUp,
-    refreshFrozenResultFromSession: delivery.refreshFrozenResultFromSession,
-    settleRequesterTurnAfterSessionSpawns: (args: {
-      requesterSessionKey: string;
-      requesterTurnRunId: string;
-      requesterYielded: boolean;
-      acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
-    }) =>
-      settleRequesterTurnAfterSessionSpawns({
-        ...args,
-        runs: params.runs,
-        persistOrThrow: (...runIds) => params.persistOrThrow(...runIds),
-        schedule: (runId, entry) => {
-          if (state.scheduledRequesterSettleWakeRuns.has(runId)) {
-            state.pendingRequesterSettleWakeRearms.add(runId);
-            return;
-          }
-          requesterWake.scheduleRequesterSettleWake(runId, entry);
-        },
-      }),
-    resumeRequesterSettleWake: requesterWake.scheduleRequesterSettleWake,
-    startSubagentAnnounceCleanupFlow: cleanup.startSubagentAnnounceCleanupFlow,
+  completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {
+    completeCleanupBookkeeping(this, params, (excludeRunId) =>
+      retryDeferredCompletedAnnounces(this, excludeRunId),
+    );
   };
+
+  static discardTerminalDelivery(
+    this: void,
+    entry: SubagentRunRecord,
+    completedAt: number,
+    reason: "dismissed" | "expired" = "dismissed",
+  ): void {
+    const delivery = ensureDeliveryState(entry);
+    const payload = delivery.payload;
+    if (reason === "dismissed") {
+      delivery.disposition = "intentional_non_delivery";
+      delivery.dismissedAt = completedAt;
+    } else {
+      delivery.discardedAt = completedAt;
+      delivery.discardReason = "expired";
+      delivery.discardedPayloadSummary = {
+        requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
+        childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
+        childRunId: payload?.childRunId ?? entry.runId,
+        endedAt: payload?.endedAt ?? entry.execution.endedAt,
+        status: payload?.outcome?.status ?? entry.execution.outcome?.status,
+        lastError: getDeliveryLastError(entry) ?? null,
+      };
+    }
+    Object.assign(delivery, { status: "discarded", queueId: undefined, nextAttemptAt: undefined });
+    delivery.payload = undefined;
+    Object.assign(delivery, { createdAt: undefined, lastAttemptAt: undefined });
+    Object.assign(delivery, {
+      attemptCount: undefined,
+      lastError: undefined,
+      announcedAt: undefined,
+    });
+    Object.assign(delivery, { suspendedAt: undefined, suspendedReason: undefined });
+    Object.assign(entry, { wakeOnDescendantSettle: undefined, cleanupHandled: true });
+    const completion = ensureCompletionState(entry);
+    Object.assign(completion, { fallbackResultText: undefined, fallbackCapturedAt: undefined });
+    entry.cleanupCompletedAt = completedAt;
+  }
+
+  finalizeResumedAnnounceGiveUp = (params: Parameters<typeof finalizeResumedAnnounceGiveUp>[1]) =>
+    finalizeResumedAnnounceGiveUp(this, params);
+
+  refreshFrozenResultFromSession = (sessionKey: string) =>
+    refreshFrozenResultFromSession(this, sessionKey);
+
+  resumeRequesterSettleWake = (runId: string, entry: SubagentRunRecord) =>
+    scheduleRequesterSettleWake(this, runId, entry);
+
+  settleRequesterTurnAfterSessionSpawns = (args: {
+    requesterSessionKey: string;
+    requesterAgentId?: string;
+    requesterTurnRunId: string;
+    requesterYielded: boolean;
+    acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+  }) =>
+    settleRequesterTurnAfterSessionSpawns({
+      ...args,
+      runs: this.options.runs,
+      persistOrThrow: (...runIds) => this.options.persistOrThrow(...runIds),
+      schedule: (runId, entry) => {
+        if (this.hasScheduledRequesterSettleWakeRun(runId)) {
+          this.markRequesterSettleWakeRearm(runId);
+          return;
+        }
+        scheduleRequesterSettleWake(this, runId, entry);
+      },
+    });
+
+  startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean =>
+    startSubagentAnnounceCleanupFlow(this, runId, entry);
 }

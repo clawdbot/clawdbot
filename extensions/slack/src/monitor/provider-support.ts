@@ -95,7 +95,8 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
         `Before trying to reconnect, this client will wait for ${delayMs} milliseconds`,
       );
       return new Promise((resolve, reject) => {
-        setTimeout(() => {
+        const reconnectTimer = setTimeout(() => {
+          Reflect.set(this, "reconnectionTimer", undefined);
           if (Reflect.get(this, "shuttingDown")) {
             logger?.debug?.("Client shutting down, will not attempt reconnect.");
             resolve(undefined);
@@ -112,6 +113,9 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
             reject(toErrorObject(error, "Non-Error rejection"));
           });
         }, delayMs);
+        // SocketModeClient.disconnect() clears this field. Keep the patched
+        // scheduler on the SDK's lifecycle so a stopped app cannot reconnect.
+        Reflect.set(this, "reconnectionTimer", reconnectTimer);
       });
     },
   );

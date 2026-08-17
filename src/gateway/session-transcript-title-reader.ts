@@ -11,9 +11,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import {
-  extractMessageRole,
-  extractMessageText,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
@@ -84,7 +83,7 @@ function findFirstTitleUserMessage(
   includeInterSession: boolean,
 ): unknown {
   return entries.map(sqliteMessageEventWithSeq).find((message) => {
-    if (extractMessageRole(message) !== "user") {
+    if (projectSessionDisplayMessage(message)?.role !== "user") {
       return false;
     }
     return (
@@ -96,8 +95,11 @@ function findFirstTitleUserMessage(
 
 function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
   return (
-    entries.toReversed().map(sqliteMessageEventWithSeq).map(extractMessageText).find(Boolean) ??
-    null
+    entries
+      .toReversed()
+      .map(sqliteMessageEventWithSeq)
+      .map((message) => projectSessionDisplayMessage(message, { flattenMarkdown: true }))
+      .find(Boolean)?.text ?? null
   );
 }
 
@@ -158,7 +160,7 @@ function readSqliteTitleFields(
       );
     }
     fields = {
-      firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
+      firstUserMessage: firstUser ? (projectSessionDisplayMessage(firstUser)?.text ?? null) : null,
       lastMessagePreview: lastText,
     };
   } catch (error) {
@@ -231,7 +233,7 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
   }
 
   const watermarks = readSessionTranscriptWatermarkBatch(
-    cachedCandidates.map((candidate) => candidate.scope),
+    cachedCandidates.map((candidate) => toTranscriptReadScope(candidate.target)),
   );
   for (const [candidateIndex, candidate] of cachedCandidates.entries()) {
     const watermark = watermarks[candidateIndex];
@@ -253,7 +255,11 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
   }
 
   const probes =
-    misses.length > 0 ? readSessionTranscriptTitleProbeBatch(misses.map((miss) => miss.scope)) : [];
+    misses.length > 0
+      ? readSessionTranscriptTitleProbeBatch(
+          misses.map((miss) => toTranscriptReadScope(miss.target)),
+        )
+      : [];
   for (const [probeIndex, miss] of misses.entries()) {
     const probe = probes[probeIndex];
     if (!probe) {
@@ -277,7 +283,7 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
       continue;
     }
     const fields = {
-      firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
+      firstUserMessage: firstUser ? (projectSessionDisplayMessage(firstUser)?.text ?? null) : null,
       lastMessagePreview: lastText,
     };
     const fieldsByVariant =

@@ -36,6 +36,7 @@ export function createCodexAttemptTurnWatchController(params: {
   isCompleted: () => boolean;
   isTerminalTurnNotificationQueued: () => boolean;
   getActiveAppServerTurnRequests: () => number;
+  getActiveAppServerTurnRequestsWithoutTimeout: () => number;
   getActiveTurnItemCount: () => number;
   getActiveCompletionBlockerItemCount: () => number;
   getActiveFinalizationHookCount: () => number;
@@ -136,13 +137,25 @@ export function createCodexAttemptTurnWatchController(params: {
     );
   }
 
+  function shouldPauseAttemptIdleWatch() {
+    // Native tool items and independently timed dynamic tool requests own quiet
+    // windows. Approval, elicitation, and user-input requests keep this deadline.
+    if (params.getActiveAppServerTurnRequestsWithoutTimeout() > 0) {
+      return false;
+    }
+    return (
+      params.getActiveCompletionBlockerItemCount() > 0 ||
+      params.getActiveAppServerTurnRequests() > 0
+    );
+  }
+
   function scheduleAttemptIdleWatch() {
     scheduleWatch(
       "attempt",
       fireAttemptIdleTimeout,
       attemptLastProgressAt,
       attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs,
-      attemptIdleWatchArmed,
+      attemptIdleWatchArmed && !shouldPauseAttemptIdleWatch(),
     );
   }
 
@@ -266,7 +279,12 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireAttemptIdleTimeout() {
-    if (params.isCompleted() || params.signal.aborted || !attemptIdleWatchArmed) {
+    if (
+      params.isCompleted() ||
+      params.signal.aborted ||
+      !attemptIdleWatchArmed ||
+      shouldPauseAttemptIdleWatch()
+    ) {
       return;
     }
     const idleMs = Math.max(0, Date.now() - attemptLastProgressAt);

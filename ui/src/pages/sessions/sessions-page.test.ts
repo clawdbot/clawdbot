@@ -16,6 +16,7 @@ import { getWorkboardState } from "../../lib/workboard/index.ts";
 import {
   createContext,
   createGateway,
+  createManagedSessions,
   createRenderedPage,
   createSessions,
   type TestSessionsPage,
@@ -107,18 +108,61 @@ describe("sessions page lifecycle", () => {
     document.body.append(toast);
     await toast.updateComplete;
 
-    await page.archiveSessionWithUndo({ key, pinned: true } as GatewaySessionRow);
+    await page.archiveSessionWithUndo({
+      key,
+      sessionId: "session-pinned",
+      pinned: true,
+    } as GatewaySessionRow);
     await toast.updateComplete;
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
     expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
 
-    expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
+    expect(patch).toHaveBeenNthCalledWith(
+      1,
+      key,
+      { archived: true },
+      { agentId: undefined, expectedSessionId: "session-pinned" },
+    );
     expect(patch).toHaveBeenNthCalledWith(
       2,
       key,
       { archived: false, pinned: true },
-      { agentId: undefined },
+      { agentId: undefined, expectedSessionId: "session-pinned" },
+    );
+  });
+
+  it("keeps the archive Undo working after navigating off the Sessions page", async () => {
+    const key = "agent:main:navigated";
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key,
+      entry: { sessionId: key },
+    }));
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({ sessionKey: key });
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+
+    await page.archiveSessionWithUndo({
+      key,
+      sessionId: "session-nav",
+      pinned: false,
+    } as GatewaySessionRow);
+    await toast.updateComplete;
+    // The toast host outlives the page; navigation unmounts the page element.
+    page.remove();
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      key,
+      { archived: false },
+      { agentId: undefined, expectedSessionId: "session-nav" },
     );
   });
 
@@ -238,6 +282,35 @@ describe("sessions page lifecycle", () => {
     expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
+  it("reports a connection error instead of silently dropping a patch", async () => {
+    const patch = vi.fn();
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    // Gateway drops while a rename dialog is open; submit lands afterwards.
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+
+    const result = await page.patchSession("agent:main:main", { label: "renamed" });
+
+    expect(result).toBe("failed");
+    expect(patch).not.toHaveBeenCalled();
+    expect(page.error).toBe("Connect to the Gateway to change sessions.");
+  });
+
+  it("shows a connection error in the checkpoints drawer while disconnected", async () => {
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+
+    await page.loadCheckpoint("agent:main:main");
+
+    // Without the recorded error the drawer would render "No checkpoints"
+    // beside a nonzero checkpoint badge.
+    expect(page.checkpointErrorByKey["agent:main:main"]).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+  });
+
   it("drops a transcript result after the query changes while it is pending", async () => {
     const response = deferred<SessionsSearchResult>();
     const request = vi.fn(() => response.promise);
@@ -345,6 +418,7 @@ describe("sessions page lifecycle", () => {
   it("enables Archive but keeps Delete disabled for an active non-main row", async () => {
     const row = {
       key: "agent:main:running",
+      sessionId: "session-running",
       kind: "direct",
       hasActiveRun: true,
     } as GatewaySessionRow;
@@ -441,81 +515,6 @@ describe("sessions page lifecycle", () => {
     expect(menu.querySelector('[value="workboard"]')?.hasAttribute("disabled")).toBe(true);
   });
 
-  it("rejects preloaded data after a same-client reconnect and loads the current epoch", async () => {
-    const client = {} as GatewayBrowserClient;
-    const mutableGateway = createGateway(client);
-    const preloadedSnapshot = mutableGateway.gateway.snapshot;
-    mutableGateway.emit({ phase: "reconnecting", client });
-    mutableGateway.emit({ phase: "connected", client });
-    const freshResult = { count: 1, sessions: [{ key: "fresh" }] } as SessionsListResult;
-    const sessions = createSessions({ list: vi.fn(async () => freshResult) });
-    const context = createContext(mutableGateway.gateway, sessions);
-    const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-    page.context = context;
-    page.render = () => nothing;
-    page.routeData = {
-      gateway: mutableGateway.gateway,
-      gatewaySnapshot: preloadedSnapshot,
-      result: { count: 1, sessions: [{ key: "stale" }] } as SessionsListResult,
-      error: null,
-      expandedSessionKey: null,
-      statusFilter: "active",
-    };
-
-    document.body.append(page);
-    await page.updateComplete;
-    await vi.waitFor(() => expect(page.result?.sessions[0]?.key).toBe("fresh"));
-
-    expect(sessions.list).toHaveBeenCalledOnce();
-    expect(page.result?.sessions.map((session) => session.key)).toEqual(["fresh"]);
-  });
-
-  it("rejects session and checkpoint results after the sessions capability changes", async () => {
-    const list = deferred<SessionsListResult | null>();
-    const checkpoints = deferred<SessionCompactionCheckpoint[]>();
-    const sessions = createSessions({
-      list: vi.fn(() => list.promise),
-      listCheckpoints: vi.fn(() => checkpoints.promise),
-    });
-    const { gateway } = createGateway({} as GatewayBrowserClient);
-    const context = createContext(gateway, sessions);
-    const page = await createPage(context);
-
-    const listRequest = page.loadSessions();
-    const checkpointRequest = page.loadCheckpoint("main");
-    await vi.waitFor(() => {
-      expect(sessions.list).toHaveBeenCalledOnce();
-      expect(sessions.listCheckpoints).toHaveBeenCalledOnce();
-    });
-
-    page.context = { ...context, sessions: createSessions() };
-    page.requestUpdate();
-    await page.updateComplete;
-    list.resolve({ count: 1, sessions: [{ key: "stale" }] } as SessionsListResult);
-    checkpoints.resolve([{ checkpointId: "stale" }] as SessionCompactionCheckpoint[]);
-    await Promise.all([listRequest, checkpointRequest]);
-
-    expect(page.result).toBeNull();
-    expect(page.loading).toBe(false);
-    expect(page.checkpointItemsByKey).toEqual({});
-    expect(page.checkpointLoadingKey).toBeNull();
-  });
-
-  it("scopes list requests while preserving an all-agents escape", async () => {
-    const sessions = createSessions();
-    const context = createContext(createGateway({} as GatewayBrowserClient).gateway, sessions);
-    const page = await createPage(context);
-
-    await page.loadSessions();
-    expect(sessions.list).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
-
-    context.agentSelection.state.scopeId = null;
-    await page.loadSessions();
-    expect(sessions.list).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ agentId: expect.anything() }),
-    );
-  });
-
   it("invalidates checkpoint work and mutation locks on same-client disconnect", async () => {
     const checkpoints = deferred<SessionCompactionCheckpoint[]>();
     const sessions = createSessions({
@@ -558,19 +557,22 @@ describe("sessions page lifecycle", () => {
 
   it("retargets the Gateway after deleting the current session", async () => {
     const key = "agent:writer:work";
+    const sessionId = "session-writer-work";
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     mutableGateway.emit({ sessionKey: key });
     const page = await createPage(createContext(mutableGateway.gateway, sessions));
-    page.result = { count: 1, sessions: [{ key }] } as SessionsListResult;
+    page.result = { count: 1, sessions: [{ key, sessionId }] } as SessionsListResult;
     page.selectedKeys = new Set([key]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
 
-    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key, agentId: undefined, expectedSessionId: sessionId },
+    ]);
     expect(mutableGateway.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
     expect(page.result?.sessions).toEqual([]);
     expect(page.selectedKeys).toEqual(new Set());
@@ -644,10 +646,11 @@ describe("sessions page lifecycle", () => {
     const activeKey = "agent:main:active";
     const archivedKey = "agent:main:archived";
     const unknownKey = "agent:main:unknown";
+    const retryError = `Session ${archivedKey} changed before deletion. Retry.`;
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({
         deleted: [archivedKey],
-        errors: ["active denied", "unknown denied"],
+        errors: [retryError],
         preservedWorktrees: [],
       })),
     });
@@ -675,15 +678,15 @@ describe("sessions page lifecycle", () => {
       sessions: [{ key: activeKey, archived: false }],
     });
     expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
-    expect(page.error).toBe("active denied; unknown denied");
+    expect(page.error).toBe(retryError);
+    expect(page.error).not.toContain("GatewayRequestError");
   });
 
   it("stops an active cloud worker and refreshes the session roster", async () => {
-    const request = vi.fn(() => Promise.resolve({ ok: true }));
-    const list = vi.fn(async () => ({ count: 0, sessions: [] }) as unknown as SessionsListResult);
-    const sessions = createSessions({ list });
+    const stopped = deferred<{ ok: true }>();
+    const request = vi.fn(() => stopped.promise);
+    const managed = createManagedSessions();
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const page = await createPage(createContext(gateway, sessions));
     const row = {
       key: "agent:main:cloud",
       label: "Cloud task",
@@ -700,9 +703,31 @@ describe("sessions page lifecycle", () => {
         remoteWorkspaceDir: "/workspace",
       },
     } as GatewaySessionRow;
+    const page = await createRenderedPage(createContext(gateway, managed.sessions), {
+      count: 1,
+      sessions: [row],
+    } as SessionsListResult);
+    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
+    if (!query) {
+      throw new Error("Expected a managed query subscription");
+    }
+    managed.refreshList.mockClear();
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
-    await page.stopCloudWorker(row);
+    const stopping = page.stopCloudWorker(row);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    managed.publish(query, {
+      result: {
+        count: 1,
+        sessions: [{ ...row, label: "Updated while stopping" }],
+      } as SessionsListResult,
+      agentId: "main",
+      loading: false,
+      error: null,
+    });
+    expect(page.result?.sessions[0]?.label).toBe("Cloud task");
+    stopped.resolve({ ok: true });
+    await stopping;
 
     expect(showConfirmDialog).toHaveBeenCalledWith({
       message: 'Stop the cloud worker for "Cloud task"?',
@@ -714,7 +739,8 @@ describe("sessions page lifecycle", () => {
       { key: "agent:main:cloud", agentId: "main" },
       { timeoutMs: 10 * 60_000 },
     );
-    expect(list).toHaveBeenCalledOnce();
+    expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
+    expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
     expect(page.sessionMutationPending).toBe(false);
   });
 
@@ -722,10 +748,10 @@ describe("sessions page lifecycle", () => {
     const request = vi.fn(() =>
       Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
     );
-    const list = vi.fn(async () => ({ count: 0, sessions: [] }) as unknown as SessionsListResult);
-    const sessions = createSessions({ list });
+    const managed = createManagedSessions();
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const page = await createPage(createContext(gateway, sessions));
+    const page = await createPage(createContext(gateway, managed.sessions));
+    managed.refreshList.mockClear();
     const toast = document.createElement("openclaw-toast-host");
     document.body.append(toast);
     await toast.updateComplete;
@@ -754,7 +780,7 @@ describe("sessions page lifecycle", () => {
     expect(request).toHaveBeenCalledWith("environments.destroy", {
       environmentId: "environment-1",
     });
-    expect(list).toHaveBeenCalledOnce();
+    expect(managed.refreshList).toHaveBeenCalledOnce();
     expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
       'Cloud worker for "Cloud task" is destroyed.',
     );
@@ -773,7 +799,7 @@ describe("sessions page lifecycle", () => {
     await page.rememberCustomGroup(name);
 
     expect(groupsPut).toHaveBeenCalledWith([name]);
-    expect(page.error).toBe("Error: group name exceeds 512 characters");
+    expect(page.error).toBe("group name exceeds 512 characters");
   });
 
   it("drops stale mutation state, errors, and navigation after disconnect", async () => {
@@ -810,13 +836,16 @@ describe("sessions page lifecycle", () => {
     const context = createContext(mutableGateway.gateway, sessions);
     getWorkboardState(context.workboard).loaded = true;
     const page = await createPage(context);
-    page.result = { count: 1, sessions: [{ key: "main" }] } as SessionsListResult;
+    page.result = {
+      count: 1,
+      sessions: [{ key: "main", sessionId: "session-main" }],
+    } as SessionsListResult;
     page.selectedKeys = new Set(["main"]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const requests = [
       page.deleteSelected(),
-      page.patchSession("main", { archived: true }),
+      page.patchSession("main", { archived: true }, undefined, "session-main"),
       page.forkSession("main"),
       page.branchCheckpoint("main", "branch-checkpoint"),
       page.restoreCheckpoint("main", "restore-checkpoint"),
@@ -859,5 +888,21 @@ describe("sessions page lifecycle", () => {
     await request;
 
     expect(context.navigate).not.toHaveBeenCalled();
+  });
+
+  it("forks an active session from its last completed message", async () => {
+    const create = vi.fn(async () => "active-fork");
+    const sessions = createSessions({ create });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, sessions);
+    const page = await createPage(context);
+
+    await page.forkSession("main", true);
+
+    expect(create).toHaveBeenCalledWith({
+      parentSessionKey: "main",
+      fork: true,
+      forkFrom: "last-completed",
+    });
   });
 });

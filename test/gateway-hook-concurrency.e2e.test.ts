@@ -89,7 +89,10 @@ describe("Gateway hook concurrency", () => {
         error: "hook agent run did not start before admission timeout",
         runId: expect.any(String),
       });
-      expect(modelServer.active(), instance.logs()).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(modelServer.active(), instance.logs()).toBeGreaterThan(0), {
+        interval: 20,
+        timeout: 30_000,
+      });
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
       expect(modelServer.requestCount(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET + 1);
 

@@ -104,6 +104,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
+    resolveChannelIngress,
   } = ctx;
 
   const fromLabel = isDirectMessage
@@ -286,14 +287,14 @@ export async function buildDiscordMessageProcessContext(params: {
     if (threadParentId) {
       parentSessionKey = buildAgentSessionKey({
         agentId: route.agentId,
+        mainKey: cfg.session?.mainKey,
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
+        groupScope: route.groupScope,
       });
-      modelParentSessionKey = parentSessionKey;
+      modelParentSessionKey = parentSessionKey === baseSessionKey ? undefined : parentSessionKey;
     }
-    if (!threadParentInheritanceEnabled) {
-      parentSessionKey = undefined;
-    }
+    parentSessionKey = threadParentInheritanceEnabled ? modelParentSessionKey : undefined;
   }
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
@@ -321,6 +322,8 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
     channel: route.channel,
     cfg,
+    parentSessionKey: route.sessionKey,
+    groupScope: route.groupScope,
     threadParentInheritanceEnabled,
   });
   const deliverTarget = replyPlan.deliverTarget;
@@ -360,7 +363,22 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = await buildChannelInboundEventContext({
+  // Auto-threading owns the dispatch session, so bind admission only after that session is final.
+  const channelIngress = await resolveChannelIngress(
+    {
+      agentId: route.agentId,
+      sessionKey: effectiveSessionKey,
+      messageId: canonicalMessageId ?? message.id,
+      inboundEventKind: ctx.inboundEventKind,
+    },
+    {
+      parentId: threadChannel ? threadParentId : undefined,
+      threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
+    },
+  );
+
+  const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
     contextVisibility: contextVisibilityMode,
@@ -384,7 +402,9 @@ export async function buildDiscordMessageProcessContext(params: {
       id: messageChannelId,
       nativeChannelId: messageChannelId,
       label: fromLabel,
-      spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      spaceId: isGuildMessage
+        ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
+        : undefined,
       parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },

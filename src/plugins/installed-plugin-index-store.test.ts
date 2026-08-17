@@ -18,7 +18,6 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
 import {
-  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
@@ -251,7 +250,7 @@ describe("installed plugin index persistence", () => {
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
-    const index = createIndex();
+    const index = createIndex({ workspaceDir: "/agents/gadget/workspace" });
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
 
@@ -262,8 +261,17 @@ describe("installed plugin index persistence", () => {
     expect(persisted.version).toBe(index.version);
     expect(persisted.warning).toContain("DO NOT EDIT.");
     expect(persisted.policyHash).toBe(index.policyHash);
+    expect(persisted.workspaceDir).toBe("/agents/gadget/workspace");
     expectPluginIds(persisted, ["demo"]);
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
+  });
+
+  it("reads indexes written before workspace identity was persisted", async () => {
+    const stateDir = makeTempDir();
+    insertPersistedIndexRow(stateDir, {});
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.workspaceDir).toBeUndefined();
   });
 
   it("atomically captures the predecessor and revision for a leased install-record write", async () => {
@@ -660,13 +668,12 @@ describe("installed plugin index persistence", () => {
     };
     await writePersistedInstalledPluginIndex(legacy, { stateDir });
 
-    const inspection = await inspectPersistedInstalledPluginIndex({
+    const inspection = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       candidates: [candidate],
       env,
     });
-    expect(inspection.state).toBe("stale");
-    expect(inspection.refreshReasons).toEqual(["migration"]);
+    expect(inspection.source).toBe("derived");
 
     const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
@@ -724,85 +731,6 @@ describe("installed plugin index persistence", () => {
     insertPersistedIndexRow(stateDir, { migrationVersion: 0 });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-  });
-
-  it("inspects missing, fresh, and stale persisted index state without loading runtime", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-    const env = {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-
-    const missingInspect = await inspectPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-    expect(missingInspect.state).toBe("missing");
-    expect(missingInspect.refreshReasons).toEqual(["missing"]);
-    expect(missingInspect.persisted).toBeNull();
-    expectPluginIds(missingInspect.current, ["demo"]);
-
-    const current = await refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-
-    const freshInspect = await inspectPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-    expect(freshInspect.state).toBe("fresh");
-    expect(freshInspect.refreshReasons).toEqual([]);
-    expect(freshInspect.persisted).toEqual(current);
-    expectPluginFields(freshInspect.current, "demo", { enabled: true });
-
-    const policyInspect = await inspectPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env,
-    });
-    expect(policyInspect.state).toBe("stale");
-    expect(policyInspect.refreshReasons).toEqual(["policy-changed"]);
-    expect(policyInspect.persisted).toEqual(current);
-    expectPluginFields(policyInspect.current, "demo", { enabled: false });
-
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "demo",
-        name: "Demo",
-        configSchema: { type: "object" },
-        providers: ["demo", "demo-next"],
-      }),
-      "utf8",
-    );
-
-    const staleManifestInspect = await inspectPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-    expect(staleManifestInspect.state).toBe("stale");
-    expect(staleManifestInspect.refreshReasons).toEqual(["stale-manifest"]);
-    expect(staleManifestInspect.persisted).toEqual(current);
-    expectPluginIds(staleManifestInspect.current, ["demo"]);
   });
 
   it("refreshes and persists a rebuilt index without loading plugin runtime", async () => {

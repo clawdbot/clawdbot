@@ -71,4 +71,23 @@ describe("cron creator authority grants", () => {
     revokeCronCreatorAuthorityRunScope(revokedScope);
     expect(revokedRemove).toHaveBeenCalledWith("abort", expect.any(Function));
   });
+
+  it("transports a private immutable runtime authority only through one-shot consumption", () => {
+    const scope = createCronCreatorAuthorityRunScope("run-authority");
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+
+    const grant = mintCronCreatorAuthorityGrant(scope, undefined, runtimeAuthority);
+
+    expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
+    expect(consumeCronCreatorAuthorityGrant(grant)).toEqual(runtimeAuthority);
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
+      "Configured MCP cron authority is no longer active",
+    );
+    revokeCronCreatorAuthorityRunScope(scope);
+  });
 });

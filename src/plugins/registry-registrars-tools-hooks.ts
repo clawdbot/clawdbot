@@ -16,7 +16,6 @@ import {
 } from "./agent-tool-result-middleware.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
-import { getPluginCompatRecord } from "./compat/registry.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -33,9 +32,7 @@ import {
 } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
-  isDeprecatedPluginHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
   isPromptInjectionHookName,
@@ -52,9 +49,6 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
-const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
-const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
-
 function normalizeEligibleTriggers(value: unknown) {
   if (!Array.isArray(value)) {
     return undefined;
@@ -64,31 +58,6 @@ function normalizeEligibleTriggers(value: unknown) {
     return undefined;
   }
   return uniqueValues(triggers);
-}
-
-function formatLegacyDeactivateHookAliasDiagnostic(): string {
-  const removeAfter =
-    LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.removeAfter ?? "a future breaking release";
-  return (
-    `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
-    `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
-  );
-}
-
-function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
-  if (!isDeprecatedPluginHookName(hookName) || hookName === "deactivate") {
-    return undefined;
-  }
-  const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
-  const compat =
-    hookName === "subagent_spawning" ? LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT : undefined;
-  const removeAfter = compat?.removeAfter ?? deprecation.removeAfter ?? "a future breaking release";
-  const code = compat?.code ?? "deprecated-plugin-hook";
-  return (
-    `typed hook "${hookName}" is deprecated (${code}); ` +
-    `${deprecation.reason} Use ${deprecation.replacement}. ` +
-    `This compatibility hook will be removed after ${removeAfter}.`
-  );
 }
 
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
@@ -425,36 +394,16 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const effectiveHookName = hookName === "deactivate" ? "gateway_stop" : hookName;
-    if (hookName === "deactivate") {
+    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: formatLegacyDeactivateHookAliasDiagnostic(),
-      });
-    } else {
-      const diagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
-      if (diagnostic) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: diagnostic,
-        });
-      }
-    }
-    const effectiveHandler = handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       });
       return;
     }
-    if (isConversationHookName(effectiveHookName)) {
+    if (isConversationHookName(hookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
       if (record.origin !== "bundled" && explicitConversationAccess !== true) {
         pushDiagnostic({
@@ -462,7 +411,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
           pluginId: record.id,
           source: record.source,
           message:
-            `typed hook "${effectiveHookName}" blocked because non-bundled plugins must set ` +
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
             `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         });
         return;
@@ -472,38 +421,34 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
         });
         return;
       }
     }
-    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     const eligibleTriggers =
-      effectiveHookName === "before_agent_reply"
+      hookName === "before_agent_reply"
         ? normalizeEligibleTriggers(opts?.eligibleTriggers)
         : undefined;
     const matcher =
-      effectiveHookName === "before_tool_call" || effectiveHookName === "after_tool_call"
+      hookName === "before_tool_call" || hookName === "after_tool_call"
         ? normalizePluginToolMatcher(opts?.matcher)
         : undefined;
-    if (
-      opts?.matcher &&
-      effectiveHookName !== "before_tool_call" &&
-      effectiveHookName !== "after_tool_call"
-    ) {
+    if (opts?.matcher && hookName !== "before_tool_call" && hookName !== "after_tool_call") {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${effectiveHookName}" ignores tool matcher`,
+        message: `typed hook "${hookName}" ignores tool matcher`,
       });
     }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
       ...(opts?.registrationId ? { registrationId: opts.registrationId } : {}),
-      hookName: effectiveHookName,
-      handler: effectiveHandler,
+      hookName,
+      handler,
       ...(matcher ? { matcher } : {}),
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),

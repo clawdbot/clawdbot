@@ -130,13 +130,6 @@ export const legacyBillingBCases = [
     expected: reason("auth_permanent"),
   },
   {
-    id: "legacy-billing-b-017",
-    source:
-      "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts#classifyFailoverReason",
-    signal: { provider: "openrouter", message: "Key limit exceeded" },
-    expected: reason("billing"),
-  },
-  {
     id: "legacy-billing-b-018",
     source:
       "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts#isContextOverflowError",

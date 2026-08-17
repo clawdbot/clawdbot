@@ -55,6 +55,7 @@ describe("chat session sharing menu", () => {
     expect(root.textContent).not.toContain("Suggest");
     expect(root.textContent).toContain("Alice");
     expect(root.querySelector('wa-dropdown-item[value="member:owner"]')).toBeNull();
+    expect(root.querySelector(".session-menu__separator")).toBeNull();
 
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
@@ -68,6 +69,58 @@ describe("chat session sharing menu", () => {
     );
     expect(onVisibilityChange).toHaveBeenCalledWith("shared");
     expect(onMemberChange).toHaveBeenCalledWith("alice", true);
+  });
+
+  it("renders member presentation from identity.type, not from ID spelling", () => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: [
+              { type: "human", id: "profile-vyctor", label: "Vyctor Brzezowski" },
+              // Human identity IDs are opaque (e.g. an inbound SenderId) and
+              // can contain "channel:" as a substring; the recorded type,
+              // not the ID string, must drive presentation.
+              { type: "human", id: "channel:chn_design", label: "Design" },
+              { type: "agent", id: "discord:channel:operations", label: "Operations" },
+              { type: "system", id: "channel:audit", label: "Audit" },
+            ],
+            role: "owner",
+            allowedVisibilities: ["shared"],
+          },
+        },
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    const humans = [
+      root.querySelector('wa-dropdown-item[value="member:profile-vyctor"]'),
+      root.querySelector('wa-dropdown-item[value="member:channel:chn_design"]'),
+    ];
+    const nonHumans = [
+      root.querySelector('wa-dropdown-item[value="member:discord:channel:operations"]'),
+      root.querySelector('wa-dropdown-item[value="member:channel:audit"]'),
+    ];
+
+    for (const human of humans) {
+      expect(human?.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    }
+    for (const nonHuman of nonHumans) {
+      expect(nonHuman?.querySelector("openclaw-session-owner-chip")).toBeNull();
+      expect(nonHuman?.querySelector(".chat-pane__sharing-member-icon svg")).not.toBeNull();
+    }
   });
 
   it("shows only the draft marker to a non-manager", () => {
@@ -147,8 +200,16 @@ describe("chat session sharing menu", () => {
             sessionKey: "agent:main:main",
             members: [{ identityId: "alice", addedBy: "owner", addedAt: 1 }],
             identities: [
-              { type: "human", id: "alice", label: "Alice" },
-              { type: "human", id: "bob", label: "Bob" },
+              {
+                type: "human",
+                id: "alice",
+                label: "Alice with a very long selected member display name",
+              },
+              {
+                type: "human",
+                id: "bob",
+                label: "Bob with a very long available member display name",
+              },
             ],
             role: "owner",
             allowedVisibilities: ["shared", "read-only"],
@@ -173,6 +234,15 @@ describe("chat session sharing menu", () => {
     expect(
       root.querySelector('wa-dropdown-item[value="member:bob"]')?.hasAttribute("disabled"),
     ).toBe(true);
+    for (const identityId of ["alice", "bob"]) {
+      const item = root.querySelector<HTMLElement>(
+        `wa-dropdown-item[value="member:${identityId}"]`,
+      );
+      expect(item?.title).toBe("Requires write");
+      expect(item?.querySelector(".chat-pane__sharing-member-label")?.hasAttribute("title")).toBe(
+        false,
+      );
+    }
 
     dropdown?.dispatchEvent(new CustomEvent("wa-show"));
     dropdown?.dispatchEvent(

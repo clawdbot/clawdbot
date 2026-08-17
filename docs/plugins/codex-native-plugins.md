@@ -4,7 +4,7 @@ title: "Native Codex plugins"
 read_when:
   - You want Codex-mode OpenClaw agents to use native Codex plugins
   - You are migrating source-installed openai-curated Codex plugins
-  - You are configuring an existing workspace-directory Codex plugin
+  - You are discovering or installing a Codex marketplace plugin
   - You are troubleshooting codexPlugins, app inventory, destructive actions, or plugin app diagnostics
 ---
 
@@ -32,10 +32,11 @@ working.
   API-key and Bedrock accounts under the `openai-api-curated` wire name;
   OpenClaw treats both names as the one curated catalog, so configured
   `openai-curated` plugins resolve from either.
-- Manually configured `workspace-directory` plugins must already appear
-  installed and enabled under their exact marketplace-qualified identity in
-  `plugin/installed`. Their owned apps must be accessible and callable for the
-  configured Codex thread.
+- Native runtime support also includes other marketplaces already available to
+  Codex, such as `openai-bundled`, `openai-primary-runtime`,
+  `workspace-directory`, and marketplace manifests in the current repository.
+  Plugins remain unavailable until an owner or `operator.admin` explicitly
+  installs or enables their marketplace-qualified identity.
 
 `codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
 bindings, or other harnesses, because those paths never create Codex
@@ -97,11 +98,25 @@ config looks like this:
 }
 ```
 
-Migration remains limited to `openai-curated`. To use an existing
-`workspace-directory` plugin, add it manually with the exact
-marketplace-qualified `summary.id` returned by `plugin/installed`. For example,
-if Codex returns `example-plugin@workspace-directory`, configure that complete
-value instead of its display name:
+Migration remains limited to `openai-curated`. To find another plugin that
+Codex can already see, list the available marketplace catalog and install the
+exact marketplace-qualified identity:
+
+```text
+/codex plugins available
+/codex plugins install security-review@company-tools
+```
+
+Codex discovers repository marketplaces from
+`.agents/plugins/marketplace.json` in the current conversation workspace. An
+owner does not need to add that marketplace to OpenClaw configuration before
+listing or installing its plugins. Official bundled, primary-runtime, curated,
+workspace, shared, and personal marketplaces depend on the signed-in Codex
+account and upstream feature or administrator policies.
+When Codex requires marketplace sources to be explicitly configured or
+allowlisted, those requirements still apply; OpenClaw does not bypass them.
+
+Installation writes an explicit configuration entry such as:
 
 ```json5
 {
@@ -113,10 +128,10 @@ value instead of its display name:
           codexPlugins: {
             enabled: true,
             plugins: {
-              "example-plugin": {
+              "security-review@company-tools": {
                 enabled: true,
-                marketplaceName: "workspace-directory",
-                pluginName: "example-plugin@workspace-directory",
+                marketplaceName: "company-tools",
+                pluginName: "security-review",
               },
             },
           },
@@ -127,18 +142,49 @@ value instead of its display name:
 }
 ```
 
-OpenClaw does not call `plugin/install` or start authentication for a
-`workspace-directory` plugin. Install, enable, and authenticate it in Codex
-before adding or enabling the OpenClaw policy. OpenClaw keeps apps hidden when
-the response omits the exact marketplace, plugin ID, detail ID, or app-readiness
-evidence. If the installed snapshot omits the workspace marketplace, OpenClaw
-reports `marketplace_missing` for each enabled workspace plugin and keeps any
-independently discovered curated plugins available.
+The install command checks the authenticated owner or administrator before it
+calls Codex `plugin/install`. Codex continues to enforce marketplace source,
+workspace administrator, account, and connector-authentication policies.
+Remote plugins that require a Codex installation interstitial, or do not
+report whether one is required, must be installed in Codex first; rerun the
+OpenClaw install command afterward to authorize the already-installed plugin.
+OpenClaw keeps apps hidden when the response omits the exact marketplace,
+plugin identity, detail identity, or app-readiness evidence. If a connector
+requires additional sign-in, complete that authorization before expecting the
+plugin's tools to become available.
 
 After a `codexPlugins` change, new Codex conversations pick up the updated
 app set automatically. Run `/new` or `/reset` to refresh the current
 conversation. A gateway restart is not required for plugin enable/disable
 changes.
+
+## Scheduled automations
+
+When an authenticated owner creates an automation from a Codex turn, OpenClaw
+captures the app IDs and approval limits callable on that exact Codex thread.
+The stored authority is bound to the creator's prepared Codex profile and
+account. Scheduled runs intersect that cap with current Codex policy and app
+availability. They never gain new app IDs or a broader destructive,
+open-world, or approval ceiling. Tools added later within an already captured
+app may run only when both the stored ceiling and current policy allow them.
+
+Scheduled app calls are unattended. Only actions explicitly allowed both when
+the job was created and when it runs can proceed without a prompt. An action
+that still requires approval or elicitation is declined. A changed account,
+runtime, revoked app, narrower policy, or unavailable inventory stops before
+app execution and reports how to restore access or reauthorize the automation.
+Model fallbacks cannot move this authority to another runtime or account.
+
+Jobs created before app authority capture may keep their ordinary OpenClaw
+tool cap and continue non-app work, but cannot recover Codex app access
+automatically. Recreate or reauthorize only a job that needs app access, from a
+fresh authenticated owner turn. See
+[Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
+Ordinary edits preserve captured app authority. Explicitly replacing a job's
+`toolsAllow` cap without a fresh authenticated Codex authority capture clears
+that authority; the next run reports that app access requires reauthorization.
+An update from a fresh authenticated owner turn can instead capture and store a
+new app ceiling for the updated job.
 
 ## Manage plugins from chat
 
@@ -148,23 +194,42 @@ same chat where you operate the Codex harness:
 ```text
 /codex plugins
 /codex plugins list
+/codex plugins available
+/codex plugins install security-review@company-tools
 /codex plugins disable google-calendar
 /codex plugins enable google-calendar
+/codex plugins disable security-review@company-tools
 ```
 
 `/codex plugins` is an alias for `/codex plugins list`. The list shows each
 configured plugin's key, on/off state, Codex plugin name, and marketplace
 from `plugins.entries.codex.config.codexPlugins.plugins`.
 
-`enable`/`disable` write only to `~/.openclaw/openclaw.json`; they never edit
-`~/.codex/config.toml` or install new Codex plugins. Only the owner or a
-gateway client with the `operator.admin` scope can run them.
+`available` reads Codex's marketplace catalog using the bound workspace, so it
+can discover repository-local plugins without enabling them. The owner-scoped
+`codex_plugins` model tool is also read-only: it can recommend an exact install
+command but cannot install, enable, or add a marketplace.
 
-Enabling a configured plugin also turns on the global `codexPlugins.enabled`
-switch. If a curated plugin was written disabled because migration returned
-`auth_required`, reauthorize the app in Codex before enabling it in OpenClaw.
-For a `workspace-directory` entry, enabling it here changes only OpenClaw
-policy; the plugin and app must already be active in Codex.
+`install`, `enable`, and `disable` require the owner or a gateway client with
+the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched
+before agent invocation, so a model-generated recommendation does not count as
+installation approval. For a plugin that Codex has not installed yet, `install`
+calls the Codex app-server and records the explicit plugin policy only after
+installation succeeds. If Codex confirms that the plugin is already installed
+and enabled, the same command records its authorization without installing it
+again. `enable` and `disable` change OpenClaw's persisted policy; qualified
+identities and existing configuration keys are both accepted.
+
+Installing or enabling a configured plugin also turns on the global
+`codexPlugins.enabled` switch without enabling `allow_all_plugins`. If a plugin
+reports `auth_required`, authorize the app in Codex before starting a new
+conversation. Authorization remains in effect for later conversations until
+the plugin is disabled or the upstream account or workspace revokes access.
+
+Only install plugins you trust. A Codex plugin can contribute skills, apps,
+MCP servers, and hooks. Some hooks can participate in permission decisions,
+so explicit installation trusts the selected plugin's code; it is not a
+security review or an isolation boundary.
 
 ## How native plugin setup works
 
@@ -196,14 +261,13 @@ step:
   configured bearer or header authentication. A positively identified
   non-ChatGPT account remains ineligible.
 
-For `workspace-directory` plugins, setup happens outside OpenClaw. OpenClaw
-uses its `plugin/installed` snapshot only for explicitly configured enabled
-entries, or when `allow_all_plugins` requires identifying apps owned by an
-explicitly configured disabled workspace plugin. It resolves each plugin by
-exact `summary.id` and uses `plugin/read` for ownership. The disabled-plugin
-check is read-only: its apps stay denied, and OpenClaw does not install,
-enable, or authenticate the plugin. Missing or ambiguous ownership fails
-closed instead of granting account-wide access.
+For explicitly approved plugins from any discovered marketplace, OpenClaw uses
+its `plugin/installed` snapshot and `plugin/read` details to establish the
+exact marketplace-qualified identity and app ownership. The installed-only
+check during ordinary thread setup is read-only; apps from disabled or
+unapproved plugins stay denied. Owner-issued installation is the explicit
+mutation path. Missing or ambiguous ownership fails closed instead of granting
+account-wide access.
 
 Runtime app inventory is the target-session accessibility check for both
 migrated curated plugins and manually configured workspace plugins. Codex
@@ -213,16 +277,14 @@ and accessible plugin apps; it is not recomputed on every turn, so
 new Codex conversations. Use `/new` or `/reset` to pick up the change in the
 current conversation.
 
-## V1 support boundary
+## Support boundary
 
 - Only `openai-curated` plugins already installed in the source Codex
   app-server inventory are migration-eligible.
-- Runtime also supports explicit `workspace-directory` entries reported by
-  `plugin/installed`. These entries must use their exact
-  marketplace-qualified `summary.id` and must already be installed, enabled,
-  and app-accessible. A missing marketplace, plugin, ownership detail, or app
-  readiness evidence exposes no workspace app. OpenClaw never scans the
-  marketplace catalog to discover or activate a workspace plugin.
+- Runtime supports explicitly approved plugins from Codex-discovered official,
+  workspace, personal, shared, and repository-local marketplaces. A missing
+  marketplace, plugin, ownership detail, or app readiness evidence exposes no
+  plugin app.
 - Positively identified non-ChatGPT source accounts fail the subscription gate.
   Missing or unreadable source accounts are unavailable by default.
   `--verify-plugin-apps` can instead establish access through authenticated
@@ -235,21 +297,25 @@ current conversation.
 - `codexPlugins.enabled` is the only global enablement switch; there is no
   `plugins["*"]` wildcard or config key that grants arbitrary install
   authority.
-- Non-curated marketplaces, cached plugin bundles, hooks, and Codex config
-  files are preserved in the migration report for manual review, not activated
-  automatically. Runtime accepts manually configured `workspace-directory`
-  entries; other marketplaces remain unsupported.
+- Migration does not automatically import non-curated marketplaces, cached
+  plugin bundles, hooks, or Codex config files. Use `/codex plugins available`
+  and an owner-issued `/codex plugins install <plugin>@<marketplace>` command
+  to opt into an additional discovered plugin.
+- OpenClaw does not add new Git or local marketplace sources in this flow.
+  Additional sources must already be configured in Codex or be discoverable
+  from the bound repository.
 
 ## App inventory and ownership
 
 OpenClaw first reads and caches one `plugin/installed` snapshot scoped to the
-target Codex app-server and configured workspace. That snapshot covers
-installed curated and workspace plugins, including disabled plugin identities;
-failed or incomplete snapshots are never cached. `plugin/read` is limited to
-the exact configured plugin details required to establish ownership. Routine
-thread setup never scans the marketplace catalog. `plugin/list` runs only to
-find or repair an explicitly enabled missing curated plugin, and
-`plugin/install` runs only for that explicitly configured curated plugin.
+target Codex app-server and configured workspace. That snapshot covers plugins
+from the marketplaces visible in that scope, including disabled plugin
+identities; failed or incomplete snapshots are never cached. `plugin/read` is
+limited to exact configured plugin details required to establish ownership.
+Explicit discovery queries `plugin/list` with the conversation workspace to
+find repository marketplaces. Routine setup retains its existing curated
+recovery behavior; additional marketplace installation requires the explicit
+owner or administrator command.
 
 OpenClaw reads installed app runtime state through `app/installed` and fetches
 canonical app metadata with `app/read` in batches of at most 100 app IDs. The
@@ -272,7 +338,8 @@ Migration and runtime use separate cache keys:
 - Target runtime setup uses the target agent's Codex app-server identity when
   building and verifying the thread app config. Curated plugin activation
   invalidates that target cache key, then force-refreshes it after
-  `plugin/install`. `workspace-directory` setup never runs this activation path.
+  `plugin/install`. Explicit marketplace installation refreshes the same
+  target runtime state before subsequent conversations use the plugin.
 
 A plugin app is exposed only when OpenClaw can map it back to the configured
 plugin through stable ownership: an exact app id from plugin detail, a known
@@ -387,9 +454,9 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 | `app_inventory_unavailable`                       | Strict source app verification was requested but the source Codex app inventory refresh failed.                                      | Fix source Codex app-server access, or retry without `--verify-plugin-apps` to accept the faster account-gated plan.   |
 | `codex_subscription_required`                     | The source app-server positively identified an API-key or other non-ChatGPT account.                                                 | Log in to the Codex app with subscription auth, then rerun migration.                                                  |
 | `codex_account_unavailable`                       | The source account was missing or `account/read` failed without strict app verification.                                             | Restore source account access, or use `--verify-plugin-apps` when authenticated source app inventory can prove access. |
-| `marketplace_missing`, `plugin_missing`           | The exact marketplace or configured plugin is unavailable in the installed snapshot; workspace apps fail closed.                     | Verify the target app-server's `plugin/installed` response and exact configured plugin identity.                       |
+| `marketplace_missing`, `plugin_missing`           | The exact marketplace or configured plugin is unavailable in the installed snapshot; plugin apps fail closed.                        | Verify the target app-server's `plugin/installed` response and exact configured plugin identity.                       |
 | `plugin_detail_unavailable`                       | OpenClaw could not read the exact configured plugin's ownership details.                                                             | Inspect the target app-server's `plugin/installed` and `plugin/read` responses.                                        |
-| `plugin_disabled`                                 | Codex reports the plugin installed but disabled.                                                                                     | Curated activation may repair it; enable a workspace plugin in Codex before retrying.                                  |
+| `plugin_disabled`                                 | Codex reports the plugin installed but disabled.                                                                                     | Enable the plugin in Codex, or have the owner explicitly install and authorize it again.                               |
 | `plugin_activation_failed`                        | Plugin activation did not complete.                                                                                                  | Use the attached diagnostic to distinguish marketplace, auth, refresh, or workspace-readiness failures.                |
 | `app_inventory_missing`, `app_inventory_stale`    | App readiness came from an empty or stale cache.                                                                                     | OpenClaw schedules an async refresh automatically; plugin apps stay excluded until ownership and readiness are known.  |
 | `app_ownership_ambiguous`                         | App inventory only matched by display name.                                                                                          | The app stays hidden from the Codex thread until a later refresh proves ownership.                                     |
@@ -404,14 +471,14 @@ workspace plugins, and Codex managed or workspace restrictions still block
 access. Reauthorize or repair those upstream conditions before starting a new
 thread. If you changed that state after the gateway cached app inventory, wait
 for the one-hour cache refresh or restart the gateway, then use `/new` or
-`/reset`. OpenClaw does not repair or authenticate workspace plugins.
+`/reset`. OpenClaw does not authenticate plugin apps on the owner's behalf.
 
 For `plugin_detail_unavailable`, verify that the exact installed marketplace
 and plugin identity select a matching `plugin/read` result. OpenClaw keeps
 owned apps hidden when that selector or ownership detail is unavailable. For
-`plugin_activation_failed`, curated plugins may report a marketplace, auth, or
-post-install refresh failure. A workspace plugin reports this code when it is
-not already active; install, enable, and authenticate it outside OpenClaw.
+`plugin_activation_failed`, inspect the marketplace, app authorization, and
+post-install refresh diagnostics. An explicitly approved plugin must be
+installed, enabled, and authenticated before its apps can appear in a thread.
 
 **Config changed but the agent cannot see the plugin:** run `/codex plugins
 list` to confirm the configured state, then `/new` or `/reset`. Existing

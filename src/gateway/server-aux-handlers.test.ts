@@ -25,7 +25,7 @@ vi.mock("../secrets/store/secret-store.js", () => {
 });
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -214,6 +214,7 @@ type SecretsReloadHarnessParams = {
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
   onApprovalLifecycle?: GatewayAuxHandlerParams["onApprovalLifecycle"];
+  onAgentRunAuthorityClosed?: GatewayAuxHandlerParams["onAgentRunAuthorityClosed"];
   validateAgentRuntimeDelegatedAuthority?: GatewayAuxHandlerParams["validateAgentRuntimeDelegatedAuthority"];
   registerWorkerTurnClaimClosedHandler?: GatewayAuxHandlerParams["registerWorkerTurnClaimClosedHandler"];
 };
@@ -236,6 +237,7 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
     onApprovalLifecycle: params.onApprovalLifecycle,
+    onAgentRunAuthorityClosed: params.onAgentRunAuthorityClosed,
     validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
     registerWorkerTurnClaimClosedHandler: params.registerWorkerTurnClaimClosedHandler,
   });
@@ -300,6 +302,65 @@ describe("gateway aux handlers", () => {
     expect(first.execApprovalManager.runtimeEpoch).not.toBe(
       second.execApprovalManager.runtimeEpoch,
     );
+  });
+
+  it("fans exact run closure out to Gateway-owned capability cleanup", () => {
+    const onAgentRunAuthorityClosed = vi.fn();
+    const gatewayAux = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      onAgentRunAuthorityClosed,
+    });
+    const operationalRunInstance = Object.freeze({
+      instanceId: "egress-proxy-instance",
+      runId: "egress-proxy-run",
+    });
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+
+    releaseAgentRunDelegatedAuthority(authority);
+
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
+      expect.objectContaining({ operationalRunInstance }),
+    );
+    gatewayAux.unregisterApprovalAuthorityObserver();
+  });
+
+  it("publishes exec.approval.resolved when the gateway timeout expires an approval", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayAux = createSecretsReloadHarness({
+        activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      });
+      const broadcast = vi.fn();
+      const publishResolved = vi.fn();
+      gatewayAux.bindApprovalPublicationContext({
+        broadcast,
+        broadcastToConnIds: vi.fn(),
+        approvalEvents: { publishResolved },
+        logGateway: { error: vi.fn() },
+      } as never);
+      const record = gatewayAux.execApprovalManager.create(
+        { command: "echo expires" },
+        1_000,
+        "exec-timeout-publish",
+      );
+      const decision = gatewayAux.execApprovalManager.register(record, 1_000);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(decision).resolves.toBeNull();
+      // The gateway clock owns expiry: reviewer surfaces must receive the
+      // terminal event instead of pruning on their own (skewed) clocks.
+      await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
+      expect(broadcast).toHaveBeenCalledWith(
+        "exec.approval.resolved",
+        expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),
+        expect.anything(),
+      );
+      gatewayAux.unregisterApprovalAuthorityObserver();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
@@ -750,7 +811,7 @@ describe("gateway aux handlers", () => {
       required: "gen-old",
     });
     expect(
-      getRuntimeAuthProfileStoreSnapshot(authAgentDir)?.profiles["openai:default"],
+      getRuntimeAuthProfileStoreSnapshotCore(authAgentDir)?.profiles["openai:default"],
     ).toMatchObject({ access: "access-new", refresh: "refresh-new" });
   });
 

@@ -123,7 +123,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", expectedSessionId: `session:${archivedRow.key}` },
     );
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
@@ -133,7 +133,11 @@ describe("AppSidebar session mutation feedback", () => {
       2,
       archivedRow.key,
       { archived: false },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: `session:${archivedRow.key}`,
+        deferListRefresh: true,
+      },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       3,
@@ -144,6 +148,69 @@ describe("AppSidebar session mutation feedback", () => {
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("assigns owners from the row menu and updates the owner chip", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.assignOwner") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ok: true,
+        key: "agent:main:a",
+        owner: {
+          actor: { type: "human", id: "profile-bob", label: "Bob" },
+          assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+          assignedAt: 10,
+        },
+      };
+    });
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      selfUser: { id: "profile-ada", name: "Ada" },
+      hello: {
+        features: { methods: ["sessions.assignOwner"] },
+        auth: { role: "operator", scopes: ["operator.write"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const result = harness.sessions.state.result;
+    const row = result?.sessions.find((session) => session.key === "agent:main:a");
+    if (!result || !row) {
+      throw new Error("expected session owner fixture");
+    }
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+    ];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    expect(menu.textContent).toContain("Assign to me");
+    expect(menu.textContent).toContain("Assign to…");
+    menu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "assign-owner:human:profile-bob" } },
+      }),
+    );
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
+      key: row.key,
+      agentId: "main",
+      owner: { type: "human", id: "profile-bob" },
+    });
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
+          ?.getAttribute("title"),
+      ).toBe("Owned by Bob");
+    });
   });
 
   it("reconciles and stops an idle active cloud worker through its session", async () => {

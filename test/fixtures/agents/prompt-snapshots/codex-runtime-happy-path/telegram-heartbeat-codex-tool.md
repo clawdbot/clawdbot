@@ -222,8 +222,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 53397,
-    "roughTokens": 13350
+    "chars": 54614,
+    "roughTokens": 13654
   },
   "openClawDeveloperInstructions": {
     "chars": 3370,
@@ -234,8 +234,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6950
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81197,
-    "roughTokens": 20300
+    "chars": 82414,
+    "roughTokens": 20604
   },
   "userInputText": {
     "chars": 1271,
@@ -566,6 +566,7 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
           "type": "boolean"
         },
         "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
           "type": "boolean"
         },
         "attachments": {
@@ -668,6 +669,18 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
         }
       },
       "required": ["action"],
@@ -677,7 +690,7 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
     "type": "function"
   },
   {
-    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

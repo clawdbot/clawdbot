@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { finalizeTaskRunByRunIdCore } from "../../tasks/task-executor.js";
@@ -18,10 +19,8 @@ import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
   getActiveCronTaskRunId,
-  resolveMainSessionCronRunSessionKey,
+  findCronTaskRunRecoveryInDatabase,
   tryCreateCronTaskRun,
-  tryFindCronTaskRunIdForRecovery,
-  tryFindFinalizedCronTaskRun,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
@@ -40,137 +39,6 @@ afterEach(() => {
 });
 
 describe("cron task run terminal records", () => {
-  it("uses the prepared configured default for a main-session run", () => {
-    const job = {
-      id: "default-owner",
-      sessionTarget: "main",
-    } as CronJob;
-
-    expect(resolveMainSessionCronRunSessionKey(job, 1_500, "ops")).toBe(
-      "agent:ops:cron:default-owner:run:1500",
-    );
-    expect(() => resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toThrow(
-      "Cron job has no agent id and no configured default was provided.",
-    );
-  });
-
-  it.each([undefined, "   "])(
-    "uses a scoped session key without evaluating a missing configured default (agentId=%j)",
-    (agentId) => {
-      const job = {
-        id: "scoped-owner",
-        sessionTarget: "main",
-        sessionKey: "agent:ops:main",
-        agentId,
-      } as CronJob;
-
-      expect(resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toBe(
-        "agent:ops:cron:scoped-owner:run:1500",
-      );
-    },
-  );
-
-  it("uses a scoped child owner when the job agent id is blank", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-cron-scoped-task-owner-" },
-      async () => {
-        resetTaskRegistryForTests();
-        const job = {
-          id: "scoped-task-owner",
-          name: "scoped task owner",
-          agentId: "   ",
-          sessionKey: "agent:ops:main",
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "work" },
-          schedule: { kind: "every", everyMs: 60_000 },
-          state: {},
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          enabled: true,
-        } satisfies CronJob;
-        const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        });
-
-        expect(tryCreateCronTaskRun({ state, job, startedAt: 1_500 })).toBeTruthy();
-
-        expect(
-          listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-            runtime: "cron",
-            sourceId: job.id,
-          }),
-        ).toEqual([
-          expect.objectContaining({
-            agentId: "ops",
-            childSessionKey: "agent:ops:cron:scoped-task-owner:run:1500",
-          }),
-        ]);
-      },
-    );
-  });
-
-  it("seeds main transcript links only for system events and clears an unused link", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-cron-main-task-session-" },
-      async () => {
-        resetTaskRegistryForTests();
-        const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        });
-        const createMainJob = (id: string, payload: CronJob["payload"]): CronJob => ({
-          id,
-          name: id,
-          agentId: "ops",
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload,
-          schedule: { kind: "every", everyMs: 60_000 },
-          state: {},
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          enabled: true,
-        });
-        const systemEventJob = createMainJob("main-system-event", {
-          kind: "systemEvent",
-          text: "work",
-        });
-        const jobs = [
-          systemEventJob,
-          createMainJob("main-script", { kind: "script", script: "return {}" }),
-          createMainJob("main-heartbeat", { kind: "heartbeat" }),
-        ];
-        const runIds = jobs.map((job) => tryCreateCronTaskRun({ state, job, startedAt: 1_500 }));
-        const childSessionKey = (job: CronJob) =>
-          listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-            runtime: "cron",
-            sourceId: job.id,
-          })[0]?.childSessionKey;
-
-        expect(childSessionKey(systemEventJob)).toBe("agent:ops:cron:main-system-event:run:1500");
-        expect(childSessionKey(jobs[1]!)).toBeUndefined();
-        expect(childSessionKey(jobs[2]!)).toBeUndefined();
-
-        tryFinishCronTaskRunWithoutHistory(state, {
-          taskRunId: runIds[0],
-          status: "skipped",
-          endedAt: 1_501,
-        });
-        expect(childSessionKey(systemEventJob)).toBeUndefined();
-      },
-    );
-  });
-
   it.each([
     {
       label: "current",
@@ -345,7 +213,7 @@ describe("cron task run terminal records", () => {
     );
   });
 
-  it("keeps task-registry lookup failures inside the best-effort boundary", () => {
+  it("keeps task-registry finalization failures inside the best-effort boundary", () => {
     const warn = vi.fn();
     const startedAt = 500;
     const job: CronJob = {
@@ -372,11 +240,6 @@ describe("cron task run terminal records", () => {
     vi.spyOn(taskRegistry, "findTaskByRunId").mockImplementation(() => {
       throw new Error("task store unavailable");
     });
-    vi.spyOn(taskRegistry, "listTaskRecordsUnsorted").mockImplementation(() => {
-      throw new Error("task store unavailable");
-    });
-
-    expect(tryFindFinalizedCronTaskRun(state, job.id, startedAt)).toBeUndefined();
     expect(() =>
       tryFinishCronTaskRun(state, {
         job,
@@ -390,10 +253,6 @@ describe("cron task run terminal records", () => {
         },
       }),
     ).not.toThrow();
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: job.id }),
-      "cron: failed to read finalized task ledger record",
-    );
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: expect.stringMatching(new RegExp(`^cron:${job.id}:${startedAt}:`)),
@@ -438,7 +297,7 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "skipped",
-            error: "trigger condition not met",
+            error: "cron: job execution timed out",
             runId: "manual:skipped-job:1",
             runAtMs: startedAt,
             durationMs: 0,
@@ -455,10 +314,10 @@ describe("cron task run terminal records", () => {
           runtime: "cron",
           sourceId: job.id,
           agentId: "finn",
-          status: "succeeded",
+          status: "failed",
           startedAt,
           endedAt: startedAt,
-          error: "trigger condition not met",
+          error: "cron: job execution timed out",
           detail: {
             kind: "cron-run",
             status: "skipped",
@@ -791,7 +650,9 @@ describe("cron task run terminal records", () => {
     "cron: isolated agent setup timed out before runner start (last phase: preparing)",
     "cron: isolated agent run stalled before execution start",
     "cron: isolated agent run stalled before execution start (last phase: preparing)",
-  ])("preserves %j as a provisional timed-out task", async (error) => {
+    Object.assign(new Error(), { name: "AbortError" }),
+  ])("preserves a provisional timed-out task for case %#", async (input) => {
+    const expected = input instanceof Error ? timeoutErrorMessage() : input;
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-provisional-watchdog-timeout-" },
       async () => {
@@ -826,7 +687,7 @@ describe("cron task run terminal records", () => {
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId,
           status: "error",
-          error,
+          error: input,
           endedAt: startedAt + 100,
         });
 
@@ -838,7 +699,7 @@ describe("cron task run terminal records", () => {
         ).toEqual([
           expect.objectContaining({
             status: "timed_out",
-            error,
+            error: expected,
             endedAt: startedAt + 100,
           }),
         ]);
@@ -940,7 +801,15 @@ describe("cron task run terminal records", () => {
           notifyPolicy: "silent",
           startedAt,
         });
-        expect(tryFindCronTaskRunIdForRecovery(state, "legacy-job", startedAt)).toBe(legacyRunId);
+        const recovery = runOpenClawStateWriteTransaction(({ db }) =>
+          findCronTaskRunRecoveryInDatabase({
+            database: db,
+            jobId: "legacy-job",
+            startedAt,
+            storeKey: cronStoreKey(state.deps.storePath),
+          }),
+        );
+        expect(recovery.taskRunId).toBe(legacyRunId);
         finalizeTaskRunByRunIdCore({
           runId: legacyRunId,
           runtime: "cron",
@@ -1011,8 +880,18 @@ describe("cron task run terminal records", () => {
         expect(runB).toBeTruthy();
         expect(runA).not.toBe(runB);
 
-        expect(tryFindCronTaskRunIdForRecovery(stateA, job.id, startedAt)).toBe(runA);
-        expect(tryFindCronTaskRunIdForRecovery(stateB, job.id, startedAt)).toBe(runB);
+        const findRecoveryId = (state: ReturnType<typeof createCronServiceState>) =>
+          runOpenClawStateWriteTransaction(
+            ({ db }) =>
+              findCronTaskRunRecoveryInDatabase({
+                database: db,
+                jobId: job.id,
+                startedAt,
+                storeKey: cronStoreKey(state.deps.storePath),
+              }).taskRunId,
+          );
+        expect(findRecoveryId(stateA)).toBe(runA);
+        expect(findRecoveryId(stateB)).toBe(runB);
       },
     );
   });

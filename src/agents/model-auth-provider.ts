@@ -73,7 +73,7 @@ export function resolveScopedAuthProfileStore(params: {
 }
 
 /** Resolves the credential that should be used for one provider request. */
-export async function resolveApiKeyForProvider(params: {
+export async function resolveApiKeyForProviderCore(params: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
@@ -176,7 +176,7 @@ export async function resolveApiKeyForProvider(params: {
         modelApi: params.modelApi,
       })
     ) {
-      return resolveApiKeyForProvider({
+      return resolveApiKeyForProviderCore({
         ...params,
         store,
         profileId: undefined,
@@ -249,7 +249,7 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         })
       ) {
-        return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
+        return resolveApiKeyForProviderCore({ ...params, credentialPrecedence: "profile-first" });
       }
       return {
         apiKey: authConfig.sentinelizeConfigSecretRefEnvApiKey({

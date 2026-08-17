@@ -33,7 +33,7 @@ import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
-  pad,
+  padProcessStatus,
   readEnvInt,
   sliceLogLines,
   truncateMiddle,
@@ -56,6 +56,12 @@ const DEFAULT_LOG_TAIL_LINES = 200;
 const DEFAULT_INPUT_WAIT_IDLE_MS = 15_000;
 const MIN_INPUT_WAIT_IDLE_MS = 1_000;
 const MAX_INPUT_WAIT_IDLE_MS = 10 * 60 * 1000;
+const PROCESS_TOOL_ACTIONS = (
+  processSchema.properties.action as typeof processSchema.properties.action & {
+    enum: readonly string[];
+  }
+).enum;
+type ProcessToolAction = (typeof PROCESS_TOOL_ACTIONS)[number];
 
 function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
@@ -164,8 +170,8 @@ function finishedPollResult(
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
   acknowledgeNotifyOnExit(finished);
-  const { stdout, stderr, outputDropped } = drainFinishedSession(finished);
-  const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+  const { output: unreadOutput, outputDropped } = drainFinishedSession(finished);
+  const output = unreadOutput.trim();
   // Omitted retained output is pageable only while this public id still owns
   // the exact snapshot; a reused slug must never point the model at successor logs.
   const retainedOutputNote = outputDropped
@@ -288,18 +294,14 @@ export function createProcessTool(
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+      const action = (args as { action?: unknown }).action;
+      if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
+        return failText(
+          `Invalid process action. Expected one of: ${PROCESS_TOOL_ACTIONS.join(", ")}`,
+        );
+      }
       const params = args as {
-        action:
-          | "list"
-          | "poll"
-          | "log"
-          | "write"
-          | "send-keys"
-          | "submit"
-          | "paste"
-          | "kill"
-          | "clear"
-          | "remove";
+        action: ProcessToolAction;
         sessionId?: string;
         data?: string;
         keys?: string[];
@@ -356,7 +358,7 @@ export function createProcessTool(
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
             const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
-            return `${s.sessionId} ${pad(s.status, 9)} ${
+            return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
               formatDurationCompact(s.runtimeMs) ?? "n/a"
             }${marker} :: ${label}`;
           });
@@ -459,8 +461,8 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
             return failText(`No session found for ${params.sessionId}`);
           }
-          const { stdout, stderr, outputDropped } = drainSession(scopedSession);
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const { output: unreadOutput, outputDropped } = drainSession(scopedSession);
+          const output = unreadOutput.trim();
           const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
             ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"

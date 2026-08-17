@@ -1,39 +1,97 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  prepareStreamRuntime: vi.fn(),
+  abortable: vi.fn(),
+  bindOwnedSessionTranscriptWrites: vi.fn(),
+  createRunAbort: vi.fn(),
+  flushPendingToolResultsAfterIdle: vi.fn(),
+  installStreamGuards: vi.fn(),
+  prepareHistory: vi.fn(),
+  prepareStream: vi.fn(),
+  prepareTimeout: vi.fn(),
   runSettledPhase: vi.fn(),
+  withOwnedSessionTranscriptWrites: vi.fn(),
 }));
 
-vi.mock("./attempt-stream-runtime-prepare.js", () => ({
-  prepareEmbeddedAttemptStreamRuntime: mocks.prepareStreamRuntime,
+vi.mock("../../../config/sessions/transcript-write-context.js", () => ({
+  bindOwnedSessionTranscriptWrites: mocks.bindOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites: mocks.withOwnedSessionTranscriptWrites,
+}));
+vi.mock("../wait-for-idle-before-flush.js", () => ({
+  flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
+}));
+vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
+vi.mock("./attempt-finalize.js", () => ({
+  createEmbeddedAttemptRunAbort: mocks.createRunAbort,
+}));
+vi.mock("./attempt-history.js", () => ({
+  prepareEmbeddedAttemptHistory: mocks.prepareHistory,
 }));
 vi.mock("./attempt-settle.js", () => ({
   runEmbeddedAttemptSettledPhase: mocks.runSettledPhase,
+}));
+vi.mock("./attempt-stream-prepare.js", () => ({
+  prepareEmbeddedAttemptStream: mocks.prepareStream,
+}));
+vi.mock("./attempt-stream.js", () => ({
+  installEmbeddedAttemptStreamGuards: mocks.installStreamGuards,
+}));
+vi.mock("./attempt-timeout-prepare.js", () => ({
+  prepareEmbeddedAttemptTimeout: mocks.prepareTimeout,
 }));
 
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 
 type ExecutionInput = Parameters<typeof runEmbeddedAttemptExecutionPhase>[0];
 
-function createFixture() {
+function createFixture(options: { aborted?: boolean } = {}) {
   const order: string[] = [];
-  const activeSession = { sessionId: "active-session" };
-  const sessionManager = { kind: "session-manager" };
+  const attemptAbortController = new AbortController();
+  if (options.aborted) {
+    attemptAbortController.abort(new Error("already aborted"));
+  }
+  const runAbort = vi.fn();
+  const toolSearchCatalogExecutor = vi.fn();
+  const subscription = {
+    isCompacting: vi.fn(() => false),
+  };
+  const queueHandle = { kind: "embedded", runId: "run-1" };
+  const streamResult = {
+    subscription,
+    queueHandle,
+    toolSearchCatalogExecutor,
+    getBeforeAgentFinalizeRevisionReason: vi.fn(),
+    stopAcceptingSteerMessages: vi.fn(),
+  };
+  const timeoutResult = {
+    getRunAbortDeadlineAtMs: vi.fn(() => 123),
+    clearTimers: vi.fn(),
+  };
+  const activeSession = {
+    agent: { streamFn: vi.fn() },
+    dispose: vi.fn(),
+    isCompacting: false,
+    messages: [],
+    prompt: vi.fn(async () => undefined),
+    sessionId: "active-session",
+  };
+  const sessionManager = {};
   const abortActiveSession = vi.fn(async () => undefined);
   const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
-  const toolSearchCatalogExecutor = vi.fn();
+  const externalAbortController = {
+    setRunAbort: vi.fn(() => order.push("set-run-abort")),
+    setCompactionState: vi.fn(() => order.push("set-compaction-state")),
+  };
+  const prepStages = { mark: vi.fn(() => order.push("stream-ready")) };
+  const emitPrepStageSummary = vi.fn();
+  const setToolSearchCatalogExecutor = vi.fn(() => order.push("set-catalog"));
+  const replaySafeTool = { name: "read" };
   const result = { messages: [] };
-  const preparedStreamRuntime = { stream: { queueHandle: { kind: "embedded" } } };
   const state = {
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
   };
-  const prepStages = { mark: vi.fn() };
-  const emitPrepStageSummary = vi.fn();
-  const setToolSearchCatalogExecutor = vi.fn();
-  const replaySafeTool = { name: "read" };
   const sessionRuntime = {
     agentSession: {
       activeSession,
@@ -63,13 +121,20 @@ function createFixture() {
     },
   };
   const input = {
-    attempt: { runId: "run-1", sessionId: "session-1" },
+    attempt: {
+      abortSignal: attemptAbortController.signal,
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      runId: "run-1",
+      sessionId: "session-1",
+      timeoutMs: 30_000,
+    },
     activeContextEngine: { info: { id: "engine" } },
     agentDir: "/agent",
     isRawModelRun: false,
     resolveActiveContextEnginePluginId: vi.fn(),
     runAbortController: new AbortController(),
-    externalAbortController: {},
+    externalAbortController,
     abortState: {},
     prepared: {
       bootstrap: {},
@@ -111,22 +176,47 @@ function createFixture() {
     },
   } as unknown as ExecutionInput;
 
-  mocks.prepareStreamRuntime.mockImplementation(async (streamInput) => {
-    order.push("stream-runtime");
-    streamInput.lifecycle.markStreamReady();
-    streamInput.lifecycle.markIdleTimedOut();
-    streamInput.lifecycle.markExternalAbort();
-    streamInput.lifecycle.markTimedOutDuringCompaction();
-    streamInput.lifecycle.markTimedOutByRunBudget();
-    streamInput.lifecycle.setToolSearchCatalogExecutor(toolSearchCatalogExecutor);
-    return preparedStreamRuntime;
+  mocks.abortable.mockImplementation((_signal, promise) => promise);
+  mocks.bindOwnedSessionTranscriptWrites.mockImplementation((_context, operation) => operation);
+  mocks.withOwnedSessionTranscriptWrites.mockImplementation(
+    async (_context, operation) => await operation(),
+  );
+  mocks.installStreamGuards.mockImplementation(() => {
+    order.push("guards");
+    return {
+      cacheObservabilityEnabled: true,
+      promptCacheTools: [{ name: "read" }],
+    };
+  });
+  mocks.prepareHistory.mockImplementation(async () => {
+    order.push("history");
+    return {
+      contextEnginePromptAuthority: "assembled",
+      contextEngineAssemblySucceeded: true,
+    };
+  });
+  mocks.createRunAbort.mockImplementation(() => {
+    order.push("abort");
+    return runAbort;
+  });
+  mocks.prepareStream.mockImplementation((streamInput) => {
+    order.push("stream");
+    const idleError = new Error("idle timeout");
+    mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
+    streamInput.markExternalAbort();
+    return streamResult;
+  });
+  mocks.prepareTimeout.mockImplementation((timeoutInput) => {
+    order.push("timeout");
+    timeoutInput.markTimedOutDuringCompaction();
+    timeoutInput.markTimedOutByRunBudget();
+    return timeoutResult;
   });
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
     order.push("settled-phase");
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(false);
-    const streamInput = mocks.prepareStreamRuntime.mock.calls[0]?.[0];
-    streamInput.lifecycle.markRejectedThinkingReplayRepaired();
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(true);
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
+    mocks.installStreamGuards.mock.calls[0]?.[0].onRejectedProviderReplayRepaired();
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
     return result;
   });
 
@@ -134,15 +224,19 @@ function createFixture() {
     abortActiveSession,
     activeSession,
     emitPrepStageSummary,
+    externalAbortController,
     input,
     order,
     prepStages,
-    preparedStreamRuntime,
     replaySafeTool,
     result,
+    runAbort,
     sessionManager,
     setToolSearchCatalogExecutor,
     state,
+    streamResult,
+    subscription,
+    timeoutResult,
     toolSearchCatalogExecutor,
     trackPromptSettlePromise,
   };
@@ -153,13 +247,24 @@ beforeEach(() => {
 });
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
-  it("prepares the guarded stream and delegates settlement with live lifecycle state", async () => {
+  it("prepares guarded history, stream handling, deadlines, and settlement in order", async () => {
     const fixture = createFixture();
 
     const result = await runEmbeddedAttemptExecutionPhase(fixture.input);
 
     expect(result).toBe(fixture.result);
-    expect(fixture.order).toEqual(["stream-runtime", "settled-phase"]);
+    expect(fixture.order).toEqual([
+      "guards",
+      "stream-ready",
+      "history",
+      "abort",
+      "set-run-abort",
+      "stream",
+      "set-catalog",
+      "set-compaction-state",
+      "timeout",
+      "settled-phase",
+    ]);
     expect(fixture.state).toEqual(
       expect.objectContaining({
         terminal: {
@@ -175,42 +280,92 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(fixture.setToolSearchCatalogExecutor).toHaveBeenCalledWith(
       fixture.toolSearchCatalogExecutor,
     );
-    expect(mocks.runSettledPhase).toHaveBeenCalledWith(
-      expect.objectContaining({
-        getRepairedRejectedThinkingReplay: expect.any(Function),
-        preparedStreamRuntime: fixture.preparedStreamRuntime,
-      }),
-    );
-    const settledInput = mocks.runSettledPhase.mock.calls[0]?.[0];
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(true);
 
-    const streamInput = mocks.prepareStreamRuntime.mock.calls[0]?.[0];
-    expect(streamInput).toEqual(
+    const settledInput = mocks.runSettledPhase.mock.calls[0]?.[0];
+    expect(settledInput).toEqual(
       expect.objectContaining({
-        activeSession: fixture.activeSession,
-        sessionManager: fixture.sessionManager,
-        abortActiveSession: fixture.abortActiveSession,
-        trackPromptSettlePromise: fixture.trackPromptSettlePromise,
+        preparedStreamRuntime: expect.objectContaining({
+          cache: {
+            observabilityEnabled: true,
+            promptTools: [{ name: "read" }],
+          },
+          history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
+          isProbeSession: false,
+          stream: fixture.streamResult,
+          timeout: fixture.timeoutResult,
+        }),
       }),
     );
-    expect(streamInput.lifecycle.isYieldDetected()).toBe(true);
-    expect(streamInput.lifecycle.readRunState()).toEqual({
+
+    const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
+    expect(guardInput).toEqual(
+      expect.objectContaining({
+        attempt: fixture.input.attempt,
+        session: fixture.activeSession,
+        sessionManager: fixture.sessionManager,
+      }),
+    );
+    expect(guardInput.isYieldDetected()).toBe(true);
+    expect(fixture.runAbort).toHaveBeenCalledWith(true, expect.any(Error));
+
+    const abortInput = mocks.createRunAbort.mock.calls[0]?.[0];
+    expect(abortInput.abortActiveSession).toBe(fixture.abortActiveSession);
+    const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
+    expect(streamInput.activeSession).toBe(fixture.activeSession);
+    expect(streamInput.getRunState()).toEqual({
       aborted: true,
       promptError: null,
       timedOut: true,
       yieldDetected: true,
     });
-    expect(streamInput.stream.isReplaySafeTool(fixture.replaySafeTool)).toBe(true);
-  });
-
-  it("does not enter settlement when stream preparation fails", async () => {
-    const fixture = createFixture();
-    mocks.prepareStreamRuntime.mockRejectedValueOnce(new Error("stream setup failed"));
-
-    await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).rejects.toThrow(
-      "stream setup failed",
+    expect(streamInput.isReplaySafeTool(fixture.replaySafeTool)).toBe(true);
+    expect(fixture.externalAbortController.setCompactionState).toHaveBeenCalledWith({
+      isPendingOrRetrying: fixture.subscription.isCompacting,
+      isInFlight: expect.any(Function),
+    });
+    expect(mocks.prepareTimeout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortRun: fixture.runAbort,
+        compactionState: fixture.subscription,
+      }),
     );
 
-    expect(mocks.runSettledPhase).not.toHaveBeenCalled();
+    await settledInput.preparedStreamRuntime.promptActiveSession("hello");
+    expect(fixture.activeSession.prompt).toHaveBeenCalledWith("hello", undefined);
+    expect(fixture.trackPromptSettlePromise).toHaveBeenCalledOnce();
+    expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
+  });
+
+  it("does not start a prompt after external cancellation", async () => {
+    const fixture = createFixture();
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+    const reason = new Error("run cancelled");
+    const abortError = new Error("run cancelled", { cause: reason });
+    abortError.name = "AbortError";
+    fixture.input.runAbortController.abort(reason);
+    mocks.abortable.mockImplementationOnce((_signal, _promise) => Promise.reject(abortError));
+    const settledInput = mocks.runSettledPhase.mock.calls[0]?.[0];
+
+    await expect(
+      settledInput.preparedStreamRuntime.promptActiveSession("must not start"),
+    ).rejects.toThrow("run cancelled");
+
+    expect(fixture.activeSession.prompt).not.toHaveBeenCalled();
+  });
+
+  it("flushes pending tool results and disposes the session when history preparation fails", async () => {
+    const fixture = createFixture({ aborted: true });
+    const failure = new Error("history failed");
+    mocks.prepareHistory.mockRejectedValueOnce(failure);
+    mocks.flushPendingToolResultsAfterIdle.mockResolvedValue(undefined);
+
+    await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).rejects.toBe(failure);
+
+    expect(mocks.flushPendingToolResultsAfterIdle).toHaveBeenCalledWith({
+      agent: fixture.activeSession.agent,
+      sessionManager: fixture.sessionManager,
+      timeoutMs: 0,
+    });
+    expect(fixture.activeSession.dispose).toHaveBeenCalledOnce();
   });
 });

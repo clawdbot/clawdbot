@@ -12,9 +12,6 @@ import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
-  getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
@@ -38,9 +35,6 @@ export type SubagentRegistryDeps = {
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
-  getSubagentRunsSnapshotForChildSession: typeof getSubagentRunsSnapshotForChildSession;
-  getSubagentRunsSnapshotForController: typeof getSubagentRunsSnapshotForController;
-  getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
@@ -85,9 +79,6 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
-  getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
   getRuntimeConfig,
   onAgentEvent,
   persistSubagentRunsToDisk,

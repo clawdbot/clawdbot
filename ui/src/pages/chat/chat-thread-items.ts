@@ -1,22 +1,18 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import type {
-  ChatItem,
-  ChatQueueItem,
-  NormalizedMessage,
-  ToolCard,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
-  normalizeMessage,
   stripMessageDisplayMetadataText,
+  normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -63,24 +59,12 @@ export function appendCanvasBlockToAssistantMessage(
   };
 }
 
-export function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
-  if (!asRecord(message)) {
-    return null;
-  }
-  try {
-    return normalizeMessage(message);
-  } catch {
-    return null;
-  }
-}
-
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
-  if (!normalizedQuery) {
-    return true;
-  }
-  const text = normalizeLowercaseStringOrEmpty(extractTextCached(message));
-  return text.includes(normalizedQuery);
+  return (
+    !normalizedQuery ||
+    normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
+  );
 }
 
 export function turnHasMatchingAssistant(
@@ -202,18 +186,16 @@ export function findNearestAssistantMessageIndex(
   let currentTurnEnd = maximumIndex;
   for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
-    if (item?.kind !== "message") {
+    if (!item || !chatItemStartsUserTurn(item)) {
       continue;
     }
-    const normalized = safeNormalizeMessage(item.message);
-    if (!normalized || normalizeRoleForGrouping(normalized.role).toLowerCase() !== "user") {
-      continue;
-    }
-    if (
-      toolTimestamp != null &&
-      normalized.timestamp != null &&
-      normalized.timestamp > toolTimestamp
-    ) {
+    const boundaryTimestamp =
+      item.kind === "notice"
+        ? item.timestamp
+        : item.kind === "message"
+          ? (safeNormalizeMessage(item.message)?.timestamp ?? null)
+          : null;
+    if (toolTimestamp != null && boundaryTimestamp != null && boundaryTimestamp > toolTimestamp) {
       currentTurnEnd = index;
       break;
     }
@@ -554,7 +536,6 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-
 export function hasRenderableNormalizedMessage(message: unknown): boolean {
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
@@ -584,6 +565,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.replyToId ? { replyToId: item.replyToId } : {}),
       ...(item.sender?.id ? { senderId: item.sender.id } : {}),
       ...(item.sender?.name ? { senderName: item.sender.name } : {}),
       ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
@@ -595,8 +577,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
 }
 
 export function rawMessageTimestamp(message: unknown): number | null {
-  const timestamp = asRecord(message)?.timestamp;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+  return asFiniteNumber(asRecord(message)?.timestamp) ?? null;
 }
 
 function chatItemTimestamp(item: ChatItem): number | null {

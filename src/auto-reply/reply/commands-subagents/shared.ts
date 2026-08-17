@@ -12,12 +12,11 @@ import {
   resolveMainSessionAlias,
 } from "../../../agents/tools/sessions-helpers.js";
 import { callGateway } from "../../../gateway/call.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { parseAgentSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";
-import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
+import { extractSubagentMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -248,7 +247,7 @@ export function buildSubagentsHelp() {
 export function formatLogLines(messages: ChatMessage[]) {
   const lines: string[] = [];
   for (const msg of messages) {
-    const extracted = extractMessageText(msg);
+    const extracted = extractSubagentMessageText(msg);
     if (!extracted) {
       continue;
     }

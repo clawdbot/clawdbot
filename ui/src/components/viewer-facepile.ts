@@ -84,7 +84,7 @@ let cachedAuthenticatedSelfUserId: string | undefined;
 let cachedSelfInstanceId: string | undefined;
 let cachedPresenceProjection: ReturnType<typeof projectPresenceViewers> | undefined;
 
-function projectPresencePayload(
+export function projectPresencePayload(
   value: unknown,
   authenticatedSelfUserId?: string,
   selfInstanceId?: string,
@@ -113,10 +113,15 @@ export function hasSessionPresenceViewers(
   authenticatedSelfUserId: string | undefined,
   selfInstanceId: string | undefined,
   sessionKey: string,
+  excludeUserId?: string,
 ): boolean {
   const projection = projectPresencePayload(value, authenticatedSelfUserId, selfInstanceId);
+  const excludedUserId = normalized(excludeUserId);
   return projection.users.some(
-    (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
+    (user) =>
+      user.id !== projection.selfUserId &&
+      user.id !== excludedUserId &&
+      user.watchedSessions.includes(sessionKey),
   );
 }
 
@@ -145,6 +150,8 @@ export type ViewerAvatarVariant = "session" | "footer" | "profile";
 class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;
   @property() variant: ViewerAvatarVariant = "session";
+  // Presence selectors use this marker; owner and menu chrome must opt out.
+  @property({ type: Boolean, attribute: false }) markAsViewer = true;
 
   override render() {
     const user = this.user;
@@ -160,7 +167,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     });
     return html`<span
       class=${identityAvatarClass(`viewer-avatar viewer-avatar--${this.variant}`, view)}
-      data-viewer-id=${user.id}
+      data-viewer-id=${this.markAsViewer ? user.id : nothing}
       aria-label=${label}
     >
       ${renderViewerAvatar(view)}
@@ -189,6 +196,8 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfUserId?: string;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
+  @property({ attribute: false }) excludeUserId?: string;
+  @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
   @property({ attribute: false }) buildInfo: ControlUiBuildInfo = CONTROL_UI_BUILD_INFO;
@@ -201,13 +210,20 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       this.selfInstanceId,
     );
     const sessionKey = this.sessionKey;
-    const users = sessionKey
-      ? projection.users.filter(
-          (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
-        )
-      : this.variant === "footer"
-        ? projection.users.filter((user) => user.id !== projection.selfUserId)
-        : projection.users.filter((user) => user.id !== projection.selfUserId);
+    const excludeUserId = normalized(this.excludeUserId);
+    const users =
+      this.variant === "session" && this.staticUsers
+        ? [...this.staticUsers]
+        : sessionKey
+          ? projection.users.filter(
+              (user) =>
+                user.id !== projection.selfUserId &&
+                user.id !== excludeUserId &&
+                user.watchedSessions.includes(sessionKey),
+            )
+          : this.variant === "footer"
+            ? projection.users.filter((user) => user.id !== projection.selfUserId)
+            : projection.users.filter((user) => user.id !== projection.selfUserId);
     if (users.length === 0) {
       return nothing;
     }

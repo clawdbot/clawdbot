@@ -204,6 +204,32 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Stale chat");
   });
 
+  it("shows a search failure instead of a false empty result", async () => {
+    const { gateway } = createGateway(true);
+    const list = vi
+      .fn<ApplicationContext<RouteId>["sessions"]["list"]>()
+      .mockRejectedValueOnce(new Error("store needs doctor migration"))
+      .mockResolvedValueOnce(createSessionResult("agent:main:zz", "Recovered chat"));
+    const { palette } = await mountPalette(createContext(gateway, list));
+    // The query matches no navigation item, so a swallowed search failure
+    // would render the plain "No results" empty state.
+    await enterQuery(palette, "zzz-unmatched");
+    await vi.advanceTimersByTimeAsync(250);
+    await palette.updateComplete;
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(palette.textContent).toContain("Chat search failed");
+    expect(palette.textContent).not.toContain("No results");
+
+    // A new keystroke clears the failure state and retries cleanly.
+    await enterQuery(palette, "zz");
+    await palette.updateComplete;
+    expect(palette.textContent).not.toContain("Chat search failed");
+    await vi.advanceTimersByTimeAsync(250);
+    await palette.updateComplete;
+    expect(palette.textContent).toContain("Recovered chat");
+  });
+
   it("navigates to the plugin manager from search", async () => {
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(

@@ -3,6 +3,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
@@ -288,12 +289,9 @@ export async function finishUpdate(params: {
           const completedPluginUpdate = await completePostCorePluginUpdate({
             root: postUpdateRoot,
             pluginUpdate: initialPluginUpdate,
-            // A plugin-only update can replace its migration owner without replacing core.
-            // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
+            // Aggregate plugin changes and core install changes independently require fresh doctor.
             freshDoctorRequired:
-              didCoreUpdateChangeInstall(params.result) ||
-              initialPluginUpdate.sync.changed ||
-              initialPluginUpdate.npm.changed,
+              didCoreUpdateChangeInstall(params.result) || initialPluginUpdate.changed,
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.updateStepTimeoutMs,
@@ -440,7 +438,7 @@ export async function finishUpdate(params: {
       }
     } catch (err) {
       if (err instanceof GatewayServiceUpdateOwnershipError) {
-        defaultRuntime.error(err.message);
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
         return;
       }

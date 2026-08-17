@@ -12,6 +12,10 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "../plugins/types.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -392,6 +396,61 @@ describe("transactional setup migration import", () => {
       "Migration target changed before promotion",
     );
     await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+  });
+
+  it("promotes while the live runtime state database changes during staged apply", async () => {
+    const root = tempRoots.make("openclaw-migration-transaction-");
+    const source = path.join(root, "source-memory.md");
+    const stateDir = path.join(root, "openclaw-state");
+    const liveEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const runtimeDatabasePath = path.join(root, "runtime-agent.sqlite");
+    await fs.writeFile(source, "remember this\n", "utf8");
+    mocks.provider = provider({
+      source,
+      mutateDuringApply: async () => {
+        registerOpenClawAgentDatabase({
+          agentId: "runtime",
+          path: runtimeDatabasePath,
+          env: liveEnv,
+        });
+      },
+    });
+    const currentConfig = { value: {} };
+
+    await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
+      kind: "no-imported-inference",
+    });
+
+    expect(await fs.readFile(path.join(root, "workspace", "MEMORY.md"), "utf8")).toBe(
+      "remember this\n",
+    );
+    expect(listOpenClawRegisteredAgentDatabases({ env: liveEnv })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentId: "main" }),
+        expect.objectContaining({ agentId: "runtime", path: runtimeDatabasePath }),
+      ]),
+    );
+  });
+
+  it("still aborts promotion when another writer changes the workspace", async () => {
+    const root = tempRoots.make("openclaw-migration-transaction-");
+    const source = path.join(root, "source-memory.md");
+    const externalFile = path.join(root, "workspace", "external.txt");
+    await fs.writeFile(source, "remember this\n", "utf8");
+    mocks.provider = provider({
+      source,
+      mutateDuringApply: async () => {
+        await fs.mkdir(path.dirname(externalFile), { recursive: true });
+        await fs.writeFile(externalFile, "concurrent write\n", "utf8");
+      },
+    });
+    const currentConfig = { value: {} };
+
+    await expect(runImport({ root, source, currentConfig })).rejects.toThrow(
+      "Migration target changed before promotion",
+    );
+    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+    expect(await fs.readFile(externalFile, "utf8")).toBe("concurrent write\n");
   });
 
   it("runs deferred activation only after promotion and keeps failures as warnings", async () => {

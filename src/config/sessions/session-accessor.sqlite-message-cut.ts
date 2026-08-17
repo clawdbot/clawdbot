@@ -3,7 +3,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -13,11 +13,11 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
-  readSqliteSessionIdentitySnapshot,
+  readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
-import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   normalizeSqliteSessionKey,
@@ -49,6 +49,7 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type MessageCut = {
+  status: "cut";
   editorText?: string;
   editorAttachments?: Array<{ mimeType: string; data: string }>;
   editorMediaRefs?: Array<{ path: string; contentType: string }>;
@@ -120,9 +121,7 @@ function loadSessionBranchSummaries(
     return cloneSessionBranchSummaries(cached.branches);
   }
 
-  const branches = summarizeSessionBranches(
-    loadSqliteTranscriptEventsFromDatabase(database, sessionId),
-  );
+  const branches = summarizeSessionBranches(loadTranscriptEventsFromDatabase(database, sessionId));
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, { ...watermark, branches });
   pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
@@ -135,7 +134,7 @@ function invalidateSessionBranchCache(databasePath: string, sessionIds: readonly
   }
 }
 
-export async function listSqliteSessionBranches(
+export async function listSessionBranches(
   params: SessionBranchListParams,
 ): Promise<SessionBranchListResult> {
   const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
@@ -167,21 +166,21 @@ export function resolveSessionTranscriptActiveLeafEntryId(
   return scanSessionTranscriptTree(events).leafId ?? undefined;
 }
 
-export async function rewindSqliteSessionToMessage(
+export async function rewindSessionToMessage(
   params: SessionMessageCutMutationParams,
   expectedState?: SessionEntryExpectedState,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
   return await mutateSqliteSessionAtMessage(params, "rewind", expectedState);
 }
 
-export async function forkSqliteSessionAtMessage(
+export async function forkSessionAtMessage(
   params: SessionMessageCutMutationParams & { targetKey: string },
   expectedState?: SessionEntryExpectedState,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
-export async function switchSqliteSessionBranch(
+export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
   expectedState?: SessionEntryExpectedState,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }> {
@@ -240,7 +239,7 @@ async function mutateSqliteSessionAtMessage(
         ...collectSessionEntryLookupKeys(database, sourceKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
       ]);
-      previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
         entryId: params.entryId,
         canonicalSourceKey,
@@ -250,7 +249,7 @@ async function mutateSqliteSessionAtMessage(
         sourceKey,
         targetKey,
       });
-      currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
       return mutationResult;
     }, toDatabaseOptions(resolved));
     if (result.status === "created" && databasePath) {
@@ -290,9 +289,9 @@ function mutateSqliteSessionAtMessageInTransaction(
   ) {
     return { status: "conflict" };
   }
-  const events = loadSqliteTranscriptEventsFromDatabase(database, currentEntry.sessionId);
+  const events = loadTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
-  if (cut && "status" in cut) {
+  if (cut && cut.status !== "cut") {
     return cut;
   }
   if (params.mode === "switch") {
@@ -313,7 +312,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     sessionId: nextSessionId,
   });
   const nextEvents =
-    params.mode === "fork" && cut && !("status" in cut)
+    params.mode === "fork" && cut?.status === "cut"
       ? [header, ...cut.prefix]
       : [
           header,
@@ -356,11 +355,11 @@ function mutateSqliteSessionAtMessageInTransaction(
     status: "created",
     key: params.targetKey,
     entry: nextEntry,
-    ...(cut && !("status" in cut) && cut.editorText ? { editorText: cut.editorText } : {}),
-    ...(cut && !("status" in cut) && cut.editorAttachments
+    ...(cut?.status === "cut" && cut.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut?.status === "cut" && cut.editorAttachments
       ? { editorAttachments: cut.editorAttachments }
       : {}),
-    ...(cut && !("status" in cut) && cut.editorMediaRefs
+    ...(cut?.status === "cut" && cut.editorMediaRefs
       ? { editorMediaRefs: cut.editorMediaRefs }
       : {}),
   };
@@ -438,7 +437,7 @@ function extractHeadlineText(messageValue: unknown): string | undefined {
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : extractEditorText(message.content ?? message.text);
   const normalized = text?.replace(/\s+/g, " ").trim();
   return normalized || undefined;
@@ -484,6 +483,7 @@ function resolveMessageCut(
   const editorAttachments = extractEditorAttachments(message.content);
   const editorMediaRefs = extractEditorMediaRefs(message);
   return {
+    status: "cut",
     editorText: extractEditorText(message.content),
     ...(editorAttachments ? { editorAttachments } : {}),
     ...(editorMediaRefs ? { editorMediaRefs } : {}),

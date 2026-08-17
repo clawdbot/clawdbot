@@ -122,7 +122,7 @@ const mocks = vi.hoisted(() => ({
     >;
     return store[scope.sessionKey];
   }),
-  listSessionEntries: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
+  listSessionEntriesCore: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
     const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
       string,
       SessionEntry
@@ -130,7 +130,7 @@ const mocks = vi.hoisted(() => ({
     return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   }),
   loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
-  patchSessionEntry: vi.fn(
+  patchSessionEntryCore: vi.fn(
     async (
       scope: SessionAccessScope,
       update: (
@@ -238,16 +238,16 @@ vi.mock("../../../config/config.js", () => {
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: mocks.listSessionEntries,
-  listSessionEntriesReadOnly: mocks.listSessionEntries,
+  listSessionEntriesCore: mocks.listSessionEntriesCore,
+  listSessionEntriesReadOnly: mocks.listSessionEntriesCore,
   loadSessionEntry: mocks.loadSessionEntry,
   loadSessionEntryReadOnly: mocks.loadSessionEntry,
-  patchSessionEntry: mocks.patchSessionEntry,
+  patchSessionEntryCore: mocks.patchSessionEntryCore,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
@@ -1062,7 +1062,7 @@ describe("subagent registry seam flow", () => {
 
   it("keeps killed session timing root-admitted after task finalization", async () => {
     let finishTiming: (() => void) | undefined;
-    mocks.patchSessionEntry.mockImplementationOnce(async () => {
+    mocks.patchSessionEntryCore.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
         finishTiming = resolve;
       });
@@ -4803,7 +4803,7 @@ describe("subagent registry seam flow", () => {
       timingWriteStarted = resolve;
     });
     const timingWriteFinished = new Promise<void>((resolveFinished) => {
-      mocks.patchSessionEntry.mockImplementationOnce(async (scope, update) => {
+      mocks.patchSessionEntryCore.mockImplementationOnce(async (scope, update) => {
         timingWriteStarted?.();
         await new Promise<void>((resolve) => {
           releaseTimingWrite = resolve;
@@ -4908,7 +4908,7 @@ describe("subagent registry seam flow", () => {
       ),
     ).toBe(false);
     expect(
-      mocks.patchSessionEntry.mock.calls.some(
+      mocks.patchSessionEntryCore.mock.calls.some(
         ([scope]) => (scope as SessionAccessScope).sessionKey === childSessionKey,
       ),
     ).toBe(false);
@@ -5154,24 +5154,35 @@ describe("subagent registry seam flow", () => {
     });
     mockPendingAgentWait();
     const defaultRuntime = getDetachedTaskLifecycleRuntime();
-    const createMutatingTaskRun = vi.fn(
+    const mutateRequesterOrigin = (
+      taskParams: Parameters<typeof defaultRuntime.createQueuedTaskRun>[0],
+    ) => {
+      if (!taskParams.requesterOrigin) {
+        throw new Error("expected requester origin");
+      }
+      Object.assign(taskParams.requesterOrigin, {
+        channel: "mutated",
+        to: "mutated",
+        accountId: "mutated",
+        threadId: "mutated",
+      });
+    };
+    const createMutatingQueuedTaskRun = vi.fn(
       (taskParams: Parameters<typeof defaultRuntime.createQueuedTaskRun>[0]) => {
-        if (!taskParams.requesterOrigin) {
-          throw new Error("expected requester origin");
-        }
-        Object.assign(taskParams.requesterOrigin, {
-          channel: "mutated",
-          to: "mutated",
-          accountId: "mutated",
-          threadId: "mutated",
-        });
-        return null;
+        mutateRequesterOrigin(taskParams);
+        return defaultRuntime.createQueuedTaskRun(taskParams);
+      },
+    );
+    const createMutatingRunningTaskRun = vi.fn(
+      (taskParams: Parameters<typeof defaultRuntime.createRunningTaskRun>[0]) => {
+        mutateRequesterOrigin(taskParams);
+        return defaultRuntime.createRunningTaskRun(taskParams);
       },
     );
     setDetachedTaskLifecycleRuntime({
       ...defaultRuntime,
-      createQueuedTaskRun: createMutatingTaskRun,
-      createRunningTaskRun: createMutatingTaskRun,
+      createQueuedTaskRun: createMutatingQueuedTaskRun,
+      createRunningTaskRun: createMutatingRunningTaskRun,
     });
 
     mod.registerSubagentRun({
@@ -5181,11 +5192,95 @@ describe("subagent registry seam flow", () => {
       requesterOrigin,
     });
 
-    expect(createMutatingTaskRun).toHaveBeenCalledOnce();
+    expect(
+      queued ? createMutatingQueuedTaskRun : createMutatingRunningTaskRun,
+    ).toHaveBeenCalledOnce();
     expect(findRequesterRun(runId)?.requesterOrigin).toEqual(expectedRequesterOrigin);
     expect(persistedEntry?.requesterOrigin).toEqual(expectedRequesterOrigin);
     expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
     expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
+  });
+
+  const optionalTaskRowFaults: Array<[label: string, createTaskRun: () => null]> = [
+    ["returns no row", () => null],
+    [
+      "throws",
+      () => {
+        throw new Error("task store unavailable");
+      },
+    ],
+  ];
+  it.each(optionalTaskRowFaults)(
+    "keeps ACP-style registry ownership when the secondary task runtime %s",
+    (_label, createTaskRun) => {
+      const runId = `run-acp-task-fault-${_label.replaceAll(" ", "-")}`;
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        createQueuedTaskRun: createTaskRun,
+        createRunningTaskRun: createTaskRun,
+      });
+      mockPendingAgentWait();
+
+      expect(() =>
+        mod.registerSubagentRun({
+          runId,
+          task: "preserve ACP registry ownership",
+        }),
+      ).not.toThrow();
+
+      expect(findRequesterRun(runId)).toMatchObject({
+        runId,
+        task: "preserve ACP registry ownership",
+      });
+    },
+  );
+
+  it("keeps memory aligned with the durable registration when rollback persistence fails", () => {
+    const childSessionKey = "agent:main:subagent:task-row-rollback-failure";
+    mod.addSubagentRunForTests({
+      runId: "run-task-row-rollback-old",
+      childSessionKey,
+      task: "preserve the durable predecessor state",
+      createdAt: Date.now() - 1_000,
+      endedAt: Date.now() - 500,
+      endedReason: "subagent-killed",
+      suppressAnnounceReason: "killed",
+      killReconciliation: { killedAt: Date.now() - 500 },
+    });
+    mocks.persistSubagentRunsToDiskOrThrow
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("rollback disk full");
+      });
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      createRunningTaskRun: () => null,
+    });
+    mockPendingAgentWait();
+
+    expect(() =>
+      mod.registerSubagentRun({
+        runId: "run-task-row-rollback-new",
+        childSessionKey,
+        task: "retain the last durable snapshot",
+        taskRowOwnership: "required",
+      }),
+    ).toThrowError("rollback disk full");
+
+    expect(findRequesterRun("run-task-row-rollback-new")).toMatchObject({
+      runId: "run-task-row-rollback-new",
+      childSessionKey,
+    });
+    expect(
+      findRequesterRun("run-task-row-rollback-old")?.killReconciliation?.supersededAt,
+    ).toBeTypeOf("number");
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId: "run-task-row-rollback-new" }),
+      }),
+    );
   });
 
   it("retains an already-running replacement when its durable write fails", () => {

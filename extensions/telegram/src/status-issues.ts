@@ -11,7 +11,7 @@ import {
   resolveEnabledConfiguredAccountId,
   type AccountStatusSnapshot,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
@@ -41,10 +41,6 @@ type TelegramGroupMembershipAuditSummary = {
   }>;
 };
 
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function appendTelegramRuntimeError(message: string, lastError: unknown): string {
   const error = normalizeOptionalString(lastError);
   return error ? `${message}: ${error}` : message;
@@ -69,8 +65,8 @@ function collectTelegramPollingRuntimeIssues(params: {
     return;
   }
 
-  const lastStartAt = asFiniteNumber(account.lastStartAt);
-  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt);
+  const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
+  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt) ?? null;
   const fix = `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`;
 
   if (account.connected === false) {
@@ -129,7 +125,7 @@ function collectTelegramWebhookRuntimeIssues(params: {
     return;
   }
 
-  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
   const withinStartupGrace =
     lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
   if (withinStartupGrace) {

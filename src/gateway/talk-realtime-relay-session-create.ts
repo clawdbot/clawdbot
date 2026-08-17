@@ -195,13 +195,13 @@ export function createTalkRealtimeRelaySession(
     createBridge: (request: Parameters<typeof params.provider.createBridge>[0]) =>
       params.provider.createBridge({
         ...request,
-        ...(relayAgentId ? { agentId: relayAgentId } : {}),
         runAgentConsult,
       }),
   };
   const bridge = harness.createBridge({
     provider: relayProvider,
     cfg: params.cfg,
+    agentId: relayAgentId,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
@@ -315,27 +315,42 @@ export function createTalkRealtimeRelaySession(
       ) {
         currentOutputItemId = event.itemId ?? currentOutputItemId;
         currentOutputResponseId = event.responseId ?? currentOutputResponseId;
+      }
+    },
+    onResponseDone: (outcome) => {
+      const relay = getActiveRelay();
+      if (!relay) {
         return;
       }
-      if (
-        event.type === "response.audio.done" ||
-        event.type === "response.output_audio.done" ||
-        event.type === "conversation.output_audio.done" ||
-        event.type === "response.done" ||
-        event.type === "response.cancelled"
-      ) {
-        emit({
-          relaySessionId,
-          type: "audioDone",
-          ...((event.itemId ?? currentOutputItemId)
-            ? { itemId: event.itemId ?? currentOutputItemId }
-            : {}),
-          ...((event.responseId ?? currentOutputResponseId)
-            ? { responseId: event.responseId ?? currentOutputResponseId }
-            : {}),
+      const terminalTalkEvent = harness.talk.recentEvents.at(-1);
+      broadcastToOwner(params.context, params.connId, {
+        relaySessionId,
+        type: "audioDone",
+        ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
+        ...((outcome.responseId ?? currentOutputResponseId)
+          ? { responseId: outcome.responseId ?? currentOutputResponseId }
+          : {}),
+        ...(terminalTalkEvent &&
+        (terminalTalkEvent.type === "turn.ended" || terminalTalkEvent.type === "turn.cancelled")
+          ? { talkEvent: terminalTalkEvent }
+          : {}),
+      });
+      currentOutputItemId = undefined;
+      currentOutputResponseId = undefined;
+      if (outcome.status === "failed" || outcome.status === "incomplete") {
+        const issue = realtimeRelayIssue({
+          message: outcome.message,
+          provider: params.provider.id,
+          model: params.model,
+          phase: "response",
         });
-        currentOutputItemId = undefined;
-        currentOutputResponseId = undefined;
+        const errorTalkEvent = harness.talk.recentEvents.findLast(
+          (event) => event.type === "session.error" && event.payload === outcome,
+        );
+        broadcastToOwner(params.context, params.connId, {
+          ...relayIssuePayload(relaySessionId, issue),
+          ...(errorTalkEvent ? { talkEvent: errorTalkEvent } : {}),
+        });
       }
     },
     onTranscript: (role, text, final) => {

@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
@@ -15,7 +15,10 @@ import {
   sidebarRouteDragActive,
   writeSidebarRouteDragData,
 } from "../lib/sessions/drag.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  categoryClearReturnsToGroups,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   loadStoredCollapsedSessionSections,
   storeSidebarSessionStatusFilter,
@@ -30,41 +33,19 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
+
+export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
-
-export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
-  readonly sessionData: Pick<
-    SessionDataController,
-    | "beginSessionMutation"
-    | "isSessionMutationScopeCurrent"
-    | "publishSessionMutationError"
-    | "refreshSidebarSessions"
-    | "resetForStatusFilter"
-    | "sessionMutationError"
-  >;
-  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
-  sessionsGrouping: SidebarSessionsGrouping;
-  sessionsShowCron: boolean;
-  sessionsShowSystem: boolean;
-  sessionsStatusFilter: SidebarSessionStatusFilter;
-  clearSessionSelection(): void;
-  findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
-  knownSessionGroups(): string[];
-  knownSessionCatalogIds(): string[];
-  knownSectionOrder(): string[];
-  pruneSidebarSessionEntry(key: string): void;
-  reconciledSidebarZone(): { sidebarEntries: readonly string[] };
-  replaceCurrentSession(sessionKey: string): void;
-  selectSession(sessionKey: string): void;
-  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
-}
+type SessionGroupDefaultsDialogOpener =
+  (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
-export class SessionOrganizerController implements ReactiveController {
+export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
   draggingSidebarSection: string | null = null;
@@ -78,19 +59,7 @@ export class SessionOrganizerController implements ReactiveController {
   sessionListRemovalDrop = false;
   private operationsLoad: Promise<SessionOrganizerOperations> | null = null;
 
-  constructor(private readonly host: SessionOrganizerControllerHost) {
-    host.addController(this);
-  }
-
-  hostConnected(): void {}
-
-  // No dialog teardown here on purpose. The sidebar detaches for reasons that
-  // are not the operator leaving — a narrow viewport drops it entirely — and
-  // cancelling on those would throw away a name mid-edit. The dialog is a
-  // body-level modal, so it outlives the sidebar's DOM position by design; the
-  // Sessions page binds its own dialogs because a page unmount really is a
-  // navigation.
-  hostDisconnected(): void {}
+  constructor(private readonly host: SessionOrganizerControllerHost) {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
@@ -190,6 +159,18 @@ export class SessionOrganizerController implements ReactiveController {
     }
     const operations = await this.loadOperations(scope);
     await operations?.stopCloudWorker(this.host, session, scope);
+  }
+
+  async assignSessionOwner(
+    session: SidebarRecentSession,
+    owner: Pick<SessionOwnerOption, "type" | "id">,
+  ): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.assignSessionOwner(this.host, session, owner, scope);
   }
 
   async deleteSession(session: SidebarRecentSession): Promise<void> {
@@ -423,7 +404,10 @@ export class SessionOrganizerController implements ReactiveController {
     const nextLabel =
       (await showInputDialog?.({
         title: t("sessionsView.renameSessionPrompt"),
-        defaultValue: session.label,
+        // The stored label, not the resolved display name: pre-filling the
+        // derived string persists it on submit and it then outranks every
+        // later derivation. Matches the Sessions page rename.
+        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
       })) ?? null;
     if (nextLabel === null) {
       return;
@@ -527,6 +511,47 @@ export class SessionOrganizerController implements ReactiveController {
     this.host.requestUpdate();
   }
 
+  async editSessionGroupDefaults(group: string): Promise<void> {
+    let showDialog: SessionGroupDefaultsDialogOpener;
+    try {
+      showDialog = (await import("./session-group-defaults-dialog.ts"))
+        .showSessionGroupDefaultsDialog;
+    } catch (error) {
+      const scope = this.host.sessionData.beginSessionMutation();
+      if (scope) {
+        this.host.sessionData.publishSessionMutationError(scope, error);
+      }
+      return;
+    }
+    const defaults = this.host.sessionGroupDefaults(group);
+    if (defaults) {
+      await showDialog({
+        group,
+        defaults,
+        listDirectory: (path) => this.host.listSessionGroupFolders(path),
+        submit: async (nextDefaults) => {
+          const scope = this.host.sessionData.beginSessionMutation();
+          if (!scope || !this.host.sessionGroupDefaults(group)) {
+            return t("sessionsView.groupDefaultsStale");
+          }
+          const operations = await this.loadOperations(scope);
+          const result = await operations?.updateSessionGroupDefaults(
+            this.host,
+            group,
+            { cwd: nextDefaults.cwd || null, worktree: nextDefaults.worktree },
+            scope,
+          );
+          return result === "completed"
+            ? null
+            : result === "stale"
+              ? t("sessionsView.groupDefaultsStale")
+              : (this.host.sessionData.sessionMutationError ??
+                t("sessionsView.groupDefaultsFailed"));
+        },
+      });
+    }
+  }
+
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
     this.collapsedSessionSections = new Set(sections);
     this.host.requestUpdate();
@@ -579,6 +604,26 @@ export class SessionOrganizerController implements ReactiveController {
     await operations?.assignSessionCategory(this.host, session, category, scope, patch);
   }
 
+  private sectionAcceptsSession(
+    sectionId: string,
+    category: string | undefined,
+    session: SidebarRecentSession | undefined,
+  ): boolean {
+    if (sectionId === "pinned") {
+      return true;
+    }
+    if (
+      this.host.sessionsGrouping === "category" &&
+      (sectionId === "ungrouped" || Boolean(category))
+    ) {
+      return true;
+    }
+    return (
+      sectionId === "groups" &&
+      Boolean(session && categoryClearReturnsToGroups(session, this.host.sessionsGrouping))
+    );
+  }
+
   sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
     const dataTransfer = event.dataTransfer;
     if (sidebarSectionDragActive(dataTransfer) && this.draggingSidebarSection !== sectionId) {
@@ -599,11 +644,12 @@ export class SessionOrganizerController implements ReactiveController {
     if (!sessionDragActive(dataTransfer)) {
       return;
     }
-    const acceptsSession =
-      sectionId === "pinned" ||
-      (this.host.sessionsGrouping === "category" &&
-        (sectionId === "ungrouped" || Boolean(category)));
-    if (!acceptsSession) {
+    // Browsers protect transferred data during dragover. Use the key recorded
+    // at dragstart for hover eligibility; sectionDrop reads the payload itself.
+    const session = this.draggingSessionKey
+      ? this.host.findSidebarSessionByKey(this.draggingSessionKey)
+      : undefined;
+    if (!this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
     }
@@ -638,11 +684,9 @@ export class SessionOrganizerController implements ReactiveController {
     if (!sourceSectionId && !sessionKey) {
       return;
     }
-    if (
-      !sourceSectionId &&
-      sectionId !== "pinned" &&
-      (this.host.sessionsGrouping !== "category" || (sectionId !== "ungrouped" && !category))
-    ) {
+    // Rows can be dragged from a browsed agent section, so search all caches.
+    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
     }
@@ -654,23 +698,19 @@ export class SessionOrganizerController implements ReactiveController {
           ? this.sidebarSectionDropTarget.position
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
-    } else {
-      // Rows can be dragged from a browsed agent section, so search all caches.
-      const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-      if (session && sectionId === "pinned") {
-        if (!session.pinned) {
-          void this.patchSession(session, { pinned: true });
-        }
-      } else if (session) {
-        const nextCategory = category ?? null;
-        if (session.category !== nextCategory || session.pinned) {
-          // The pinned:false leg prunes the persisted zone entry via patchSession.
-          void this.assignSessionCategory(
-            session,
-            nextCategory,
-            session.pinned ? { pinned: false } : {},
-          );
-        }
+    } else if (session && sectionId === "pinned") {
+      if (!session.pinned) {
+        void this.patchSession(session, { pinned: true });
+      }
+    } else if (session) {
+      const nextCategory = category ?? null;
+      if (session.category !== nextCategory || session.pinned) {
+        // The pinned:false leg prunes the persisted zone entry via patchSession.
+        void this.assignSessionCategory(
+          session,
+          nextCategory,
+          session.pinned ? { pinned: false } : {},
+        );
       }
     }
     this.finishSidebarEntryDrag();

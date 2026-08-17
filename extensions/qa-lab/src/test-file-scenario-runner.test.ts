@@ -6,13 +6,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
+import {
+  resetQaScenarioCommandCleanupTimings,
+  runQaScenarioCommandLifecycle,
+  setQaScenarioCommandCleanupTimings,
+} from "./test-file-scenario-command-lifecycle.js";
 import {
   dockerE2eLaneName,
   prepareDockerE2eEnvironment,
 } from "./test-file-scenario-docker-batch.js";
 import {
-  qaTestFileScenarioRunnerTesting,
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-runner.js";
@@ -352,7 +355,7 @@ async function writeScriptProducerEvidence(params: {
 describe("qa test file scenario runner", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
-    qaTestFileScenarioRunnerTesting.resetTimeoutCleanupTimings();
+    resetQaScenarioCommandCleanupTimings();
     await Promise.all([
       cleanupTempDirs(),
       ...tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -1349,7 +1352,7 @@ describe("qa test file scenario runner", () => {
         "utf8",
       );
 
-      qaTestFileScenarioRunnerTesting.setTimeoutCleanupTimings({
+      setQaScenarioCommandCleanupTimings({
         forceSettleMs: 25,
         killGraceMs: 50,
       });
@@ -1396,47 +1399,6 @@ describe("qa test file scenario runner", () => {
       }
       expect(isProcessRunning(descendantPid)).toBe(false);
     });
-  });
-
-  it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
-    const originalSystemRoot = process.env.SystemRoot;
-    const originalWindir = process.env.WINDIR;
-    process.env.SystemRoot = "C:\\Windows";
-    delete process.env.WINDIR;
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ status: 1 })
-      .mockReturnValueOnce({ status: 0 });
-
-    try {
-      expect(
-        qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
-          12345,
-          "SIGTERM",
-          runTaskkill,
-        ),
-      ).toBe(true);
-      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/pid", "12345", "/T"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/pid", "12345", "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } finally {
-      if (originalSystemRoot === undefined) {
-        delete process.env.SystemRoot;
-      } else {
-        process.env.SystemRoot = originalSystemRoot;
-      }
-      if (originalWindir === undefined) {
-        delete process.env.WINDIR;
-      } else {
-        process.env.WINDIR = originalWindir;
-      }
-    }
   });
 
   it("fails script scenarios that exit cleanly after timeout termination", async () => {

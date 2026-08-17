@@ -72,7 +72,8 @@ const DashboardToolSchema = Type.Object(
     pluginKind: Type.Optional(
       Type.String({
         pattern: BOARD_PLUGIN_KIND_PATTERN,
-        description: "Plugin widget kind, for example workboard:card or workboard:mini",
+        description:
+          "Plugin widget kind, for example workboard:card, workboard:mini, or workboard:board",
       }),
     ),
     props: Type.Optional(
@@ -84,7 +85,11 @@ const DashboardToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type DashboardCommandEmitter = (params: { sessionKey: string; command: BoardCommand }) => number;
+type DashboardCommandEmitter = (params: {
+  sessionKey: string;
+  agentId?: string;
+  command: BoardCommand;
+}) => number;
 
 type DashboardGatewayContext = {
   getClientConnIds?: (
@@ -95,6 +100,7 @@ type DashboardGatewayContext = {
 
 type DashboardToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   callGateway?: InProcessGatewayCaller;
   emitCommand?: DashboardCommandEmitter;
 };
@@ -220,7 +226,11 @@ function opForAction(action: string, params: Record<string, unknown>): BoardOp {
   }
 }
 
-function emitBoardCommand(params: { sessionKey: string; command: BoardCommand }): number {
+function emitBoardCommand(params: {
+  sessionKey: string;
+  agentId?: string;
+  command: BoardCommand;
+}): number {
   const context = getInProcessGatewayToolContext() as DashboardGatewayContext | undefined;
   if (!context) {
     throw new ToolInputError("dashboard command unavailable outside gateway runtime");
@@ -247,18 +257,24 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). Widgets use stable names. Create trusted plugin widgets with widget_put; examples: workboard:card props {cardId}, workboard:mini props {boardId, limit}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). Widgets use stable names. Create trusted plugin widgets with widget_put; examples: workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       const sessionKey = requireSessionKey(opts.agentSessionKey);
       if (action === "read") {
-        return snapshotResult(await gatewayCall<BoardSnapshot>("board.get", { sessionKey }));
+        return snapshotResult(
+          await gatewayCall<BoardSnapshot>("board.get", {
+            sessionKey,
+            agentId: opts.agentId,
+          }),
+        );
       }
       if (action === "focus_tab") {
         const delivered = emitCommand({
           sessionKey,
+          agentId: opts.agentId,
           command: {
             kind: "focus_tab",
             tabId: readTabId(params),
@@ -274,7 +290,11 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         if (!dock) {
           throw new ToolInputError("dock required");
         }
-        const delivered = emitCommand({ sessionKey, command: { kind: "set_chat_dock", dock } });
+        const delivered = emitCommand({
+          sessionKey,
+          agentId: opts.agentId,
+          command: { kind: "set_chat_dock", dock },
+        });
         return textResult(`Dashboard command sent to ${delivered} client(s)`, {
           ok: true,
           delivered,
@@ -293,6 +313,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         return snapshotResult(
           await gatewayCall<BoardSnapshot>("board.widget.put", {
             sessionKey,
+            agentId: opts.agentId,
             name: readToolStringParam(params, "name", { required: true }),
             ...(title !== undefined ? { title } : {}),
             content: {
@@ -315,6 +336,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       return snapshotResult(
         await gatewayCall<BoardSnapshot>("board.update", {
           sessionKey,
+          agentId: opts.agentId,
           ops: [opForAction(action, params)],
         }),
       );

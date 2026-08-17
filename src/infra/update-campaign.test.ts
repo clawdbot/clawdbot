@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 
-function createInspectors(readBusy: () => number): GatewayActiveWorkInspectors {
+function createInspectors(
+  readBusy: () => number,
+  overrides: Partial<GatewayActiveWorkInspectors> = {},
+): GatewayActiveWorkInspectors {
   return {
     getQueueSize: readBusy,
     getPendingReplies: () => 0,
@@ -18,6 +21,7 @@ function createInspectors(readBusy: () => number): GatewayActiveWorkInspectors {
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    ...overrides,
   };
 }
 
@@ -58,6 +62,36 @@ describe("UpdateCampaignController", () => {
       applyAtMs: 1_060_000,
       forceAtMs: 1_900_000,
     });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(controller.getState()?.state).toBe("applying");
+    expect(apply).toHaveBeenCalledWith({ forced: false });
+  });
+
+  it("ignores open terminals while persistence and queue work still delay countdown", async () => {
+    const controller = createController();
+    let queueSize = 0;
+    let terminalPersistence = 1;
+    const apply = vi.fn(async () => "applied" as const);
+
+    controller.announce({
+      target: { kind: "package", version: "2.0.0" },
+      inspect: createInspectors(() => queueSize, {
+        getTerminalPersistence: () => terminalPersistence,
+        getTerminalSessions: () => 2,
+      }),
+      apply,
+      onChange: vi.fn(),
+    });
+    expect(controller.getState()?.state).toBe("waiting-for-idle");
+
+    terminalPersistence = 0;
+    queueSize = 1;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    queueSize = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.getState()?.state).toBe("countdown");
+
     await vi.advanceTimersByTimeAsync(60_000);
     expect(controller.getState()?.state).toBe("applying");
     expect(apply).toHaveBeenCalledWith({ forced: false });

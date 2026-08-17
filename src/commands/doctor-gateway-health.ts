@@ -160,6 +160,14 @@ export async function checkGatewayHealth(params: {
       if (exporterSummary) {
         note(exporterSummary.lines.join("\n"), exporterSummary.title);
       }
+    } else {
+      note(
+        [
+          `Exporter diagnostics failed: ${sanitizeTerminalText(formatErrorMessage(exporterResult.reason))}`,
+          `Retry: ${formatCliCommand("openclaw gateway stability --type telemetry.exporter")}`,
+        ].join("\n"),
+        "Telemetry exporters",
+      );
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {

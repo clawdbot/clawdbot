@@ -41,14 +41,6 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
-vi.mock("./run/plugin-harness-prompt-images.js", () => ({
-  preparePluginHarnessPromptImages: vi.fn(async () => ({
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-  })),
-}));
-
 vi.mock("./run/skill-workshop-attempt-params.js", () => ({
   resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
 }));
@@ -160,6 +152,23 @@ describe("embedded run retry dispatch", () => {
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 
+  it("forwards effective and authored context facts without a context engine (#124702)", async () => {
+    const cappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    cappedInput.runtime.contextTokenBudget = 272_000;
+    cappedInput.runtime.authoredContextTokenCap = 32_000;
+    const capped = await dispatchEmbeddedRunAttempt(cappedInput);
+
+    expect(capped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(capped.preparedAttempt.authoredContextTokenCap).toBe(32_000);
+
+    const uncappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    uncappedInput.runtime.contextTokenBudget = 272_000;
+    const uncapped = await dispatchEmbeddedRunAttempt(uncappedInput);
+
+    expect(uncapped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
+  });
+
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {
@@ -179,6 +188,7 @@ describe("embedded run retry dispatch", () => {
       await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(postCompactionAbortError);
 
       expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+        requesterAgentId: "main",
         requesterSessionKey: "agent:main:session-1",
         requesterTurnRunId: "run-1",
         requesterYielded: yieldDetected,

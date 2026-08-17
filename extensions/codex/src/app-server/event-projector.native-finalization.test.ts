@@ -376,7 +376,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResult.status).toBe("completed");
     expect(toolResult.isError).toBe(false);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ `run tests (workspace)`",
+      text: "🛠️ Bash",
     });
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
       threadId: THREAD_ID,
@@ -509,6 +509,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResultMessage.toolCallId).toBe("cmd-denied");
     expect(toolResultMessage.toolName).toBe("bash");
     expect(toolResultMessage.isError).toBe(true);
+    expect(toolResultMessage.details).toEqual({ reason: "missing_tool_result" });
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     expect(JSON.stringify(toolResultContent)).toContain("matching tool.result");
     const finalAssistant = requireRecord(result.messagesSnapshot[3], "final assistant message");

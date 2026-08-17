@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { toQaError } from "./errors.js";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
@@ -31,10 +32,6 @@ type ManualLaneResult = {
   watchUrl: string;
 };
 
-function normalizeManualLaneCleanupError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
-
 async function stopManualLaneResource(
   resource: { stop: () => Promise<void> | void } | null | undefined,
 ): Promise<Error | undefined> {
@@ -45,7 +42,7 @@ async function stopManualLaneResource(
     await resource.stop();
     return undefined;
   } catch (error) {
-    return normalizeManualLaneCleanupError(error);
+    return toQaError(error);
   }
 }
 
@@ -58,7 +55,7 @@ async function stopManualLaneAuxiliaryResources(resources: {
     .map((resource) => Promise.resolve().then(() => resource.stop()));
   const results = await Promise.allSettled(stopTasks);
   const failed = results.find((result) => result.status === "rejected");
-  return failed ? normalizeManualLaneCleanupError(failed.reason) : undefined;
+  return failed ? toQaError(failed.reason) : undefined;
 }
 
 function resolveManualLaneTimeoutMs(params: {
@@ -188,13 +185,13 @@ export async function runQaManualLane(params: QaManualLaneParams) {
   } finally {
     let transportCleanupBeforeError: Error | undefined;
     await transportCleanupBeforeGatewayStop?.().catch((error: unknown) => {
-      transportCleanupBeforeError = normalizeManualLaneCleanupError(error);
+      transportCleanupBeforeError = toQaError(error);
     });
     const gatewayCleanupError = await stopManualLaneResource(gateway);
     let transportCleanupAfterError: Error | undefined;
     if (!gatewayCleanupError) {
       await transportCleanupAfterGatewayStop?.().catch((error: unknown) => {
-        transportCleanupAfterError = normalizeManualLaneCleanupError(error);
+        transportCleanupAfterError = toQaError(error);
       });
     }
     const auxiliaryCleanupError = await stopManualLaneAuxiliaryResources({ lab, mock });

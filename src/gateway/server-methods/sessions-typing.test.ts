@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -91,14 +91,14 @@ afterEach(() => {
 
 describe("session typing handler", () => {
   it.each([
-    { agentId: "main", expected: ["agent:main:global", "global"] },
+    { agentId: "main", expected: ["agent:main:global"] },
     { agentId: "work", expected: ["agent:work:global"] },
   ])("uses the canonical global subscription keys for $agentId", async ({ agentId, expected }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { list: [{ id: "main" }, { id: "work" }] },
       } satisfies OpenClawConfig;
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId, sessionKey: "global" },
         {
           sessionId: `session-${agentId}`,
@@ -136,7 +136,7 @@ describe("session typing handler", () => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
       const sessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-main",
@@ -185,7 +185,7 @@ describe("session typing handler", () => {
       vi.setSystemTime(15_000);
       const sessionKey = "agent:main:typing-instance";
       const writeSession = (sessionId: string, updatedAt: number) =>
-        upsertSessionEntry(
+        upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
             sessionId,
@@ -258,7 +258,7 @@ describe("session typing handler", () => {
       vi.setSystemTime(20_000);
       const sessionKey = "agent:main:typing-reset";
       const scope = { agentId: "main", sessionKey };
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId: "session-before-reset",
         updatedAt: 1,
         createdActor: { type: "human", id: "owner" },
@@ -285,7 +285,7 @@ describe("session typing handler", () => {
         ok: true,
         broadcast: false,
       });
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId: "session-after-reset",
         updatedAt: 2,
         createdActor: { type: "human", id: "owner" },

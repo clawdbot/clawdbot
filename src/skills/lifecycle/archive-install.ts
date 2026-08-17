@@ -11,6 +11,7 @@ import {
   evaluateSkillInstallPolicy,
   type InstallSecurityScanResult,
 } from "../../plugins/install-security-scan.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
@@ -40,6 +41,7 @@ function hasNonAscii(value: string): boolean {
 
 type SkillArchiveInstallPolicy = {
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   installId?: string;
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
@@ -188,6 +190,7 @@ export async function installExtractedSkillRoot(params: {
     if (params.policy) {
       const scanResult = await evaluateSkillInstallPolicy({
         config: params.policy.config,
+        onInstallPolicyWarning: params.policy.onInstallPolicyWarning,
         installId: params.policy.installId ?? "archive",
         logger: params.logger ?? {},
         origin: params.policy.origin,

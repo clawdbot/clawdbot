@@ -15,6 +15,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -52,6 +53,107 @@ describe("dispatchReplyFromConfig", () => {
     describe0BeforeEach0();
   });
   afterEach(clearRuntimeConfigSnapshot);
+
+  it("records channel transform suppression before TTS or visible fallback delivery", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const transformReplyPayload = vi.fn(() => null);
+    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "private block" });
+        return { text: "private reply" };
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
+    );
+  });
+
+  it("keeps a block-only channel transform veto terminal", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "private block" });
+        return undefined;
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "channel_transform" }),
+    );
+  });
+
+  it("lets a later accepted final override an earlier transform veto", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const transformReplyPayload = vi.fn((payload: ReplyPayload) =>
+      payload.text === "private reply" ? null : payload,
+    );
+    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => [{ text: "private reply" }, { text: "public reply" }]),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "public reply" }),
+      { kind: "final" },
+    );
+    expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "channel_transform" }),
+    );
+  });
 
   it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
@@ -2122,5 +2224,55 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Plain tagged text." });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      expectedText: "Private speech.",
+      ttsReply: { text: "Private speech." },
+      finalReply: {},
+      streamedText: "[[tts:text]]Private speech.[[/tts:text]]",
+    },
+    {
+      expectedText: undefined,
+      ttsReply: { text: "Private speech.", mediaUrl: "https://x/tts.opus", audioAsVoice: true },
+      finalReply: { mediaUrl: "https://x/tts.opus", audioAsVoice: true },
+      streamedText: "[[tts:text]]Private speech.[[/tts:text]]",
+    },
+    {
+      expectedText: "Visible answer.",
+      ttsReply: { text: "Visible answer." },
+      finalReply: undefined,
+      streamedText: "Visible answer. [[tts:text]]Private speech.[[/tts:text]]",
+    },
+  ])("keeps tagged TTS delivery single for $streamedText", async (testCase) => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot.autoMode = "tagged";
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(testCase.ttsReply);
+    const dispatcher = createDispatcher();
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: testCase.streamedText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const blockReply = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    const deliveredPayload = testCase.finalReply ? firstFinalReplyPayload(dispatcher) : blockReply;
+    expect(deliveredPayload?.text?.trim()).toBe(testCase.expectedText);
+    if (testCase.finalReply) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(deliveredPayload).toMatchObject(testCase.finalReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
+  });
+
+  it("skips fallback when directives stay visible", () =>
+    expect(needsTtsFallback(false, "[[tts:text]]x", "x")).toBe(false));
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

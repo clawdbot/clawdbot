@@ -75,6 +75,7 @@ describe("GatewayChatClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceAuthScope: "wss://remote.example/rpc",
+        notifyOnStartupRetry: true,
       });
       expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");
       const onConnectError = vi.fn();
@@ -103,12 +104,16 @@ describe("GatewayChatClient", () => {
       expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
       expect(onDisconnected).not.toHaveBeenCalled();
 
+      // The close above ended that socket's cycle, so the next attempt's
+      // failure is a new socket and must be reported, not deduped forever.
       const retryError = new Error("retry failed");
       options.onConnectError?.(retryError);
-      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+      options.onConnectError?.(new Error("duplicate within the retry socket"));
+      expect(onConnectError).toHaveBeenCalledTimes(2);
       options.onHelloOk?.({});
       options.onConnectError?.(retryError);
-      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+      expect(onConnectError).toHaveBeenNthCalledWith(3, retryError);
 
       options.onHelloOk?.({});
       onDisconnected.mockClear();
@@ -120,6 +125,30 @@ describe("GatewayChatClient", () => {
         client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
       ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
       expect(onDisconnected).not.toHaveBeenCalled();
+
+      options.onHelloOk?.({});
+      onConnectError.mockClear();
+      onDisconnected.mockClear();
+      client.onConnectError = onConnectError;
+      const startupError = new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      });
+      options.onConnectError?.(startupError);
+      options.onClose?.(1013, "gateway starting");
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
+
+      onDisconnected.mockClear();
+      client.onConnectError = undefined;
+      options.onConnectError?.(startupError);
+      options.onClose?.(1013, "gateway starting");
+
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
     } finally {
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();
@@ -216,6 +245,32 @@ describe("GatewayChatClient", () => {
       sessionKey: "global",
       agentId: "work",
       runId: "run-global-work",
+    });
+  });
+
+  it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ok: true, key: "agent:main:alpha", agentId: "main" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.resolveSession({
+        key: "Agent:Main:ALPHA",
+        agentId: "main",
+        includeGlobal: true,
+        allowMissing: true,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:alpha", agentId: "main" });
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
+      key: "Agent:Main:ALPHA",
+      agentId: "main",
+      includeGlobal: true,
+      allowMissing: true,
     });
   });
 

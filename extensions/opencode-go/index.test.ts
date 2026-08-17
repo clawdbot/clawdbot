@@ -586,6 +586,12 @@ describe("opencode-go provider plugin", () => {
     );
   });
 
+  it("does not synthesize a stream when the runtime provides none", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
+  });
+
   it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(
     "disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go for %s",
     async (modelId) => {

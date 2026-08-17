@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 
 type BoardWidgetBridgeRequest = {
@@ -35,10 +36,10 @@ export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidget
 }
 
 function assertWidgetRequestRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("widget host request params are invalid");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function requiredString(params: Record<string, unknown>, key: string): string {
@@ -162,10 +163,7 @@ export class BoardWidgetBridgeController {
       case "data.read": {
         const bindingId = requiredString(params, "bindingId");
         const bindingParams = params.params;
-        if (
-          bindingParams !== undefined &&
-          (!bindingParams || typeof bindingParams !== "object" || Array.isArray(bindingParams))
-        ) {
+        if (bindingParams !== undefined && !isRecord(bindingParams)) {
           throw new Error("widget data binding params are invalid");
         }
         return await this.client.request("board.data.read", {

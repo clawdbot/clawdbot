@@ -11,7 +11,12 @@ import {
 } from "./server-in-process-dispatch.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayAgentRunTaskOwner,
+  GatewayRequestContext,
+  GatewayRequestOptions,
+  TrustedAgentToolCaller,
+} from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import {
   createSyntheticPluginRuntimeClient,
@@ -29,7 +34,8 @@ const loadInternalAgentTurnFacade = createLazyRuntimeModule(
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
-  agentRunTracking?: "plugin_subagent";
+  agentToolCaller?: TrustedAgentToolCaller;
+  agentRunTracking?: GatewayAgentRunTaskOwner;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
@@ -82,6 +88,7 @@ function resolveInProcessGatewayDispatch(
     : undefined;
   const syntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    agentToolCaller: options?.agentToolCaller,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,

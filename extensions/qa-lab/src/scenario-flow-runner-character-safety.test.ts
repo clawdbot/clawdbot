@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
@@ -44,8 +45,7 @@ function createCharacterScenarioApi(
       writeFile: async () => undefined,
     },
     path: { join },
-    normalizeLowercaseStringOrEmpty: (value: unknown) =>
-      typeof value === "string" ? value.trim().toLowerCase() : "",
+    normalizeLowercaseStringOrEmpty,
     resolveQaLiveTurnTimeoutMs: () => 10,
     waitForOutboundMessage: async (
       state: ReturnType<typeof createQaBusState>,

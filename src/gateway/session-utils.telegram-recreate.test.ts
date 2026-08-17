@@ -4,7 +4,7 @@
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -106,7 +106,7 @@ describe("Telegram direct session recreation after delete", () => {
       ...cfg,
       session: { ...cfg.session, store: storePath },
     } satisfies OpenClawConfig;
-    const loaded = loadCombinedSessionStoreForGateway(runtimeCfg, { agentId: "main" });
+    const loaded = loadCombinedSessionStoreForGatewayCore(runtimeCfg, { agentId: "main" });
     const listed = listSessionsFromStore({
       cfg: runtimeCfg,
       storePath: loaded.storePath,

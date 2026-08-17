@@ -172,7 +172,7 @@ function resolveProviderMetadataLookup(params: {
 }
 
 function resolveSetupProviderPluginLoadState(
-  params: Parameters<typeof resolvePluginProviders>[0],
+  params: Parameters<typeof resolvePluginProvidersCore>[0],
   base: ReturnType<typeof resolvePluginProviderLoadBase>,
   snapshot: PluginMetadataRegistryView,
 ) {
@@ -224,7 +224,7 @@ function resolveSetupProviderPluginLoadState(
 }
 
 function resolveRuntimeProviderPluginLoadState(
-  params: Parameters<typeof resolvePluginProviders>[0],
+  params: Parameters<typeof resolvePluginProvidersCore>[0],
   base: ReturnType<typeof resolvePluginProviderLoadBase>,
   snapshot: PluginMetadataRegistryView,
 ) {
@@ -286,7 +286,7 @@ function resolveRuntimeProviderPluginLoadState(
 }
 
 export function isPluginProvidersLoadInFlight(
-  params: Parameters<typeof resolvePluginProviders>[0],
+  params: Parameters<typeof resolvePluginProvidersCore>[0],
 ): boolean {
   const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
@@ -300,7 +300,7 @@ export function isPluginProvidersLoadInFlight(
   return isPluginRegistryLoadInFlight(loadState.loadOptions);
 }
 
-export function resolvePluginProviders(params: {
+export function resolvePluginProvidersCore(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */

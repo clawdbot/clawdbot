@@ -31,6 +31,16 @@ import {
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
 
+describe("mattermost target classification", () => {
+  it("requires an explicit user namespace for direct targets", () => {
+    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "user:owner" })).toBe("direct");
+    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "channel:operators" })).toBe(
+      "channel",
+    );
+    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "ambiguous" })).toBeUndefined();
+  });
+});
+
 type MattermostHandleAction = NonNullable<
   NonNullable<typeof mattermostPlugin.actions>["handleAction"]
 >;
@@ -1729,7 +1739,7 @@ describe("mattermostPlugin", () => {
       expect(onDeliveryResult).toHaveBeenCalledWith({
         channel: "mattermost",
         messageId: "post-final",
-        channelId: "CHAN1",
+        target: { kind: "channel", id: "CHAN1" },
         content: "provider-final",
       });
     });

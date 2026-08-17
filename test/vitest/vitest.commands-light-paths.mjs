@@ -54,10 +54,6 @@ const commandsLightEntries = [
     test: "src/commands/models/list.status.test.ts",
   },
   {
-    source: "src/commands/sandbox-formatters.ts",
-    test: "src/commands/sandbox-formatters.test.ts",
-  },
-  {
     source: "src/commands/status-json-command.ts",
     test: "src/commands/status-json-command.test.ts",
   },

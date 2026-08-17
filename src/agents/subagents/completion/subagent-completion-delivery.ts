@@ -1,7 +1,4 @@
-import {
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntryAnyStatus,
-} from "../../../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   prepareClaimedSessionDelivery,
@@ -21,7 +18,12 @@ import {
 } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
-import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
+import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+  safeRemoveAttachmentsDir,
+} from "../registry/subagent-registry-helpers.js";
+import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
+import type { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -35,6 +37,12 @@ const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_DELIVERY_GENERATION = 10;
 const CANONICAL_RESULT_PROMPT =
   "A completed subagent task is ready for parent review. The canonical result follows.";
+type CompletionDeliveryRecoveryResult = {
+  ok: boolean;
+  reason?: string;
+  task?: TaskRecord;
+  duplicateRisk?: boolean;
+};
 
 function resolveTask(entry: SubagentRunRecord): TaskRecord | undefined {
   return findTaskByRunId(entry.taskRunId ?? entry.runId);
@@ -55,11 +63,10 @@ function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
 function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
   const live = subagentRuns.get(subagent.runId);
   if (live) {
-    const mutable = live as unknown as Record<string, unknown>;
-    for (const key of Object.keys(mutable)) {
-      delete mutable[key];
+    for (const key of Object.keys(live)) {
+      Reflect.deleteProperty(live, key);
     }
-    Object.assign(mutable, subagent);
+    Object.assign(live, subagent);
   } else {
     subagentRuns.set(subagent.runId, subagent);
   }
@@ -89,10 +96,8 @@ function projectRedrivenTask(
 export function admitCorrelatedSubagentSessionDelivery(params: {
   runId: string;
   payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }>;
-  /** Pre-commit redrive projection; never publish it before admission succeeds. */
-  source?: SubagentRunRecord;
 }): { id: string; claimed: boolean; status: "pending" | "failed" | "completed" } {
-  const current = params.source ?? subagentRuns.get(params.runId);
+  const current = subagentRuns.get(params.runId);
   if (!current) {
     throw new Error(`subagent completion owner not found: ${params.runId}`);
   }
@@ -106,9 +111,12 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
   const generation = delivery.generation ?? 1;
   const windowStartedAt = delivery.windowStartedAt ?? subagent.execution.endedAt ?? now;
   const deadlineAt = delivery.deadlineAt ?? windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+  const generationSuffix = generation > 1 ? `:generation:${generation}` : "";
   const queueEntry = prepareClaimedSessionDelivery(
     {
       ...params.payload,
+      idempotencyKey: `${params.payload.idempotencyKey ?? params.payload.messageId}${generationSuffix}`,
+      messageId: `${params.payload.messageId}${generationSuffix}`,
       message: CANONICAL_RESULT_PROMPT,
       maxRetries: Number.MAX_SAFE_INTEGER,
       owner: {
@@ -132,7 +140,7 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
     nextAttemptAt: queueEntry.availableAt,
     enqueuedAt: now,
   });
-  delete delivery.payload;
+  delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
   const projectedTask = projectRedrivenTask(task, subagent, "session_queued", now);
   const admission = admitSubagentCompletionDelivery({
     queueEntry,
@@ -203,7 +211,9 @@ export async function settleCorrelatedSubagentDelivery(
       announcedAt: now,
       lastError: undefined,
       nextAttemptAt: undefined,
+      queueId: undefined,
     });
+    delivery.payload = undefined;
     projectedTask.deliveryStatus = "delivered";
     projectedTask.terminalOutcome = "succeeded";
     projectedTask.error = undefined;
@@ -215,6 +225,7 @@ export async function settleCorrelatedSubagentDelivery(
       suspendedReason: "permanent_failure" as const,
       lastError: queued.lastError ?? "completion delivery failed",
       nextAttemptAt: undefined,
+      queueId: undefined,
     });
     projectedTask.deliveryStatus = "failed";
     projectedTask.terminalOutcome = "blocked";
@@ -236,12 +247,7 @@ export async function settleCorrelatedSubagentDelivery(
 export async function retrySubagentCompletionDelivery(
   taskId: string,
   databaseOptions?: OpenClawStateDatabaseOptions,
-): Promise<{
-  ok: boolean;
-  reason?: string;
-  task?: TaskRecord;
-  duplicateRisk?: boolean;
-}> {
+): Promise<CompletionDeliveryRecoveryResult> {
   const task = getTaskById(taskId);
   const current = task ? findSubagentForTask(task) : undefined;
   if (!task || !current || current.expectsCompletionMessage !== true) {
@@ -276,44 +282,21 @@ export async function retrySubagentCompletionDelivery(
     nextAttemptAt: undefined,
   });
   redrive.cleanupHandled = false;
-  if (!delivery.queueId) {
-    const projectedTask = projectRedrivenTask(task, redrive, "pending", now);
-    settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
-    publishCommittedRecords(redrive, projectedTask);
-    const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
-    resumeSubagentRun(redrive.runId);
-    return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
-  }
-  const failed = loadDeliveryQueueEntryAnyStatus(
-    SESSION_DELIVERY_QUEUE_NAME,
-    delivery.queueId,
-  ) as QueuedSessionDelivery | null;
-  if (!failed || failed.kind !== "agentTurn" || failed.owner?.kind !== "subagent_completion") {
-    return { ok: false, reason: "retained delivery route is unavailable" };
-  }
-  const payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }> = {
-    ...failed,
-    idempotencyKey: `${failed.idempotencyKey ?? failed.messageId}:generation:${generation}`,
-    messageId: `${failed.messageId}:generation:${generation}`,
-    owner: undefined,
-  };
-  const admitted = admitCorrelatedSubagentSessionDelivery({
-    runId: redrive.runId,
-    payload,
-    source: redrive,
-  });
-  if (admitted.claimed) {
-    await releaseSessionDeliveryClaim(admitted.id);
-  }
-  await scheduleSessionDelivery(admitted.id);
+  const projectedTask = projectRedrivenTask(task, redrive, "pending", now);
+  settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
+  publishCommittedRecords(redrive, projectedTask);
+  const { resumeSubagentRun } = await import("../registry/subagent-registry.js");
+  resumeSubagentRun(redrive.runId);
   return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
 }
 
-export function dismissSubagentCompletionDelivery(taskId: string): {
-  ok: boolean;
-  reason?: string;
-  task?: TaskRecord;
-} {
+export async function dismissSubagentCompletionDelivery(
+  taskId: string,
+  options: {
+    discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
+    databaseOptions?: OpenClawStateDatabaseOptions;
+  },
+): Promise<CompletionDeliveryRecoveryResult> {
   const task = getTaskById(taskId);
   const current = task ? findSubagentForTask(task) : undefined;
   if (!task || !current || current.delivery?.status !== "suspended") {
@@ -321,12 +304,6 @@ export function dismissSubagentCompletionDelivery(taskId: string): {
   }
   const now = Date.now();
   const subagent = structuredClone(current);
-  const delivery = ensureDeliveryState(subagent);
-  delivery.status = "discarded";
-  delivery.disposition = "intentional_non_delivery";
-  delivery.dismissedAt = now;
-  delivery.queueId = undefined;
-  delivery.nextAttemptAt = undefined;
   const projectedTask: TaskRecord = {
     ...task,
     deliveryStatus: "dismissed",
@@ -336,7 +313,15 @@ export function dismissSubagentCompletionDelivery(taskId: string): {
     cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
     lastEventAt: now,
   };
-  settleSubagentCompletionDelivery({ subagent, task: projectedTask });
+  settleSubagentCompletionDelivery({
+    subagent,
+    task: projectedTask,
+    databaseOptions: options.databaseOptions,
+    mutateSubagent: (entry) => options.discardTerminalDelivery(entry, now),
+  });
   publishCommittedRecords(subagent, projectedTask);
+  if (subagent.cleanup === "delete" || !subagent.retainAttachmentsOnKeep) {
+    await safeRemoveAttachmentsDir(subagent);
+  }
   return { ok: true, task: getTaskById(taskId) };
 }

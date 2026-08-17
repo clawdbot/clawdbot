@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
@@ -17,7 +19,7 @@ import {
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunId,
-  log,
+  taskRegistryLog,
   persistTaskRegistry,
   pickPreferredRunIdTask,
   rebuildRunIdIndex,
@@ -41,16 +43,46 @@ export function listTaskRecordsUnsorted(): TaskRecord[] {
   return snapshotTaskRecords(tasks);
 }
 
-function taskMatchesRelatedSession(task: TaskRecord, sessionKey: string | undefined): boolean {
+function taskMatchesRelatedSession(
+  task: TaskRecord,
+  sessionKey: string | undefined,
+  sessionAgentId?: string,
+  cfg?: OpenClawConfig,
+): boolean {
   if (!sessionKey) {
     return true;
   }
-  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
-    (candidate) => normalizeOptionalString(candidate) === sessionKey,
-  );
+  return [
+    { key: task.requesterSessionKey, agentId: task.requesterAgentId },
+    { key: task.childSessionKey, agentId: task.agentId },
+    // ownerKey belongs to the requester. task.agentId is the executor/child
+    // candidate and must never adopt a colliding bare requester session.
+    { key: task.ownerKey, agentId: task.requesterAgentId },
+  ].some((candidate) => {
+    if (normalizeOptionalString(candidate.key) !== sessionKey) {
+      return false;
+    }
+    if (!sessionAgentId) {
+      return true;
+    }
+    let candidateAgentId =
+      normalizeOptionalString(candidate.agentId) ?? parseAgentSessionKey(candidate.key)?.agentId;
+    if (!candidateAgentId && cfg && candidate.key) {
+      try {
+        candidateAgentId = resolveSessionAgentId({ config: cfg, sessionKey: candidate.key });
+      } catch {
+        return false;
+      }
+    }
+    return candidateAgentId === sessionAgentId;
+  });
 }
 
-function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
+function taskMatchesAgent(
+  task: TaskRecord,
+  agentId: string | undefined,
+  cfg?: OpenClawConfig,
+): boolean {
   if (!agentId) {
     return true;
   }
@@ -58,9 +90,24 @@ function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolea
   if (explicitAgentId) {
     return explicitAgentId === agentId;
   }
-  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
-    (candidate) => parseAgentSessionKey(candidate)?.agentId === agentId,
-  );
+  const requesterAgentId = normalizeOptionalString(task.requesterAgentId);
+  if (requesterAgentId) {
+    return requesterAgentId === agentId;
+  }
+  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some((candidate) => {
+    const parsedAgentId = parseAgentSessionKey(candidate)?.agentId;
+    if (parsedAgentId) {
+      return parsedAgentId === agentId;
+    }
+    if (!candidate || !cfg) {
+      return false;
+    }
+    try {
+      return resolveSessionAgentId({ config: cfg, sessionKey: candidate }) === agentId;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function taskUpdatedAt(task: TaskRecord): number {
@@ -73,6 +120,8 @@ export function listTaskRecordPage(params: {
   statuses?: readonly TaskStatus[];
   agentId?: string;
   sessionKey?: string;
+  sessionAgentId?: string;
+  cfg?: OpenClawConfig;
 }): { tasks: TaskRecord[]; hasMore: boolean } {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
@@ -84,8 +133,8 @@ export function listTaskRecordPage(params: {
     .filter(
       (task) =>
         (!statuses || statuses.has(task.status)) &&
-        taskMatchesAgent(task, agentId) &&
-        taskMatchesRelatedSession(task, sessionKey),
+        taskMatchesAgent(task, agentId, params.cfg) &&
+        taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg),
     )
     .toSorted((left, right) => {
       const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
@@ -223,7 +272,7 @@ export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
         .toSorted(compareTasksNewestFirst)
         .map(({ insertionIndex: _, ...task }) => task);
     } catch (error) {
-      log.warn("Failed to read fresh owner task registry records", {
+      taskRegistryLog.warn("Failed to read fresh owner task registry records", {
         ownerKey: key,
         error,
       });

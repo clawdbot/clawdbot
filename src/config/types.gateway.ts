@@ -137,6 +137,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional service credential used only for Control UI GitHub previews and discovery. */
+  github?: { token?: SecretInput };
   /**
    * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
    * When enabled, chat.toolTitles generates short titles through standard
@@ -254,15 +256,11 @@ export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
-  /** Reset serve/funnel configuration on shutdown. */
-  resetOnExit?: boolean;
-  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
-  serviceName?: string;
   /**
-   * When `mode="serve"` and an externally configured Tailscale Funnel route
-   * already covers the gateway port, skip re-applying `tailscale serve` on
-   * startup. Lets operators manage Funnel exposure outside OpenClaw without
-   * losing it across gateway restarts.
+   * Detect an external Funnel route left on the ordinary Gateway listener and
+   * leave exposure unchanged with migration guidance. Gateway-authenticated
+   * routes reject that ingress; plugin-authenticated webhooks keep their owner auth.
+   * @deprecated Migrate to `mode="funnel"`, which uses managed ingress.
    */
   preserveFunnel?: boolean;
 };
@@ -557,6 +555,8 @@ export type GatewayConfig = {
   bind?: GatewayBindMode;
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
+  /** Externally reachable HTTPS origin for Gateway callback routes; HTTP only on loopback. */
+  publicOrigin?: string;
   controlUi?: GatewayControlUiConfig;
   cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;

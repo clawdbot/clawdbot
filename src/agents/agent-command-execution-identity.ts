@@ -1,5 +1,7 @@
-import type { ExecutionIdentityAdmissionFacts } from "../audit/execution-identity-admission.js";
-import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import type {
+  ExecutionIdentityAdmissionFacts,
+  ExecutionIdentityAdmissionToken,
+} from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -8,6 +10,10 @@ import {
   prepareAgentRunAdmission,
   type OperationalRunInstanceRef,
 } from "./admitted-run-context.js";
+import {
+  attachAgentCommandAdmissionFacts,
+  getAgentCommandAdmissionFacts,
+} from "./agent-command-admission-facts.js";
 import type {
   AgentCommandGatewayIngressOpts,
   AgentCommandIngressOpts,
@@ -38,13 +44,16 @@ function prepareAgentCommandRunAdmission(params: {
   runId: string;
   onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
 }) {
+  const admissionFacts = getAgentCommandAdmissionFacts(params.operationalRunInstance) ?? {
+    ingress: params.ingress,
+  };
   return prepareAgentRunAdmission({
     cfg: params.cfg,
     operationalRunInstance: params.operationalRunInstance,
     facts: {
       runId: params.runId,
       agentId: params.agentId,
-      ingress: params.ingress,
+      ...admissionFacts,
     },
     ...(params.admission ? { recovery: params.admission } : {}),
     ...(params.onAdmitted ? { onAdmitted: params.onAdmitted } : {}),
@@ -96,13 +105,18 @@ export function prepareAgentCommandExecutionIdentity(params: {
   lifecycleGeneration: string;
 }) {
   const { opts, prepared } = params;
+  const operationalRunInstance =
+    opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId);
+  const admissionFacts = getAgentCommandAdmissionFacts(params.opts.runContext ?? params.opts);
+  if (admissionFacts) {
+    attachAgentCommandAdmissionFacts(operationalRunInstance, admissionFacts);
+  }
   return executionIdentity.prepare({
     admission: opts.executionIdentityAdmission,
     agentId: prepared.sessionAgentId,
     cfg: prepared.cfg,
     ingress: params.ingress,
-    operationalRunInstance:
-      opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId),
+    operationalRunInstance,
     runId: prepared.runId,
     onAdmitted: async (admittedRunContext) => {
       await opts.onAdmittedRunContext?.(admittedRunContext);
@@ -143,6 +157,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     mainRestartRecoveryAttempt: undefined,
     executionIdentityAdmission: undefined,
     operationalRunInstance: undefined,
+    cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
   };
 }

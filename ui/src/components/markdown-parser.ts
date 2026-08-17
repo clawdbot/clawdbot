@@ -4,6 +4,11 @@ import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import {
+  formatGitHubItemReference,
+  isGitHubItemRootPath,
+  parseGitHubItemPath,
+} from "./github-link-target.ts";
+import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
 } from "./markdown-assistant-transcript.ts";
@@ -16,9 +21,11 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
+import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -220,17 +227,31 @@ export function createMarkdownParser(): MarkdownIt {
     },
   });
 
-  // Override default link validator to allow all URLs through to renderers.
-  // marked.js does not validate URLs at all — it generates <a>/<img> tags for
-  // everything and relies on DOMPurify to strip dangerous schemes.
-  //
-  // We match this behavior exactly:
-  // - All URLs pass validation, including javascript:, vbscript:, file:, data:
-  // - Images: renderer.rules.image shows alt text for non-data-image URLs
-  // - Links: DOMPurify strips dangerous href schemes, leaving safe anchor text
-  // - Blocking at validateLink would skip token generation entirely, causing raw
-  //   markdown source to appear instead of graceful fallbacks.
+  // Keep label tokens for invalid destinations; the rule below removes only the
+  // link wrapper so rejected Markdown stays readable without a false affordance.
   markdownParser.validateLink = () => true;
+
+  markdownParser.core.ruler.after("linkify", "disallowed-link-schemes", (state) => {
+    for (const blockToken of state.tokens) {
+      const children = blockToken.children;
+      if (blockToken.type !== "inline" || !children) {
+        continue;
+      }
+      let hideClose = false;
+      for (const token of children) {
+        if (
+          token.type === "link_open" &&
+          DISALLOWED_LINK_SCHEME_RE.test(token.attrGet("href") ?? "")
+        ) {
+          token.hidden = true;
+          hideClose = true;
+        } else if (token.type === "link_close" && hideClose) {
+          token.hidden = true;
+          hideClose = false;
+        }
+      }
+    }
+  });
 
   // Trim trailing CJK characters from auto-linked URLs (RFC 3986: raw CJK is
   // not valid in URLs). markdown-it's built-in linkify for https:// URLs may
@@ -453,6 +474,8 @@ export function createMarkdownParser(): MarkdownIt {
     }
   });
 
+  installMarkdownSessionLinks(markdownParser, SESSION_LINK_SCAN_RE);
+
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
   // (badges/shields), where a mark beside a mark reads as noise. Code spans and
@@ -473,13 +496,17 @@ export function createMarkdownParser(): MarkdownIt {
         if (!url) {
           continue;
         }
-        if (open.markup === "linkify" || open.markup === "autolink") {
+        const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
+        const host = url.hostname.toLowerCase();
+        const githubLink = host === "github.com" || host === "www.github.com";
+        const itemTarget = githubLink ? parseGitHubItemPath(url) : null;
+        if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
-        const host = url.hostname.toLowerCase();
-        if (host !== "github.com" && host !== "www.github.com") {
+        if (!githubLink) {
           continue;
         }
+        let labelToken: Token | null = null;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
           const token = children[cursor];
           if (!token || token.type === "link_close") {
@@ -490,8 +517,12 @@ export function createMarkdownParser(): MarkdownIt {
             token.content.trim() !== ""
           ) {
             open.attrJoin("class", GITHUB_LINK_CLASS);
+            labelToken = token;
             break;
           }
+        }
+        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
+          labelToken.content = formatGitHubItemReference(itemTarget);
         }
       }
     }
@@ -537,18 +568,21 @@ export function createMarkdownParser(): MarkdownIt {
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
     const target = tokens[index]?.meta?.fileLink as MarkdownFileLinkMeta | undefined;
-    if (!target) {
-      return rendered;
+    if (target) {
+      const lineAttribute =
+        target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
+      const titleAttribute =
+        target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
+      return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
-    const lineAttribute =
-      target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-    const titleAttribute =
-      target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
-    return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
+    const sessionKey: unknown = tokens[index]?.meta?.sessionLink?.sessionKey;
+    return typeof sessionKey === "string"
+      ? `<a class="markdown-session-link" role="link" tabindex="0" data-session-key="${escapeMarkdownHtml(sessionKey)}">${rendered}</a>`
+      : rendered;
   };
 
-  // Message rendering allows only inline data images (#15437). Document
-  // previews preserve authored image URLs and rely on DOMPurify's URI policy.
+  // Message rendering allows inline data images and explicit open-only placeholders
+  // for remote URLs. Document previews preserve authored URLs for direct rendering.
   installAssistantTranscriptRoleImageRenderer(markdownParser, {
     escapeHtml: escapeMarkdownHtml,
     isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
@@ -558,6 +592,16 @@ export function createMarkdownParser(): MarkdownIt {
       t("chat.imageLightbox.open", {
         title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
       }),
+    renderExternalImageFallback: (src, renderedLabel, linkedImage) => {
+      if (!parseWebLinkHref(src)) {
+        return renderedLabel;
+      }
+      const label = `<span>${escapeMarkdownHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span>`;
+      const action = linkedImage
+        ? ""
+        : ` <a href="${escapeMarkdownHtml(src)}">${escapeMarkdownHtml(t("chat.externalImage.open"))}</a>`;
+      return `<span class="markdown-external-image">${label}${action}</span>`;
+    },
     interactiveImages: (env) =>
       (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
     allowRemoteImages: (env) =>

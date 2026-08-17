@@ -73,7 +73,9 @@ suite.define(() => {
         for (const method of ["status", "health", "models.list", "last-heartbeat"]) {
           const requests = await gateway.getRequests(method);
           expect(requests.length).toBeGreaterThanOrEqual(1);
-          expect(requests[0]?.params).toEqual({});
+          expect(requests[0]?.params).toEqual(
+            method === "models.list" ? { agentId: "main", preparedOnly: true } : {},
+          );
         }
 
         if (captureUiProof) {

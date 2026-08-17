@@ -11,6 +11,10 @@ import {
   toLocationContext,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
@@ -44,7 +48,12 @@ interface BuildLineMessageContextParams {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  resolveChannelIngress?: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
+  channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
+  buildContext?: typeof buildChannelInboundEventContext;
 }
 
 type LineSourceInfo = {
@@ -258,10 +267,12 @@ async function finalizeLineInboundContext(params: {
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
+  channelIngress?: ResolvedChannelMessageIngress;
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
   const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
@@ -299,7 +310,8 @@ async function finalizeLineInboundContext(params: {
     envelope: envelopeOptions,
   });
 
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: params.channelIngress,
     channel: "line",
     accountId: params.route.accountId,
     messageId: params.messageSid,
@@ -465,6 +477,16 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     timestamp,
     messageSid: messageId,
     commandAuthorized,
+    // Configured conversation bindings can replace the base route; bind only to the final route.
+    channelIngress: params.resolveChannelIngress
+      ? await params.resolveChannelIngress({
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          messageId,
+          inboundEventKind: "user_request",
+        })
+      : params.channelIngress,
+    buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
@@ -490,6 +512,11 @@ export async function buildLinePostbackContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  resolveChannelIngress?: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
+  channelIngress?: ResolvedChannelMessageIngress;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
 
@@ -524,6 +551,16 @@ export async function buildLinePostbackContext(params: {
     timestamp,
     messageSid,
     commandAuthorized,
+    // Configured conversation bindings can replace the base route; bind only to the final route.
+    channelIngress: params.resolveChannelIngress
+      ? await params.resolveChannelIngress({
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          messageId: messageSid,
+          inboundEventKind: "user_request",
+        })
+      : params.channelIngress,
+    buildContext: params.buildContext,
     media: [],
     verboseLog: { kind: "postback" },
   });

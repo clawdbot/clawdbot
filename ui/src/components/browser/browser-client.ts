@@ -4,6 +4,7 @@
 // that is dispatched against the browser plugin's control routes, either
 // locally or via a browser-capable node. This module narrows the handful of
 // routes the browser panel needs and keeps route-path knowledge in one place.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -69,10 +70,6 @@ function browserRequest<T>(client: GatewayBrowserClient, envelope: BrowserReques
 
 function stringOrEmpty(value: unknown): string {
   return readStringValue(value) ?? "";
-}
-
-function asNullableFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function normalizeTab(value: unknown): BrowserPanelTab | null {
@@ -185,6 +182,22 @@ export async function pressBrowserKey(
   });
 }
 
+export async function resizeBrowserViewport(
+  client: GatewayBrowserClient,
+  params: { targetId: string; width: number; height: number },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+  });
+}
+
 async function evaluateInBrowser<T>(
   client: GatewayBrowserClient,
   params: { targetId: string; fn: string },
@@ -236,8 +249,8 @@ export async function readBrowserPageMetrics(
       fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
     }),
   );
-  const cssWidth = asNullableFiniteNumber(result?.cssWidth);
-  const cssHeight = asNullableFiniteNumber(result?.cssHeight);
+  const cssWidth = asFiniteNumber(result?.cssWidth);
+  const cssHeight = asFiniteNumber(result?.cssHeight);
   if (!cssWidth || !cssHeight || cssWidth <= 0 || cssHeight <= 0) {
     return null;
   }
@@ -293,10 +306,10 @@ export async function inspectBrowserElementAt(
     role: stringOrEmpty(result.role),
     name: stringOrEmpty(result.name),
     rect: {
-      x: asNullableFiniteNumber(rect?.x) ?? 0,
-      y: asNullableFiniteNumber(rect?.y) ?? 0,
-      width: asNullableFiniteNumber(rect?.width) ?? 0,
-      height: asNullableFiniteNumber(rect?.height) ?? 0,
+      x: asFiniteNumber(rect?.x) ?? 0,
+      y: asFiniteNumber(rect?.y) ?? 0,
+      width: asFiniteNumber(rect?.width) ?? 0,
+      height: asFiniteNumber(rect?.height) ?? 0,
     },
     focusable: result.focusable === true,
   };

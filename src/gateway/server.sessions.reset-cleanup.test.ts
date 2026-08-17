@@ -9,7 +9,7 @@ import {
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import {
   beginSessionWorkAdmission,
@@ -77,9 +77,10 @@ function expectResetAcpState(acp: ResetAcpState | undefined) {
 }
 
 async function seedWaitingActiveMainSession() {
-  await seedActiveMainSession();
+  const seeded = await seedActiveMainSession();
   embeddedRunMock.activeIds.add("sess-main");
   embeddedRunMock.waitResults.set("sess-main", true);
+  return seeded;
 }
 
 async function resetMainSession() {
@@ -147,7 +148,7 @@ async function expectResetWithConfigSkipsBrowserCleanup(config: ConfigFilePatch)
 }
 
 test("sessions.reset aborts active runs and clears queues", async () => {
-  await seedWaitingActiveMainSession();
+  const { storePath } = await seedWaitingActiveMainSession();
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
@@ -161,6 +162,19 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).toBe("sess-main");
   expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
+  expect(reset.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }) as
+      | InternalSessionEntry
+      | undefined,
+  ).toMatchObject({
+    sessionId: "sess-main",
+    sessionDiffBaselineCapture: {
+      version: 1,
+      captureId: expect.any(String),
+      status: "pending",
+    },
+  });
   expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
@@ -609,6 +623,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   const archivePromise = directSessionReq("sessions.patch", {
     key: sessionKey,
     archived: true,
+    expectedSessionId: "sess-archive-race",
   });
   releaseHook();
 
@@ -623,17 +638,13 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   expect(entry?.sessionId).toBe("sess-archive-race");
 });
 
-test.each([
-  { initialSessionId: "sess-queued-archive-race", transition: "rotated" },
-  { initialSessionId: undefined, transition: "created" },
-])("sessions.patch rejects an archive queued behind a $transition session", async (fixture) => {
+test("sessions.patch rejects an archive queued behind a rotated session", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:subagent:queued-archive-race";
+  const initialSessionId = "sess-queued-archive-race";
   const replacementSessionId = "sess-after-queued-reset";
   await writeSessionStore({
-    entries: fixture.initialSessionId
-      ? { [sessionKey]: sessionStoreEntry(fixture.initialSessionId) }
-      : {},
+    entries: { [sessionKey]: sessionStoreEntry(initialSessionId) },
   });
   // Resolve the lazy handler/config imports before queue ordering begins.
   await Promise.all([getSessionsHandlers(), getGatewayConfigModule()]);
@@ -644,7 +655,7 @@ test.each([
   });
   const blocker = runExclusiveSessionLifecycle({
     scope: storePath,
-    identities: [sessionKey, fixture.initialSessionId],
+    identities: [sessionKey, initialSessionId],
     run: async () => {
       markBlockerStarted();
       await new Promise<void>((resolve) => {
@@ -655,7 +666,7 @@ test.each([
   await blockerStarted;
   const queuedReset = runExclusiveSessionLifecycleMutation({
     scope: storePath,
-    identities: [sessionKey, fixture.initialSessionId],
+    identities: [sessionKey, initialSessionId],
     run: async () => {
       await writeSessionStore({
         entries: {
@@ -670,6 +681,7 @@ test.each([
   const archivePromise = directSessionReq("sessions.patch", {
     key: sessionKey,
     archived: true,
+    expectedSessionId: initialSessionId,
   });
   await new Promise<void>((resolve) => {
     setImmediate(resolve);

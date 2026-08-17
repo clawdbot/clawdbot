@@ -44,8 +44,9 @@ import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
-  runWithCronCreatorAuthority,
-  runWithCronCreatorAuthorityResolver,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -54,7 +55,7 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -126,8 +127,8 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
 }
 
 function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
-  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
-  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolPolicyName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolPolicyName(tool.name)));
 }
 
 type OpenClawCodingTool = ReturnType<typeof createOpenClawCodingTools>[number];
@@ -310,30 +311,41 @@ describe("createOpenClawCodingTools", () => {
     let retainedResolver: (() => Promise<unknown>) | undefined;
 
     vi.mocked(createOpenClawTools).mockClear();
-    runWithCronCreatorAuthorityResolver({
+    const forgedTools = runWithCronCreatorAuthorityCapabilityResolver({
+      capability: undefined,
       runId: "forged-run",
       resolve,
-      run: () => createOpenClawCodingTools({ runId: "forged-run" }),
+      run: () => createOpenClawCodingTools({ runId: "forged-run", senderIsOwner: false }),
     });
+    expect(toolNameList(forgedTools)).not.toContain("automations");
     expect(
       vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority,
     ).toBeUndefined();
 
-    const activeRun = runWithCronCreatorAuthority("admitted-run", async () => {
-      runWithCronCreatorAuthorityResolver({
+    const capability = createCronCreatorAuthorityCapability("admitted-run")!;
+    const activeRun = runWithCronCreatorAuthorityCapability(capability, async () => {
+      const wrongRunTools = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
         runId: "other-run",
         resolve,
-        run: () => createOpenClawCodingTools({ runId: "admitted-run" }),
+        run: () => createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false }),
       });
+      expect(toolNameList(wrongRunTools)).not.toContain("automations");
       expect(
         vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority,
       ).toBeUndefined();
 
-      runWithCronCreatorAuthorityResolver({
+      const admittedTools = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
         runId: "admitted-run",
         resolve,
-        run: () => createOpenClawCodingTools({ runId: "admitted-run" }),
+        run: () => createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false }),
       });
+      const admittedToolNames = toolNameList(admittedTools);
+      expect(admittedToolNames).toContain("automations");
+      expect(admittedToolNames).not.toContain("gateway");
+      expect(admittedToolNames).not.toContain("nodes");
+      expect(admittedToolNames).not.toContain("openclaw");
       retainedResolver =
         vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority;
       expect(retainedResolver).toEqual(expect.any(Function));
@@ -348,7 +360,49 @@ describe("createOpenClawCodingTools", () => {
     await expect(retainedResolver!()).rejects.toThrow(
       "Configured MCP cron authority is no longer active for this run",
     );
+    expect(
+      toolNameList(createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false })),
+    ).not.toContain("automations");
     expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops senderless Automations retention when exact authority aborts or errors", async () => {
+    const resolve = async () => ({
+      tools: ["read"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    });
+    const buildTools = (capability: ReturnType<typeof createCronCreatorAuthorityCapability>) =>
+      runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: "lifecycle-run",
+        resolve,
+        run: () => createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false }),
+      });
+
+    const abortController = new AbortController();
+    const abortedCapability = createCronCreatorAuthorityCapability("lifecycle-run")!;
+    await runWithCronCreatorAuthorityCapability(
+      abortedCapability,
+      async () => {
+        expect(toolNameList(buildTools(abortedCapability))).toContain("automations");
+        abortController.abort(new Error("run cancelled"));
+        expect(toolNameList(buildTools(abortedCapability))).not.toContain("automations");
+      },
+      abortController.signal,
+    );
+    expect(abortedCapability.active).toBe(false);
+
+    const failedCapability = createCronCreatorAuthorityCapability("lifecycle-run")!;
+    await expect(
+      runWithCronCreatorAuthorityCapability(failedCapability, async () => {
+        expect(toolNameList(buildTools(failedCapability))).toContain("automations");
+        throw new Error("run failed");
+      }),
+    ).rejects.toThrow("run failed");
+    expect(failedCapability.active).toBe(false);
+    expect(
+      toolNameList(createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false })),
+    ).not.toContain("automations");
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {
@@ -1153,6 +1207,56 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("includes plugin tools declared for the active built-in profile", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([
+        {
+          name: "profiled_plugin_tool",
+          label: "Profiled plugin tool",
+          description: "Profiled plugin tool test fixture",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          execute: async () => ({
+            content: [{ type: "text" as const, text: "ok" }],
+            details: {},
+          }),
+        },
+      ]);
+    const preparedModelRuntime = {
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "profiled-plugin",
+            contracts: { tools: ["profiled_plugin_tool"] },
+            toolMetadata: { profiled_plugin_tool: { profiles: ["coding"] } },
+          },
+        ],
+      },
+    } as never;
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: { tools: { profile: "coding" } },
+        includeCoreTools: false,
+        preparedModelRuntime,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(tools.map((tool) => tool.name)).toEqual(["profiled_plugin_tool"]);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.pluginToolAllowlist).toContain(
+        "profiled_plugin_tool",
+      );
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
   it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
     let observedIdentity: unknown;
     const resolvePluginToolsSpy = vi
@@ -1193,6 +1297,7 @@ describe("createOpenClawCodingTools", () => {
           mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "creator",
+          ownerOrigin: { kind: "external", channel: "discord" },
         },
         messageThreadId: "42",
         includeCoreTools: false,
@@ -1277,12 +1382,40 @@ describe("createOpenClawCodingTools", () => {
         mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "creator",
+        ownerOrigin: { kind: "external", channel: "discord" },
       },
     });
 
     expect(latestCreateOpenClawToolsOptions()).toMatchObject({
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "discord",
+      gatewayCallerScheduled: true,
+    });
+  });
+
+  it("keeps explicit local scheduled authority distinct from live delivery routing", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      agentAccountId: "delivery",
+      messageChannel: "discord",
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:main",
+        ownerAccountId: "creator",
+        ownerOrigin: { kind: "local" },
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      gatewayCallerScheduled: true,
     });
   });
 

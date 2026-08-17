@@ -1,8 +1,13 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
+import { resolveOriginMessageProvider } from "../../auto-reply/reply/origin-routing.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import {
   abortReplyMessageInjectionTarget,
@@ -12,8 +17,11 @@ import {
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOutcome,
   type ReplyMessageInjectionTarget,
+  type ReplyToolAuthorityOverlay,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
@@ -26,6 +34,54 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
 
+function resolveChatSendToolAuthorityOverlay(params: {
+  ctx: RuntimeMsgContext;
+  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+}): ReplyToolAuthorityOverlay {
+  const { ctx, session } = params;
+  const authorization = resolveCommandAuthorization({
+    ctx,
+    cfg: session.cfg,
+    commandAuthorized: ctx.CommandAuthorized === true,
+  });
+  const senderIsOwner = authorization.senderIsOwner;
+  return {
+    originatingChannel: ctx.OriginatingChannel,
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: ctx.OriginatingChannel,
+      provider: ctx.Provider,
+    }),
+    chatType: normalizeChatType(ctx.ChatType),
+    agentAccountId: ctx.AccountId,
+    conversationToolPolicy: ctx.ConversationToolPolicy,
+    groupId: resolveGroupSessionKey(ctx)?.id,
+    groupChannel:
+      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
+    groupSpace: normalizeOptionalString(ctx.GroupSpace),
+    memberRoleIds: Array.isArray(ctx.MemberRoleIds)
+      ? ctx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
+          (roleId): roleId is string => Boolean(roleId),
+        )
+      : undefined,
+    spawnedBy: session.entry?.spawnedBy,
+    senderId: normalizeOptionalString(ctx.SenderId),
+    senderName: normalizeOptionalString(ctx.SenderName),
+    senderUsername: normalizeOptionalString(ctx.SenderUsername),
+    senderE164: normalizeOptionalString(ctx.SenderE164),
+    senderIsOwner,
+    inputProvenance: ctx.InputProvenance,
+    trustedInternalHandoff: undefined,
+    scheduledToolPolicy: undefined,
+    runtimePluginToolGrant: undefined,
+    toolsAllow: undefined,
+    disableTools: false,
+    traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+    approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+    clientCaps: ctx.GatewayClientCaps,
+    toolBindings: ctx.GatewayRunToolBindings,
+  };
+}
+
 /** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
@@ -33,7 +89,9 @@ export function createChatSendMessageInjectionStarter(params: {
   session: Pick<PreparedChatSendSession, "cfg" | "entry">;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
+  userTurnTranscriptRecorder: NonNullable<
+    ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
+  >;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry } = params.session;
@@ -49,7 +107,7 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    return beginReplyMessageInjectionTarget(
+    const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
@@ -57,6 +115,7 @@ export function createChatSendMessageInjectionStarter(params: {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        toolAuthorityOverlay: resolveChatSendToolAuthorityOverlay({ ctx, session: params.session }),
         ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
@@ -66,6 +125,7 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
+    return attempt;
   };
 }
 
@@ -129,7 +189,11 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   recordAcceptedReplyMessageInjectionTarget(target, {
     inboundAudio: hasInboundAudio(finalizedCtx),
   });
-  if (outcome.result?.transcriptCommit === "unconfirmed") {
+  // An unconfirmed transcript commit aborts the exact target without replay:
+  // the steer did not take effect, so diagnostics and audit must record the
+  // abort, not a completed injection.
+  const steerAborted = outcome.result?.transcriptCommit === "unconfirmed";
+  if (steerAborted) {
     abortReplyMessageInjectionTarget(target);
     context.logGateway.warn(
       `active run ${params.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
@@ -151,8 +215,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
-      outcome: "completed",
-      reason: "active_run_injected",
+      outcome: steerAborted ? "skipped" : "completed",
+      reason: steerAborted ? "reply_operation_aborted" : "active_run_injected",
     });
   }
   emitMessageReceivedHooks({
@@ -170,7 +234,9 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     ctx: finalizedCtx,
     observedRunId: clientRunId,
     startedAt: params.startedAt,
-    terminal: { outcome: "completed", options: { reason: "active_run_injected" } },
+    terminal: steerAborted
+      ? { outcome: "skipped", options: { reason: "reply_operation_aborted" } }
+      : { outcome: "completed", options: { reason: "active_run_injected" } },
   });
   const updatedAt = Date.now();
   if (entry) {

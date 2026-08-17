@@ -1467,12 +1467,11 @@ describe("local SQLite snapshot repository", () => {
     ).rejects.toThrow(/expected global/u);
   });
 
-  it("sanitizes transient leases from agent snapshots without touching the source", async () => {
+  it("snapshots agents without requiring legacy lease storage", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "openclaw-agent.sqlite");
     const repositoryPath = path.join(tempDir, "snapshots");
     createAgentDatabase(sourcePath, "worker-1");
-    seedStateLease(sourcePath);
     const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
 
     const snapshot = await provider.create({
@@ -1482,18 +1481,26 @@ describe("local SQLite snapshot repository", () => {
     withDatabase(
       path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME),
       (artifact) => {
-        expect(artifact.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-          count: 0,
-        });
+        expect(
+          artifact
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'",
+            )
+            .get(),
+        ).toBeUndefined();
       },
       { readOnly: true },
     );
     withDatabase(
       sourcePath,
       (source) => {
-        expect(source.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-          count: 1,
-        });
+        expect(
+          source
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'",
+            )
+            .get(),
+        ).toBeUndefined();
       },
       { readOnly: true },
     );

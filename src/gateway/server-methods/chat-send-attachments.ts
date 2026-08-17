@@ -61,6 +61,13 @@ function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolea
   return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
 }
 
+// Prepared inbound media has no transcript reference until the user turn
+// persists; abort/routing exits before that point must delete it here or the
+// files are orphaned forever (the inbound sweep is off unless attachments.ttlHours is set).
+export async function discardPreparedChatSendAttachments(refs: OffloadedRef[]): Promise<void> {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+}
+
 // Stage media before ACK so permanent client errors stay 4xx and retryable
 // staging failures stay 5xx. Managed PDFs retain their host-readable fallback.
 async function prestageMediaPathOffloads(params: {
@@ -213,24 +220,32 @@ export async function prepareChatSendAttachments(params: {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
-          const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-            loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
-            agentId,
-            provider: resolvedSessionModel.provider,
-            model: resolvedSessionModel.model,
-          });
-          const supportsImages =
-            supportsSessionModelImages ||
-            explicitOriginTargetsAcpSession(explicitOrigin) ||
-            explicitOriginTargetsPlugin;
+          const imageSupport: { value: boolean | undefined } = {
+            value:
+              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
+                ? true
+                : undefined,
+          };
+          const resolveSupportsImages = async (): Promise<boolean> => {
+            imageSupport.value ??= await resolveGatewayModelSupportsImages({
+              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+              loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
+              agentId,
+              provider: resolvedSessionModel.provider,
+              model: resolvedSessionModel.model,
+            });
+            return imageSupport.value;
+          };
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
-            supportsImages,
+            supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = supportsImages
+          // The parser owns MIME classification. An unresolved capability means no image was seen,
+          // so post-processing must not trigger catalog discovery for a non-image attachment.
+          const parsedSupportsImages = imageSupport.value !== false;
+          parsedMessage = parsedSupportsImages
             ? parsed.message
             : stripImageMediaMarkers(parsed.message, parsed.offloadedRefs);
           parsedImages = parsed.images;
@@ -242,7 +257,7 @@ export async function prepareChatSendAttachments(params: {
             workspaceDir: mediaPathOffloadWorkspaceDir,
           } = await prestageMediaPathOffloads({
             offloadedRefs,
-            includeImageRefs: !supportsImages,
+            includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,

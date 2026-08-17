@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
-import { runEmbeddedAttemptWithBackend } from "./backend.js";
+import type { runEmbeddedAttemptWithBackend } from "./backend.js";
 
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
@@ -25,6 +25,10 @@ export function normalizeEmbeddedRunAttemptResult(
       | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
       | null;
   };
+  const runtimeContinuationReplayMetadata =
+    raw.runtimeContinuationStarted === true
+      ? { hadPotentialSideEffects: true, replaySafe: false }
+      : undefined;
   return {
     ...attempt,
     assistantTexts: raw.assistantTexts ?? [],
@@ -41,8 +45,10 @@ export function normalizeEmbeddedRunAttemptResult(
       completedCount: 0,
       activeCount: 0,
     },
-    replayMetadata: raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
-    currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
+    replayMetadata: runtimeContinuationReplayMetadata ??
+      raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
+    currentAttemptReplayMetadata:
+      runtimeContinuationReplayMetadata ?? raw.currentAttemptReplayMetadata ?? undefined,
   };
 }
 

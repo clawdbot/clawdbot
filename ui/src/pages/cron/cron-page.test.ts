@@ -66,9 +66,13 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   } as unknown as TestGateway;
 }
 
-function createContext(gateway: TestGateway, scopeId: string | null = "main"): ApplicationContext {
+function createContext(
+  gateway: TestGateway,
+  scopeId: string | null = "main",
+  selectedId: string | null = scopeId,
+): ApplicationContext {
   const subscribe = () => () => undefined;
-  let selectionState = { selectedId: scopeId, scopeId };
+  let selectionState = { selectedId, scopeId };
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
@@ -262,13 +266,24 @@ describe("CronPage editor state sync", () => {
     {
       scenario: "a new task from the all-agents view",
       scopeId: null,
+      selectedId: "writer",
       suggested: false,
-      expectedAgentId: undefined,
+      expectedAgentId: "writer",
     },
   ])("creates $scenario with its intended agent ownership", async (scenario) => {
     const request = createRequest();
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, scenario.scopeId), { render: true });
+    const page = createPage(
+      createContext(gateway, scenario.scopeId, scenario.selectedId ?? scenario.scopeId),
+      { render: true },
+    );
+    await waitForCronPage(() => {
+      expect(request).toHaveBeenCalledWith("models.list", {
+        agentId: scenario.expectedAgentId,
+        view: "configured",
+        preparedOnly: true,
+      });
+    });
 
     const createSelector = scenario.suggested
       ? '[data-suggestion="repoPulse"]'
@@ -393,9 +408,11 @@ describe("CronPage editor state sync", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "digest" },
+      state: {},
     };
     let serverEnabled = true;
     let removed = false;
+    const removeRequested = createDeferred();
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "cron.list") {
         return cronListResponse(removed ? [] : [{ ...job, enabled: serverEnabled }]);
@@ -409,6 +426,7 @@ describe("CronPage editor state sync", () => {
       }
       if (method === "cron.remove") {
         removed = true;
+        removeRequested.resolve();
         return {};
       }
       if (method === "cron.runs") {
@@ -440,10 +458,19 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(page.cron.cronForm.enabled).toBe(false));
     expect(serverEnabled).toBe(false);
 
-    const removeButton = Array.from(page.querySelectorAll(".cron-job-menu__item")).find(
-      (item) => item.textContent?.trim() === "Remove",
-    ) as HTMLButtonElement;
-    removeButton.click();
+    const findRemoveButton = () =>
+      Array.from(page.querySelectorAll<HTMLButtonElement>(".cron-job-menu__item")).find(
+        (item) => item.textContent?.trim() === "Remove",
+      );
+    await waitForCronPage(() => expect(findRemoveButton()?.disabled).toBe(false));
+    findRemoveButton()?.click();
+    const findConfirmButton = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".exec-approval-actions .btn")).find(
+        (button) => button.textContent?.trim() === "Remove",
+      );
+    await waitForCronPage(() => expect(findConfirmButton()).toBeDefined());
+    findConfirmButton()?.click();
+    await removeRequested.promise;
     await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));
   });
@@ -459,6 +486,7 @@ describe("CronPage editor state sync", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "digest" },
+      state: {},
     };
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {

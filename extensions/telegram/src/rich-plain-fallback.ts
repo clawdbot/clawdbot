@@ -1,5 +1,5 @@
-// Telegram rich/plain fallback policy is shared by durable sends, final replies,
-// and draft previews. A second copy reintroduces silent drift in parse failures.
+// withTelegramPlainFallback owns formatted-to-plain recovery for durable sends,
+// final replies, and draft previews. A second orchestrator reintroduces silent drift.
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
 
@@ -16,11 +16,13 @@ const RICH_STRUCTURE_INVALID_RE =
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity|can't parse InputRichBlock/i;
 
-type TelegramPlainFallbackTrigger =
+type TelegramRichPlainFallbackTrigger =
   | "rich-entity-invalid"
   | "rich-structure-invalid"
   | "html-parse"
   | "rich-content-required";
+
+type TelegramPlainFallbackTrigger = TelegramRichPlainFallbackTrigger | "empty-content";
 
 type TelegramPlainFallbackPlan = {
   plainText: string;
@@ -40,7 +42,9 @@ export function isTelegramEmptyContentError(err: unknown): boolean {
   return EMPTY_TEXT_RE.test(message) || RICH_CONTENT_REQUIRED_RE.test(message);
 }
 
-function getTelegramPlainFallbackTrigger(err: unknown): TelegramPlainFallbackTrigger | undefined {
+function getTelegramPlainFallbackTrigger(
+  err: unknown,
+): TelegramRichPlainFallbackTrigger | undefined {
   if (isTelegramRichEntityInvalidError(err)) {
     return "rich-entity-invalid";
   }
@@ -107,33 +111,46 @@ function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit:
   return chunks;
 }
 
-export function buildTelegramPlainFallbackPlan(params: {
-  plainText: string;
-  err: unknown;
+export async function withTelegramPlainFallback<T>(params: {
+  kind: "rich" | "html";
   context: string;
+  plainText: string;
   warn: (message: string) => void;
   limit?: number;
   chunkCount?: number;
-}): TelegramPlainFallbackPlan | undefined {
-  const trigger = getTelegramPlainFallbackTrigger(params.err);
-  if (!trigger) {
-    return undefined;
+  sendFormatted: () => Promise<T>;
+  sendPlain: (plan: TelegramPlainFallbackPlan, label: string) => Promise<T>;
+}): Promise<T> {
+  try {
+    return await params.sendFormatted();
+  } catch (err) {
+    const trigger: TelegramPlainFallbackTrigger | undefined =
+      params.kind === "rich"
+        ? getTelegramPlainFallbackTrigger(err)
+        : isTelegramHtmlParseError(err)
+          ? "html-parse"
+          : isTelegramEmptyContentError(err)
+            ? "empty-content"
+            : undefined;
+    if (!trigger || !params.plainText.trim()) {
+      throw err;
+    }
+    params.warn(
+      `telegram ${params.context} degrade=plain-fallback:${trigger}: ${formatErrorMessage(err)}`,
+    );
+    const limit = params.limit ?? 4000;
+    const chunks =
+      params.chunkCount === undefined
+        ? splitTelegramPlainTextChunks(params.plainText, limit)
+        : splitTelegramPlainTextFallback(params.plainText, params.chunkCount, limit);
+    return await params.sendPlain(
+      {
+        plainText: params.plainText,
+        chunks,
+      },
+      `${params.context}-plain`,
+    );
   }
-  const plainText = params.plainText;
-  const limit = params.limit ?? 4000;
-  const chunks =
-    params.chunkCount === undefined
-      ? splitTelegramPlainTextChunks(plainText, limit)
-      : splitTelegramPlainTextFallback(plainText, params.chunkCount, limit);
-  params.warn(
-    `telegram ${params.context} rich-degrade=plain-fallback:${trigger}: ${formatErrorMessage(
-      params.err,
-    )}`,
-  );
-  return {
-    plainText,
-    chunks,
-  };
 }
 
 export function warnTelegramRichBlocksDegradations(params: {

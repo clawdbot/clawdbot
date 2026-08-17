@@ -17,7 +17,9 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-export const messageActionRunnerMocks = {
+// Create shared bindings before mock factories run so non-isolated tests reset
+// and assert against the same functions that the production imports receive.
+const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
@@ -36,7 +38,9 @@ export const messageActionRunnerMocks = {
   isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
-};
+}));
+
+export const messageActionRunnerMocks = hoistedMessageActionRunnerMocks;
 
 vi.mock("./channel-resolution.js", () => ({
   normalizeDeliverableOutboundChannel: (value?: string | null) =>

@@ -89,7 +89,7 @@ Heartbeat scratch is now monitor prose only. Runtime heartbeats do not parse `ta
 
 ### Stream sources
 
-A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and require `cron.triggers.enabled: true` because the long-lived command has the same unattended trust class as trigger scripts. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
+A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and are available by default. Set `cron.triggers.enabled: false` to disable them together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
 ```bash
 openclaw automations add \
@@ -155,7 +155,7 @@ The script must return `{ fire, message?, state? }`. The previous JSON state is 
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
-Enabling `cron.triggers.enabled` permits both condition-trigger scripts and `script` payloads to run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create automation jobs is trusted accordingly.
+Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
 </Warning>
 
 Create a watcher from a local script file (`-` reads the script from stdin):
@@ -221,6 +221,12 @@ until their tool policy is explicitly edited or the job is recreated.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
+Pick the model for the job's difficulty, not the agent's default. Routine
+automation - summaries, triage, classification, status checks - runs well on a
+lighter model, which is cheaper and faster per run and adds up across a
+schedule. Keep your default model for jobs that need deep reasoning, and use
+`--fallbacks` when a light primary should escalate on failure.
+
 Model-selection precedence for isolated jobs, highest first:
 
 1. Per-job payload `model` (explicit config; a disallowed model fails the run)
@@ -258,7 +264,7 @@ Delivered text is derived from process output: non-empty stdout wins; if stdout 
 
 ### Script payloads
 
-Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. Enable `cron.triggers.enabled` before creating or running them; this dangerous-automation gate covers both trigger scripts and script payloads. Script jobs support only `main` and `isolated` session targets.
+Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. They are available by default; setting `cron.triggers.enabled: false` disables creation and execution of script payloads together with condition-trigger scripts and stream schedules. Script jobs support only `main` and `isolated` session targets.
 
 ```bash
 openclaw automations create "0 * * * *" \
@@ -283,18 +289,30 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
 
 ## Execution styles
 
-| Style           | `--session` value   | Runs in                   | Best for                        |
-| --------------- | ------------------- | ------------------------- | ------------------------------- |
-| Main session    | `main`              | Dedicated automation lane | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`  | Reports, background chores      |
-| Current session | `current`           | Bound at creation time    | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session  | Workflows that build on history |
+### Codex apps in scheduled automations
+
+Codex-created automations can retain the app IDs and permission ceiling
+available to the authenticated creator thread. At execution, OpenClaw requires
+the same prepared Codex profile and account, then narrows the stored cap against
+current app policy. Revoked apps, account/runtime changes, and interactive
+approval requirements fail closed with a recovery message; they never fall
+back to broader or different credentials. Older jobs without a captured app
+envelope continue their ordinary non-app behavior; recreate or reauthorize one
+only when it needs Codex app access. See
+[Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
+
+| Style           | `--session` value   | Runs in                     | Best for                        |
+| --------------- | ------------------- | --------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
+| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into a scheduler-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but do not append routine automation turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -490,9 +508,11 @@ openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --s
 openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { archived: true }` from an operator-admin caller) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
+
+Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
 
 The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `automations(action: "list")`; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
 
@@ -539,13 +559,13 @@ Query-string tokens are rejected.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a system event for the main session:
+    Enqueue a system event for the selected agent's main session:
 
     ```bash
     curl -X POST http://127.0.0.1:18789/hooks/wake \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"text":"New email received","mode":"now"}'
+      -d '{"text":"New email received","mode":"now","agentId":"main"}'
     ```
 
     <ParamField path="text" type="string" required>
@@ -553,6 +573,9 @@ Query-string tokens are rejected.
     </ParamField>
     <ParamField path="mode" type="string" default="now">
       `now` or `next-heartbeat`.
+    </ParamField>
+    <ParamField path="agentId" type="string">
+      Target agent. Required when the configured agent fleet has no implicit or retained legacy owner.
     </ParamField>
 
   </Accordion>
@@ -617,15 +640,16 @@ Wire Gmail inbox triggers to OpenClaw via Google PubSub.
 
 ### Configure a restricted Gmail reader (recommended)
 
-Before connecting Gmail transport, merge a dedicated reader and hook policy into your existing config. Preserve the real settings on your existing default agent; the `main` entry below only shows the required roster shape.
+Before connecting Gmail transport, merge a dedicated reader and hook policy into your existing config. Preserve the real settings on your existing agent; the `main` entry below only shows the required roster shape.
+
+<Warning>Adding `mail_reader` creates an explicit fleet. Keep existing bindings and add one channel-wide binding per enabled channel that `main` still owns; there is no cross-channel wildcard.</Warning>
 
 ```json5
 {
   agents: {
+    ownership: "explicit",
     entries: {
-      main: {
-        default: true,
-      },
+      main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
         model: "openai/gpt-5.6-sol",
@@ -642,6 +666,7 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
       },
     },
   },
+  bindings: [{ agentId: "main", match: { channel: "<channel-id>", accountId: "*" } }],
   hooks: {
     defaultSessionKey: "hook:gmail:ingress",
     allowRequestSessionKey: true,
@@ -664,13 +689,16 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
 }
 ```
 
+Before restart, run `openclaw agents list --bindings`; replace every placeholder and verify each channel owner.
+
 Why this shape is safer:
 
-- `agentId: "mail_reader"` keeps Gmail off the default agent.
+- The explicit `main` binding preserves existing channel ownership instead of leaving non-Gmail traffic ownerless. Use a specific `accountId` instead of `"*"` when only one account belongs to `main`.
+- `agentId: "mail_reader"` keeps Gmail off the `main` agent.
 - `allowedAgentIds` prevents this hook endpoint from selecting another agent. If the Gateway serves other hook workflows, include only their intended agent ids too.
 - `scope: "session"` gives each Gmail message its own sandbox; `workspaceAccess: "none"` keeps the host agent workspace out of that sandbox.
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.
-- `deliver: false` keeps completion inside the hook flow. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent) policy.
+- `deliver: false` keeps completion inside the hook flow. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent) policy.
 
 Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Ensure inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
 
@@ -699,7 +727,7 @@ This writes `hooks.gmail` transport settings, enables the Gmail preset, preserve
 <Warning>
 The built-in Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
 
-For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent).
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 </Warning>
 
 ### Verify the reader boundary

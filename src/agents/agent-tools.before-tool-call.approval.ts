@@ -357,10 +357,11 @@ async function requestPluginToolApproval(params: {
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
           if (params.signal!.aborted) {
-            reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
             return;
           }
-          onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+          onAbort = () =>
+            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
           params.signal!.addEventListener("abort", onAbort, { once: true });
         });
         try {
@@ -574,7 +575,7 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
 // Success output schemas do not describe policy-layer terminal results. Track
 // identity so catalog boundaries can reject them without trusting spoofable status fields.
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+function toApprovalErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }

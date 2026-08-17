@@ -53,6 +53,8 @@ type TabState = {
   /** Set while chrome.debugger is attached: real CDP targetId + synthetic root sessionId. */
   attached?: { targetId: string; sessionId: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
+  /** Extension loss invalidated attachment work that auto-attach clients still expect restored. */
+  restoreAttachment: boolean;
 };
 
 type CdpClientState = {
@@ -285,9 +287,11 @@ export class ExtensionRelayBridge {
       pending.reject(new Error("extension disconnected"));
     }
     this.pendingExtension.clear();
-    // Tell CDP clients their pages are gone; the tab list itself survives so a
-    // reconnecting extension can re-expose the same tabs.
+    // Retire attach work synchronously so a replacement snapshot cannot reuse
+    // a rejected promise. Keep the tab list so the same ids can be re-exposed.
     for (const [tabId, tab] of this.tabs) {
+      tab.restoreAttachment ||= tab.attached !== undefined || tab.attaching !== undefined;
+      tab.attaching = undefined;
       if (tab.attached) {
         this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
         tab.attached = undefined;
@@ -356,6 +360,7 @@ export class ExtensionRelayBridge {
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
+    const shouldAutoAttach = [...this.clients].some((client) => client.autoAttach);
     for (const [tabId, tab] of this.tabs) {
       if (!nextIds.has(tabId)) {
         if (tab.attached) {
@@ -366,21 +371,20 @@ export class ExtensionRelayBridge {
     }
     for (const info of tabs) {
       const existing = this.tabs.get(info.tabId);
+      const shouldAttach = !existing || existing.restoreAttachment;
       if (existing) {
         existing.info = info;
       } else {
-        this.tabs.set(info.tabId, { info });
-        // Newly accessible tabs must reach auto-attach clients immediately;
-        // an access-mode or pause change may happen mid-session.
-        if ([...this.clients].some((client) => client.autoAttach)) {
-          void this.ensureTabAttached(info.tabId)
-            .then(({ targetId, sessionId }) => {
-              this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
-            })
-            .catch((err: unknown) => {
-              log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
-            });
-        }
+        this.tabs.set(info.tabId, { info, restoreAttachment: false });
+      }
+      if (shouldAutoAttach && shouldAttach) {
+        void this.ensureTabAttached(info.tabId)
+          .then(({ targetId, sessionId }) => {
+            this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
+          })
+          .catch((err: unknown) => {
+            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
+          });
       }
     }
   }
@@ -413,13 +417,17 @@ export class ExtensionRelayBridge {
         throw new Error(`tab ${tabId} closed during attach`);
       }
       current.attached = attached;
+      current.restoreAttachment = false;
       return attached;
     })();
     tab.attaching = attaching;
     try {
       return await attaching;
     } finally {
-      tab.attaching = undefined;
+      // A replacement extension may already have started a fresh attach for this tab.
+      if (tab.attaching === attaching) {
+        tab.attaching = undefined;
+      }
     }
   }
 
@@ -884,7 +892,10 @@ export class ExtensionRelayBridge {
         }
         const tabId = created.tabId;
         if (!this.tabs.has(tabId)) {
-          this.tabs.set(tabId, { info: { tabId, url, title: "", active: false } });
+          this.tabs.set(tabId, {
+            info: { tabId, url, title: "", active: false },
+            restoreAttachment: false,
+          });
         }
         const attached = await this.ensureTabAttached(tabId);
         // Announce before responding, mirroring Chrome's event-then-result order.

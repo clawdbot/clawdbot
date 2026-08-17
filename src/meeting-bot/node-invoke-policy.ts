@@ -1,5 +1,9 @@
-import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber as readPositiveNumber,
+  asSafeIntegerInRange,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
@@ -37,14 +41,6 @@ export type MeetingBrowserNodePolicyOptions = {
 type PolicyDecision =
   | { approved: true; params: Record<string, unknown> }
   | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
 
 function readOutputGeneration(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });

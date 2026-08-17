@@ -1,12 +1,11 @@
-// Thread-binding artifact parity contract for bundled channel plugins.
+// Thread-binding lightweight artifact contract for bundled channel plugins.
 //
 // Core resolves default thread placement from lightweight `thread-binding-api`
 // artifacts before full plugin loading (src/channels/plugins/thread-binding-api.ts).
-// This suite pins artifact exports to the runtime plugin's conversationBindings
-// so the fast path cannot drift from loaded-plugin behavior.
+// This shard owns artifact inventory and placement shape; loaded-plugin parity
+// lives in plugin-shape.contract.test.ts.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  getBundledChannelPluginAsync,
   getBundledChannelThreadBindingArtifactAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
@@ -30,16 +29,8 @@ describe("bundled channel thread-binding artifact parity", () => {
     expect([...artifactPlacements.keys()].toSorted()).toEqual([
       ...THREAD_BINDING_ARTIFACT_PLUGIN_IDS,
     ]);
+    for (const id of THREAD_BINDING_ARTIFACT_PLUGIN_IDS) {
+      expect(["current", "child"]).toContain(artifactPlacements.get(id));
+    }
   });
-
-  it.each(THREAD_BINDING_ARTIFACT_PLUGIN_IDS)(
-    "keeps the %s artifact placement equal to the runtime plugin default",
-    async (id) => {
-      const artifactPlacement = artifactPlacements.get(id);
-      expect(["current", "child"]).toContain(artifactPlacement);
-
-      const plugin = await getBundledChannelPluginAsync(id);
-      expect(plugin?.conversationBindings?.defaultTopLevelPlacement).toBe(artifactPlacement);
-    },
-  );
 });

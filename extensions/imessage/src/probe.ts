@@ -10,6 +10,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import {
+  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -187,14 +188,6 @@ function selectorsFromPayload(payload: Record<string, unknown>): Record<string, 
   return selectors;
 }
 
-function rpcMethodsFromPayload(payload: Record<string, unknown>): string[] {
-  const raw = payload.rpc_methods;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.filter((entry): entry is string => typeof entry === "string");
-}
-
 // Probe whether the installed imsg CLI accepts `--file` on the `send-rich`
 // subcommand (added by openclaw/imsg#114, which lets a single bridge call
 // combine `--reply-to` and an attachment). We grep the help output rather
@@ -278,7 +271,7 @@ export async function probeIMessagePrivateApi(
     }
     const { payload, firstLineSnippet } = parseStatusPayload(result.stdout);
     const selectors = payload ? selectorsFromPayload(payload) : {};
-    const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
+    const rpcMethods = filterStringEntries(payload?.rpc_methods);
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
     // imsg explains an unavailable bridge here (SIP, library validation, macOS

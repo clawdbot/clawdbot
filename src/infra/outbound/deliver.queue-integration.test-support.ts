@@ -1,6 +1,6 @@
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue-recovery.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
 
 export const boundedCronCompletionRetention = {
@@ -55,7 +55,7 @@ export async function drainMatrixReconnect(opts: {
   deliver: DeliverFn;
   stateDir: string;
 }): Promise<void> {
-  await drainPendingDeliveries({
+  await drainPendingDeliveriesCore({
     drainKey: "matrix:reconnect-test",
     logLabel: "Matrix reconnect drain",
     cfg: {} as OpenClawConfig,

@@ -1,6 +1,6 @@
 // Shared session-store helpers for command handlers that mutate sessions.
-import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStoreEntryCore, type SessionEntry } from "../../config/sessions.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionSnapshotChangesApplied } from "../../config/sessions/session-snapshot-merge.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
@@ -25,7 +25,7 @@ export function resolveCommandSessionEntryForKey(
   if (!store || !sessionKey) {
     return {};
   }
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const resolved = resolveSessionStoreEntryCore({ store, sessionKey });
   if (!resolved.existing) {
     return {};
   }
@@ -99,7 +99,7 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
-    await patchSessionEntry(
+    await patchSessionEntryCore(
       { storePath, sessionKey: key },
       (nextEntry) => {
         nextEntry.abortedLastRun = true;

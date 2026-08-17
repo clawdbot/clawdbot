@@ -13,6 +13,12 @@ describe("directory adapters", () => {
     await expect(adapter.self?.({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
   });
 
+  it("defaults an explicitly undefined self to the null resolver", async () => {
+    const adapter = createChannelDirectoryAdapter({ self: undefined });
+    expect(adapter.self).toBe(nullChannelDirectorySelf);
+    await expect(adapter.self?.({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
+  });
+
   it("preserves provided resolvers", async () => {
     const adapter = createChannelDirectoryAdapter({
       listPeers: async () => [{ kind: "user", id: "u-1" }],

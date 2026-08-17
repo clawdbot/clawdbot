@@ -65,6 +65,28 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes port diagnostics and their native proof to Windows", () => {
+    for (const portPath of ["src/infra/ports-inspect.ts", "src/infra/ports.test.ts"]) {
+      expect(detectChangedScope([portPath]), portPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes LAN advertisement and its native PowerShell proof to Windows", () => {
+    for (const lanPath of [
+      "src/infra/advertised-lan-host.ts",
+      "src/infra/advertised-lan-host.test.ts",
+      "src/infra/advertised-lan-host.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([lanPath]), lanPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes MXC runtime changes and Windows-only suites to Windows", () => {
     for (const mxcPath of [
       "extensions/mxc/src/mxc-backend.ts",
@@ -117,6 +139,11 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes web and Teams file URL handling to Windows", () => {
     for (const fileUrlPath of [
+      "src/agents/tools/media-tool-file-url.windows.test.ts",
+      "src/agents/tools/media-tool-shared.test.ts",
+      "src/agents/tools/media-tool-shared.ts",
+      "src/agents/tools/pdf-tool.test.ts",
+      "src/agents/tools/pdf-tool.ts",
       "src/media/local-media-path.ts",
       "src/media/local-media-path.windows.test.ts",
       "src/media/local-roots.ts",
@@ -201,15 +228,65 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("routes MCP environment resolution and native doctor coverage to Windows", () => {
-    for (const mcpPath of [
+  it("routes OS-home path owners and native tool coverage to Windows", () => {
+    for (const homePath of [
+      "src/infra/home-dir.ts",
+      "src/infra/home-dir.test.ts",
+      "src/agents/agent-tools.read.ts",
+      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/agent-tools.read.windows.test.ts",
+      "src/agents/sessions/tools/path-utils.ts",
+      "src/agents/sessions/tools/path-utils.test.ts",
+    ]) {
+      expect(detectChangedScope([homePath]), homePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes child environment resolution and native doctor coverage to Windows", () => {
+    for (const envPath of [
+      "src/agents/provider-local-service.ts",
+      "src/agents/provider-local-service.env-case.test.ts",
       "src/cli/mcp-cli.ts",
       "src/cli/mcp-cli.test.ts",
       "src/cli/mcp-cli.path-case.windows.test.ts",
       "src/infra/process-env.ts",
       "src/infra/process-env.test.ts",
     ]) {
-      expect(detectChangedScope([mcpPath]), mcpPath).toMatchObject({
+      expect(detectChangedScope([envPath]), envPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes node-host executable resolution and native coverage to Windows", () => {
+    for (const executablePath of [
+      "src/plugin-sdk/node-host.ts",
+      "src/plugin-sdk/node-host.test.ts",
+      "src/process/terminal-pty.test.ts",
+      "src/tui/tui.ts",
+      "src/tui/tui.resolve-codex-bin.test.ts",
+    ]) {
+      expect(detectChangedScope([executablePath]), executablePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes explicit memory extra-file owners and native coverage to Windows", () => {
+    for (const memoryPath of [
+      "packages/memory-host-sdk/src/host/explicit-extra-markdown.ts",
+      "packages/memory-host-sdk/src/host/internal.ts",
+      "packages/memory-host-sdk/src/host/internal.test.ts",
+      "packages/memory-host-sdk/src/host/read-file.ts",
+      "extensions/memory-core/src/cli-runtime-common.ts",
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([memoryPath]), memoryPath).toMatchObject({
         runNode: true,
         runWindows: true,
       });

@@ -13,7 +13,7 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import {
   isGatewayArgv,
@@ -35,6 +35,8 @@ const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
 type LockPayload = {
   pid: number;
   ownerId?: string;
+  /** Present when Gateway cron writes use the dynamic-default ownership projection. */
+  cronOwnerProjection?: "dynamic-default-v1";
   createdAt: string;
   configPath: string;
   port?: number;
@@ -46,6 +48,7 @@ type LockPayload = {
 const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),
+  cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
@@ -68,6 +71,7 @@ type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "
 export type GatewayLockIdentity = {
   pid: number;
   ownerId?: string;
+  cronOwnerProjection?: "dynamic-default-v1";
   createdAt: string;
   port: number;
   startTime?: number;
@@ -315,7 +319,7 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: strin
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
-  const configHash = sha256HexPrefix(configPath, 8);
+  const configHash = sha256HexPrefixCore(configPath, 8);
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
@@ -367,6 +371,7 @@ async function readVerifiedGatewayLockIdentity(
   return {
     pid: payload.pid,
     ...(payload.ownerId ? { ownerId: payload.ownerId } : {}),
+    ...(payload.cronOwnerProjection ? { cronOwnerProjection: payload.cronOwnerProjection } : {}),
     createdAt: payload.createdAt,
     port: payload.port,
     ...(payload.startTime !== undefined ? { startTime: payload.startTime } : {}),
@@ -478,6 +483,7 @@ async function acquireLockFile(
     return {
       pid: process.pid,
       ownerId: opts.ownerId,
+      ...(opts.role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
       createdAt: resolveTimestampMsToIsoString(now()),
       configPath,
       stateDir,

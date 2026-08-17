@@ -201,8 +201,8 @@ function startPendingOutboundDeliveryRecovery(params: {
       if (stopped) {
         return;
       }
-      const { drainPendingDeliveries, recoverPendingDeliveries } =
-        await import("../infra/outbound/delivery-queue.js");
+      const { drainPendingDeliveriesCore, recoverPendingDeliveries } =
+        await import("../infra/outbound/delivery-queue-recovery.js");
       const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
       if (stopped) {
         return;
@@ -218,7 +218,7 @@ function startPendingOutboundDeliveryRecovery(params: {
       }
       // Startup migration runs once. Normal retries use fresh config so revoked
       // accounts cannot inherit the authority captured at gateway startup.
-      await drainPendingDeliveries({
+      await drainPendingDeliveriesCore({
         drainKey: "gateway:outbound",
         logLabel: "Outbound delivery retry",
         cfg: getRuntimeConfig(),

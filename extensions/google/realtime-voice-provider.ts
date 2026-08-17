@@ -49,6 +49,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   asBoolean,
   asFiniteNumber,
+  asSafeIntegerInRange,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -209,8 +210,7 @@ function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined 
 }
 
 function asNonNegativeInteger(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {

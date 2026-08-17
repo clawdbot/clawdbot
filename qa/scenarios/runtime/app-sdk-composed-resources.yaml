@@ -28,7 +28,7 @@ scenario:
   codeRefs:
     - packages/sdk/src/client.ts
     - packages/sdk/src/app-sdk-composed-resources.e2e.test.ts
-    - src/gateway/server-methods/agent-job.ts
+    - src/gateway/agent-turn/agent-job.ts
     - src/gateway/server-methods/artifacts.ts
     - src/gateway/server-methods/environments.ts
   execution:

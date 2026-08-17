@@ -3,6 +3,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
 import { callGateway as realCallGateway } from "../../../gateway/call.js";
@@ -12,7 +13,7 @@ import { startGatewayServer, type GatewayServer } from "../../../gateway/server.
 import { extractPayloadText } from "../../../gateway/test-helpers.agent-results.js";
 import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -259,7 +260,7 @@ describeLive("subagent announce live", () => {
     await server?.close({ reason: "subagent announce live test done" }).catch(() => undefined);
     await state?.cleanup().catch(() => undefined);
     clearRuntimeConfigSnapshot();
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     client = undefined;
     server = undefined;
     state = undefined;
@@ -308,7 +309,7 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
@@ -500,7 +501,7 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
@@ -716,7 +717,7 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
@@ -797,17 +798,3 @@ describeLive("subagent announce live", () => {
     12 * 60_000,
   );
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

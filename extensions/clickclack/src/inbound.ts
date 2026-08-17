@@ -1,4 +1,5 @@
 import {
+  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -48,6 +49,7 @@ async function dispatchModelReply(params: {
   route: { agentId: string };
   target: string;
   correlationId?: string;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
   const result = await runtime.llm.complete({
@@ -90,6 +92,7 @@ export async function handleClickClackInbound(params: {
   message: ClickClackMessage;
   access?: ClickClackInboundAccess;
   correlationId?: string;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
   const message = params.message;
@@ -100,7 +103,7 @@ export async function handleClickClackInbound(params: {
       config: params.config,
       message,
     }));
-  if (!access.shouldDispatch) {
+  if (!access.shouldDispatch || !access.channelIngress) {
     return;
   }
   const conversationId = message.channel_id || message.direct_conversation_id;
@@ -199,7 +202,8 @@ export async function handleClickClackInbound(params: {
     timestamp: new Date(message.created_at),
     body: message.body,
   });
-  const ctxPayload = runtime.channel.inbound.buildContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: access.channelIngress,
     channel: CHANNEL_ID,
     accountId: route.accountId ?? params.account.accountId,
     messageId: message.id,

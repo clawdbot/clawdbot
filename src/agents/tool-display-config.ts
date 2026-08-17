@@ -70,6 +70,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Terminal",
       detailKeys: ["action", "sessionId", "command", "cwd"],
     },
+    portal: {
+      emoji: "🌐",
+      title: "Portal",
+      detailKeys: ["action", "port", "id", "title", "path"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -518,9 +523,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Apply Patch",
       detailKeys: [],
     },
+    // Historical transcripts retain the old name. This display-only entry
+    // preserves their presentation without restoring a runtime tool alias.
     image: {
       emoji: "🖼️",
       title: "Image",
+      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
+    },
+    view_image: {
+      emoji: "🖼️",
+      title: "View Image",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
     },
     image_generate: {
@@ -578,7 +590,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
-    sessions_yield: { emoji: "⏸️", title: "Yield", detailKeys: ["message"] },
+    sessions_yield: { emoji: "⏸️", title: "Yield" },
     tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
   },
 };

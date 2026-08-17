@@ -3,7 +3,6 @@ import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
-  supportsNativeStreamingUsageCompat,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -17,10 +16,9 @@ export const MOONSHOT_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
 export const MOONSHOT_DEFAULT_MODEL_ID = MOONSHOT_DEFAULT_MODEL_REF.slice("moonshot/".length);
 
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
-  return supportsNativeStreamingUsageCompat({
-    providerId: "moonshot",
-    baseUrl,
-  });
+  return [MOONSHOT_BASE_URL, MOONSHOT_CN_BASE_URL].some(
+    (official) => baseUrl === official || baseUrl === `${official}/`,
+  );
 }
 
 export function applyMoonshotNativeStreamingUsageCompat(

@@ -2,6 +2,7 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 /**
  * Secret-provider protocol schemas.
@@ -27,10 +28,16 @@ const SecretStoreEntryMetadataProperties = {
   updatedBy: Type.Optional(Type.String()),
 } as const;
 
+const SecretStoreAllowedHostsSchema = Type.Array(Type.String({ minLength: 1, maxLength: 253 }), {
+  maxItems: 128,
+  uniqueItems: true,
+});
+
 /** Secret metadata never structurally carries the stored value. */
 export const SecretStoreSecretEntrySchema = closedObject({
   ...SecretStoreEntryMetadataProperties,
   kind: Type.Literal("secret"),
+  allowedHosts: Type.Optional(withSince("2026.8", SecretStoreAllowedHostsSchema)),
 });
 
 /** Environment entries include their value because they are intentionally visible. */
@@ -59,6 +66,7 @@ export const SecretsStoreSetParamsSchema = closedObject({
   name: SecretStoreNameSchema,
   value: Type.String({ maxLength: 64 * 1024 }),
   kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+  allowedHosts: Type.Optional(withSince("2026.8", SecretStoreAllowedHostsSchema)),
 });
 
 /** Soft-delete one team secret-store entry. */

@@ -22,10 +22,10 @@ import { bootstrapWorker } from "./worker-environments/bootstrap.js";
 import type { WorkerInstallationArtifact } from "./worker-environments/bundle.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import {
   createWorkerEnvironmentService,
   type WorkerEnvironmentService,
-  workerEnvironmentIdForIdempotencyKey,
 } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
@@ -40,7 +40,7 @@ const FALLBACK_PORT = 22;
 const SESSION_ID = "session-original-order";
 const SESSION_KEY = "agent:main:original-order";
 const PROFILE_ID = "development";
-const ENVIRONMENT_ID = workerEnvironmentIdForIdempotencyKey(`session-dispatch:${SESSION_ID}:1`);
+const ENVIRONMENT_ID = deriveEnvironmentIntent(`session-dispatch:${SESSION_ID}:1`).environmentId;
 const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
   bundleHash: BUNDLE_HASH,
@@ -50,6 +50,7 @@ const RECEIPT = {
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
   ...RECEIPT,
+  tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/worker-bundle.tgz",
 };
@@ -437,7 +438,9 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
     runActivationBarrier: async ({ activate }) => activate(),
-    runReclaimBarrier: async ({ reclaim }) => await reclaim(localWorkspace),
+    runMoveBarrier: async ({ begin }) => begin(),
+    resolveMoveDestination: async () => undefined,
+    runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(localWorkspace, begin()),
     resolveWorkspacePath: async () => localWorkspace,
     reportWorkspaceResultConflict: async () => {},
     resolveWorkspaceResultConflict: async () => undefined,
@@ -448,8 +451,10 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     sessionKey: SESSION_KEY,
     agentId: "main",
     profileId: PROFILE_ID,
+    executionMode: "worker-turn",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
+  expect(runner.starts).toHaveLength(1);
   await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
     `${JSON.stringify(RECEIPT)}\n`,

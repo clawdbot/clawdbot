@@ -8,14 +8,14 @@ const mocks = vi.hoisted(() => ({
   loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   resolveBundledProviderPolicySurface: vi.fn(() => null),
-  shouldSuppressBuiltInModel: vi.fn(() => {
+  shouldSuppressBuiltInModelCore: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
   }),
   shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: mocks.shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore: mocks.shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
@@ -565,7 +565,7 @@ describe("prepared provider catalog projection", () => {
       },
     });
 
-    expect(mocks.shouldSuppressBuiltInModel).not.toHaveBeenCalled();
+    expect(mocks.shouldSuppressBuiltInModelCore).not.toHaveBeenCalled();
     expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
       provider: "openai",
       id: "gpt-5.3-codex-spark",

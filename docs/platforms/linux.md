@@ -29,6 +29,14 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
+### Host sleep
+
+On systems with systemd-logind, the companion prepares a suspension lease for
+its local Gateway before the host sleeps. After wake, it reconnects and resumes
+the Gateway; remote Gateway routes are left untouched. If logind or the system
+bus is unavailable, the sleep hook disables itself and the app continues
+normally.
+
 Realtime voice Talk inside the companion's embedded WebView is not validated:
 the shell does not grant microphone capture to the WebKitGTK WebView, so
 `getUserMedia` is expected to fail there. Until that lands, open the Gateway's
@@ -122,7 +130,7 @@ Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI a
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
 1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
-2. `npm i -g openclaw@latest`
+2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.12 and earlier, omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared

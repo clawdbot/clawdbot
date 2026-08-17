@@ -154,9 +154,7 @@ beforeEach(() => {
       nextConfig: OpenClawConfig;
     }) => {
       if (snapshot.hash !== storedHash) {
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: storedHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       storedConfig = nextConfig;
       storedHash = `next-hash-${nextHash}`;
@@ -338,7 +336,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     );
   });
 
-  it("rejects a mixed hash-free patch", async () => {
+  it("rejects a mixed hash-free patch and names the guarded path", async () => {
     const { respond } = await invokeConfigPatch({
       raw: { ui: { prefs: { theme: "knot" } }, gateway: { port: 19_001 } },
     });
@@ -346,7 +344,11 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
+      // The operator must see which path needs the base hash; a bare
+      // "hash required" with no path was a dead-end error.
+      expect.objectContaining({
+        message: expect.stringContaining("config base hash required for gateway.port"),
+      }),
     );
     expect(storedConfig).toEqual({});
   });
@@ -451,9 +453,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
       storedConfig = { ui: { prefs: { locale: "de" } } };
       storedHash = "raced-hash";
-      throw new ConfigMutationConflictError("config changed since last load", {
-        currentHash: storedHash,
-      });
+      throw new ConfigMutationConflictError("config changed since last load");
     });
 
     const { respond } = await invokeConfigPatch({
@@ -469,6 +469,27 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       }),
     );
     expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
+  });
+
+  it("advises retry only for retryable mutation conflicts", async () => {
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
+      throw new ConfigMutationConflictError("config path owned by another writer", {
+        retryable: false,
+      });
+    });
+
+    const { respond } = await invokeConfigPatch({
+      raw: { ui: { prefs: { theme: "knot" } } },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      // A non-retryable conflict fails the retry too; advising it is a dead end.
+      expect.objectContaining({
+        message: "config path owned by another writer",
+      }),
+    );
   });
 });
 

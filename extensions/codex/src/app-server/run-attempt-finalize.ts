@@ -323,9 +323,9 @@ export async function finalizeCodexAttempt(
   const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
     mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
-    turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
-    result.messagesSnapshot.some((message) => message.role === "toolResult");
+    result.messagesSnapshot.some((message) => message.role === "toolResult") &&
+    (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
     ? await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,
@@ -479,8 +479,11 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  return {
+  const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
+    ...(toolState.yieldAcknowledgment
+      ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
+      : {}),
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
       aborted: finalAborted,
@@ -494,9 +497,14 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
   };
+  if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
+    resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
+  }
+  return finalizedResult;
 }

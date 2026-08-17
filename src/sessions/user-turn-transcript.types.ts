@@ -30,7 +30,9 @@ export type PersistedUserTurnMediaInput = Pick<
   workspaceDir?: string | null;
 };
 
-export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
+export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
+  __openclaw?: Record<string, unknown>;
+};
 
 export type UserTurnInput = {
   text?: string | null;
@@ -45,6 +47,10 @@ export type UserTurnInput = {
   } | null;
   timestamp?: number;
   idempotencyKey?: string;
+  /** Durable transcript message reference used to render and hydrate replies. */
+  replyToId?: string;
+  /** Bounded display fallback for replies whose target is outside loaded history. */
+  replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
@@ -152,6 +158,8 @@ export type UserTurnTranscriptRecorder = {
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
+  /** Confirms exact-run steering provenance after transcript commitment is proven. */
+  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;

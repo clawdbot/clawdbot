@@ -1,12 +1,11 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseInboundMediaUri } from "../media/media-reference.js";
+import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
@@ -100,7 +99,11 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
       if (!Object.hasOwn(record, field)) {
         continue;
       }
-      const projected = projectChatHistoryMediaReference(record[field]);
+      // Managed inbound file paths persisted on media facts are host-local absolute
+      // paths; rewrite them to canonical `media://inbound/<id>` URIs the UI loads through
+      // the authenticated assistant-media route, instead of redacting the reference entirely.
+      const inboundUri = fact ? buildInboundMediaUriFromPath(String(record[field])) : undefined;
+      const projected = inboundUri ?? projectChatHistoryMediaReference(record[field]);
       record[field] = projected;
       if (projected === undefined) {
         delete record[field];
@@ -158,25 +161,17 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    if (preserveExactToolPayload) {
-      entry.text = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+    if (!preserveExactToolPayload) {
+      const res = truncateChatHistoryText(entry.text, maxChars);
       entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   }
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    if (preserveExactToolPayload) {
-      entry.content = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+    if (!preserveExactToolPayload) {
+      const res = truncateChatHistoryText(entry.content, maxChars);
       entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   }
   if (typeof entry.partialJson === "string" && !preserveExactToolPayload) {
@@ -265,8 +260,7 @@ function projectAssistantMixedToolContent(
     if (typeof entry.text !== "string" || !entry.text.trim()) {
       continue;
     }
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const truncated = truncateChatHistoryText(stripped.text, maxChars);
+    const truncated = truncateChatHistoryText(entry.text, maxChars);
     if (truncated.text.trim()) {
       projectedContent.push({ type: "text", text: truncated.text });
       hasVisibleText = true;
@@ -278,10 +272,6 @@ function projectAssistantMixedToolContent(
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
-function toFiniteNumber(x: unknown): number | undefined {
-  return asFiniteNumber(x);
-}
-
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -289,7 +279,7 @@ function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   const c = raw as Record<string, unknown>;
   const out: Record<string, number> = {};
   for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
-    const value = toFiniteNumber(c[key]);
+    const value = asFiniteNumber(c[key]);
     if (value !== undefined) {
       out[key] = value;
     }
@@ -324,7 +314,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   ];
 
   for (const k of knownFields) {
-    const n = toFiniteNumber(u[k]);
+    const n = asFiniteNumber(u[k]);
     if (n !== undefined) {
       out[k] = n;
     }
@@ -464,18 +454,16 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(stripped.text)
-      : stripped.text;
-    changed ||= controlStripped !== stripped.text;
+      ? stripSuppressedControlReplyToken(entry.content)
+      : entry.content;
+    changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
       entry.content = controlStripped;
-      changed ||= stripped.changed;
     } else {
       const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => {
@@ -523,18 +511,16 @@ export function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(stripped.text)
-      : stripped.text;
-    changed ||= controlStripped !== stripped.text;
+      ? stripSuppressedControlReplyToken(entry.text)
+      : entry.text;
+    changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {
       entry.text = controlStripped;
-      changed ||= stripped.changed;
     } else {
       const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   }
 
@@ -585,11 +571,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  // Classify after removing UI-only directives, before sanitization can erase
-  // the control token and leave a blank assistant row behind.
-  const displayText =
-    text === undefined ? undefined : stripInlineDirectiveTagsForDisplay(text).text;
-  if (displayText === undefined || !isSuppressedControlReplyText(displayText)) {
+  if (text === undefined || !isSuppressedControlReplyText(text)) {
     return false;
   }
   return !hasAssistantDisplayableNonTextContent(message);

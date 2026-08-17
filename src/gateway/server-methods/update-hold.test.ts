@@ -1,6 +1,11 @@
 // Update hold tests cover campaign deferral and its validated schedule response.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  PortalCloseResultSchema,
+  PortalListResultSchema,
+  PortalSummarySchema,
+} from "../../../packages/gateway-protocol/src/schema/portals.js";
 
 type UpdateScheduleState =
   import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState;
@@ -27,6 +32,9 @@ vi.mock("../../infra/update-startup.js", () => ({
 }));
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
+  PortalCloseResultSchema,
+  PortalListResultSchema,
+  PortalSummarySchema,
   validateUpdateHoldParams: () => true,
   validateUpdateHoldResult: validateUpdateHoldResultMock,
   validateUpdateRunParams: () => true,

@@ -6,12 +6,8 @@ import {
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
   readCodeModePayloadToolName,
-} from "@openclaw/ai/transports";
-import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
-} from "@openclaw/ai/transports";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
@@ -308,39 +304,8 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof value === "function") {
     return normalizeOpenAIFastMode((value as () => unknown)());
   }
-  if (typeof value === "boolean") {
-    return value;
-  }
   const fastMode = normalizeFastMode(value);
-  if (fastMode === "auto") {
-    return undefined;
-  }
-  if (typeof fastMode === "boolean") {
-    return fastMode;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "on" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "1" ||
-    normalized === "fast"
-  ) {
-    return true;
-  }
-  if (
-    normalized === "off" ||
-    normalized === "false" ||
-    normalized === "no" ||
-    normalized === "0" ||
-    normalized === "normal"
-  ) {
-    return false;
-  }
-  return undefined;
+  return fastMode === "auto" ? undefined : fastMode;
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */

@@ -10,12 +10,12 @@ import {
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
   capturePendingAssistantUsage,
-  handleMessageEnd,
   handleMessageStart,
-  handleMessageUpdate,
   preservePendingAssistantUsage,
   resetPendingAssistantUsage,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+  handleMessageEnd,
+} from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -16,7 +17,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
-import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -818,19 +818,6 @@ describe("active-memory plugin", () => {
     );
 
     expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
-  });
-
-  it("does not synthesize a main agent when every configured agent opts out", () => {
-    expect(
-      hasRememberAcrossConversationsAgent({
-        agents: {
-          list: [
-            { id: "personal", memory: { search: { rememberAcrossConversations: false } } },
-            { id: "support", memory: { search: { rememberAcrossConversations: false } } },
-          ],
-        },
-      }),
-    ).toBe(false);
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {
@@ -5882,17 +5869,4 @@ describe("active-memory plugin", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

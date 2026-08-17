@@ -10,7 +10,7 @@ import {
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { withEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { testApi as loggerTest } from "./logger.js";
+import { testApi as loggerTest } from "./logger.test-support.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
 const secret = "sk-testsecret1234567890abcd";

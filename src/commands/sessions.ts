@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Session listing command.
  *
@@ -26,7 +27,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { info } from "../globals.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
@@ -156,20 +156,24 @@ const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   return theme.muted(label);
 };
 
+// Matches `openclaw status` semantics: show the recorded total whenever one
+// exists, and withhold only the percentage when freshness provenance is missing.
 const formatTokensCell = (
   total: number | undefined,
+  freshTotal: number | undefined,
   contextTokens: number | null,
   rich: boolean,
 ) => {
+  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
   if (total === undefined) {
-    const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
     const label = `unknown/${ctxLabel} (?%)`;
     return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
   }
-  const totalLabel = formatKTokens(total);
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
-  const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
+  const pct =
+    contextTokens && freshTotal !== undefined
+      ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
+      : null;
+  const label = `${formatKTokens(total)}/${ctxLabel} (${pct ?? "?"}%)`;
   const padded = label.padEnd(TOKENS_PAD);
   return colorByPct(padded, pct, rich);
 };
@@ -253,6 +257,7 @@ function stripChannelRecipientPrefix(
 }
 
 function resolveDisplayRuntimePolicySessionKey(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   key: string;
   entry: SessionEntry;
@@ -279,10 +284,12 @@ function resolveDisplayRuntimePolicySessionKey(params: {
   // Direct-message runtime policy can route by native user id, stripped
   // recipient, or sender; expose the derived key when it differs from the row.
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId: params.agentId,
     cfg,
     sessionKey: key,
     ctx: {
       SessionKey: key,
+      AgentId: params.agentId,
       Provider: channel,
       Surface: normalizeOptionalString(origin?.surface),
       AccountId: normalizeOptionalString(origin?.accountId ?? deliveryContext?.accountId),
@@ -315,11 +322,8 @@ export async function sessionsCommand(
   const aggregateAgents = opts.allAgents === true;
   const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
-  const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
-    configuredContextTokens ??
-    (await lookupContextTokensForDisplay(displayDefaults.model)) ??
-    DEFAULT_CONTEXT_TOKENS;
+    (await lookupContextTokensForDisplay(displayDefaults.model)) ?? DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
     opts: {
@@ -328,6 +332,7 @@ export async function sessionsCommand(
       allAgents: opts.allAgents,
     },
     runtime,
+    json: opts.json,
   });
   if (!targets) {
     return;
@@ -404,6 +409,7 @@ export async function sessionsCommand(
       displayModelRef: modelRef,
       kind: classifySessionKind(row.key, entry),
       runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
+        agentId,
         cfg,
         key: row.key,
         entry,
@@ -450,7 +456,6 @@ export async function sessionsCommand(
             // mirrors the terminal percentage calculation.
             contextTokens:
               r.contextTokens ??
-              configuredContextTokens ??
               (await lookupContextTokensForDisplay(modelRef.model)) ??
               configContextTokens ??
               null,
@@ -504,11 +509,9 @@ export async function sessionsCommand(
   for (const row of rows) {
     const model = row.displayModelRef.model;
     const contextTokens =
-      row.contextTokens ??
-      configuredContextTokens ??
-      (await lookupContextTokensForDisplay(model)) ??
-      configContextTokens;
-    const total = resolveFreshSessionTotalTokens(row);
+      row.contextTokens ?? (await lookupContextTokensForDisplay(model)) ?? configContextTokens;
+    const total = resolveSessionTotalTokens(row);
+    const freshTotal = resolveFreshSessionTotalTokens(row);
 
     const line = [
       ...(showAgentColumn
@@ -519,19 +522,10 @@ export async function sessionsCommand(
       formatSessionAgeCell(row.updatedAt, rich),
       formatSessionModelCell(model, rich),
       formatRuntimeCell(row.runtimeLabel, rich),
-      formatTokensCell(total, contextTokens ?? null, rich),
+      formatTokensCell(total, freshTotal, contextTokens ?? null, rich),
       formatSessionFlagsCell(row, rich),
     ].join(" ");
 
     runtime.log(line.trimEnd());
   }
-}
-
-const testing = {
-  parseSessionsLimit,
-} as const;
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsCommandTestApi")] =
-    testing;
 }

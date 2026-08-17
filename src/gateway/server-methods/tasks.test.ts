@@ -10,6 +10,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
@@ -82,9 +83,9 @@ function captureRespond() {
   return { calls, respond };
 }
 
-function createContext() {
+function createContext(config: Record<string, unknown> = {}) {
   return {
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => config,
   } as never;
 }
 
@@ -110,6 +111,7 @@ function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
 async function runTaskHandler(
   method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
   params: Record<string, unknown>,
+  config: Record<string, unknown> = {},
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(
@@ -119,7 +121,7 @@ async function runTaskHandler(
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,
-    context: createContext(),
+    context: createContext(config),
     client: null,
     isWebchatConnect: () => false,
   });
@@ -188,6 +190,77 @@ describe("tasks gateway handlers", () => {
       sessionKey: "agent:main:main",
     });
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
+  });
+
+  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      scopeKind: "session",
+      runId: "run-global",
+      task: "Owned task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const { calls, payload } = await runTaskHandler(
+      "tasks.list",
+      { sessionKey: "global" },
+      {
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      },
+    );
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
+  });
+
+  it("does not use the executor as the requester owner for a legacy bare task", () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      scopeKind: "session",
+      childSessionKey: "agent:research:subagent:child",
+      agentId: "research",
+      runId: "run-legacy-owner",
+      task: "Owned by ops, executed by research",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    expect(task.requesterAgentId).toBeUndefined();
+    const cfg = {
+      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      listTaskRecordPage({
+        offset: 0,
+        limit: 10,
+        sessionKey: "global",
+        sessionAgentId: "ops",
+        cfg,
+      }).tasks.map((entry) => entry.taskId),
+    ).toEqual([task.taskId]);
+    expect(
+      listTaskRecordPage({
+        offset: 0,
+        limit: 10,
+        sessionKey: "global",
+        sessionAgentId: "research",
+        cfg,
+      }).tasks,
+    ).toEqual([]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {

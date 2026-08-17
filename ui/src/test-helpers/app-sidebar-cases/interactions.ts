@@ -10,7 +10,6 @@ import {
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -139,8 +138,16 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        {
+          key: "agent:main:a",
+          agentId: "main",
+          expectedSessionId: "session:agent:main:a",
+        },
+        {
+          key: "agent:main:b",
+          agentId: "main",
+          expectedSessionId: "session:agent:main:b",
+        },
       ],
       { archived: true },
     );
@@ -190,13 +197,21 @@ describe("AppSidebar multi-select", () => {
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:a",
+        deferListRefresh: true,
+      },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:b",
+        deferListRefresh: true,
+      },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
@@ -227,13 +242,21 @@ describe("AppSidebar multi-select", () => {
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:a",
+        deferListRefresh: true,
+      },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: "session:agent:main:b",
+        deferListRefresh: true,
+      },
     );
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toHaveLength(
       1,
@@ -263,8 +286,18 @@ describe("AppSidebar multi-select", () => {
 
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
       expect(harness.deleteMany).toHaveBeenCalledWith([
-        { key: "agent:main:a", agentId: "main", deleteTranscript: true },
-        { key: "agent:main:b", agentId: "main", deleteTranscript: true },
+        {
+          key: "agent:main:a",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:a",
+        },
+        {
+          key: "agent:main:b",
+          agentId: "main",
+          deleteTranscript: true,
+          expectedSessionId: "session:agent:main:b",
+        },
       ]);
     } finally {
       restoreDialogPolyfill();
@@ -344,10 +377,6 @@ describe("AppSidebar catalog session rows", () => {
       );
       const navigated: Array<[string, unknown]> = [];
       sidebar.onNavigate = (routeId, options) => navigated.push([routeId, options]);
-      let navDrawerCloses = 0;
-      sidebar.onCloseNavDrawer = () => {
-        navDrawerCloses += 1;
-      };
       const header = sidebar.querySelector<HTMLElement>(
         '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
       );
@@ -373,10 +402,6 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-
-      // On a phone this menu lives inside the modal navigation drawer, which occludes
-      // and inerts the toast; the outcome only reaches the operator once it closes.
-      expect(navDrawerCloses).toBe(1);
 
       // Hiding must announce its own outcome: the section name, undo, and a recovery
       // path that opens the settings block instead of only naming it.
@@ -494,12 +519,16 @@ describe("AppSidebar catalog session rows", () => {
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
       try {
         await sidebar.updateComplete;
+        // The rendered row owns this catalog even if the global selection changes
+        // before its already-rendered click handler runs.
+        (sidebar as unknown as { newSessionAgentId: string }).newSessionAgentId = "jarvis";
         (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
       } finally {
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
       }
       expect(detail).toEqual({
         open: true,
+        agentId: "main",
         catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
       });
       expect(navigate).not.toHaveBeenCalled();
@@ -639,32 +668,27 @@ describe("AppSidebar catalog session rows", () => {
     }
   });
 
-  it("binds the adopted session immediately on the catalog-continued event", async () => {
+  it("returns an adopted session to the thread list when its catalog is hidden", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
-        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
-        ["agent:main:main", "agent:main:adopted-codex"],
-      );
-      expect(
-        sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]'),
-      ).toHaveLength(1);
-
-      document.dispatchEvent(
-        new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
-          detail: {
-            catalogId: "codex",
-            hostId: "gateway:local",
+        catalogList([
+          {
             threadId: "thread-1",
+            name: "Release checklist",
             sessionKey: "agent:main:adopted-codex",
           },
-        }),
+        ]),
+        ["agent:main:main", "agent:main:adopted-codex"],
       );
+      // Hiding the catalog removes the live row; the adopted key must fall
+      // back to a regular thread row, not vanish from the entire sidebar.
+      sidebar.hiddenSessionCatalogIds = new Set(["codex"]);
       await sidebar.updateComplete;
 
       const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
+      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).toBeNull();
     } finally {
       vi.useRealTimers();
     }

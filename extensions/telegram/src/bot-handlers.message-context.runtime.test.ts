@@ -1,9 +1,12 @@
 // Telegram tests cover forum topic recovery from the real message cache.
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it } from "vitest";
-import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.runtime.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTelegramMessageContextRuntime,
+  createTelegramMessageSessionRuntime,
+} from "./bot-handlers.message-context.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { resetTelegramMessageCacheForTest } from "./runtime.test-support.js";
 
 const CHAT_ID = 5678;
@@ -21,6 +24,7 @@ function createRuntime() {
   return createTelegramMessageContextRuntime({
     cfg,
     accountId: "default",
+    ownerAgentId: "main",
     opts: { token: "test" },
     telegramCfg: {},
     telegramDeps: {
@@ -43,6 +47,56 @@ function forumMessage(messageId: number, threadId?: number): Message {
 describe("resolveCachedMessageThreadSpec", () => {
   beforeEach(() => {
     resetTelegramMessageCacheForTest();
+  });
+
+  it("keeps account cache ownership separate from a topic-routed session owner", () => {
+    const resolveStorePath = vi.fn(
+      (_store, options: { agentId?: string }) =>
+        `/tmp/openclaw-telegram-owner-${options.agentId}.json`,
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {}, research: {} },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
+    } as OpenClawConfig;
+    createTelegramMessageContextRuntime({
+      cfg,
+      accountId: "primary",
+      ownerAgentId: "main",
+      opts: { token: "test" },
+      telegramCfg: {},
+      telegramDeps: {
+        resolveStorePath,
+      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
+    });
+    const sessionRuntime = createTelegramMessageSessionRuntime({
+      accountId: "primary",
+      resolveTelegramGroupConfig: () => ({ topicConfig: { agentId: "research" } }),
+      telegramDeps: {
+        resolveStorePath,
+      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
+    });
+
+    const session = sessionRuntime.resolveTelegramSessionState({
+      chatId: CHAT_ID,
+      isGroup: true,
+      isForum: true,
+      messageThreadId: TOPIC_ID,
+      senderId: 10,
+      runtimeCfg: cfg,
+    });
+
+    expect(resolveStorePath.mock.calls.map(([, options]) => options?.agentId)).toEqual([
+      "main",
+      "research",
+    ]);
+    expect(session).toMatchObject({
+      agentId: "research",
+      storePath: "/tmp/openclaw-telegram-owner-research.json",
+    });
+    expect(session.sessionKey).toContain("agent:research:");
   });
 
   it("recovers the topic of a recorded forum message", async () => {

@@ -6,12 +6,12 @@ import {
   type GatewayNativeApprovalMethod,
 } from "../infra/approval-gateway-runtime-methods.js";
 import type {
-  GatewayApprovalEventKind,
   GatewayApprovalEventSubscriber,
   GatewayApprovalRequest,
   GatewayApprovalResolved,
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
@@ -136,12 +136,13 @@ export function createGatewayInstanceRuntime(
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
         throw new Error(result.error ?? "recovery notice delivery failed");
       }
+      return { suppressed: result.deliveryStatus === "suppressed" };
     },
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
   const publish = (
-    kind: GatewayApprovalEventKind,
+    kind: ChannelApprovalKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
     shouldDeliver?: (subscriber: GatewayApprovalEventSubscriber) => boolean,
   ): number => {

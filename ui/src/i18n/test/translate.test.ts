@@ -111,6 +111,14 @@ describe("i18n", () => {
     );
   });
 
+  it("renders a provided empty-string param as empty, not the raw placeholder", () => {
+    expect(translate.t("connection.help.copyCommandAria", { command: "" })).toBe("Copy command: ");
+  });
+
+  it("keeps the visible placeholder when the param is missing", () => {
+    expect(translate.t("connection.help.copyCommandAria", {})).toBe("Copy command: {command}");
+  });
+
   it("should fallback to English if key is missing in another locale", async () => {
     translate.i18n.registerTranslation("zh-CN", { common: {} } as never);
     await translate.i18n.setLocale("zh-CN");

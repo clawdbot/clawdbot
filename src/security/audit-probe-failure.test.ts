@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
-import { runSecurityAudit } from "./audit.js";
+import { runSecurityAuditCore } from "./audit.js";
 
 function requireProbeFailure(findings: ReturnType<typeof collectDeepProbeFindings>) {
   const finding = findings.find((entry) => entry.checkId === "gateway.probe_failed");
@@ -20,7 +20,7 @@ describe("security audit deep probe failure", () => {
     const url = `wss://${user}:${password}@gateway.example.test/socket?client_secret=${querySecret}`;
 
     const report = await withEnvAsync({ OPENCLAW_GATEWAY_URL: undefined }, async () =>
-      runSecurityAudit({
+      runSecurityAuditCore({
         config: { gateway: { mode: "remote", remote: { url } } },
         sourceConfig: { gateway: { mode: "remote", remote: { url } } },
         env: {},

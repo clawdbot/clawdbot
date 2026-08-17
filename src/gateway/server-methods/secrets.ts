@@ -16,7 +16,7 @@ import {
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import {
   collectSecretStoreRefKeysInConfig,
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotState,
 } from "../../secrets/runtime-state.js";
 import {
   deleteSecretStoreEntry,
@@ -48,7 +48,7 @@ function toProtocolStoreEntry(
     }
     return { ...metadata, kind: "env", value: entry.valuePreview };
   }
-  return { ...metadata, kind: "secret" };
+  return { ...metadata, kind: "secret", allowedHosts: entry.allowedHosts ?? [] };
 }
 
 function storeUpdatedBy(client: GatewayClient | null): string {
@@ -136,7 +136,7 @@ export function createSecretsHandlers(params: {
   const reloadStoreReference = async (
     name: string,
   ): Promise<{ reloaded: boolean; warningCount?: number }> => {
-    const snapshot = getActiveSecretsRuntimeSnapshot();
+    const snapshot = getActiveSecretsRuntimeSnapshotState();
     const refKeys = snapshot
       ? collectSecretStoreRefKeysInConfig(snapshot.sourceConfig, name)
       : new Set<string>();
@@ -285,6 +285,9 @@ export function createSecretsHandlers(params: {
           name: requestParams.name,
           value: requestParams.value,
           kind: requestParams.kind,
+          ...(requestParams.allowedHosts !== undefined
+            ? { allowedHosts: requestParams.allowedHosts }
+            : {}),
           updatedBy: storeUpdatedBy(client),
         });
         stored = true;

@@ -26,7 +26,7 @@ import {
 } from "../../code-mode-control-tools.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { normalizeToolName } from "../../tool-policy.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   restrictToolSearchCatalog,
@@ -52,6 +52,13 @@ type PromptBuildToolPolicyBaseline = {
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
 
+function readNamedToolPluginMeta(tool: NamedTool): { pluginId: string } | undefined {
+  if (!("execute" in tool) || typeof tool.execute !== "function") {
+    return undefined;
+  }
+  return getPluginToolMeta(tool as AnyAgentTool);
+}
+
 export function applyResolvedToolPromptFinalizer(params: {
   prompt: string;
   activeToolNames: readonly string[];
@@ -63,7 +70,7 @@ export function applyResolvedToolPromptFinalizer(params: {
   return params.finalize({
     prompt: params.prompt,
     messageToolAvailable: params.activeToolNames.some(
-      (toolName) => normalizeToolName(toolName) === "message",
+      (toolName) => normalizeToolPolicyName(toolName) === "message",
     ),
   });
 }
@@ -71,8 +78,7 @@ export function applyResolvedToolPromptFinalizer(params: {
 function filterTools<T extends NamedTool>(
   tools: readonly T[],
   toolsAllow: string[],
-  toolMeta: (tool: T) => { pluginId: string } | undefined = (tool) =>
-    getPluginToolMeta(tool as unknown as AnyAgentTool),
+  toolMeta: (tool: T) => { pluginId: string } | undefined = readNamedToolPluginMeta,
 ): T[] {
   return applyEmbeddedAttemptToolsAllow([...tools], toolsAllow, {
     toolMeta,
@@ -136,17 +142,17 @@ export function applyPromptBuildToolsAllow<
     applyToolsAllow(
       params.baseline.activeToolNames.map((name) => ({ name })),
       toolsAllow,
-    ).map((tool) => normalizeToolName(tool.name)),
+    ).map((tool) => normalizeToolPolicyName(tool.name)),
   );
   for (const tool of [...allowedEffectiveTools, ...allowedUncompactedTools, ...allowedTools]) {
-    allowedActiveNames.add(normalizeToolName(tool.name));
+    allowedActiveNames.add(normalizeToolPolicyName(tool.name));
   }
 
   const catalogControlNames = params.codeModeControlsEnabled
     ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
     : TOOL_SEARCH_CONTROL_TOOL_NAMES;
   const keepVisibleTool = (tool: NamedTool) => {
-    const normalized = normalizeToolName(tool.name);
+    const normalized = normalizeToolPolicyName(tool.name);
     return (
       allowedActiveNames.has(normalized) ||
       (catalogToolCount > 0 && catalogControlNames.has(normalized))

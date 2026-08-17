@@ -10,11 +10,11 @@ import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
+  type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -293,7 +293,7 @@ async function readSessionEntries(params: {
         storePath: marker.storePath,
       })
     : undefined;
-  const markerMatches = listSessionEntries({
+  const markerMatches = listSessionEntriesCore({
     agentId: marker.agentId,
     storePath: marker.storePath,
   }).filter(({ entry }) => entry.sessionId === marker.sessionId);

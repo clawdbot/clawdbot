@@ -1,5 +1,13 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  DEFAULT_MAIN_KEY,
+  isReservedSessionRest,
+  normalizeControlUiBasePath,
+  parseShortSessionRef,
+} from "./grammar.js";
+
+export { normalizeControlUiBasePath };
 
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";
@@ -10,6 +18,7 @@ type BuildControlUiSessionPathParams = {
   fallbackAgentId?: string;
   basePath?: string;
   displayName?: string;
+  exactKey?: boolean;
   mainKey?: string;
   shortIdLength?: number;
 };
@@ -26,15 +35,7 @@ type BuildControlUiCatalogSessionUrlParams = {
 export const SESSION_UUID_SUFFIX_RE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 export const SHORT_SESSION_ID_RE = /^[0-9a-f]{8,32}$/iu;
-const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
 const SESSION_SLUG_MAX_LENGTH = 48;
-const DEFAULT_MAIN_KEY = "main";
-const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "sessions"]);
-
-function normalizeBasePath(basePath: string | undefined): string {
-  const trimmed = basePath?.trim().replace(/^\/+|\/+$/gu, "") ?? "";
-  return trimmed ? `/${trimmed}` : "";
-}
 
 function agentSessionKeyParts(sessionKey: string): { agentId: string; rest: string } | null {
   const parts = sessionKey.split(":");
@@ -63,14 +64,6 @@ function encodePathSegment(segment: string): string {
   return encoded.startsWith("~") ? `~${encoded}` : encoded;
 }
 
-function isReservedSessionRest(rest: string, mainKey: string | undefined): boolean {
-  const normalized = rest.toLowerCase();
-  return (
-    FIXED_RESERVED_SESSION_RESTS.has(normalized) ||
-    normalized === (normalizeNullableString(mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY)
-  );
-}
-
 export function controlUiSessionSlug(displayName: string | undefined | null): string {
   const tokens = (displayName ?? "")
     .toLowerCase()
@@ -84,10 +77,6 @@ export function controlUiSessionSlug(displayName: string | undefined | null): st
   return tokens.join("-").slice(0, SESSION_SLUG_MAX_LENGTH).replace(/-+$/gu, "");
 }
 
-function controlUiShortIdFromSessionRef(sessionRef: string): string | null {
-  return sessionRef.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase() ?? null;
-}
-
 export function buildControlUiSessionPath(params: BuildControlUiSessionPathParams): string | null {
   const rawKey = normalizeNullableString(params.sessionKey);
   const parsed = rawKey ? agentSessionKeyParts(rawKey) : null;
@@ -96,7 +85,7 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   if (!rawKey || !agentId || (!parsed && rawKey.toLowerCase().startsWith("agent:"))) {
     return null;
   }
-  const namespace = `${normalizeBasePath(params.basePath)}/${params.namespace}`;
+  const namespace = `${normalizeControlUiBasePath(params.basePath)}/${params.namespace}`;
   const encodedAgentId = encodePathSegment(agentId);
   const rest = parsed?.rest ?? rawKey;
   const normalizedRest = rest.toLowerCase();
@@ -107,6 +96,17 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
     normalizedRest === "global"
   ) {
     return `${namespace}/${encodedAgentId}`;
+  }
+  const segments = rest.split(":");
+  if (segments.some((segment) => !segment)) {
+    return null;
+  }
+  if (params.exactKey) {
+    const segment = segments[0] ?? "";
+    return segments.length === 1 &&
+      (isReservedSessionRest(segment, params.mainKey) || parseShortSessionRef(segment))
+      ? `${namespace}/${encodedAgentId}/~key/${encodePathSegment(segment)}`
+      : `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
   }
   const matchedUuid = parsed?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
   const uuid = matchedUuid?.toLowerCase().replaceAll("-", "") ?? null;
@@ -123,16 +123,9 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
       ? null
       : `${namespace}/${encodedAgentId}/${sessionRef}`;
   }
-  const segments = rest.split(":");
-  if (segments.some((segment) => !segment)) {
-    return null;
-  }
   if (segments.length === 1) {
     const segment = segments[0] ?? "";
-    if (
-      !isReservedSessionRest(segment, params.mainKey) &&
-      controlUiShortIdFromSessionRef(segment)
-    ) {
+    if (!isReservedSessionRest(segment, params.mainKey) && parseShortSessionRef(segment)) {
       return `${namespace}/${encodedAgentId}/~key/${encodePathSegment(segment)}`;
     }
   }

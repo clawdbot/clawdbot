@@ -347,10 +347,24 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
+  it("carries the admitted agent into channel bootstrap", async () => {
+    const cfg = {} as never;
+
+    await expectResolvedSelection({ cfg, channel: "alpha", agentId: "ops" });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      agentId: "ops",
+      allowBootstrap: true,
+    });
+  });
+
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },
-      expectedMessage: "Unknown channel: channel:c123",
+      expectedMessage:
+        'Unknown channel "channel:c123". Run `openclaw channels list --all` to see configured and installable channels.',
     },
     {
       setup: () => {

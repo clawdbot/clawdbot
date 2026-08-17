@@ -2,14 +2,14 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
-import * as cronStoreModule from "../../cron/store.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
@@ -112,7 +112,7 @@ afterEach(() => {
 });
 
 describe("cron service timer seam coverage", () => {
-  it("routes main cron jobs onto a cron run lane derived from the target agent", async () => {
+  it("routes main cron jobs to the owning agent's main session", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
@@ -123,9 +123,8 @@ describe("cron service timer seam coverage", () => {
       sessionKey: "agent:main-pr-router:main",
       state: { runningAtMs: now },
     };
-    const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
     const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath: sessionStorePath, sessionKey: "agent:main-pr-router:main" },
       {
         sessionId: "main-pr-router-session",
@@ -151,10 +150,10 @@ describe("cron service timer seam coverage", () => {
 
     const result = await executeJobCore(state, job);
 
-    expect(result).toMatchObject({ status: "ok", sessionKey: cronRunSessionKey });
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.sessionKey).toBeUndefined();
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main-pr-router",
       contextKey: "cron:main-heartbeat-job",
       deliveryContext: { channel: "discord", to: "channel-1", accountId: "default" },
     });
@@ -162,8 +161,7 @@ describe("cron service timer seam coverage", () => {
       source: "cron",
       intent: "immediate",
       reason: "cron:main-heartbeat-job",
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main-pr-router",
       owningCronJobMarker: undefined,
       heartbeat: { target: "last" },
     });
@@ -194,18 +192,15 @@ describe("cron service timer seam coverage", () => {
 
     await onTimer(state);
 
-    const cronRunSessionKey = `agent:ops:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "ops",
       contextKey: "cron:main-heartbeat-job",
     });
     expect(requestHeartbeat).toHaveBeenCalledWith({
       source: "cron",
       intent: "event",
       reason: "cron:main-heartbeat-job",
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "ops",
       heartbeat: { target: "last" },
     });
 
@@ -226,7 +221,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.agentId).toBe("ops");
     expect(task.ownerKey).toBe("");
     expect(task.scopeKind).toBe("system");
-    expect(task.childSessionKey).toBe(cronRunSessionKey);
+    expect(task.childSessionKey).toBeUndefined();
     expect(task.runId).toMatch(new RegExp(`^cron:main-heartbeat-job:${now}:`));
     expect(task.label).toBe("main heartbeat job");
     expect(task.task).toBe("main heartbeat job");
@@ -281,21 +276,29 @@ describe("cron service timer seam coverage", () => {
         }
       },
     });
-    const save = cronStoreModule.saveCronJobsStore;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (...args) => {
-        const marker = args[1].jobs[0]?.state.queuedAtMs;
+    const database = openOpenClawStateDatabase().db;
+    database.function("observe_timer_reservation", (stateJson) => {
+      if (typeof stateJson === "string") {
+        const marker = (JSON.parse(stateJson) as CronJob["state"]).queuedAtMs;
         if (reservedAt === undefined && typeof marker === "number") {
           reservedAt = marker;
         }
-        await save(...args);
-      });
+      }
+      return 0;
+    });
+    database.exec(`
+      CREATE TEMP TRIGGER observe_timer_reservation
+      AFTER UPDATE ON cron_jobs
+      WHEN NEW.job_id = '${job.id}'
+      BEGIN
+        SELECT observe_timer_reservation(NEW.state_json);
+      END;
+    `);
 
     try {
       await onTimer(state);
     } finally {
-      saveSpy.mockRestore();
+      database.exec("DROP TRIGGER IF EXISTS observe_timer_reservation");
     }
 
     expect(reservedAt).toEqual(expect.any(Number));
@@ -322,23 +325,20 @@ describe("cron service timer seam coverage", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
     let terminalStatePersisted = false;
     let finalizedAfterPersist = false;
-    const save = cronStoreModule.saveCronJobsStore;
     const finalize = taskExecutor.finalizeTaskRunByRunIdCore;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (...args) => {
-        await save(...args);
-        const persistedJob = args[1].jobs.find((entry) => entry.id === job.id);
-        if (
-          persistedJob?.state.runningAtMs === undefined &&
-          (persistedJob?.state.nextRunAtMs ?? 0) > now
-        ) {
-          terminalStatePersisted = true;
-        }
-      });
     const finalizeSpy = vi
       .spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
       .mockImplementation((params) => {
+        const persistedJob = openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT running_at_ms AS runningAtMs, next_run_at_ms AS nextRunAtMs FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+          )
+          .get(cronStoreKey(storePath), job.id) as {
+          runningAtMs: number | null;
+          nextRunAtMs: number | null;
+        };
+        terminalStatePersisted =
+          persistedJob.runningAtMs === null && (persistedJob.nextRunAtMs ?? 0) > now;
         finalizedAfterPersist = terminalStatePersisted;
         return finalize(params);
       });
@@ -359,9 +359,12 @@ describe("cron service timer seam coverage", () => {
       expect(finalizedAfterPersist).toBe(true);
       const task = findCronTaskByBaseRunId(`cron:${job.id}:${now}`);
       expect(task).toMatchObject({ status: "succeeded" });
-      expect(task?.detail).toEqual({ storeKey: cronStoreKey(storePath) });
+      expect(task?.detail).toEqual({
+        storeKey: cronStoreKey(storePath),
+        triggerFired: false,
+        triggerStateChanged: false,
+      });
     } finally {
-      saveSpy.mockRestore();
       finalizeSpy.mockRestore();
     }
   });
@@ -474,7 +477,7 @@ describe("cron service timer seam coverage", () => {
 
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("cron.triggers.enabled=true"),
+      error: expect.stringContaining("the operator set cron.triggers.enabled: false"),
     });
     expect(runScriptJob).not.toHaveBeenCalled();
   });
@@ -821,10 +824,8 @@ describe("cron service timer seam coverage", () => {
       { jobId: "main-heartbeat-job", error: ledgerError },
       "cron: failed to create task ledger record",
     );
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main",
       contextKey: "cron:main-heartbeat-job",
     });
 

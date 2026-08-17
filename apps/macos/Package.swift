@@ -20,7 +20,9 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.9.8"),
+        .package(
+            url: "https://github.com/openclaw/Peekaboo.git",
+            revision: "a48c462c757acbf320b22a6c9b34852e26bcb763"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),

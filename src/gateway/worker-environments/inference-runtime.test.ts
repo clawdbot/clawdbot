@@ -86,6 +86,13 @@ const identity: WorkerConnectionIdentity = {
   bundleHash: "bundle-hash-runtime-test",
   sessionId: SESSION_ID,
   runId: "run-runtime-test",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-runtime-test",
+    runId: "run-runtime-test",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
+  },
   ownerEpoch: 3,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -396,7 +403,6 @@ describe("worker inference provider runtime", () => {
     expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "runtime-agent",
-        inheritedAuthDir: expect.any(String),
       }),
     );
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];

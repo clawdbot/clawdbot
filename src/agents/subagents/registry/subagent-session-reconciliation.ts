@@ -7,7 +7,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type SessionEntry,
 } from "../../../config/sessions.js";
 import {
@@ -95,7 +95,7 @@ export function loadSubagentSessionEntry(params: {
   }
   const agentId = resolveAgentIdFromSessionKey(key);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   let store = params.storeCache?.get(storePath);
   if (!store) {
     store = Object.fromEntries(
@@ -120,7 +120,7 @@ function loadSubagentSessionEntryForAccessor(params: {
   }
   const agentId = resolveAgentIdFromSessionKey(key);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return loadSessionEntryReadOnly({
     storePath,
     sessionKey: key,

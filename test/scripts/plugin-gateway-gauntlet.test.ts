@@ -358,7 +358,6 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
     await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
-    await writeManifest("qqbot", "openclaw.plugin.json", JSON.stringify({ id: "qqbot" }));
     await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
 
     const matrix = discoverBundledPluginManifests(repoRoot);

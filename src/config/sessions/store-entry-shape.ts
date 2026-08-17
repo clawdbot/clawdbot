@@ -1,6 +1,7 @@
 // Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
@@ -11,13 +12,13 @@ function isSafeSessionId(value: unknown): value is string {
     return false;
   }
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 255) {
+  if (!trimmed || trimmed.length > 255 || trimmed !== trimmed.normalize("NFC")) {
     return false;
   }
   if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === "." || trimmed === "..") {
     return false;
   }
-  return /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed);
+  return /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._:@-]*$/u.test(trimmed);
 }
 
 function normalizeTranscriptSessionId(value: string): string | undefined {
@@ -39,7 +40,6 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
   const {
-    icon: _retiredIcon,
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     pendingFinalDeliveryCreatedAt,
@@ -58,8 +58,18 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     memoryFlushFailureCount,
     memoryFlushLastFailedAt: _memoryFlushLastFailedAt,
     memoryFlushLastFailureError: _memoryFlushLastFailureError,
+    owner: _projectedOwner,
+    participants: _projectedParticipants,
+    participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
+  const icon =
+    typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
+  if (icon) {
+    canonicalValue.icon = icon;
+  } else {
+    delete canonicalValue.icon;
+  }
   const legacyPendingText = normalizeOptionalString(pendingFinalDeliveryText);
   const legacySelectedModel = normalizeOptionalString(fallbackNoticeSelectedModel);
   const legacyActiveModel = normalizeOptionalString(fallbackNoticeActiveModel);
@@ -87,6 +97,14 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     canonicalValue.pendingFinalDelivery = pendingFinalDelivery;
   } else {
     delete canonicalValue.pendingFinalDelivery;
+  }
+  const pendingDeliveryNotice = normalizePendingDeliveryNotice(
+    canonicalValue.pendingDeliveryNotice,
+  );
+  if (pendingDeliveryNotice) {
+    canonicalValue.pendingDeliveryNotice = pendingDeliveryNotice;
+  } else {
+    delete canonicalValue.pendingDeliveryNotice;
   }
   const pendingTranscriptRepair = normalizePendingTranscriptRepair(
     canonicalValue.pendingTranscriptRepair,
@@ -144,25 +162,7 @@ function normalizePendingFinalDelivery(
     return undefined;
   }
   const intentId = normalizeOptionalString(value.intentId);
-  const deliveries: NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"] = Array.isArray(
-    value.deliveries,
-  )
-    ? value.deliveries.flatMap((delivery) => {
-        if (!isRecord(delivery)) {
-          return [];
-        }
-        const id = normalizeOptionalString(delivery.id);
-        const state = delivery.state;
-        return id &&
-          (state === "prepared" ||
-            state === "queued" ||
-            state === "delivered" ||
-            state === "suppressed" ||
-            state === "unknown")
-          ? [{ id, state }]
-          : [];
-      })
-    : undefined;
+  const deliveries = normalizePendingFinalDeliveries(value.deliveries);
   const base = {
     createdAt,
     ...(isRecord(value.context) ? { context: value.context } : {}),
@@ -174,6 +174,43 @@ function normalizePendingFinalDelivery(
   }
   const text = normalizeOptionalString(value.text);
   return value.kind === "replayable" && text ? { kind: "replayable", text, ...base } : undefined;
+}
+
+function normalizePendingFinalDeliveries(
+  value: unknown,
+): NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]> =
+    value.flatMap((item) => {
+      const id = isRecord(item) ? normalizeOptionalString(item.id) : undefined;
+      const state = isRecord(item) ? item.state : undefined;
+      return id &&
+        (state === "prepared" ||
+          state === "queued" ||
+          state === "delivered" ||
+          state === "suppressed" ||
+          state === "unknown")
+        ? [{ id, state }]
+        : [];
+    });
+  return deliveries.length > 0 ? deliveries : undefined;
+}
+
+function normalizePendingDeliveryNotice(
+  value: unknown,
+): SessionEntry["pendingDeliveryNotice"] | undefined {
+  if (!isRecord(value) || !isRecord(value.context)) {
+    return undefined;
+  }
+  const createdAt = normalizeOptionalTimestamp(value.createdAt);
+  const intentId = normalizeOptionalString(value.intentId);
+  return createdAt !== undefined &&
+    intentId &&
+    (value.state === "owed" || value.state === "unresolved")
+    ? { createdAt, context: value.context, intentId, state: value.state }
+    : undefined;
 }
 
 function normalizePendingTranscriptRepair(

@@ -1,11 +1,9 @@
 // Telegram plugin module implements lane delivery text deliverer behavior.
 import {
   createPreviewMessageReceipt,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
@@ -13,6 +11,7 @@ import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -43,6 +42,7 @@ export type LaneDeliveryResult =
       kind: "preview-finalized";
       delivery: LanePreviewFinalizedDelivery;
     }
+  | { kind: "preview-finalized-partial"; delivery: LanePreviewFinalizedDelivery; error: unknown }
   | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" };
 
 type CreateLaneTextDelivererParams = {
@@ -92,8 +92,10 @@ type DeliverLaneTextParams = {
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
+export type LaneTextDeliverer = (params: DeliverLaneTextParams) => Promise<LaneDeliveryResult>;
+
 function result(
-  kind: LaneDeliveryResult["kind"],
+  kind: Exclude<LaneDeliveryResult["kind"], "preview-finalized-partial">,
   delivery?: LanePreviewFinalizedDeliveryInput,
 ): LaneDeliveryResult {
   if (kind === "preview-finalized") {
@@ -109,7 +111,7 @@ function result(
   return { kind };
 }
 
-export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
+export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): LaneTextDeliverer {
   const textOnlyPayload = (payload: ReplyPayload): ReplyPayload => {
     const {
       mediaUrl: _mediaUrl,
@@ -174,10 +176,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     ) {
       return payload;
     }
-    const telegramRest =
-      telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
-        ? (telegramData as Record<string, unknown>)
-        : {};
+    const telegramRest = asNonArrayRecord(telegramData);
     return {
       ...payload,
       channelData: {
@@ -317,7 +316,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       await onPlatformSendDispatch?.();
     }
     if (finalizePreview) {
-      await params.stopDraftLane(lane);
+      if (previewAlreadyVisible) {
+        // Cleanup cannot invalidate an accepted preview or create fresh send custody.
+        await params.stopDraftLane(lane).catch(() => undefined);
+      } else {
+        await params.stopDraftLane(lane);
+      }
     } else {
       await params.flushDraftLane(lane);
     }
@@ -474,19 +478,26 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           finalizedPreview.delivery.buttonsAttached === true;
         const mediaText =
           finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
-        await params.sendPayload(
-          mediaOnlyPayload(payload, mediaText, {
-            stripButtons,
-            fallbackButtons: stripButtons ? undefined : buttons,
-          }),
-          {
-            afterAcceptedDraft: true,
-            durable,
-            promptContextSequence,
-            onPlatformSendDispatch,
-            bindPendingFinalDelivery,
-          },
-        );
+        try {
+          await params.sendPayload(
+            mediaOnlyPayload(payload, mediaText, {
+              stripButtons,
+              fallbackButtons: stripButtons ? undefined : buttons,
+            }),
+            {
+              afterAcceptedDraft: true,
+              durable,
+              promptContextSequence,
+              onPlatformSendDispatch,
+              bindPendingFinalDelivery,
+            },
+          );
+        } catch (error) {
+          if (durable && finalizedPreview.kind === "preview-finalized") {
+            return { ...finalizedPreview, kind: "preview-finalized-partial", error };
+          }
+          throw error;
+        }
         return finalizedPreview;
       }
     }

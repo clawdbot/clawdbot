@@ -190,9 +190,13 @@ Create a bot with [@BotFather](https://t.me/botfather) (`/newbot`), copy the
 token, then configure OpenClaw from the sandbox SSH session:
 
 ```bash
-openclaw config set channels.telegram.enabled true
-openclaw config set channels.telegram.botToken YOUR_BOT_TOKEN
+export TELEGRAM_BOT_TOKEN="<bot-token>"
+openclaw channels add --channel telegram --use-env
 ```
+
+Also store `TELEGRAM_BOT_TOKEN=<bot-token>` in `~/.openclaw/.env` so the
+background Gateway receives it after a restart. `--use-env` validates the token
+without copying it into `openclaw.json`.
 
 Restart the Gateway (see above), send your bot a DM, then approve the pairing
 code it reports:
@@ -238,8 +242,11 @@ personal-number mode, and self-chat details: [WhatsApp](/channels/whatsapp).
 The snapshot's global npm tree is owned by root, so plain `openclaw update`
 cannot write to it. Update from the sandbox SSH session with:
 
+The command below is for npm 12 or npm 11.16+. On npm 11.12 and earlier,
+omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+
 ```bash
-sudo env "PATH=$PATH" npm install --global openclaw@latest
+sudo env "PATH=$PATH" npm install --global openclaw@latest --allow-scripts=openclaw
 openclaw doctor
 ```
 

@@ -19,8 +19,8 @@ import {
   generateMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
-import type { MusicGenerationOutputFormat } from "../../music-generation/types.js";
 import type {
+  MusicGenerationOutputFormat,
   MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
@@ -614,6 +614,7 @@ export function createMusicGenerateTool(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -671,7 +672,10 @@ export function createMusicGenerateTool(options?: {
       }
 
       if (action === "status") {
-        return createMusicGenerateStatusActionResult(options?.agentSessionKey);
+        return createMusicGenerateStatusActionResult(
+          options?.agentSessionKey,
+          options?.requesterAgentId,
+        );
       }
 
       const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
@@ -690,7 +694,7 @@ export function createMusicGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createMusicGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt },
+        { prompt, agentId: options?.requesterAgentId },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -749,7 +753,7 @@ export function createMusicGenerateTool(options?: {
       });
       const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt, requestKey },
+        { prompt, requestKey, agentId: options?.requesterAgentId },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
@@ -775,17 +779,20 @@ export function createMusicGenerateTool(options?: {
       signal?.throwIfAborted();
       const taskHandle = createMusicGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
+        requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
         providerId: selectedProvider?.id ?? selectedModelRef?.provider,
       });
       const shouldDetach = Boolean(
-        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+        taskHandle &&
+        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
       );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
+          agentId: options?.requesterAgentId,
           taskKind: "music_generation",
           sourcePrefix: "music_generate",
           taskId: taskHandle.taskId,

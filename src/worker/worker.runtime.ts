@@ -1,6 +1,8 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
@@ -48,8 +50,19 @@ async function assertWorkspaceDirectory(workspaceDir: string): Promise<string> {
 
 export async function runWorkerDescriptor(
   descriptor: WorkerLaunchDescriptor,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    onConnectionFailure?: (cause: string | undefined) => void;
+    browserRuntime?: WorkerBrowserRuntime;
+  } = {},
 ): Promise<WorkerRuntimeResult> {
+  if (
+    descriptor.connectionEndpoint.kind === "websocket" &&
+    descriptor.connectionEndpoint.cloudflareAccess
+  ) {
+    registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientId);
+    registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientSecret);
+  }
   const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
@@ -63,8 +76,9 @@ export async function runWorkerDescriptor(
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
   const connection = createWorkerConnection({
-    socketPath: descriptor.socketPath,
+    endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
@@ -142,6 +156,7 @@ export async function runWorkerDescriptor(
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
+        ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },
         transcript: {
           commit: async (messages) => {
@@ -149,18 +164,13 @@ export async function runWorkerDescriptor(
           },
         },
         live: {
-          emit: async (event) => {
-            await live.emit(descriptor.assignment.runId, event);
-            if (
-              event.kind === "lifecycle" &&
-              (event.payload.phase === "finishing" ||
-                event.payload.phase === "end" ||
-                event.payload.phase === "error")
-            ) {
-              resultFenceAcked = true;
-            }
+          enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
+          emitTerminal: async (event) => {
+            await live.emitTerminal(descriptor.assignment.runId, event);
+            resultFenceAcked = true;
           },
         },
+        sessions: connection,
         signal: abortController.signal,
       });
       if (options.signal?.aborted) {

@@ -80,6 +80,7 @@ export async function authorizeExistingGatewayDevice(params: {
       isControlUi,
       isWebchat,
       isNativeAppUi,
+      authMethod,
       reason: "metadata-upgrade",
     });
     if (!allowSilentMetadataUpgrade) {

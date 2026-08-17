@@ -3,12 +3,9 @@
  * Callers canonicalize aliases before dispatch so payloads cannot carry
  * conflicting limits.
  */
-const MAX_TOKENS_PARAM_KEYS = ["maxTokens", "max_completion_tokens", "max_tokens"] as const;
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
-/** Return a finite non-negative max-token value, or undefined for invalid input. */
-function resolveNonNegativeMaxTokensParam(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
+const MAX_TOKENS_PARAM_KEYS = ["maxTokens", "max_completion_tokens", "max_tokens"] as const;
 
 /** Resolve the first supported max-token parameter present in a params object. */
 export function resolveMaxTokensParam(
@@ -18,7 +15,7 @@ export function resolveMaxTokensParam(
     return undefined;
   }
   for (const key of MAX_TOKENS_PARAM_KEYS) {
-    const resolved = resolveNonNegativeMaxTokensParam(params[key]);
+    const resolved = asNonNegativeFiniteNumber(params[key]);
     if (resolved !== undefined) {
       return resolved;
     }

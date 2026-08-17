@@ -1,5 +1,6 @@
 // Tests runtime policy session-key derivation for routed replies.
 import { describe, expect, it } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
@@ -116,5 +117,49 @@ describe("resolveRuntimePolicySessionKey", () => {
         },
       }),
     ).toBe("agent:main:telegram:default:direct:alice");
+  });
+
+  it("uses the persisted fixed-store owner for a bare global policy key", () => {
+    const explicitConfig: OpenClawConfig = {
+      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "research" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    expect(
+      resolveRuntimePolicySessionKey({
+        cfg: explicitConfig,
+        sessionKey: "global",
+        ctx: {
+          OriginatingChannel: "slack" as MsgContext["OriginatingChannel"],
+          ChatType: "direct",
+          SenderId: "U123",
+        },
+      }),
+    ).toBe("agent:research:slack:default:direct:u123");
+    expect(() =>
+      resolveRuntimePolicySessionKey({
+        cfg: explicitConfig,
+        sessionKey: "global",
+        ctx: { AgentId: "ops" },
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
+  it("uses an explicit agent for a bare main alias without config", () => {
+    expect(
+      resolveRuntimePolicySessionKey({
+        agentId: "research",
+        sessionKey: "main",
+        ctx: {
+          OriginatingChannel: "slack" as MsgContext["OriginatingChannel"],
+          ChatType: "direct",
+          SenderId: "U123",
+        },
+      }),
+    ).toBe("agent:research:slack:default:direct:u123");
   });
 });
