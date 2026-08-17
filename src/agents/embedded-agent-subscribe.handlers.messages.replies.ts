@@ -37,6 +37,10 @@ export function mergeReplyDirectiveResults(
     return first;
   }
   const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
+  const fencedSkippedMediaDirectives = uniqueStrings([
+    ...(first.fencedSkippedMediaDirectives ?? []),
+    ...(second.fencedSkippedMediaDirectives ?? []),
+  ]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
@@ -45,6 +49,9 @@ export function mergeReplyDirectiveResults(
     replyToTag: first.replyToTag || second.replyToTag,
     audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
     isSilent: first.isSilent || second.isSilent,
+    mediaTokenSkippedInFence:
+      Boolean(first.mediaTokenSkippedInFence) || Boolean(second.mediaTokenSkippedInFence),
+    fencedSkippedMediaDirectives,
   };
 }
 
