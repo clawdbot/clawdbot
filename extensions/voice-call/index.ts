@@ -97,6 +97,9 @@ const VOICE_CALL_RUNTIME_COORDINATOR_KEY = Symbol.for("openclaw.voice-call.runti
 type VoiceCallRuntimeGeneration = {
   epoch: number;
   retired: boolean;
+  serviceHealth?: Parameters<
+    Parameters<OpenClawPluginApi["registerService"]>[0]["start"]
+  >[0]["serviceHealth"];
   stopPromise?: Promise<void>;
 };
 
@@ -179,7 +182,7 @@ export default definePluginEntry({
       coreConfig: api.config as OpenClawConfig,
     });
 
-    const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
+    const ensureRuntimeForGeneration = async (): Promise<VoiceCallRuntime> => {
       activateVoiceCallRuntimeGeneration(runtimeCoordinator, runtimeGeneration);
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
@@ -246,6 +249,20 @@ export default definePluginEntry({
           promise: runtimePromise,
         };
         runtimeCoordinator.slot = startingSlot;
+      }
+    };
+    const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
+      try {
+        const runtime = await ensureRuntimeForGeneration();
+        runtimeGeneration.serviceHealth?.clearFailure();
+        return runtime;
+      } catch (err) {
+        const staleGeneration =
+          runtimeGeneration.retired || runtimeGeneration.epoch < runtimeCoordinator.registeredEpoch;
+        if (!(err instanceof VoiceCallRuntimeLifecycleError && staleGeneration)) {
+          runtimeGeneration.serviceHealth?.reportFailure(err);
+        }
+        throw err;
       }
     };
 
@@ -513,7 +530,8 @@ export default definePluginEntry({
 
     api.registerService({
       id: "voicecall",
-      start: () => {
+      start: (ctx) => {
+        runtimeGeneration.serviceHealth = ctx.serviceHealth;
         if (isCliOnlyProcess()) {
           return;
         }
@@ -587,6 +605,7 @@ export default definePluginEntry({
           if (runtimeCoordinator.current === runtimeGeneration) {
             runtimeCoordinator.current = undefined;
           }
+          runtimeGeneration.serviceHealth = undefined;
         }
       },
     });
