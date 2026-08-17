@@ -189,7 +189,8 @@ export const streamOpenAICompletions: StreamFunction<
 
       let textBlock: TextContent | null = null;
       let thinkingBlock: ThinkingContent | null = null;
-      let lastInterruptedTextBlock: TextContent | null = null;
+      let pendingInterruptedTextBlock: TextContent | null = null;
+      let confirmedInterruptedTextBlock: TextContent | null = null;
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
@@ -292,6 +293,10 @@ export const streamOpenAICompletions: StreamFunction<
         sealNativeReasoningBeforeText();
         const block = ensureTextBlock();
         block.text += delta;
+        if (pendingInterruptedTextBlock && delta.trim()) {
+          confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
+          pendingInterruptedTextBlock = null;
+        }
         stream.push({
           type: "text_delta",
           contentIndex: getContentIndex(block),
@@ -376,7 +381,7 @@ export const streamOpenAICompletions: StreamFunction<
         // Resumed reasoning makes the preceding visible text interim. Preserve
         // the candidate boundary only if later text confirms a final answer.
         if (textBlock.text.trim()) {
-          lastInterruptedTextBlock = textBlock;
+          pendingInterruptedTextBlock = textBlock;
         }
         finishBlock(textBlock);
         textBlock = null;
@@ -604,8 +609,8 @@ export const streamOpenAICompletions: StreamFunction<
               : "Provider returned an invalid tool call"),
         );
       }
-      if (output.stopReason !== "toolUse" && lastInterruptedTextBlock) {
-        tagInterruptedTextPhases(output.content, lastInterruptedTextBlock);
+      if (output.stopReason !== "toolUse" && confirmedInterruptedTextBlock) {
+        tagInterruptedTextPhases(output.content, confirmedInterruptedTextBlock);
       }
       // Tool completion is irreversible: confirm the terminal before closing
       // blocks, then preserve their original text/thinking/tool event order.

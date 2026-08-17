@@ -208,6 +208,15 @@ const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiInterleavedThenTrailingReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Second thought." }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const anthropicFailure = {
   status: 429,
   body: {
@@ -534,6 +543,39 @@ describe("provider and transport observable parity fixtures", () => {
           thinkingSignature: "reasoning_content",
         },
         { type: "text", text: " " },
+      ]);
+
+      const interleavedThenTrailingReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiInterleavedThenTrailingReasoningChunks,
+      );
+      expect(interleavedThenTrailingReasoningResult.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Trailing thought.",
+          thinkingSignature: "reasoning_content",
+        },
       ]);
     }
   });

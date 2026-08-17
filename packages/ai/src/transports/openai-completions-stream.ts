@@ -102,7 +102,8 @@ export async function processCompletionsStream(
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
     | ToolCallBlock
     | null = null;
-  let lastInterruptedTextBlock: TextBlock | null = null;
+  let pendingInterruptedTextBlock: TextBlock | null = null;
+  let confirmedInterruptedTextBlock: TextBlock | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
@@ -166,6 +167,10 @@ export async function processCompletionsStream(
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
     currentBlock.text += text;
+    if (pendingInterruptedTextBlock && text.trim()) {
+      confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
+      pendingInterruptedTextBlock = null;
+    }
     pushStreamEvent({
       type: "text_delta",
       contentIndex: blockIndex(),
@@ -333,7 +338,7 @@ export async function processCompletionsStream(
     // Resumed reasoning makes the preceding visible text interim. Preserve
     // the candidate boundary only if later text confirms a final answer.
     if (currentBlock.text.trim()) {
-      lastInterruptedTextBlock = currentBlock;
+      pendingInterruptedTextBlock = currentBlock;
     }
     currentBlock = null;
   };
@@ -562,12 +567,12 @@ export async function processCompletionsStream(
     },
   });
   if (
-    lastInterruptedTextBlock &&
+    confirmedInterruptedTextBlock &&
     output.stopReason !== "toolUse" &&
     output.stopReason !== "error" &&
     output.stopReason !== "aborted"
   ) {
-    tagInterruptedTextPhases(output.content, lastInterruptedTextBlock);
+    tagInterruptedTextPhases(output.content, confirmedInterruptedTextBlock);
   }
   if (output.stopReason !== "toolUse") {
     clearPendingCommentaryText(provisionalCommentaryTags);
