@@ -125,7 +125,16 @@ describe("normalizeCronJobPrecheck", () => {
         command: "echo hi",
         workExitCodes: [0, "x" as unknown as number],
       }),
-    ).toThrow(/workExitCodes must contain only finite numbers/);
+    ).toThrow(/workExitCodes must contain only integers/);
+  });
+
+  it("rejects fractional persisted exit codes (no silent trunc)", () => {
+    expect(() =>
+      normalizeCronJobPrecheck(
+        { command: "true", workExitCodes: [0.5] },
+        { requireCommand: true },
+      ),
+    ).toThrow(/workExitCodes must contain only integers/);
     expect(() => normalizeCronJobPrecheck({ command: "echo hi", noWorkExitCodes: [] })).toThrow(
       /noWorkExitCodes must be a non-empty array/,
     );

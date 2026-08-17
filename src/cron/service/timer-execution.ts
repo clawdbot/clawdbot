@@ -116,24 +116,35 @@ export async function executeJobCore(
     };
     let toolsExec: PrecheckExecLayer | undefined;
     let agentToolsExec: PrecheckExecLayer | undefined;
+    // Bind precheck approvals + tools.exec to the canonical effective cron owner
+    // (not bare job.agentId). Agent-less jobs inherit the configured default agent
+    // for BOTH config layers and approval records (ClawSweeper P1 #112375).
+    let precheckAgentId: string | undefined = job.agentId;
     try {
       const cfg = getRuntimeConfig();
       toolsExec = cfg.tools?.exec;
-      const agentId =
-        job.agentId ?? state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-      if (agentId) {
-        agentToolsExec = resolveAgentConfig(cfg, agentId)?.tools?.exec;
+      const configuredDefault =
+        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+      precheckAgentId = resolveCronJobEffectiveAgentId(job, configuredDefault);
+      agentToolsExec = resolveAgentConfig(cfg, precheckAgentId)?.tools?.exec;
+    } catch (err) {
+      // Fail closed on config/owner resolution errors: deny host-shell precheck
+      // rather than falling through to approval-file defaults (security=full).
+      if (
+        err instanceof Error &&
+        err.message.includes("Agent-less cron job has no resolvable owner")
+      ) {
+        toolsExec = { security: "deny" };
+        precheckAgentId = undefined;
+      } else {
+        toolsExec = { security: "deny" };
       }
-    } catch {
-      // Fail closed on config read errors: deny host-shell precheck rather than
-      // falling through to approval-file defaults (security=full).
-      toolsExec = { security: "deny" };
     }
     const precheckResult = await runCronJobPrecheck(job.precheck, {
       abortSignal,
       authz: {
         triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
-        agentId: job.agentId,
+        agentId: precheckAgentId,
         toolsExec,
         agentToolsExec,
       },

@@ -66,10 +66,11 @@ export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | unde
     }
     const nums: number[] = [];
     for (const x of v) {
-      if (typeof x !== "number" || !Number.isFinite(x)) {
-        throw new Error(`precheck.${field} must contain only finite numbers`);
+      // Protocol requires integers; refuse silent truncation of 0.5 → 0 (ClawSweeper P2).
+      if (typeof x !== "number" || !Number.isFinite(x) || !Number.isInteger(x)) {
+        throw new Error(`precheck.${field} must contain only integers`);
       }
-      nums.push(Math.trunc(x));
+      nums.push(x);
     }
     return nums;
   };

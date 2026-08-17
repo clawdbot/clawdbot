@@ -645,6 +645,54 @@ describe("cron service timer seam coverage", () => {
     }
   });
 
+  it("binds precheck authz to effective default agent for agent-less jobs", async () => {
+    // ClawSweeper P1: agent-less jobs must pass effective owner (defaultAgentId)
+    // into precheck authz, not bare job.agentId (generic default approvals).
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-08-17T18:30:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const spy = vi
+      .spyOn(jobPrecheck, "runCronJobPrecheck")
+      .mockImplementation(async (_spec, opts) => {
+        expect(opts?.authz?.agentId).toBe("main");
+        return {
+          decision: "skip",
+          reason: "precheck-no-work",
+          exitCode: 2,
+          stdout: "",
+          stderr: "",
+        } as Awaited<ReturnType<typeof jobPrecheck.runCronJobPrecheck>>;
+      });
+    try {
+      const job: CronJob = {
+        ...createDueIsolatedAgentJob({ now }),
+        id: "precheck-effective-agent",
+        agentId: undefined,
+        precheck: { kind: "exec", command: "exit 2" },
+      };
+      // Drop agentId from the job record for agent-less path.
+      delete (job as { agentId?: string }).agentId;
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      await onTimer(state);
+
+      expect(spy).toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("persists precheck-policy-denied through onTimer without an agent turn", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-25T12:30:00.000Z");
