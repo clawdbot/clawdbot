@@ -11,7 +11,6 @@ import {
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import {
-  boardExists,
   canvasWidgetNameForDocument,
   mcpAppWidgetNameForViewId,
   type BoardProvider,
@@ -42,11 +41,7 @@ type WidgetCardOptions = {
   boardProvider?: BoardProvider;
 };
 
-async function pinWidget(
-  event: Event,
-  idleLabel: string,
-  pin: () => Promise<void>,
-): Promise<void> {
+async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> {
   const button = event.currentTarget;
   if (!(button instanceof HTMLButtonElement)) {
     return;
@@ -61,7 +56,7 @@ async function pinWidget(
     button.dataset.pinned = "true";
   } catch {
     button.disabled = false;
-    button.ariaLabel = idleLabel;
+    button.ariaLabel = t("chat.toolCards.pinToDashboard");
     const failureLabel = t("chat.toolCards.pinToDashboardFailed");
     button.title = failureLabel;
     showToast({ message: failureLabel });
@@ -73,13 +68,12 @@ async function pinCanvasWidget(
   preview: ToolPreview,
   provider: BoardProvider,
   name: string,
-  idleLabel: string,
 ): Promise<void> {
   const docId = preview.viewId?.trim();
   if (!docId) {
     return;
   }
-  return pinWidget(event, idleLabel, () =>
+  return pinWidget(event, () =>
     provider.pinWidget({
       docId,
       name,
@@ -94,9 +88,8 @@ async function pinMcpAppWidget(
   provider: BoardProvider,
   name: string,
   viewId: string,
-  idleLabel: string,
 ): Promise<void> {
-  return pinWidget(event, idleLabel, () =>
+  return pinWidget(event, () =>
     provider.pinMcpApp({
       viewId,
       name,
@@ -545,14 +538,7 @@ function renderWidgetCard(
     ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
     : undefined;
   const pinned = Boolean(pinnedWidget);
-  const hasDashboard = provider ? boardExists(provider.snapshot$.value) : false;
-  const pinLabel = t(
-    pinned
-      ? "chat.toolCards.pinnedToDashboard"
-      : hasDashboard
-        ? "chat.toolCards.pinToDashboard"
-        : "chat.toolCards.createDashboard",
-  );
+  const pinLabel = t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
   const pinAction =
     provider &&
     (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
@@ -571,10 +557,10 @@ function renderWidgetCard(
           aria-label=${pinLabel}
           @click=${(event: Event) =>
             contentKind === "mcp-app" && mcpAppViewId
-              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId, pinLabel)
-              : void pinCanvasWidget(event, preview, provider, pinName, pinLabel)}
+              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
+              : void pinCanvasWidget(event, preview, provider, pinName)}
         >
-          ${pinned || hasDashboard ? icons.pin : icons.layoutDashboard}
+          ${icons.pin}
         </button>`
       : nothing;
   const widgetActions = renderWidgetActions(preview, Boolean(options?.rawText));

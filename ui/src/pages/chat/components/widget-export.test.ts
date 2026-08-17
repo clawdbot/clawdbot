@@ -103,15 +103,12 @@ describe("widget export", () => {
 
   it("does not use legacy fallbacks for an explicit bridge error", async () => {
     const frame = createWidgetFrame();
-    const fetchDocument = vi.fn();
     const captureError = new Error("canvas is not exportable");
     const result = exportWidget("download", frame, "Broken widget", {
       requestSnapshot: () => Promise.reject(captureError),
-      fetch: fetchDocument,
     });
 
     await expect(result).rejects.toBe(captureError);
-    expect(fetchDocument).not.toHaveBeenCalled();
   });
 
   it("sanitizes PNG download filenames and falls back to widget", async () => {

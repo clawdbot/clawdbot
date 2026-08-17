@@ -5756,7 +5756,6 @@ export const en: TranslationMap = {
       downloadFile: "Download file",
       copyAsImage: "Copy as image",
       downloadAsImage: "Download as image",
-      createDashboard: "Create dashboard",
       widgetExportRerender: "This widget needs to be re-rendered to export as an image.",
       widgetExportFailed: "Widget export failed. Try again.",
       pinToDashboard: "Pin to dashboard",
