@@ -67,6 +67,23 @@ describe("Reef inbound dispatch content", () => {
       MessageThreadId: "thread-1",
     });
   });
+
+  it("does not invent a thread for an explicitly correlated unthreaded reply", () => {
+    const content = resolveReefInboundDispatchContent({
+      id: "message-2",
+      peer: "clanky",
+      text: "correlated reply",
+      provenance: "Untrusted third-party data from @clanky's agent.",
+      autonomy: "bounded",
+      replyTo: "message-1",
+    });
+
+    expect(content.extraContext).toMatchObject({
+      ReplyToId: "message-1",
+      ReplyToIdFull: "message-1",
+    });
+    expect(content.extraContext).not.toHaveProperty("MessageThreadId");
+  });
 });
 
 describe("Reef message-tool threading", () => {
