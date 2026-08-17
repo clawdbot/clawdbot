@@ -1100,6 +1100,7 @@ export const en: TranslationMap = {
   },
   agents: {
     noAgents: "No agents",
+    createdBy: "Created by {id}",
     defaults: {
       title: "Agent defaults",
       description: "Defaults every agent inherits unless overridden.",
