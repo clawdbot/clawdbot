@@ -2301,6 +2301,9 @@ importers:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../gateway-client
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../gateway-protocol
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
