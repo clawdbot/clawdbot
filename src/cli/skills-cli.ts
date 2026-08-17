@@ -21,7 +21,6 @@ import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
   fetchClawHubSkillCard,
-  fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -34,6 +33,7 @@ import {
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
+  verifySkillWithClawHub,
 } from "../skills/lifecycle/clawhub.js";
 import {
   installSkillFromSource,
@@ -893,7 +893,7 @@ export function registerSkillsCli(program: Command) {
             reportError(target.error);
             exitCode = 1;
           } else {
-            const verification = await fetchClawHubSkillVerification({
+            const result = await verifySkillWithClawHub({
               slug: target.slug,
               ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               ...(target.requestedReference
@@ -903,7 +903,11 @@ export function registerSkillsCli(program: Command) {
               tag: target.tag,
               baseUrl: target.baseUrl,
             });
-            if (opts.card && !hasJsonOutput(opts)) {
+            if (!result.ok) {
+              reportError(result.error);
+              exitCode = 1;
+            } else if (opts.card && !hasJsonOutput(opts)) {
+              const verification = result.value;
               const cardUrl = readVerifiedSkillCardUrl(verification);
               if (!cardUrl.ok) {
                 reportError(cardUrl.error);
@@ -917,6 +921,7 @@ export function registerSkillsCli(program: Command) {
                 exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
               }
             } else {
+              const verification = result.value;
               defaultRuntime.writeJson(buildSkillVerificationOutput(verification, target));
               exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
             }
