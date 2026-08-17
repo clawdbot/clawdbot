@@ -689,11 +689,12 @@ export class CustodianSessionStore {
       this.setupIssue = null;
       const step = result.step ?? null;
       const question = step ? null : parseCustodianQuestion(result.question);
-      if (this.rejoinBarrierPending && !hasCustodianUserInput(params) && !step && !question) {
+      if (this.rejoinBarrierPending && !hasCustodianUserInput(params)) {
         // Rejoin barrier: this input-free request queued behind any in-flight
         // turn on the Gateway's per-session queue, so refreshing here shows
-        // rows a racing turn persisted after the initial history fetch.
-        // Once per restored id; skipped when a live control is about to render.
+        // rows a racing turn persisted after the initial history fetch. Runs
+        // before the reply/control is appended, so a projected live wizard or
+        // question renders on top of the reconciled rows. Once per restored id.
         this.rejoinBarrierPending = false;
         await this.refreshTranscriptHistory(client, epoch);
         if (epoch !== this.requestEpoch || client !== this.activeClient) {

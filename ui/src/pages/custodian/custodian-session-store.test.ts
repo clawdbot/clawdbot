@@ -279,6 +279,41 @@ describe("CustodianSessionStore", () => {
     expect(reconnectRequest.mock.calls.some(([method]) => method === "openclaw.chat")).toBe(true);
   });
 
+  it("reconciles racing history even when the rejoin projects a live wizard", async () => {
+    const step = { id: "live-step", type: "text", message: "Continue setup" };
+    let historyCall = 0;
+    const request = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "openclaw.chat.history") {
+        historyCall += 1;
+        return Promise.resolve(
+          historyCall === 1
+            ? { turns: [] }
+            : { turns: [{ role: "assistant", text: "Racing turn landed", at: 40 }] },
+        );
+      }
+      return Promise.resolve({
+        sessionId: params.sessionId,
+        reply: "Welcome back.",
+        action: "none",
+        wizardInputPending: true,
+        step,
+      });
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    localStorage.setItem("openclaw.custodian.session.v1", "persisted-session-2");
+    const store = new CustodianSessionStore();
+
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+
+    // A projected live control must not skip the racing-history barrier: the
+    // reconciled rows render beneath the answerable wizard step.
+    expect(historyCall).toBe(2);
+    expect(store.messages.some((message) => message.text === "Racing turn landed")).toBe(true);
+    expect(store.messages.at(-1)?.step).toMatchObject({ id: "live-step" });
+    expect(store.wizardInputPending).toBe(true);
+  });
+
   it("reconciles history persisted behind a racing turn on rejoin", async () => {
     const historyBatches = [
       { turns: [] },
