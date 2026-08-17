@@ -787,7 +787,7 @@ for auto-allow checks.
 ## Audit ledger RPC
 
 `audit.activity.list` gives operator clients a stable newest-first view of agent
-run, tool action, and opt-in message lifecycle metadata. It requires
+run, tool action, inbound-message, and terminal outbound-message metadata. It requires
 `operator.read`. Queries exclude records older than 30 days, and the shared
 SQLite ledger is capped at 100,000 records. Expired rows are deleted during
 Gateway startup, hourly maintenance, and later writes. See
@@ -856,8 +856,9 @@ records may include agent and run ids, but intentionally never include
 `sessionKey` or `sessionId`; the `sessionKey` query filter therefore applies to
 run and tool rows only. Tool events may include tool call id and tool name.
 
-Message records use `message.inbound.processed` or
-`message.outbound.finished` and add direction, channel, conversation kind,
+The activity ledger returns `message.inbound.processed` and
+`message.outbound.finished` records and adds
+direction, channel, conversation kind,
 normalized outcome, and optional delivery kind, failure stage, duration,
 result count, reason code, and installation-local keyed
 account/conversation/message/target pseudonyms. These pseudonyms aid
@@ -877,9 +878,11 @@ crash-ambiguous rows omit it.
 
 Current message coverage includes accepted inbound messages that reach core
 dispatch, including core duplicate/terminal outcomes. Outbound coverage writes
-one terminal row per original logical reply payload that reaches shared durable
-delivery; chunking and adapter fan-out are aggregated in `resultCount`. Queued
-retryable or ambiguous sends are recorded only after acknowledgement, dead
+replay-safe queue and platform-start records to a lazy owner-native companion
+and one terminal activity row per original logical reply payload that reaches
+shared durable delivery; run inspection merges those sources. Chunking and
+adapter fan-out are aggregated in terminal `resultCount`. Ambiguous sends reach
+a terminal only after acknowledgement, dead
 letter, or reconciliation. Plugin-local and direct-send paths that bypass those
 shared boundaries are not yet covered. The bounded worker queue is best-effort
 and may drop records on failure or saturation, so this surface is not a
@@ -901,6 +904,11 @@ identity collection is separately off by default and requires
 `logging.audit.executionIdentity: true` plus an enabled audit ledger after
 Gateway restart. Missing best-effort evidence never proves that a run did not
 occur.
+
+For a selected run, decision receipts merge terminal outbound activity with
+owner-native `queued` and `platform_started` progress. Progress is
+attribution-only, lives in the lazy companion store, and is not part of the
+`audit.activity.list` result schema.
 
 The shipped `audit.list` request, result, and `AuditEvent` schemas remain
 unchanged and return only agent-run and tool-action records. New operator

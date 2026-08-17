@@ -8,7 +8,6 @@ import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
-import type { ChatSendOptions } from "../chat-send-contract.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
@@ -120,7 +119,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: (options?: ChatSendOptions) => void;
+  onSend: (followUpModeOverride?: "steer") => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
@@ -133,7 +132,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   queuedEdit?: ChatQueuedEditProps;
-  onNewSession: () => void;
   onClearReply?: () => void;
   onGoalCommand?: (command: string) => void;
   onGatewayQuestionChange?: () => void;

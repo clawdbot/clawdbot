@@ -17,15 +17,20 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_launches",
   "operator_approval_execution_identities",
   "execution_decision_facts",
+  "outbound_message_execution_bindings",
+  "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
   "idx_node_worker_launches_terminal_completed",
   "execution_identity_contexts_run_created_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
+  "outbound_message_execution_bindings_execution_event_idx",
+  "outbound_message_progress_occurred_idx",
+  "outbound_message_progress_run_occurred_idx",
 ] as const;
-// Added after v6 shipped. These tables stay optional until their feature-local
-// lazy ensures run; fold them into the next natural schema-version bump.
+// These additive tables stay optional until their feature-local lazy ensures
+// run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "agent_provenance",

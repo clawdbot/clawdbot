@@ -424,6 +424,10 @@ const SLACK_CHART_PROMPT = [
   `Call the message tool exactly once with these exact arguments: ${JSON.stringify(SLACK_CHART_MESSAGE_TOOL_ARGS)}.`,
   `After the chart send succeeds, reply with only this exact marker: ${SLACK_CHART_DONE_TOKEN}`,
 ].join(" ");
+const MESSAGE_DECISION_SUPPRESSION_PROMPT = "Message delivery decision suppression QA check.";
+const MESSAGE_DECISION_SEND_PROMPT = "Message delivery decision send QA check.";
+const MESSAGE_DECISION_SUPPRESSION_TEXT =
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
 const WHATSAPP_AGENT_REACT_PROMPT =
   "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
 const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
@@ -1803,6 +1807,45 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
     expect(outputText(afterToolPayload)).toBe(SLACK_CHART_DONE_TOKEN);
+  });
+
+  it("emits the deterministic message-decision suppression fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT)],
+    });
+    const toolCall = outputToolCall(initial, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: MESSAGE_DECISION_SUPPRESSION_TEXT,
+    });
+
+    const afterTool = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT),
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_suppression"),
+          '{"status":"suppressed"}',
+        ),
+      ],
+    });
+    expect(outputText(afterTool)).toBe("NO_REPLY");
+  });
+
+  it("emits the deterministic durable message-decision send fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SEND_PROMPT)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(initial, "message"))).toEqual({
+      action: "send",
+      message: "QA-MESSAGE-DELIVERY-OK",
+      final: true,
+      presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+    });
   });
 
   it("emits WhatsApp agent reaction message tool calls only when the tool is declared", async () => {

@@ -259,8 +259,11 @@ export async function prepareOutboundPayloadBatch(
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
     sourcePayloadCount: params.payloads.length,
     channelNormalized: true,
-    ...(params.replyPayloadSendingHook?.runId
-      ? { runId: params.replyPayloadSendingHook.runId }
+    ...((params.runId ?? params.replyPayloadSendingHook?.runId)
+      ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
+      : {}),
+    ...(params.executionIdentityToken
+      ? { executionIdentityToken: params.executionIdentityToken }
       : {}),
     entries,
   };

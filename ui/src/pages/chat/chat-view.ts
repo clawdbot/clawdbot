@@ -33,13 +33,13 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
-import type { ChatSendOptions } from "./chat-send-contract.ts";
 import { type ChatCloudStartupNoticeProps, renderChatViewNotices } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import type {
   CapabilityMenuProps,
   ChatComposerDisabledBanner,
+  ChatComposerProps,
   ChatQueuedEditProps,
 } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
@@ -197,7 +197,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRequestUpdate?: () => void;
     onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     onSlashIntent?: () => void | Promise<void>;
-    onSend: (options?: ChatSendOptions) => void;
+    onSend: ChatComposerProps["onSend"];
     onCompact?: () => void | Promise<void>;
     onOpenSessionCheckpoints?: () => void | Promise<void>;
     onToggleRealtimeTalk?: () => void;
@@ -216,7 +216,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onHistoryIntent?: (event: Event) => void;
     onCompanionQuestion?: (question: string) => void;
     onCompanionPrefill?: (question: string) => void;
-    onNewSession: () => void;
     onClearHistory?: () => void;
     agentsList: {
       agents: Array<{
@@ -435,7 +434,6 @@ export function renderChat(props: ChatProps) {
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
     onGatewayQuestionSkip: props.onGatewayQuestionSkip,
-    onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
     onAttachmentsChange: props.onAttachmentsChange,
     onRemoveAttachment: props.onRemoveAttachment,

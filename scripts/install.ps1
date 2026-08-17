@@ -2,6 +2,7 @@
 # Usage: powershell -c "irm https://openclaw.ai/install.ps1 | iex"
 #        powershell -c "& ([scriptblock]::Create((irm https://openclaw.ai/install.ps1))) -Tag beta -NoOnboard -DryRun"
 
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Tag = "latest",
     [ValidateSet("npm", "git")]
@@ -9,10 +10,29 @@ param(
     [string]$GitDir,
     [switch]$NoOnboard,
     [switch]$NoGitUpdate,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    @"
+Usage:
+  powershell -File install.ps1 [options]
+  & ([scriptblock]::Create((irm https://openclaw.ai/install.ps1))) [options]
+
+Options:
+  -InstallMethod npm|git  Install method (default: npm)
+  -Tag <tag|version>      OpenClaw version or dist-tag (default: latest)
+  -GitDir <path>          Git checkout directory
+  -NoOnboard              Skip onboarding
+  -NoGitUpdate            Skip git pull
+  -DryRun                 Print actions only
+  -Help                   Show this help
+"@ | Write-Output
+    return
+}
 
 $script:InstallExitCode = 0
 
@@ -177,12 +197,6 @@ function Initialize-InstallerTempDirectory {
     $env:TMP = $tempDirectory
 }
 
-Initialize-InstallerTempDirectory
-
-Write-Host ""
-Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
-Write-Host ""
-
 # Check if running in PowerShell
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     Write-Host "Error: PowerShell 5+ required" -ForegroundColor Red
@@ -190,8 +204,6 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
     Complete-Install
     return
 }
-
-Write-Host "[OK] Windows detected" -ForegroundColor Green
 
 if (-not $PSBoundParameters.ContainsKey("InstallMethod")) {
     if (-not [string]::IsNullOrWhiteSpace($env:OPENCLAW_INSTALL_METHOD)) {
@@ -223,6 +235,13 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
     $userHome = [Environment]::GetFolderPath("UserProfile")
     $GitDir = (Join-Path $userHome "openclaw")
 }
+
+Initialize-InstallerTempDirectory
+
+Write-Host ""
+Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "[OK] Windows detected" -ForegroundColor Green
 
 # Check for Node.js
 function Test-NodeVersionSupported {

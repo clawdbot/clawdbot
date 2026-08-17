@@ -12,8 +12,10 @@ import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
+import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -123,6 +125,11 @@ describe("worker environment service", () => {
 
   it("commits an installed Gateway bundle receipt and credential for a node lease", async () => {
     const workerBuild = structuredClone(support.BOOTSTRAP_RECEIPT);
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const placementGate = createWorkerSessionPlacementGate(placements);
     const workerService = support.createService(
       support.createProvider({
         provisionBeforeInstallation: true,
@@ -132,7 +139,7 @@ describe("worker environment service", () => {
           sharedHost: true,
         }),
       }),
-      { ensureNodeWorkerBundle: async () => workerBuild },
+      { ensureNodeWorkerBundle: async () => workerBuild, placementStore: placementGate },
     );
 
     const result = await workerService.create("development", "request-device");
@@ -156,19 +163,36 @@ describe("worker environment service", () => {
       credential: support.CREDENTIAL,
       bundleHash: support.BUNDLE_HASH,
     });
-    const attachedCredential = await workerService.attachSession({
+    await workerService.attachSession({
       environmentId: result.environmentId,
       ownerEpoch: result.ownerEpoch,
-      sessionId: "session-device",
+      sessionId: REQUEST.sessionId,
     });
     const attached = support.testState.store.get(result.environmentId)!;
+    seedActivePlacement(placements, {
+      environmentId: result.environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    });
+    const turnClaim = placements.claimTurn({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      claimId: "claim-device",
+      runId: "run-device",
+      owner: {
+        kind: "worker",
+        environmentId: result.environmentId,
+        ownerEpoch: attached.ownerEpoch,
+      },
+    });
+    const turnCredential = await workerService.acquireTurnCredential(turnClaim);
     const admission = {
       environmentId: result.environmentId,
-      credential: attachedCredential.credential,
+      credential: turnCredential.credential,
       ownerEpoch: attached.ownerEpoch,
       rpcSetVersion: 1,
-      sessionId: "session-device",
-      runId: "run-device",
+      sessionId: REQUEST.sessionId,
+      runId: turnClaim.runId,
       handshake: workerBuild,
     } as const;
     expect(
@@ -177,6 +201,7 @@ describe("worker environment service", () => {
         admission,
         expectedBuild: workerBuild,
         nowMs: support.testState.nowMs,
+        turnClaim,
       }),
     ).toMatchObject({ ok: true });
     expect(
@@ -188,6 +213,7 @@ describe("worker environment service", () => {
         },
         expectedBuild: workerBuild,
         nowMs: support.testState.nowMs,
+        turnClaim,
       }),
     ).toEqual({ ok: false, reason: "bundle-mismatch" });
   });

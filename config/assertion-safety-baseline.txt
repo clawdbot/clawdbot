@@ -2148,7 +2148,7 @@ src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/media-tool-shared.ts	4
 src/agents/tools/message-tool-discovery.ts	3
-src/agents/tools/message-tool-execution.ts	5
+src/agents/tools/message-tool-execution.ts	4
 src/agents/tools/message-tool-visible-content.ts	9
 src/agents/tools/mobile-ui-tool.ts	5
 src/agents/tools/model-config.helpers.ts	1

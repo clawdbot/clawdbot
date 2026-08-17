@@ -1,6 +1,6 @@
 import type { ChatSendShortcut } from "../../../app/settings.ts";
+import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
-import { steerableQueuedMessage } from "./chat-composer-queue.ts";
 import {
   getActiveSkillMenuOptionId,
   resetSkillMenuState,
@@ -24,6 +24,7 @@ type ComposerKeyDownDeps = {
   commitDraft: (draft: string) => void;
   syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
   showAbortableUi: boolean;
+  steerNowEnabled: boolean;
 };
 
 function handleComposerMenuKeyDown<T>(
@@ -92,6 +93,7 @@ export function createComposerKeyDownHandler({
   commitDraft,
   syncDraftAfterSend,
   showAbortableUi,
+  steerNowEnabled,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
     // The handler only ever binds to the composer textarea; narrowing here
@@ -233,16 +235,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
-      const steerImmediately =
-        sendShortcut === "enter" &&
-        showAbortableUi &&
-        props.followUpMode === "queue" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        hasComposedContent;
+      const steerImmediately = steerNowEnabled && (event.metaKey || event.ctrlKey) && !event.altKey;
       if (steerImmediately) {
-        props.onSend({ followUpMode: "steer" });
+        props.onSend("steer");
       } else {
         props.onSend();
       }

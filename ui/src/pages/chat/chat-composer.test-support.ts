@@ -23,7 +23,6 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
     onDraftChange: vi.fn(),
     onSend: vi.fn(),
     onQueueRemove: vi.fn(),
-    onNewSession: vi.fn(),
     ...overrides,
   };
 }

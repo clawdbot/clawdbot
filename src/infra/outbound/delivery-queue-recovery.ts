@@ -995,7 +995,8 @@ async function drainQueuedEntry(opts: {
       }
       opts.onFailed?.(entry, error);
       opts.log.warn(`Delivery entry ${entry.id} ${error}; preserving unknown_after_send`);
-      emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
+      // The pending row still owns reconciliation. Emit its one stable terminal
+      // only when recovery later acks or dead-letters that durable custody.
       return "failed";
     }
     if (results.length > 0) {

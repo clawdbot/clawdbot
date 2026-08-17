@@ -579,6 +579,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       accountId: accountId ?? undefined,
       conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
+      runId: input.runId,
+      executionIdentityToken: input.executionIdentityToken,
       inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,

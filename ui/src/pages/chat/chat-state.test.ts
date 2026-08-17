@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -206,6 +207,48 @@ describe("canonical session message recovery", () => {
 
     expect(state.chatMessages).toEqual([currentUser]);
     expect(state.chatStream).toBe("Current partial reply");
+  });
+
+  it("orders an active queued turn before its landed steer", () => {
+    const activePrompt = {
+      id: "active-prompt",
+      text: "Keep this run active",
+      createdAt: 1,
+      sendRunId: "active-run",
+      sendState: "waiting-model" as const,
+      sessionKey: "main",
+    };
+    const { state } = createSessionEventState({
+      chatRunId: "active-run",
+      chatQueue: [
+        activePrompt,
+        {
+          id: "landed-steer-chip",
+          text: "Use the deployment plan",
+          createdAt: 2,
+          kind: "steered",
+          pendingRunId: "steer-request-run",
+          sendRunId: "steer-request-run",
+          steerTargetRunId: "active-run",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        runId: "steer-request-run",
+        sessionKey: state.sessionKey,
+        state: "final",
+      },
+    });
+
+    expect(state.chatQueue).toEqual([activePrompt]);
+    expect(
+      state.chatMessages.map((message) => readSessionMessageIdentity(message)?.idempotencyKey),
+    ).toEqual(["active-run:user", "steer-request-run:user"]);
   });
 
   it("renders distinct live peers immediately and coalesces their stale history", async () => {
