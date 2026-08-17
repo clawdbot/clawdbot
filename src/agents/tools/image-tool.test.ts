@@ -764,11 +764,11 @@ async function expectImageToolExecOk(
   tool: {
     execute: (toolCallId: string, input: { prompt: string; path: string }) => Promise<unknown>;
   },
-  path: string,
+  imagePath: string,
 ) {
   const result = await tool.execute("t1", {
     prompt: "Describe the image.",
-    path,
+    path: imagePath,
   });
   expectToolText(result, "ok");
 }

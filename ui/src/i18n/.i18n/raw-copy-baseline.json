@@ -244,13 +244,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/lib/agents/display.ts",
-      "text": "image"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
       "text": "memory_get"
     },
     {
@@ -322,6 +315,13 @@
       "name": "label",
       "path": "ui/src/lib/agents/display.ts",
       "text": "sessions_spawn"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/lib/agents/display.ts",
+      "text": "view_image"
     },
     {
       "count": 1,
