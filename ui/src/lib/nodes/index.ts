@@ -945,8 +945,11 @@ export function peekStoredDeviceIdentityId(): string | null {
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as StoredIdentity;
-    return parsed?.version === 1 && typeof parsed.deviceId === "string" && parsed.deviceId
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) &&
+      parsed.version === 1 &&
+      typeof parsed.deviceId === "string" &&
+      parsed.deviceId
       ? parsed.deviceId
       : null;
   } catch {
