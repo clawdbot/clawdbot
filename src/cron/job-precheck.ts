@@ -13,6 +13,7 @@ import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { evaluateSystemRunPolicy } from "../node-host/exec-policy.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { resolveTrustedWindowsCmdExe } from "../process/windows-command.js";
 import { createCronRunDiagnosticsFromError } from "./run-diagnostics.js";
 import type { CronJobPrecheck } from "./types-shared.js";
 import type { CronRunDiagnostics, CronRunOutcome } from "./types.js";
@@ -22,11 +23,12 @@ const IS_WINDOWS = process.platform === "win32";
 
 function resolveShellCommand(command: string): { shell: string; args: string[] } {
   if (IS_WINDOWS) {
-    const shell = process.env.ComSpec?.trim() || "cmd.exe";
+    // Fixed trusted transport — never inherit %ComSpec% for unattended precheck.
+    const shell = resolveTrustedWindowsCmdExe();
     return { shell, args: ["/d", "/s", "/c", command] };
   }
-  const shell = process.env.SHELL?.trim() || "/bin/sh";
-  return { shell, args: ["-c", command] };
+  // Fixed trusted transport — never inherit $SHELL for unattended precheck.
+  return { shell: "/bin/sh", args: ["-c", command] };
 }
 
 /** Stable skip / error reason codes for run logs and operators. */

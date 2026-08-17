@@ -217,6 +217,53 @@ describe("authorizeCronJobPrecheckCommand", () => {
 });
 
 describe("runCronJobPrecheck", () => {
+  it("uses fixed trusted shell executables (ignores $SHELL / %ComSpec%)", async () => {
+    const prevShell = process.env.SHELL;
+    process.env.SHELL = "/tmp/evil-shell-should-not-run";
+    let spawned: { cmd: string; args: string[] } | null = null;
+    const spawnImpl = ((cmd: string, args: string[]) => {
+      spawned = { cmd, args };
+      const { EventEmitter } = require("node:events") as typeof import("node:events");
+      const child = new EventEmitter() as import("node:events").EventEmitter & {
+        stdout: import("node:events").EventEmitter;
+        stderr: import("node:events").EventEmitter;
+        pid: number;
+        kill: () => boolean;
+      };
+      const mkStream = () => {
+        const s = new EventEmitter() as import("node:events").EventEmitter & {
+          setEncoding: (enc: string) => void;
+        };
+        s.setEncoding = () => {};
+        return s;
+      };
+      child.stdout = mkStream();
+      child.stderr = mkStream();
+      child.pid = 4242;
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from("ok\n"));
+        child.emit("close", 0);
+      });
+      return child;
+    }) as unknown as typeof import("node:child_process").spawn;
+    try {
+      const result = await runCronJobPrecheck(
+        { command: "echo ok", onExitZero: "run", onNonZero: "skip" },
+        {
+          spawnImpl,
+          authz: { triggersEnabled: true, security: "full", securityOverrideOnly: true },
+        },
+      );
+      expect(result.decision).toBe("run");
+      expect(spawned?.cmd).toBe("/bin/sh");
+      expect(spawned?.args?.[0]).toBe("-c");
+    } finally {
+      if (prevShell === undefined) delete process.env.SHELL;
+      else process.env.SHELL = prevShell;
+    }
+  });
+
   it("blocks host spawn when policy denies (security=deny)", async () => {
     const result = await runCronJobPrecheck(
       { command: "exit 0" },
