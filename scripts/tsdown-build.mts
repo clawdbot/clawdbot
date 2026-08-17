@@ -543,6 +543,12 @@ function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
   if (mountRoot === "/") {
     return cgroupPath;
   }
+  // Inside a cgroup namespace the record is namespace-relative and reads "/", while the
+  // mount root stays the host subtree it was mounted from. That namespace root is exactly
+  // what this mount exposes at its mount point, so it resolves rather than failing closed.
+  if (cgroupPath === "/") {
+    return "/";
+  }
   if (cgroupPath === mountRoot) {
     return "/";
   }

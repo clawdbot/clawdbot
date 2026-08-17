@@ -447,6 +447,38 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("caps the tsdown heap from a cgroup-namespace-relative record", () => {
+    // Inside a container the record is namespace-relative ("/") while the mount root stays
+    // the host subtree. Failing to resolve that pair skips the limit and falls back to
+    // host memory, which is the opposite of what a constrained container needs.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/2f1a9c /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    // 5 GiB container budget minus the 768 MiB build headroom.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("caps the tsdown heap when the cgroup mount point is octal-escaped in mountinfo", () => {
     const slicePath = "/user.slice/user-999.slice/user@999.service";
     // The kernel escapes a space in the mount point as \040. Matching the field
