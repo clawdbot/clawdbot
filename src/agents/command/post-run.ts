@@ -72,6 +72,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     workspaceDir,
     cwd,
     agentDir,
+    timeoutMs,
     outboundSession,
     runId,
   } = params.prepared;
@@ -253,27 +254,24 @@ export async function finalizeEmbeddedAgentCommand(params: {
         prompt: "",
         enqueuedAt: Date.now(),
         run: {
-          ...params.prepared,
-          ...params.opts,
           agentId: sessionAgentId,
+          agentDir,
           sessionId: sessionEntry.sessionId,
+          sessionKey,
           sessionFile: sessionKey,
           workspaceDir,
+          cwd: effectiveCwd,
           runtimePolicySessionKey: sessionKey,
           config: cfg,
           provider: flushProvider,
           model: flushModel,
           blockReplyBreak: "message_end",
-          groupId: params.opts.groupId ?? undefined,
-          groupChannel: params.opts.groupChannel ?? undefined,
-          groupSpace: params.opts.groupSpace ?? undefined,
-          spawnedBy: params.opts.spawnedBy ?? undefined,
           skillsSnapshot,
           thinkLevel: effectiveTurnThinkLevel,
           verboseLevel: resolvedVerboseLevel ?? "off",
-          agentAccountId: runContext.accountId,
-          senderIsOwner: params.opts.senderIsOwner,
-          cwd: effectiveCwd,
+          timeoutMs,
+          // Maintenance is system-owned and must not inherit completed-turn authority.
+          senderIsOwner: false,
         },
       };
       const { runMemoryFlushIfNeeded } = await loadAgentRunnerMemoryRuntime();
@@ -298,6 +296,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
         runOwnedSessionId = sessionEntry.sessionId;
         publishSessionOwnership();
       }
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     }
 
     const payloads = result.payloads ?? [];
