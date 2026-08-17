@@ -148,7 +148,6 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
           reason: "interval",
           agentId: "main",
           scheduledEveryMs: 5 * 60_000,
-          scheduledAnchorMs: 0,
           deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
         }),
       ).resolves.toMatchObject({ status: "ran" });

@@ -5,7 +5,6 @@ export type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 export type { IsolatedAgentSetupTimeoutSignal } from "./timer-execution-timeout.js";
 export { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 export { executeJobCoreWithTimeout } from "./timer-job-runner.js";
-export { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 export { applyJobResult } from "./timer-outcomes.js";
 export { applyTriggerRunResult } from "./timer-trigger.js";
 export { applyScriptRunResult } from "./timer-outcomes.js";

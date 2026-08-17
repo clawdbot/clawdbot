@@ -45,7 +45,6 @@ describe("CronService interval/cron jobs fire on time", () => {
   const expectMainSystemEvent = (
     enqueueSystemEvent: ReturnType<typeof vi.fn>,
     expectedText: string,
-    jobId: string,
   ) => {
     const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
     if (!matchingCall) {
@@ -97,7 +96,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       jobId: job.id,
       firstDueAt,
     });
-    expectMainSystemEvent(enqueueSystemEvent, "tick", job.id);
+    expectMainSystemEvent(enqueueSystemEvent, "tick");
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance by at least one full interval past the due time.
     expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
@@ -131,7 +130,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     cron.resumeScheduling();
     await vi.runOnlyPendingTimersAsync();
     await finishedRun;
-    expectMainSystemEvent(enqueueSystemEvent, "resumed-tick", job.id);
+    expectMainSystemEvent(enqueueSystemEvent, "resumed-tick");
 
     cron.stop();
     await store.cleanup();
@@ -212,7 +211,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       const finishedRun = finished.waitForOk(job.id);
       await vi.advanceTimersByTimeAsync(9_005);
       await finishedRun;
-      expectMainSystemEvent(enqueueSystemEvent, "recovered-tick", job.id);
+      expectMainSystemEvent(enqueueSystemEvent, "recovered-tick");
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -247,7 +246,7 @@ describe("CronService interval/cron jobs fire on time", () => {
 
       expect(pendingSignal?.rollback()).toBe(true);
       await finishedRun;
-      expectMainSystemEvent(enqueueSystemEvent, "rollback-tick", job.id);
+      expectMainSystemEvent(enqueueSystemEvent, "rollback-tick");
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -283,7 +282,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       jobId: job.id,
       firstDueAt,
     });
-    expectMainSystemEvent(enqueueSystemEvent, "cron-tick", job.id);
+    expectMainSystemEvent(enqueueSystemEvent, "cron-tick");
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs should be the next whole-minute boundary (60s later).
     expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);
