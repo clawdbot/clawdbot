@@ -471,7 +471,6 @@ async function runSideQuestionWithManagedWebSearchCall(
   options: { preserveToolFactory?: boolean } = {},
 ) {
   const client = createFakeClient();
-  let toolResponse: unknown;
   if (!options.preserveToolFactory) {
     createOpenClawCodingToolsMock.mockReturnValue([
       {
@@ -500,7 +499,7 @@ async function runSideQuestionWithManagedWebSearchCall(
   getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
   const run = runCodexAppServerSideQuestion(params);
-  toolResponse = await handleClientRequestWhenReady(client, {
+  const toolResponse = await handleClientRequestWhenReady(client, {
     id: 42,
     method: "item/tool/call",
     params: {
@@ -1531,7 +1530,6 @@ describe("runCodexAppServerSideQuestion", () => {
   it("forwards side-thread command approvals through the active native hook relay", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
-    let approvalResponse: unknown;
     handleCodexAppServerApprovalRequestMock.mockResolvedValueOnce({ decision: "decline" });
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
       if (method === "thread/fork") {
@@ -1561,7 +1559,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       { nativeHookRelay: { enabled: true } },
     );
-    approvalResponse = await handleClientRequestWhenReady(client, {
+    const approvalResponse = await handleClientRequestWhenReady(client, {
       id: 42,
       method: "item/commandExecution/requestApproval",
       params: {
@@ -2315,7 +2313,6 @@ describe("runCodexAppServerSideQuestion", () => {
         : [],
     );
     const client = createFakeClient();
-    let toolResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
         return threadResult("side-thread");
@@ -2348,7 +2345,7 @@ describe("runCodexAppServerSideQuestion", () => {
       preparedModelRuntime?: unknown;
     };
     expect(toolFactoryOptions.preparedModelRuntime).toBe(preparedModelRuntime);
-    toolResponse = await handleClientRequestWhenReady(
+    const toolResponse = await handleClientRequestWhenReady(
       client,
       {
         id: 42,
@@ -2445,7 +2442,6 @@ describe("runCodexAppServerSideQuestion", () => {
   it("omits computer control from side threads without a compaction owner", async () => {
     const client = createFakeClient();
     const computerExecute = vi.fn();
-    let toolResponse: unknown;
     createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "computer",
@@ -2472,7 +2468,7 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
-    toolResponse = await handleClientRequestWhenReady(client, {
+    const toolResponse = await handleClientRequestWhenReady(client, {
       id: 43,
       method: "item/tool/call",
       params: {
@@ -3098,8 +3094,6 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("returns an empty response for side-thread user input requests", async () => {
     const client = createFakeClient();
-    let unrelatedUserInputResponse: unknown;
-    let userInputResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
         return threadResult("side-thread");
@@ -3118,7 +3112,7 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
-    userInputResponse = await handleClientRequestWhenReady(client, {
+    const userInputResponse = await handleClientRequestWhenReady(client, {
       id: 43,
       method: "item/tool/requestUserInput",
       params: {
@@ -3134,7 +3128,7 @@ describe("runCodexAppServerSideQuestion", () => {
         ],
       },
     });
-    unrelatedUserInputResponse = await client.handleRequest({
+    const unrelatedUserInputResponse = await client.handleRequest({
       id: 42,
       method: "item/tool/requestUserInput",
       params: {

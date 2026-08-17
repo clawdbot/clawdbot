@@ -4754,7 +4754,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history deduplicates a directive-tagged local Claude delivery with managed audio", async () => {
+  test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
@@ -4788,17 +4788,18 @@ describe("gateway server chat", () => {
           [
             createTextTranscriptEvent(
               "assistant",
-              "[[reply_to:delivery-run-1]]CLAUDE DELIVERY READY",
+              "CLAUDE DELIVERY READY",
               {
                 timestamp: deliveryTimestamp,
                 message: {
                   content: [
                     {
                       type: "text",
-                      text: "[[reply_to:delivery-run-1]]CLAUDE DELIVERY READY",
+                      text: "CLAUDE DELIVERY READY",
                     },
                     { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl },
                   ],
+                  openclawDelivery: { replyToId: "delivery-run-1" },
                 },
               },
             ),
