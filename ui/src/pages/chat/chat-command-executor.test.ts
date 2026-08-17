@@ -1410,7 +1410,7 @@ describe("executeSlashCommand directives", () => {
     expect(result.content).toBe(
       [
         t("chat.commandResults.verbose.current", { level: "full" }),
-        t("chat.commandResults.options", { options: "on, full, off" }),
+        t("chat.commandResults.options", { options: "on, full, off, plain" }),
       ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });

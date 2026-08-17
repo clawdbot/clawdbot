@@ -219,9 +219,28 @@ describe("buildChannelProgressDraftLine", () => {
     expect(done?.text).toBe(plainTitle);
     expect(done?.text).not.toContain("🛠️");
     expect(done?.text).not.toContain("git");
+    // Failures keep the plain activity sentence (never exit codes / tool chrome).
+    expect(failed?.text).toBe(plainTitle);
     expect(failed?.text).not.toContain("🛠️");
+    expect(failed?.text).not.toContain("exit");
     expect(failed?.text).not.toContain("git status");
     expect(failed?.text).not.toContain("/workspace");
+  });
+
+  it("uses a plain-language failure when no safe sentence is available", () => {
+    const failed = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-2",
+        name: "exec",
+        phase: "end",
+        exitCode: 1,
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    expect(failed?.text).toBe("That step didn't work.");
+    expect(failed?.text).not.toContain("exit");
+    expect(failed?.text).not.toContain("🛠️");
   });
 });
 

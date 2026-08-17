@@ -457,7 +457,7 @@ async function executeVerbose(
           t("chat.commandResults.verbose.current", {
             level: normalizeVerboseLevel(session?.verboseLevel) ?? "off",
           }),
-          "on, full, off",
+          "on, full, off, plain",
         ),
       };
     } catch (err) {

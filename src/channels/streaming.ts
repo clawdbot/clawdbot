@@ -456,6 +456,26 @@ function buildCommandOutputProgressLine(
     markdown: options?.markdown,
     ...(options?.detailMode ? { detailMode: options.detailMode } : {}),
   };
+  // Plain mode must never surface exit codes / failure jargon — keep the
+  // caller-supplied safe sentence (title), or a plain failure fallback.
+  if (options?.detailMode === "plain") {
+    const safeTitle =
+      typeof input.title === "string" && input.title.trim() && input.title.trim() !== status
+        ? input.title.trim()
+        : undefined;
+    const plainText = formatToolAggregate(
+      name,
+      safeTitle ? [safeTitle] : ["That step didn't work."],
+      aggregateOptions,
+    );
+    const statusLine = {
+      ...line,
+      detail: plainText,
+      text: plainText,
+    };
+    setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+    return statusLine;
+  }
   if (!line.detail || line.detail === status) {
     const statusLine = {
       ...line,

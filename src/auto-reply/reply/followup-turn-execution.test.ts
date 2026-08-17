@@ -139,6 +139,35 @@ describe("executeFollowupTurn", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
+  it("forces plain toolProgressDetail when the live session is plain", async () => {
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "plain" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        // Admitted default is non-plain; live session override must win.
+        toolProgressDetail: "explain",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.resolvedVerboseLevel).toBe("plain");
+    expect(call.toolProgressDetail).toBe("plain");
+  });
+
   it("ignores verbosity loaded from a replacement session generation", async () => {
     const currentEntry = {
       sessionId: "session",

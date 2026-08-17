@@ -401,7 +401,10 @@ export async function executeFollowupTurn(params: {
         activeSessionStore: turn.sessionStore,
         storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
         resolvedVerboseLevel: currentVerboseLevel() ?? "off",
-        toolProgressDetail: defaults.toolProgressDetail,
+        // Plain verbose is presentation-only: force plain tool detail for
+        // queued turns so session overrides are not lost to admitted defaults.
+        toolProgressDetail:
+          (currentVerboseLevel() ?? "off") === "plain" ? "plain" : defaults.toolProgressDetail,
         onCompactionNoticePayload: (payload) =>
           enqueueProgress(() =>
             progressAllowed()

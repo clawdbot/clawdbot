@@ -830,8 +830,9 @@ function resolvePlainToolDetail(toolKey: string, args: unknown, meta?: string): 
 
 /** True when meta looks like technical detail that must not surface in plain mode. */
 export function looksTechnicalMeta(meta: string): boolean {
-  // Paths, shell tokens, schema-ish keys, IPs, env refs, and explain markers.
-  return /[/\\]|--|`|\.ts\b|\.js\b|\.json\b|node_modules|https?:\/\/|\(repo\)|\$[A-Za-z_][A-Za-z0-9_]*|\b\d{1,3}(?:\.\d{1,3}){3}\b/i.test(
+  // Paths, shell tokens, schema-ish keys, IPs, env refs, explain markers, and
+  // command exit/status jargon that must not leak into plain progress lines.
+  return /[/\\]|--|`|\.ts\b|\.js\b|\.json\b|node_modules|https?:\/\/|\(repo\)|\$[A-Za-z_][A-Za-z0-9_]*|\b\d{1,3}(?:\.\d{1,3}){3}\b|\bexit\s+\d+\b|\bfailed\b/i.test(
     meta,
   );
 }

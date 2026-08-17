@@ -929,6 +929,7 @@ export const en: TranslationMap = {
     on: "on",
     off: "off",
     full: "full",
+    plain: "plain",
     stream: "stream",
     manual: "manual",
     autoThreshold: "auto-threshold",

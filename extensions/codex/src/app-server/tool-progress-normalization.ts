@@ -19,7 +19,13 @@ import {
 export function resolveCodexToolProgressDetailMode(
   value: EmbeddedRunAttemptParams["toolProgressDetail"],
 ): ToolProgressDetailMode {
-  return value === "raw" ? "raw" : "explain";
+  if (value === "raw") {
+    return "raw";
+  }
+  if (value === "plain") {
+    return "plain";
+  }
+  return "explain";
 }
 
 export function isCodexCommandBearingToolCall(

@@ -81,4 +81,14 @@ describe("formatToolAggregateParts plain mode", () => {
     expect(result.text).not.toContain("/workspace");
     expect(result.text).not.toContain("(repo)");
   });
+
+  it("rejects exit-code status jargon in plain mode", () => {
+    const result = formatToolAggregateParts(
+      "exec",
+      ["exit 1", "I'm checking the current state of the project."],
+      { detailMode: "plain" },
+    );
+    expect(result.text).toBe("I'm checking the current state of the project.");
+    expect(result.text).not.toContain("exit");
+  });
 });
