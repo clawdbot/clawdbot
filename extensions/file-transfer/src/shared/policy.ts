@@ -135,38 +135,15 @@ function normalizeGlobs(patterns: string[] | undefined): string[] {
   if (!Array.isArray(patterns)) {
     return [];
   }
-  const normalized = patterns
+  return patterns
     .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
     .map((p) => expandTilde(p.trim()));
-  for (const pattern of normalized) {
-    warnIfBareLiteralPattern(pattern);
-  }
-  return normalized;
 }
 
 /** True when `pattern` carries glob magic per minimatch's own definition —
  * a bare literal path is not a glob and matches only its own string. */
 function hasGlobMagic(pattern: string): boolean {
   return new Minimatch(pattern).hasMagic();
-}
-
-const warnedBareLiteralPatterns = new Set<string>();
-
-/**
- * A bare-literal allow/deny entry is an operator footgun: a directory entry
- * like "/data" silently never matches "/data/x" (issue #124992). Emit a
- * one-time diagnostic so the misconfiguration surfaces instead of failing
- * misleadingly at every request. Exact-file grants (e.g. "/etc/hosts") are
- * legitimate and keep working — the note is informational only.
- */
-function warnIfBareLiteralPattern(pattern: string): void {
-  if (hasGlobMagic(pattern) || warnedBareLiteralPatterns.has(pattern)) {
-    return;
-  }
-  warnedBareLiteralPatterns.add(pattern);
-  console.warn(
-    `[file-transfer] allow/deny entry "${pattern}" has no glob suffix and matches only its literal path; use "${directoryGlobForm(pattern)}" to cover files inside a directory`,
-  );
 }
 
 /** Collapse trailing separators and normalize backslashes for prefix/glob
@@ -179,7 +156,10 @@ function directoryGlobForm(pattern: string): string {
  * Return the bare-literal allow entry that is a strict ancestor prefix of a
  * denied path, if any. Such an entry looks like it should cover the path but
  * matches only its own literal string; naming the fix ("/dir/**") turns the
- * silent POLICY_DENIED into an actionable message.
+ * silent POLICY_DENIED into an actionable message. Exact-file grants are
+ * deliberately excluded: they match only their own path and are never an
+ * ancestor of a denied descendant, so no hint (and no access broadening
+ * advice) is produced for them.
  */
 function findBareAncestorAllowEntry(target: string, patterns: string[]): string | null {
   const normalizedTarget = target.replace(/\\/gu, "/");

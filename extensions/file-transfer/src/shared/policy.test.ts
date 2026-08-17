@@ -720,34 +720,40 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
     expect(r.ok ? "" : r.reason).toContain("/Users/x/Desktop/**");
   });
 
-  it("warns once per bare-literal pattern and never for glob patterns", () => {
+  it("emits no warning for exact-file allow or deny rules (no false positive)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Exact-file allow rule: works as intended, must not be told to widen.
+    withConfig({
+      n1: { allowReadPaths: ["/etc/hosts"] },
+    });
+    expectResultFields(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/etc/hosts" }), {
+      ok: true,
+      reason: "matched-allow",
+    });
+    // Exact-file deny rule: also bare-literal, must not warn either.
+    withConfig({
+      n1: { allowReadPaths: ["/**"], denyPaths: ["/etc/hosts"] },
+    });
+    expectResultFields(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/etc/hosts" }), {
+      ok: false,
+      code: "POLICY_DENIED",
+      askable: false,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("hints on a bare-dir ancestor miss without emitting a console warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     withConfig({
-      n1: {
-        allowReadPaths: ["/opt/warn-test/Desktop", "/opt/warn-test/Docs/**"],
-      },
+      n1: { allowReadPaths: ["/opt/warn-test/Desktop"] },
     });
-    const evaluate = () =>
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: "/opt/warn-test/Desktop/a.png",
-      });
-    evaluate();
-    evaluate();
-    const bareWarnings = warn.mock.calls.filter(
-      ([message]) => typeof message === "string" && message.includes("/opt/warn-test/Desktop"),
-    );
-    expect(bareWarnings).toHaveLength(1);
-    expect(
-      warn.mock.calls.some(
-        ([message]) => typeof message === "string" && message.includes("no glob suffix"),
-      ),
-    ).toBe(true);
-    expect(
-      warn.mock.calls.some(
-        ([message]) => typeof message === "string" && message.includes("/opt/warn-test/Docs/**"),
-      ),
-    ).toBe(false);
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/opt/warn-test/Desktop/a.png",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
+    expect(r.ok ? "" : r.reason).toContain("/opt/warn-test/Desktop/**");
+    expect(warn).not.toHaveBeenCalled();
   });
 });
