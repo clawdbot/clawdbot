@@ -21,7 +21,6 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   describeUnsupportedToolResultMedia,
   extractToolResultText,
@@ -38,7 +37,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { estimateStringChars, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
@@ -65,8 +64,6 @@ export {
   wrapOllamaCompatNumCtx,
 } from "./stream-compat.js";
 
-const log = createSubsystemLogger("ollama-stream");
-
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
@@ -78,20 +75,6 @@ const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
-
-function findNewlineEnd(value: Uint8Array, lineIndex: number): number | undefined {
-  let remaining = lineIndex;
-  for (let offset = 0; offset < value.byteLength; offset += 1) {
-    if (value[offset] !== 0x0a) {
-      continue;
-    }
-    if (remaining === 0) {
-      return offset + 1;
-    }
-    remaining -= 1;
-  }
-  return undefined;
-}
 
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
@@ -912,94 +895,60 @@ export async function* parseNdjsonStream(
         }
         break;
       }
-      let nextPendingRecordBytes = pendingRecordBytes;
-      let recordCapError: Error | undefined;
-      if (!terminalRecord) {
-        try {
-          nextPendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
-        } catch (error) {
-          // A terminal record and a large newline-free tail can share one
-          // transport read. Defer the cap decision until the terminal line
-          // is identified so the tail uses its own bounded policy.
-          recordCapError = error instanceof Error ? error : new Error(String(error));
-        }
-      }
       if (terminalRecord) {
-        // A terminal record was already parsed; the remaining body bytes only
-        // need fatal UTF-8 validation before the completion is exposed.
-        decoder.decode(value, { stream: true });
-        terminalTailBytes += value.byteLength;
-        if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
-          // Bound the post-terminal validation drain: a peer that keeps
-          // sending valid trailing bytes must not withhold completion forever.
+        const tail = decodeTerminalTail(decoder, value, terminalTailBytes);
+        terminalTailBytes = tail.totalBytes;
+        if (tail.cutoff) {
           terminalTailCutoff = true;
           break;
         }
         continue;
       }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
       const parsedRecords: OllamaChatResponse[] = [];
-      let terminalFound = false;
-      for (const [lineIndex, line] of lines.entries()) {
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const newlineIndex = value.indexOf(0x0a, offset);
+        const segmentEnd = newlineIndex === -1 ? value.byteLength : newlineIndex + 1;
+        const segment = value.subarray(offset, segmentEnd);
+        pendingRecordBytes = checkNdjsonRecordCap(segment, pendingRecordBytes);
+        buffer += decoder.decode(segment, { stream: true });
+        offset = segmentEnd;
+        if (newlineIndex === -1) {
+          break;
+        }
+
+        const line = buffer;
+        buffer = "";
         const trimmed = line.trim();
         if (!trimmed) {
           continue;
         }
-        let parsed: OllamaChatResponse;
-        try {
-          parsed = parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
-        } catch {
-          log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
-          continue;
-        }
+        const parsed = parseOllamaNdjsonRecord(trimmed);
         if (parsed.done) {
-          const terminalLineEnd = findNewlineEnd(value, lineIndex);
-          if (terminalLineEnd === undefined) {
-            throw new Error("Ollama terminal record was not newline-terminated");
-          }
-          pendingRecordBytes = checkNdjsonRecordCap(
-            value.subarray(0, terminalLineEnd),
-            pendingRecordBytes,
-          );
           // Hold the terminal record until the whole response body has been
           // read and fatal-decoded: the production consumer exits on the
           // terminal record, so malformed bytes in later transport chunks
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
           terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
-          terminalTailBytes += value.byteLength - terminalLineEnd;
-          buffer = "";
-          terminalFound = true;
-          if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
-            // The terminal-containing read can already carry enough valid tail
-            // bytes to satisfy the bounded validation window.
+          const tail = decodeTerminalTail(decoder, value.subarray(offset), terminalTailBytes);
+          terminalTailBytes = tail.totalBytes;
+          if (tail.cutoff) {
             terminalTailCutoff = true;
-            break;
           }
           break;
         }
         parsedRecords.push(parsed);
       }
 
-      if (terminalFound) {
-        for (const parsed of parsedRecords) {
-          yield parsed;
-        }
-        if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
-          terminalTailCutoff = true;
+      for (const parsed of parsedRecords) {
+        yield parsed;
+      }
+      if (terminalRecord) {
+        if (terminalTailCutoff) {
           break;
         }
         continue;
-      }
-      if (recordCapError) {
-        throw recordCapError;
-      }
-      pendingRecordBytes = nextPendingRecordBytes;
-      for (const parsed of parsedRecords) {
-        yield parsed;
       }
     }
 
@@ -1014,11 +963,7 @@ export async function* parseNdjsonStream(
     if (terminalRecord) {
       yield terminalRecord;
     } else if (buffer.trim()) {
-      try {
-        yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
-      } catch {
-        log.warn(`Skipping malformed trailing data: ${truncateUtf16Safe(buffer.trim(), 120)}`);
-      }
+      yield parseOllamaNdjsonRecord(buffer.trim());
     }
   } finally {
     // Start cancellation best-effort; do not await it — a pending cancel
@@ -1026,6 +971,66 @@ export async function* parseNdjsonStream(
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
+  let parsed: unknown;
+  try {
+    parsed = parseJsonPreservingUnsafeIntegers(value);
+  } catch {
+    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  }
+  if (!isRecord(parsed)) {
+    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  }
+  if (typeof parsed.error === "string") {
+    const status =
+      typeof parsed.status === "number" && Number.isFinite(parsed.status)
+        ? parsed.status
+        : undefined;
+    throw Object.assign(
+      new Error(status === undefined ? parsed.error : `${status}: ${parsed.error}`),
+      {
+        ...(status === undefined ? {} : { status }),
+        body: parsed,
+      },
+    );
+  }
+  if (
+    !isRecord(parsed.message) ||
+    (parsed.done !== undefined && typeof parsed.done !== "boolean")
+  ) {
+    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  }
+  // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
+  return parsed as OllamaChatResponse;
+}
+
+function decodeTerminalTail(
+  decoder: TextDecoder,
+  value: Uint8Array,
+  terminalTailBytes: number,
+): { totalBytes: number; cutoff: boolean } {
+  const remainingBytes = OLLAMA_TERMINAL_TAIL_MAX_BYTES - terminalTailBytes;
+  if (remainingBytes > 0 && value.byteLength > 0) {
+    // Validate only the raw bytes inside the tail window. A code point that
+    // crosses the cutoff stays buffered and is intentionally not finalized.
+    const inspected = value.subarray(0, Math.min(value.byteLength, remainingBytes));
+    decoder.decode(inspected, {
+      stream: true,
+    });
+    if (
+      inspected.includes(0x0a) &&
+      inspected.some((byte) => byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x20)
+    ) {
+      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+    }
+  }
+  const totalBytes = terminalTailBytes + value.byteLength;
+  return {
+    totalBytes,
+    cutoff: totalBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES,
+  };
 }
 
 async function readWithTerminalTailDeadline(

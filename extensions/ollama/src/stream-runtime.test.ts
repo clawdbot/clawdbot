@@ -1349,6 +1349,47 @@ describe("parseNdjsonStream", () => {
     }
   });
 
+  it("ignores invalid UTF-8 beyond the tail cap in the terminal read", async () => {
+    const encoder = new TextEncoder();
+    const terminal = encoder.encode(
+      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+    );
+    const tail = new Uint8Array(256 * 1024 + 2).fill(0x20);
+    tail[256 * 1024] = 0xc3;
+    tail[256 * 1024 + 1] = 0x28;
+    const value = new Uint8Array(terminal.byteLength + tail.byteLength);
+    value.set(terminal);
+    value.set(tail, terminal.byteLength);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(mockChunkSequenceReader([value]))) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+  });
+
+  it("ignores invalid UTF-8 beyond the tail cap in a later read", async () => {
+    const encoder = new TextEncoder();
+    const terminal = encoder.encode(
+      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+    );
+    const tail = new Uint8Array(256 * 1024 + 2).fill(0x20);
+    tail[256 * 1024] = 0xc3;
+    tail[256 * 1024 + 1] = 0x28;
+    const reader = mockChunkSequenceReader([terminal, tail]);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+    expect(reader.read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps terminal-line whitespace under the NDJSON record cap", async () => {
     const encoder = new TextEncoder();
     const terminal = encoder.encode(
