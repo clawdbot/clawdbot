@@ -67,9 +67,14 @@ function renderChatTaskSuggestions(props: {
   if (props.suggestions.length === 0) {
     return nothing;
   }
+  const multiple = props.suggestions.length > 1;
   return html`
-    <div class="task-suggestions" aria-live="polite">
-      ${props.suggestions.map((suggestion) => {
+    <div
+      class="task-suggestions ${multiple ? "task-suggestions--stack" : ""}"
+      aria-live="polite"
+      @click=${handleTaskSuggestionNavigation}
+    >
+      ${props.suggestions.map((suggestion, index) => {
         const busy = props.busyIds.has(suggestion.id);
         const title = sanitizeTaskSuggestionText(suggestion.title);
         const tldr = sanitizeTaskSuggestionText(suggestion.tldr);
@@ -86,16 +91,66 @@ function renderChatTaskSuggestions(props: {
           }
         };
         return html`
-          <article class="task-suggestion" data-task-id=${suggestion.id}>
-            <div class="task-suggestion__body">
+          <article class="task-suggestion" data-task-id=${suggestion.id} ?hidden=${index > 0}>
+            <header class="task-suggestion__header">
               <div class="task-suggestion__eyebrow" title=${cwd}>
                 ${t("chat.taskSuggestions.eyebrow", { repo })}
+                ${multiple
+                  ? html`<span class="task-suggestion__position"
+                      >${index + 1} / ${props.suggestions.length}</span
+                    >`
+                  : nothing}
               </div>
+              <div class="task-suggestion__header-actions">
+                ${multiple
+                  ? html`
+                      <button
+                        class="task-suggestion__header-action"
+                        type="button"
+                        aria-label=${t("chat.taskSuggestions.previous")}
+                        data-task-prev
+                      >
+                        ${icons.chevronLeft}
+                      </button>
+                      <button
+                        class="task-suggestion__header-action"
+                        type="button"
+                        aria-label=${t("chat.taskSuggestions.next")}
+                        data-task-next
+                      >
+                        ${icons.chevronRight}
+                      </button>
+                    `
+                  : nothing}
+                ${props.canDismiss
+                  ? html`
+                      <button
+                        class="task-suggestion__header-action task-suggestion__dismiss"
+                        type="button"
+                        ?disabled=${busy}
+                        aria-label=${t("chat.taskSuggestions.dismiss", { title })}
+                        @click=${() => props.onDismiss(suggestion)}
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            </header>
+            <div class="task-suggestion__body">
               <div class="task-suggestion__title">${title}</div>
               <div class="task-suggestion__summary">${tldr}</div>
               <details class="chat-json-collapse task-suggestion__instructions">
                 <summary class="chat-json-summary">
-                  ${t("chat.taskSuggestions.showInstructions")}
+                  <span class="task-suggestion__instructions-chevron" aria-hidden="true"
+                    >${icons.chevronRight}</span
+                  >
+                  <span class="task-suggestion__show"
+                    >${t("chat.taskSuggestions.showInstructions")}</span
+                  >
+                  <span class="task-suggestion__hide"
+                    >${t("chat.taskSuggestions.hideInstructions")}</span
+                  >
                 </summary>
                 <div class="task-suggestion__instruction-body">
                   <code>${cwd}</code>
@@ -103,19 +158,6 @@ function renderChatTaskSuggestions(props: {
                 </div>
               </details>
             </div>
-            ${props.canDismiss
-              ? html`
-                  <button
-                    class="btn btn--ghost btn--icon task-suggestion__dismiss"
-                    type="button"
-                    ?disabled=${busy}
-                    aria-label=${t("chat.taskSuggestions.dismiss", { title })}
-                    @click=${() => props.onDismiss(suggestion)}
-                  >
-                    ${icons.x}
-                  </button>
-                `
-              : nothing}
             <div class="task-suggestion__actions">
               <div class="task-suggestion__split">
                 <button
@@ -212,4 +254,32 @@ function renderChatTaskSuggestions(props: {
       })}
     </div>
   `;
+}
+
+function handleTaskSuggestionNavigation(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  const direction = target.closest("[data-task-prev]")
+    ? -1
+    : target.closest("[data-task-next]")
+      ? 1
+      : 0;
+  if (direction === 0) {
+    return;
+  }
+  const tray = target.closest<HTMLElement>(".task-suggestions");
+  const cards = tray ? [...tray.querySelectorAll<HTMLElement>(".task-suggestion")] : [];
+  const current = cards.findIndex((card) => !card.hidden);
+  if (current < 0 || cards.length < 2) {
+    return;
+  }
+  const next = cards[(current + direction + cards.length) % cards.length];
+  if (!next) {
+    return;
+  }
+  cards[current]!.hidden = true;
+  next.dataset.swapDirection = direction > 0 ? "next" : "previous";
+  next.hidden = false;
 }

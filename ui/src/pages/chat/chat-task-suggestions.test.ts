@@ -189,6 +189,27 @@ describe("chat task suggestions", () => {
     expect(container.querySelector(".task-suggestion__dismiss")).not.toBeNull();
   });
 
+  it("shows one suggestion at a time and preserves dismissal for the active task", () => {
+    const secondSuggestion = { ...suggestion, id: "task_456", title: "Trim old fixtures" };
+    const { container, onDismiss } = renderSuggestion({
+      taskSuggestions: [suggestion, secondSuggestion],
+    });
+
+    const cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    expect(cards.map((card) => card.hidden)).toEqual([false, true]);
+    expect(cards[0]?.querySelector(".task-suggestion__position")?.textContent).toContain("1 / 2");
+
+    cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    expect(cards.map((card) => card.hidden)).toEqual([true, false]);
+    expect(cards[1]?.dataset.swapDirection).toBe("next");
+    cards[1]?.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
+    expect(onDismiss).toHaveBeenCalledWith(secondSuggestion);
+
+    cards[1]?.querySelector<HTMLButtonElement>("[data-task-prev]")?.click();
+    expect(cards.map((card) => card.hidden)).toEqual([false, true]);
+    expect(cards[0]?.dataset.swapDirection).toBe("previous");
+  });
+
   it("strips bidi controls from every displayed field", () => {
     const rawProfileId = "build\u202eprofile";
     const { container, onAccept } = renderSuggestion({
