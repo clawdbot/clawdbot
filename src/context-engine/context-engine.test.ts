@@ -24,6 +24,7 @@ import {
   setActivePluginRegistry,
   withPluginRegistrationContext,
 } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
@@ -39,9 +40,9 @@ import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   activateContextEngineRegistrations,
+  adoptRuntimeContextEngineRegistrations,
   getContextEngineRegistration,
   listContextEngineQuarantines,
-  promoteMatchingRuntimeContextEngineRegistrations,
   registerContextEngineForOwner,
   registerContextEngineInRegistry,
   resolveContextEngine,
@@ -1319,7 +1320,7 @@ describe("Read-only plugin discovery registrations", () => {
 
     // The active gateway registry is loaded in full mode and owns the runtime-safe factory.
     const activeRuntimeRegistry = createEmptyPluginRegistry();
-    activeRuntimeRegistry.plugins.push({ id: pluginId, source } as PluginRecord);
+    activeRuntimeRegistry.plugins.push({ id: pluginId, source, status: "loaded" } as PluginRecord);
     registerContextEngineInRegistry(
       activeRuntimeRegistry,
       engineId,
@@ -1346,7 +1347,7 @@ describe("Read-only plugin discovery registrations", () => {
     // read-only. Its discovery-mode factory is construction-unsafe: promotion must replace it
     // before any resolve constructs it.
     const preparedHandle = requireActivePluginRegistry();
-    preparedHandle.plugins.push({ id: pluginId, source } as PluginRecord);
+    preparedHandle.plugins.push({ id: pluginId, source, status: "loaded" } as PluginRecord);
     registerContextEngineInRegistry(
       preparedHandle,
       engineId,
@@ -1358,11 +1359,25 @@ describe("Read-only plugin discovery registrations", () => {
       { allowSameOwnerRefresh: true, lifecycle: "readOnlyDiscovery" },
     );
 
-    promoteMatchingRuntimeContextEngineRegistrations(preparedHandle, activeRuntimeRegistry);
+    const adoptedHandle = adoptRuntimeContextEngineRegistrations(
+      preparedHandle,
+      activeRuntimeRegistry,
+    );
 
-    const engine = await resolveContextEngine(configWithSlot(engineId));
+    // Copy-on-write: adoption returns a fresh clone and leaves the prepared discovery
+    // handle untouched, so the construction-unsafe factory stays confined to the discovery
+    // snapshot while the runtime-safe factory is reachable only through the clone.
+    expect(adoptedHandle).not.toBe(preparedHandle);
+    expect(preparedHandle.contextEngines.get(engineId)?.lifecycle).toBe("readOnlyDiscovery");
+    expect(adoptedHandle.contextEngines.get(engineId)?.lifecycle).toBe("runtime");
 
-    // Promotion carried the runtime-safe factory in, so resolve constructs the right engine...
+    // Resolve reads the active/scoped registry, so bind the adopted clone the way agent
+    // runtime plugins do before resolving.
+    const engine = await withPluginRuntimeRegistryScope(adoptedHandle, () =>
+      resolveContextEngine(configWithSlot(engineId)),
+    );
+
+    // Adoption carried the runtime-safe factory in, so resolve constructs the right engine...
     expect(engine.info.id).toBe("lossless-claw");
     expect(runtimeSafeCalls).toBeGreaterThanOrEqual(1);
     // ...and never touches the construction-unsafe discovery factory or records a quarantine.
