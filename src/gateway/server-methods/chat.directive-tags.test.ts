@@ -1002,7 +1002,7 @@ function createScopedCliClient(
 }
 
 function createChatContext() {
-  return {
+  const context = {
     broadcast: vi.fn<GatewayRequestContext["broadcast"]>(),
     nodeSendToSession: vi.fn<GatewayRequestContext["nodeSendToSession"]>(),
     agentRunSeq: new Map<string, number>(),
@@ -1046,6 +1046,7 @@ function createChatContext() {
       error: vi.fn<GatewayRequestContext["logGateway"]["error"]>(),
     },
   };
+  return context as typeof context & GatewayRequestContext;
 }
 
 type ChatContext = ReturnType<typeof createChatContext>;
@@ -1085,7 +1086,7 @@ function createChatRequestFixture() {
         req: {} as never,
         client: null as never,
         isWebchatConnect: () => false,
-        context: context as GatewayRequestContext,
+        context,
       }),
   };
 }
@@ -1187,7 +1188,7 @@ async function runNonStreamingChatSend(params: {
     req: {} as never,
     client: (params.client ?? null) as never,
     isWebchatConnect: () => false,
-    context: params.context as GatewayRequestContext,
+    context: params.context,
   });
 
   const waitFor =
@@ -1880,7 +1881,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             },
           } as never,
           isWebchatConnect: () => false,
-          context: context as GatewayRequestContext,
+          context,
         },
         async () => {
           original.complete();
@@ -3170,7 +3171,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null,
       isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      context,
     });
 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
@@ -3198,7 +3199,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null,
       isWebchatConnect: () => false,
-      context: createChatContext() as GatewayRequestContext,
+      context: createChatContext(),
     });
 
     expect(lastRespondCall(respond)?.[1]).toMatchObject({
@@ -5147,7 +5148,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         req: {} as never,
         client: null as never,
         isWebchatConnect: () => false,
-        context: context as GatewayRequestContext,
+        context,
       });
       await waitForAssertion(() => expect(mockState.loadSessionEntryCalls).toHaveLength(1));
       mockState.sessionEntry = { archivedAt: Date.now() };
@@ -5236,7 +5237,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      context,
     });
 
     const response = lastRespondCall(respond);
@@ -5264,7 +5265,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      context,
     });
 
     const response = lastRespondCall(respond);
@@ -5908,7 +5909,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-user-transcript-agent-run:user",
     });
     const finalBroadcast = context.broadcast.mock.calls.find(
-      (call) => call[0] === "chat" && call[1]?.state === "final",
+      (call) =>
+        call[0] === "chat" && (call[1] as { state?: unknown } | undefined)?.state === "final",
     )?.[1];
     expect(finalBroadcast).toBeUndefined();
   });
