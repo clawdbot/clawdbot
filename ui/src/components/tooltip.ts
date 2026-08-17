@@ -2,10 +2,13 @@
 // wrapper API; Web Awesome owns popup positioning, rendering, and dismissal.
 import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { css, html } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
+const DESCRIBABLE_SELECTOR =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+const HOVER_SUPPRESSED_SCOPE = "[data-hover-suppressed]";
 const HOVER_DELAY = 150;
 const TOUCH_DELAY = 450;
 const TOUCH_VISIBLE = 900;
@@ -222,9 +225,14 @@ class Tooltip extends OpenClawLitElement {
   /** Let a reveal-only trigger open on click instead of dismissing. */
   @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
 
+  @property({ type: Number }) delay?: number;
+  @property({ type: Boolean, reflect: true }) suppressed = false;
+  @property() placement = "top";
+
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
   private triggerElement: HTMLElement | null = null;
+  private describedElement: HTMLElement | null = null;
   private openTimer: number | null = null;
   private closeTimer: number | null = null;
   private touchTimer: number | null = null;
@@ -248,22 +256,28 @@ class Tooltip extends OpenClawLitElement {
 
     wa-tooltip {
       --max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
-      --wa-tooltip-arrow-size: 6px;
-      --wa-tooltip-background-color: color-mix(in srgb, var(--card) 94%, black 6%);
-      --wa-tooltip-border-color: color-mix(in srgb, var(--border-strong) 84%, transparent);
+      --wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px);
+      --wa-tooltip-background-color: var(
+        --openclaw-tooltip-background-color,
+        color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
+      );
+      --wa-tooltip-border-color: var(
+        --openclaw-tooltip-border-color,
+        var(--overlay-border, var(--border-strong))
+      );
       --wa-tooltip-border-width: 1px;
       --wa-tooltip-border-style: solid;
       --wa-tooltip-content-color: var(--text);
-      --wa-tooltip-border-radius: var(--radius-md);
+      --wa-tooltip-border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
       font-family: var(--font-body);
     }
 
     wa-tooltip::part(body) {
-      padding: 7px 9px;
-      box-shadow: var(--shadow-md);
-      font-size: 12px;
+      padding: var(--openclaw-tooltip-padding, 5px 7px);
+      box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
+      font-size: 11px;
       font-weight: 500;
-      line-height: 1.35;
+      line-height: 1.25;
       overflow-wrap: anywhere;
     }
 
@@ -286,7 +300,10 @@ class Tooltip extends OpenClawLitElement {
     this.style.display = "contents";
   }
 
-  protected override updated() {
+  protected override updated(changed: PropertyValues) {
+    if (changed.has("suppressed") && this.suppressed) {
+      this.close();
+    }
     this.attachTrigger();
     this.syncDescription();
     this.syncWebAwesomeTooltip();
@@ -308,7 +325,7 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private get hoverDelay() {
-    return Math.max(0, this.provider?.delay ?? HOVER_DELAY);
+    return Math.max(0, this.delay ?? this.provider?.delay ?? HOVER_DELAY);
   }
 
   private get touchDelay() {
@@ -538,11 +555,22 @@ class Tooltip extends OpenClawLitElement {
     return isTooltipTextRedundant(this.content, trigger);
   }
 
-  private syncDescription() {
+  private resolveDescribedElement(): HTMLElement | null {
     const trigger = this.triggerElement;
+    if (!trigger) {
+      return null;
+    }
+    return trigger.matches(DESCRIBABLE_SELECTOR)
+      ? trigger
+      : (trigger.querySelector<HTMLElement>(DESCRIBABLE_SELECTOR) ?? trigger);
+  }
+
+  private syncDescription() {
+    const trigger = this.resolveDescribedElement();
     if (!trigger) {
       return;
     }
+    this.describedElement = trigger;
     const current = trigger.getAttribute("aria-describedby");
     if (!this.descriptionCaptured) {
       this.describedBy = current;
@@ -564,14 +592,16 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private restoreDescription() {
-    if (!this.triggerElement) {
+    const described = this.describedElement ?? this.triggerElement;
+    if (!described) {
       return;
     }
     if (this.describedBy) {
-      this.triggerElement.setAttribute("aria-describedby", this.describedBy);
+      described.setAttribute("aria-describedby", this.describedBy);
     } else {
-      this.triggerElement.removeAttribute("aria-describedby");
+      described.removeAttribute("aria-describedby");
     }
+    this.describedElement = null;
     this.descriptionElement?.remove();
     this.descriptionElement = null;
     this.describedBy = null;
@@ -673,7 +703,7 @@ class Tooltip extends OpenClawLitElement {
   override render() {
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual">
+      <wa-tooltip id=${this.tooltipId} trigger="manual" placement=${this.placement}>
         <span class="tooltip-content">${this.content}</span>
         <span
           class="tooltip-rich-content"
