@@ -1906,11 +1906,11 @@ describe("sqlite session normalization", () => {
       sessionKey,
       storePath: paths.storePath,
     });
-    const cronKey = "agent:main:cron:job-1";
-    const cronEntry = {
-      lifecycleRevision: "cron-revision-1",
-      sessionId: "cron-session",
-      updatedAt: Date.now(),
+    const dashboardKey = "agent:main:dashboard:active-work";
+    const dashboardEntry = {
+      lifecycleRevision: "dashboard-revision-1",
+      sessionId: "dashboard-session",
+      updatedAt: Date.now() - 10 * 24 * 60 * 60 * 1000,
     };
 
     for (const [sessionKey, sessionId] of [
@@ -1928,14 +1928,14 @@ describe("sqlite session normalization", () => {
       );
     }
 
-    await patchSessionEntryCore(scopeFor(cronKey), () => cronEntry, {
-      fallbackEntry: cronEntry,
+    await patchSessionEntryCore(scopeFor(dashboardKey), () => dashboardEntry, {
+      fallbackEntry: dashboardEntry,
       replaceEntry: true,
       skipMaintenance: true,
     });
     const admission = await beginSessionWorkAdmission({
       scope: paths.storePath,
-      identities: [cronKey, cronEntry.sessionId],
+      identities: [dashboardKey, dashboardEntry.sessionId],
       assertAllowed: () => {},
     });
     try {
@@ -1949,7 +1949,9 @@ describe("sqlite session normalization", () => {
         },
       );
 
-      expect(loadSessionEntry(scopeFor(cronKey))).toMatchObject(cronEntry);
+      const preservedEntry = loadSessionEntry(scopeFor(dashboardKey));
+      expect(preservedEntry).toMatchObject(dashboardEntry);
+      expect(preservedEntry?.archivedAt).toBeUndefined();
     } finally {
       admission.release();
     }
