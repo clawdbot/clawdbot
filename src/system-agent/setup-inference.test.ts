@@ -1541,11 +1541,13 @@ describe("activateSetupInference", () => {
     const configHarness = createConfigTransformHarness(initialConfig);
     const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-5"));
     const resolveRouteMetadata = vi.fn(resolvePluginMetadataSnapshot);
+    const refreshPreparedModelRuntimeSnapshots = vi.fn(async () => {});
     const result = await activateSetupInference({
       kind: "claude-cli",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
         resolvePluginMetadataSnapshot: resolveRouteMetadata,
+        refreshPreparedModelRuntimeSnapshots: refreshPreparedModelRuntimeSnapshots as never,
         runCliAgent: runCliAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -1578,6 +1580,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.current().agents?.defaults?.systemAgent).toEqual({ agentId: "ops" });
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(resolveRouteMetadata).toHaveBeenCalledOnce();
+    expect(refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
   });
 
   it("persists inference onto an explicit selected owner without changing the system owner", async () => {

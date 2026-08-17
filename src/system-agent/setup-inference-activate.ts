@@ -606,7 +606,7 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    if (committedConfig) {
+    if (committedConfig && params.surface === "gateway" && params.kind === "codex-cli") {
       try {
         const refreshPreparedModelRuntimeSnapshots =
           deps.refreshPreparedModelRuntimeSnapshots ??
