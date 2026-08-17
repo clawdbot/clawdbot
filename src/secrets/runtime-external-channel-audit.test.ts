@@ -237,6 +237,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
             voice: {
               enabled: true,
+              realtime: {
+                providers: {
+                  openai: { apiKey: ref("DISCORD_VOICE_REALTIME_API_KEY") },
+                },
+              },
               tts: {
                 providers: {
                   openai: { apiKey: ref("DISCORD_VOICE_TTS_API_KEY") },
@@ -256,6 +261,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
                 },
                 voice: {
                   enabled: true,
+                  realtime: {
+                    providers: {
+                      openai: { apiKey: ref("DISCORD_WORK_VOICE_REALTIME_API_KEY") },
+                    },
+                  },
                   tts: {
                     providers: {
                       openai: { apiKey: ref("DISCORD_WORK_VOICE_TTS_API_KEY") },
@@ -341,9 +351,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         env: {
           DISCORD_TOKEN: "discord-token",
           DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
+          DISCORD_VOICE_REALTIME_API_KEY: "discord-voice-realtime-api-key",
           DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
           DISCORD_WORK_TOKEN: "discord-work-token",
           DISCORD_WORK_PLURALKIT_TOKEN: "discord-work-pluralkit-token",
+          DISCORD_WORK_VOICE_REALTIME_API_KEY: "discord-work-voice-realtime-api-key",
           DISCORD_WORK_VOICE_TTS_API_KEY: "discord-work-voice-tts-api-key",
           FEISHU_APP_SECRET: "feishu-app-secret",
           FEISHU_ENCRYPT_KEY: "feishu-encrypt-key",
@@ -370,9 +382,12 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       const expectedPaths = {
         "channels.discord.token": "discord-token",
         "channels.discord.pluralkit.token": "discord-pluralkit-token",
+        "channels.discord.voice.realtime.providers.openai.apiKey": "discord-voice-realtime-api-key",
         "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
         "channels.discord.accounts.work.token": "discord-work-token",
         "channels.discord.accounts.work.pluralkit.token": "discord-work-pluralkit-token",
+        "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey":
+          "discord-work-voice-realtime-api-key",
         "channels.discord.accounts.work.voice.tts.providers.openai.apiKey":
           "discord-work-voice-tts-api-key",
         "channels.feishu.appSecret": "feishu-app-secret",
