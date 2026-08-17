@@ -542,7 +542,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             }
           }
           const accountId = ctx.accountId ?? resolveDefaultMSTeamsAccountId(ctx.cfg);
-          const actionAccountId = accountId === DEFAULT_ACCOUNT_ID ? undefined : accountId;
+          const actionAccountId =
+            ctx.accountId ?? (accountId === DEFAULT_ACCOUNT_ID ? undefined : accountId);
           const authorizeActionTarget = (target: string) =>
             assertMSTeamsReadTargetAllowed({ cfg: ctx.cfg, ctx, target });
           const presentation =

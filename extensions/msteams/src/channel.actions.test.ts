@@ -245,7 +245,14 @@ async function expectSuccessfulAction(params: {
     senderIsOwner: params.senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
   });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
+  expectActionRuntimeCall(
+    params.mockFn,
+    {
+      ...params.runtimeParams,
+      ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
+    },
+    params.cfg,
+  );
   expectActionSuccess(result, params.details, params.contentDetails);
 }
 
@@ -1235,6 +1242,63 @@ describe("msteamsPlugin message actions", () => {
         channel: "msteams",
         messageId: "msg-card-1",
         conversationId: "conv-card-1",
+      },
+    });
+  });
+
+  it("preserves an explicitly selected legacy default account when a named default is configured", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "legacy-app-id",
+          appPassword: "legacy-secret",
+          defaultAccount: "support",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    await expectSuccessfulAction({
+      mockFn: sendAdaptiveCardMSTeamsMock,
+      mockResult: {
+        messageId: "msg-legacy-default",
+        conversationId: "conv-legacy-default",
+      },
+      action: "send",
+      cfg,
+      accountId: "default",
+      actionParams: {
+        to: targetChannelId,
+        message: "Legacy default",
+        presentation: { blocks: [{ type: "text", text: "Legacy default" }] },
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            { type: "TextBlock", text: "Legacy default", wrap: true },
+            { type: "TextBlock", text: "Legacy default", wrap: true },
+          ],
+        },
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-legacy-default",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-legacy-default",
+        conversationId: "conv-legacy-default",
       },
     });
   });
