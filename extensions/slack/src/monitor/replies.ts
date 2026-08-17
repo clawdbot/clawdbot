@@ -261,18 +261,18 @@ export async function deliverReplies(params: {
         } else if (!textRaw && spokenText) {
           hookParts.push(spokenText);
         }
+        // Shared deliverTextOrMediaReply owns the accepted-caption latch.
+        // Do not also fire Slack's outer latch here or media+fenced replies warn twice (#41966).
         const mediaDelivery = await deliverTextOrMediaReply({
           payload,
           text: mediaCaption,
+          cfg: params.cfg,
+          surface: "slack",
           sendText: async (text) => {
             lastResult = await sendReply({ text, threadTs });
-            fencedMediaWarn.afterAcceptedVisibleText(text);
           },
           sendMedia: async ({ mediaUrl, caption }) => {
             lastResult = await sendReply({ text: caption ?? "", mediaUrl, threadTs });
-            if (caption) {
-              fencedMediaWarn.afterAcceptedVisibleText(caption);
-            }
           },
         });
         delivered ||= mediaDelivery !== "empty";

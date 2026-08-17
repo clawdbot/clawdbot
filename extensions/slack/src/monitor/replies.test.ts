@@ -1456,4 +1456,14 @@ describe("deliverReplies fenced MEDIA warn (#41966)", () => {
     expect(sendMock).toHaveBeenCalled();
     expect(fencedMediaLogWarn).not.toHaveBeenCalled();
   });
+
+  it("warns once for media-backed reply with fenced MEDIA caption (#41966 no double latch)", async () => {
+    const fenced = "```\nMEDIA:/tmp/slack-fenced-media.png\n```";
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: fenced, mediaUrls: ["https://example.com/img.png"] }],
+      }),
+    );
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+  });
 });
