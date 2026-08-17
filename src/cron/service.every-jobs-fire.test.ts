@@ -22,10 +22,6 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
-function expectCronRunSessionKey(value: unknown, jobId: string) {
-  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
-}
-
 describe("CronService interval/cron jobs fire on time", () => {
   const runLateTimerAndLoadJob = async ({
     cron,
@@ -56,8 +52,8 @@ describe("CronService interval/cron jobs fire on time", () => {
       throw new Error(`missing system event ${expectedText}`);
     }
     const options = matchingCall[1] as Record<string, unknown>;
-    expect(options.agentId).toBeUndefined();
-    expectCronRunSessionKey(options.sessionKey, jobId);
+    expect(options.agentId).toBe("main");
+    expect(options.sessionKey).toBeUndefined();
     expect(typeof options.contextKey).toBe("string");
     expect(String(options.contextKey).startsWith("cron:")).toBe(true);
   };

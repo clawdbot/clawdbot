@@ -44,7 +44,6 @@ type PreparedManualRun =
         | "disabled"
         | "not-due"
         | "invalid-spec"
-        | "restart-recovery-pending"
         | "stopped";
     }
   | {
@@ -250,9 +249,6 @@ async function inspectManualRunPreflight(
     if (state.stopped) {
       return { ok: true, ran: false, reason: "stopped" } as const;
     }
-    if (state.restartRecoveryPending) {
-      return { ok: true, ran: false, reason: "restart-recovery-pending" } as const;
-    }
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
@@ -329,9 +325,6 @@ export async function prepareManualRun(
     // (`list`, `status`) stay responsive while the run is in progress.
     if (state.stopped) {
       return { ok: true, ran: false, reason: "stopped" as const };
-    }
-    if (state.restartRecoveryPending) {
-      return { ok: true, ran: false, reason: "restart-recovery-pending" as const };
     }
     // The initial preflight is advisory. A command-lane wait or another cron
     // run can change this job before its reservation is persisted.
@@ -430,10 +423,6 @@ export async function activatePreparedManualRun(
     if (state.stopped) {
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "stopped" } as const;
-    }
-    if (state.restartRecoveryPending) {
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      return { ok: true, ran: false, reason: "restart-recovery-pending" } as const;
     }
     const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
     if (!job) {
