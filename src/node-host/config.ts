@@ -147,13 +147,14 @@ function rowToNodeHostConfig(row: NodeHostConfigRuntimeRow): NodeHostConfig {
   if (row.installed_apps_sharing !== 0 && row.installed_apps_sharing !== 1) {
     throw new Error("invalid node-host SQLite row: installed_apps_sharing must be 0 or 1");
   }
+  const cloudflareAccess = parseCloudflareAccessJson(row.gateway_cloudflare_access_json);
   const gateway: NodeHostGatewayConfig = {
     host: optionalNonEmptyString(row.gateway_host, "gateway_host"),
     port: validatePort(row.gateway_port, "SQLite gateway_port"),
     tls: row.gateway_tls === null ? undefined : row.gateway_tls === 1,
     tlsFingerprint: optionalNonEmptyString(row.gateway_tls_fingerprint, "gateway_tls_fingerprint"),
     contextPath: optionalNonEmptyString(row.gateway_context_path, "gateway_context_path"),
-    cloudflareAccess: parseCloudflareAccessJson(row.gateway_cloudflare_access_json),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
   const hasGateway = Object.values(gateway).some((value) => value !== undefined);
   return {

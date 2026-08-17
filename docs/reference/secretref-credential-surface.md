@@ -129,6 +129,8 @@ The lists below are generated from the source target registry and checked agains
 - `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 - `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 
+[//]: # "secretref-supported-list-end"
+
 ### Node-host connection targets
 
 - `gateway.cloudflareAccess.clientId`
@@ -140,8 +142,6 @@ the configured SecretRef providers when the node starts. The conventional
 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` fallback persists env refs for
 these fields automatically. They are not targets for `secrets configure` or
 `secrets apply`.
-
-[//]: # "secretref-supported-list-end"
 
 Notes:
 

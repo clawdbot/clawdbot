@@ -178,18 +178,19 @@ function rowToCanonicalState(row: {
   if (row.gateway_tls !== null && row.gateway_tls !== 0 && row.gateway_tls !== 1) {
     throw new Error("invalid canonical node-host SQLite gateway tls");
   }
+  const cloudflareAccess =
+    row.gateway_cloudflare_access_json === null
+      ? undefined
+      : normalizeNodeHostCloudflareAccessConfig(
+          JSON.parse(row.gateway_cloudflare_access_json) as unknown,
+        );
   const gateway: NodeHostGatewayConfig = {
     host: nullableNonEmptyString(row.gateway_host, "gateway_host"),
     port: row.gateway_port ?? undefined,
     tls: row.gateway_tls === null ? undefined : row.gateway_tls === 1,
     tlsFingerprint: nullableNonEmptyString(row.gateway_tls_fingerprint, "gateway_tls_fingerprint"),
     contextPath: nullableNonEmptyString(row.gateway_context_path, "gateway_context_path"),
-    cloudflareAccess:
-      row.gateway_cloudflare_access_json === null
-        ? undefined
-        : normalizeNodeHostCloudflareAccessConfig(
-            JSON.parse(row.gateway_cloudflare_access_json) as unknown,
-          ),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
   return {
     config: {
