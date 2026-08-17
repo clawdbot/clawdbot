@@ -262,6 +262,35 @@ describe("agent command registration", () => {
     );
   });
 
+  it("resolves nested exec --timeout from the explicit leaf, then the parent, then the default", async () => {
+    async function runPositionalCli(args: string[]) {
+      const program = new Command().enablePositionalOptions();
+      registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+      await program.parseAsync(args, { from: "user" });
+    }
+
+    await runPositionalCli(["agent", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
+      runtime,
+    );
+
+    await runPositionalCli(["agent", "--timeout", "30", "exec", "fix it"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "30" }),
+      runtime,
+    );
+
+    await runPositionalCli(["agent", "--timeout", "30", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
+      runtime,
+    );
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);

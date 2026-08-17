@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
 import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
@@ -187,7 +188,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         messageFile: opts.messageFile ?? parentOpts?.messageFile,
         model: opts.model ?? parentOpts?.model,
         thinking: opts.thinking ?? parentOpts?.thinking,
-        timeout: parentOpts?.timeout ?? opts.timeout,
+        // Exec --timeout has a child default ("600"), so `opts.timeout ?? parent`
+        // would never inherit. Prefer an explicit leaf flag; otherwise inherit a
+        // parent CLI value. Parent-first `??` would keep the parent even when the
+        // operator also set exec --timeout (production enables positional options).
+        timeout: inheritOptionFromParent<string>(command, "timeout") ?? opts.timeout,
         json: opts.json === true || parentOpts?.json === true,
       };
       const [defaultRuntime, runCommandWithRuntime, agentExecCommand] = await Promise.all([
