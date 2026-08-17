@@ -6,8 +6,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
-  compareCommitPageCount,
   HOSTED_GATE_MAX_AGE_HOURS,
+  loadPullRequestCommitShas,
   notApplicableScheduledHostedWorkflows,
   parseArgs,
   parseWorkflowRunPage,
@@ -735,11 +735,121 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow(`Missing successful recent CI workflow for ${sha}`);
   });
 
-  it("paginates comparisons beyond the pull-request endpoint's 250-commit cap", () => {
-    expect(compareCommitPageCount(0)).toBe(1);
-    expect(compareCommitPageCount(250)).toBe(3);
-    expect(compareCommitPageCount(251)).toBe(3);
-    expect(compareCommitPageCount(301)).toBe(4);
+  it("loads more than 250 pull-request commits from the local checkout", () => {
+    const commitShas = Array.from({ length: 300 }, (_, index) =>
+      (index + 1).toString(16).padStart(40, "0"),
+    ).concat(sha);
+    const execGit = (args: string[]) => {
+      switch (args[0]) {
+        case "remote":
+          return "git@github.com:openclaw/openclaw.git\n";
+        case "rev-parse":
+          return "false\n";
+        case "cat-file":
+          return "";
+        case "rev-list":
+          expect(args).toEqual(["rev-list", "--reverse", `${previousSha}..${sha}`]);
+          return `${commitShas.join("\n")}\n`;
+        default:
+          throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      }
+    };
+    expect(
+      loadPullRequestCommitShas(
+        "openclaw/openclaw",
+        pr,
+        { baseSha: previousSha, headSha: sha },
+        execGit,
+      ),
+    ).toEqual(commitShas);
+  });
+
+  it("accepts an empty membership when the head is already contained by the base", () => {
+    const execGit = (args: string[]) => {
+      if (args[0] === "remote") {
+        return "https://github.com/openclaw/openclaw.git\n";
+      }
+      if (args[0] === "rev-parse") {
+        return "false\n";
+      }
+      if (args[0] === "cat-file") {
+        return "";
+      }
+      return "";
+    };
+    expect(
+      loadPullRequestCommitShas(
+        "openclaw/openclaw",
+        pr,
+        { baseSha: previousSha, headSha: sha },
+        execGit,
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects the wrong repository or an incomplete checkout", () => {
+    const wrongRepository = (args: string[]) =>
+      args[0] === "remote" ? "https://github.com/acme/other.git\n" : "false\n";
+    expect(() =>
+      loadPullRequestCommitShas(
+        "openclaw/openclaw",
+        pr,
+        { baseSha: previousSha, headSha: sha },
+        wrongRepository,
+      ),
+    ).toThrow("Current checkout does not match requested repository openclaw/openclaw.");
+
+    const shallowCheckout = (args: string[]) =>
+      args[0] === "remote" ? "https://github.com/openclaw/openclaw.git\n" : "true\n";
+    expect(() =>
+      loadPullRequestCommitShas(
+        "openclaw/openclaw",
+        pr,
+        { baseSha: previousSha, headSha: sha },
+        shallowCheckout,
+      ),
+    ).toThrow("Hosted gate verification requires a complete non-shallow checkout.");
+  });
+
+  it("fetches a missing fork head through the pull-request ref", () => {
+    let headAvailable = false;
+    const commands: string[][] = [];
+    const execGit = (args: string[]) => {
+      commands.push(args);
+      if (args[0] === "remote") {
+        return "https://github.com/openclaw/openclaw.git\n";
+      }
+      if (args[0] === "rev-parse") {
+        return "false\n";
+      }
+      if (args[0] === "cat-file") {
+        if (args[2]?.startsWith(sha) && !headAvailable) {
+          throw new Error("missing head");
+        }
+        return "";
+      }
+      if (args[0] === "fetch") {
+        if (args.at(-1) === `refs/pull/${pr}/head`) {
+          headAvailable = true;
+          return "";
+        }
+        throw new Error("unadvertised object");
+      }
+      if (args[0] === "rev-list") {
+        return `${sha}\n`;
+      }
+      throw new Error(`Unexpected git command: ${args.join(" ")}`);
+    };
+
+    expect(
+      loadPullRequestCommitShas(
+        "openclaw/openclaw",
+        pr,
+        { baseSha: previousSha, headSha: sha },
+        execGit,
+      ),
+    ).toEqual([sha]);
+    expect(commands).toContainEqual(["fetch", "--no-tags", "origin", `refs/pull/${pr}/head`]);
   });
 
   it("requires recent evidence for scheduled gates observed on the target head", () => {

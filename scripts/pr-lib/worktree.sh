@@ -35,7 +35,27 @@ ensure_full_pr_worktree_checkout() {
   if [ "$sparse_checkout" = "true" ]; then
     # Prepare gates build the whole repository. Inherited sparse settings can
     # omit tracked transitive inputs and turn healthy PRs into false failures.
-    git sparse-checkout disable
+    if ! git sparse-checkout disable; then
+      echo "Unable to materialize the complete PR worktree." >&2
+      return 1
+    fi
+  fi
+
+  local shallow_checkout
+  shallow_checkout=$(git rev-parse --is-shallow-repository 2>/dev/null || true)
+  if [ "$shallow_checkout" = "true" ]; then
+    # Hosted-gate commit membership is derived from immutable local objects.
+    # Materialize history at the checkout owner instead of letting a verifier
+    # mutate its repository while deciding whether evidence is trustworthy.
+    if ! git fetch --no-tags --unshallow origin; then
+      echo "Unable to fetch complete history for the PR worktree." >&2
+      return 1
+    fi
+    shallow_checkout=$(git rev-parse --is-shallow-repository 2>/dev/null || true)
+  fi
+  if [ "$shallow_checkout" != "false" ]; then
+    echo "Unable to materialize complete history for the PR worktree." >&2
+    return 1
   fi
 }
 
@@ -91,7 +111,7 @@ enter_worktree() {
     return 1
   fi
 
-  ensure_full_pr_worktree_checkout
+  ensure_full_pr_worktree_checkout || return 1
   git fetch origin main
   if [ "$reset_to_main" = "true" ]; then
     git checkout -B "temp/pr-$pr" origin/main

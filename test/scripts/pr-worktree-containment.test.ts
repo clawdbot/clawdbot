@@ -46,6 +46,35 @@ function createFixture(): Fixture {
   };
 }
 
+function createShallowFixture(): Fixture & { commitCount: number } {
+  const origin = tempDirs.make("openclaw-pr-worktree-origin-");
+  git(origin, "init", "--initial-branch=main");
+  git(origin, "config", "user.name", "OpenClaw Test");
+  git(origin, "config", "user.email", "test@openclaw.invalid");
+  const commitCount = 3;
+  for (let index = 1; index <= commitCount; index += 1) {
+    writeFileSync(join(origin, "fixture.txt"), `main ${index}\n`);
+    git(origin, "add", "fixture.txt");
+    git(origin, "commit", "-m", `main fixture ${index}`);
+  }
+
+  const root = tempDirs.make("openclaw-pr-worktree-shallow-");
+  git(root, "clone", "--depth=1", "--branch=main", `file://${origin}`, ".");
+  git(root, "config", "user.name", "OpenClaw Test");
+  git(root, "config", "user.email", "test@openclaw.invalid");
+  const mainSha = git(root, "rev-parse", "HEAD");
+  git(root, "checkout", "-b", "sibling/work");
+  writeFileSync(join(root, "fixture.txt"), "sibling\n");
+  git(root, "commit", "-am", "sibling fixture");
+  return {
+    root,
+    mainSha,
+    siblingBranch: git(root, "branch", "--show-current"),
+    siblingSha: git(root, "rev-parse", "HEAD"),
+    commitCount,
+  };
+}
+
 function makeStaleWorktreeDir(fixture: Fixture) {
   mkdirSync(join(fixture.root, ".worktrees", "pr-42"), { recursive: true });
 }
@@ -159,6 +188,50 @@ describePosix("scripts/pr worktree containment", () => {
     expect(result.stdout).toContain(`cwd=${realpathSync(expectedWorktree)}`);
     expect(result.stdout).toContain("branch=temp/pr-42");
     expect(result.stdout).toContain(`head=${fixture.mainSha}`);
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
+  it("materializes complete history for a PR worktree from a shallow clone", () => {
+    const fixture = createShallowFixture();
+    const expectedWorktree = join(fixture.root, ".worktrees", "pr-42");
+    expect(git(fixture.root, "rev-parse", "--is-shallow-repository")).toBe("true");
+
+    const result = runShell(fixture, ["enter_worktree 42 false"]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(git(expectedWorktree, "rev-parse", "--is-shallow-repository")).toBe("false");
+    expect(Number(git(expectedWorktree, "rev-list", "--count", "HEAD"))).toBe(fixture.commitCount);
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
+  it("propagates shallow-history materialization failure from a conditional caller", () => {
+    const fixture = createShallowFixture();
+    const expectedWorktree = join(fixture.root, ".worktrees", "pr-42");
+
+    const result = runShell(fixture, [
+      'git() { local arg; for arg in "$@"; do [ "$arg" != "--unshallow" ] || return 1; done; command git "$@"; }',
+      'if enter_worktree 42 false; then echo "unexpected worktree success"; exit 0; fi',
+      "exit 42",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
+    expect(result.stdout).not.toContain("unexpected worktree success");
+    expect(git(expectedWorktree, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
+  it("propagates sparse-checkout materialization failure from a conditional caller", () => {
+    const fixture = createFixture();
+
+    const result = runShell(fixture, [
+      'git() { if [ "${1-}" = "config" ] && [ "${2-}" = "--bool" ] && [ "${3-}" = "core.sparseCheckout" ]; then printf "true\\n"; return 0; fi; if [ "${1-}" = "sparse-checkout" ]; then return 1; fi; command git "$@"; }',
+      'if enter_worktree 42 false; then echo "unexpected worktree success"; exit 0; fi',
+      "exit 43",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(43);
+    expect(result.stdout).not.toContain("unexpected worktree success");
+    expect(result.stderr).toContain("Unable to materialize the complete PR worktree.");
     expectCanonicalCheckoutUnchanged(fixture);
   });
 });
