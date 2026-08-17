@@ -565,7 +565,9 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     await service.stop?.(context);
 
     expect(readSessions).not.toHaveBeenCalled();
@@ -584,7 +586,9 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     await service.stop?.(context);
 
     expect(readSessions).not.toHaveBeenCalled();
