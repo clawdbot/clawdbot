@@ -14,7 +14,6 @@ import type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
-import type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-read.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
@@ -117,6 +116,12 @@ export type SessionTranscriptStats = {
 
 export type SessionTranscriptEventRow = {
   event: TranscriptEvent;
+  seq: number;
+};
+
+/** Raw transcript row shape used to detect a foreign process's concurrent commit. */
+export type SqliteTranscriptSnapshotRow = {
+  eventJson: string;
   seq: number;
 };
 

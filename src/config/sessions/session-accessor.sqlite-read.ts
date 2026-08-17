@@ -17,6 +17,7 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptEventRow,
   SessionTranscriptStats,
+  SqliteTranscriptSnapshotRow,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
@@ -29,10 +30,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
-export type SqliteTranscriptSnapshotRow = {
-  eventJson: string;
-  seq: number;
-};
+export type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-contract.js";
 
 export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
   createdAt: number;
