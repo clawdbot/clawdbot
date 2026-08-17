@@ -977,13 +977,6 @@ export function renderAgentSkills(params: {
         actions: html`
           <button
             class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
-          <button
-            class="btn btn--sm"
             ?disabled=${!editable}
             @click=${() => params.onDisableAll(params.agentId)}
           >
