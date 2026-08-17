@@ -148,12 +148,14 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
 }
 
 async function startPausedBootstrapCreator(rootDir: string): Promise<{
+  committedPath: string;
   continuePath: string;
   outcome: Promise<DeviceIdentity>;
   child: ChildProcess;
 }> {
   const databasePath = path.join(rootDir, "state", "openclaw.sqlite");
   const readyPath = path.join(rootDir, "bootstrap-ready");
+  const committedPath = path.join(rootDir, "bootstrap-committed");
   const continuePath = path.join(rootDir, "bootstrap-continue");
   const coordinatorModuleUrl = new URL("./device-identity-coordinator.ts", import.meta.url).href;
   const storeModuleUrl = new URL("./device-identity-store.ts", import.meta.url).href;
@@ -182,6 +184,7 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
         await new Promise((resolve) => setTimeout(resolve, 2));
       }
       const stored = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(), options);
+      fs.writeFileSync(process.env.OPENCLAW_IDENTITY_COMMITTED_PATH, "committed");
       console.log(JSON.stringify({
         deviceId: stored.deviceId,
         publicKeyPem: stored.publicKeyPem,
@@ -197,6 +200,7 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
     {
       env: {
         ...process.env,
+        OPENCLAW_IDENTITY_COMMITTED_PATH: committedPath,
         OPENCLAW_COORDINATOR_MODULE: coordinatorModuleUrl,
         OPENCLAW_IDENTITY_CONTINUE_PATH: continuePath,
         OPENCLAW_IDENTITY_DATABASE_PATH: databasePath,
@@ -221,18 +225,18 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
       setTimeout(resolve, 2);
     });
   }
-  return { child, continuePath, outcome };
+  return { child, committedPath, continuePath, outcome };
 }
 
-function snapshotStateFiles(rootDir: string): Array<{ path: string; size: number }> {
-  return fs
-    .readdirSync(rootDir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const filePath = path.join(entry.parentPath, entry.name);
-      return { path: path.relative(rootDir, filePath), size: fs.statSync(filePath).size };
-    })
-    .toSorted((left, right) => left.path.localeCompare(right.path));
+function waitForFileSync(filePath: string): void {
+  const deadline = Date.now() + 15_000;
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${filePath}`);
+    }
+    Atomics.wait(waitBuffer, 0, 0, 2);
+  }
 }
 
 describe("device identity SQLite store", () => {
@@ -417,15 +421,29 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it("treats an empty creator bootstrap snapshot as a read-only miss", async () => {
+  it("keeps empty-bootstrap classification on the pre-commit read snapshot", async () => {
     await withTempDir("openclaw-device-identity-bootstrap-read-", async (rootDir) => {
       const creator = await startPausedBootstrapCreator(rootDir);
       try {
-        const beforeRead = snapshotStateFiles(rootDir);
-        expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toBeNull();
-        expect(snapshotStateFiles(rootDir)).toEqual(beforeRead);
+        const sqlite = await import("node:sqlite");
+        const prepare = sqlite.DatabaseSync.prototype.prepare;
+        let committedDuringRead = false;
+        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (sql) {
+          try {
+            return prepare.call(this, sql);
+          } catch (error) {
+            if (!committedDuringRead && /device_identities/iu.test(sql)) {
+              committedDuringRead = true;
+              fs.writeFileSync(creator.continuePath, "continue");
+              waitForFileSync(creator.committedPath);
+            }
+            throw error;
+          }
+        });
 
-        fs.writeFileSync(creator.continuePath, "continue");
+        expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toBeNull();
+        expect(committedDuringRead).toBe(true);
+
         const committed = await creator.outcome;
         expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(committed);
       } finally {
