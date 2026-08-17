@@ -161,7 +161,7 @@ function parseProviderEnvEntries(
   for (const entry of entries) {
     const separator = entry.indexOf("=");
     if (separator <= 0) {
-      throw new Error("--provider-env expects KEY=VALUE entries.");
+      throw new Error("--provider-env expects KEY=*** entries.");
     }
     const key = entry.slice(0, separator).trim();
     if (!key) {
