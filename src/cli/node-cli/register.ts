@@ -64,16 +64,18 @@ export function registerNodeCli(program: Command) {
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts) => {
       let pair;
+      let gatewayOptions;
       try {
         pair = opts.pair ? resolveNodePairGatewayOptions(opts.pair) : undefined;
+        const existing = await loadNodeHostConfig();
+        gatewayOptions = resolveNodeGatewayOptions(opts, existing, pair);
       } catch (error) {
         defaultRuntime.error(error instanceof Error ? error.message : String(error));
         defaultRuntime.exit(1);
         return;
       }
-      const existing = await loadNodeHostConfig();
       const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayCandidates } =
-        resolveNodeGatewayOptions(opts, existing, pair);
+        gatewayOptions;
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);

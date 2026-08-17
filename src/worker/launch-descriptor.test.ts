@@ -69,7 +69,13 @@ describe("worker launch descriptor", () => {
       url: "wss://gateway.example/tenant/__openclaw__/worker",
       tlsFingerprint: "ab:".repeat(31) + "ab",
     };
-    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual({
+      ...descriptor,
+      connectionEndpoint: {
+        ...descriptor.connectionEndpoint,
+        tlsFingerprint: "ab".repeat(32),
+      },
+    });
 
     const invalidEndpoints: unknown[] = [
       { kind: "unix", socketPath: "gateway.sock" },
@@ -95,6 +101,16 @@ describe("worker launch descriptor", () => {
         kind: "websocket",
         url: "wss://gateway.example/__openclaw__/worker",
         tlsFingerprint: "",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "ab:cd:ef",
+      },
+      {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+        tlsFingerprint: "g".repeat(64),
       },
       { ...descriptor.connectionEndpoint, unexpected: true },
     ];

@@ -225,7 +225,7 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       bundleInstaller: { ensure },
       gatewayUrl: "wss://gateway.example/tenant",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
       gatewayCloudflareAccess: {
         clientId: "cf-bundle-id",
         clientSecret: "cf-bundle-secret",
@@ -235,7 +235,7 @@ describe("node-host worker supervisor commands", () => {
     expect(ensure).toHaveBeenCalledWith({
       input,
       gatewayUrl: "wss://gateway.example/tenant",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
       gatewayCloudflareAccess: {
         clientId: "cf-bundle-id",
         clientSecret: "cf-bundle-secret",
@@ -417,7 +417,7 @@ describe("node-host worker supervisor commands", () => {
       paramsJSON: JSON.stringify(input),
       supervisor,
       gatewayUrl: "wss://gateway.example/tenant/",
-      gatewayTlsFingerprint: "aa:bb:cc",
+      gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
       gatewayCloudflareAccess: {
         clientId: "cf-worker-id",
         clientSecret: "cf-worker-secret",
@@ -427,7 +427,7 @@ describe("node-host worker supervisor commands", () => {
     expect(supervisorMocks(supervisor).launch.mock.calls[0]?.[1]).toEqual({
       kind: "websocket",
       url: "wss://gateway.example/tenant/__openclaw__/worker",
-      tlsFingerprint: "aa:bb:cc",
+      tlsFingerprint: "aa".repeat(32),
       cloudflareAccess: {
         clientId: "cf-worker-id",
         clientSecret: "cf-worker-secret",

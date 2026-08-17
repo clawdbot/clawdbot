@@ -21,7 +21,7 @@ import {
 import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
-  normalizeFingerprint,
+  normalizeTlsFingerprint,
   normalizeGatewayErrorText,
 } from "./client-address-utils.js";
 import {
@@ -120,7 +120,7 @@ const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
   logDebug: () => {},
   logError: () => {},
   redactForLog: (message) => message,
-  normalizeTlsFingerprint: normalizeFingerprint,
+  normalizeTlsFingerprint,
 };
 
 function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayClientHostDeps> {

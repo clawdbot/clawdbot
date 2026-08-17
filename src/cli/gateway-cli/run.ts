@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -54,7 +55,6 @@ import {
   formatGatewayPidList,
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { normalizeFingerprint } from "../../infra/tls/fingerprint.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -536,9 +536,9 @@ async function probeGatewayHealthz(params: {
         if (params.tlsFingerprint) {
           const peerFingerprint =
             res.socket instanceof TLSSocket
-              ? normalizeFingerprint(res.socket.getPeerCertificate().fingerprint256 ?? "")
+              ? normalizeTlsFingerprint(res.socket.getPeerCertificate().fingerprint256 ?? "")
               : "";
-          if (peerFingerprint !== normalizeFingerprint(params.tlsFingerprint)) {
+          if (peerFingerprint !== normalizeTlsFingerprint(params.tlsFingerprint)) {
             res.resume();
             finish(false);
             return;
