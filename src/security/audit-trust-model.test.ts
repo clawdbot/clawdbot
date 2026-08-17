@@ -20,6 +20,16 @@ function requireMultiUserHeuristicFinding(findings: ReturnType<typeof audit>) {
   return finding;
 }
 
+function requireGroupScopeMainFinding(findings: ReturnType<typeof audit>) {
+  const finding = findings.find(
+    (entry) => entry.checkId === "security.trust_model.group_scope_main",
+  );
+  if (!finding) {
+    throw new Error("Expected group-scope main finding");
+  }
+  return finding;
+}
+
 describe("security audit trust model findings", () => {
   it("evaluates trust-model exposure findings", () => {
     const cases = [
@@ -140,6 +150,54 @@ describe("security audit trust model findings", () => {
               (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
             ),
           ).toBe(false);
+          expect(
+            findings.some((finding) => finding.checkId === "security.trust_model.group_scope_main"),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "warns when global group scope shares all rooms with the main session",
+        cfg: {
+          session: { groupScope: "main" },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding).toMatchObject({
+            severity: "warn",
+            title: "Group rooms share the main session",
+          });
+          expect(finding.detail).toContain('session.groupScope="main"');
+          expect(finding.detail).toContain("all group/channel rooms");
+          expect(finding.remediation).toContain(
+            "https://docs.openclaw.ai/channels/groups#session-keys",
+          );
+        },
+      },
+      {
+        name: "warns with the matched room for binding group scope",
+        cfg: {
+          session: { groupScope: "per-group" },
+          bindings: [
+            {
+              agentId: "support",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "channel", id: "1234567890" },
+                guildId: "9876543210",
+                roles: ["operators", "reviewers"],
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding.severity).toBe("warn");
+          expect(finding.detail).toContain(
+            "discord accountId=work peer=channel:1234567890 guild=9876543210 roles=operators,reviewers",
+          );
+          expect(finding.detail).not.toContain("all group/channel rooms");
         },
       },
       {

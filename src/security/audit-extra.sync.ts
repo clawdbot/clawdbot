@@ -13,6 +13,8 @@ import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { describeBinding } from "../commands/agents.binding-format.js";
+import { listRouteBindings } from "../config/bindings.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -1241,6 +1243,31 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
+  const mainGroupScopes = listRouteBindings(cfg)
+    .filter((binding) => binding.session?.groupScope === "main")
+    .map(
+      (binding) =>
+        `- bindings[].session.groupScope="main": ${describeBinding(binding)} (agent=${binding.agentId})`,
+    );
+  if (cfg.session?.groupScope === "main") {
+    mainGroupScopes.unshift(
+      '- session.groupScope="main" (global: all group/channel rooms unless a binding overrides it)',
+    );
+  }
+  if (mainGroupScopes.length > 0) {
+    findings.push({
+      checkId: "security.trust_model.group_scope_main",
+      severity: "warn",
+      title: "Group rooms share the main session",
+      detail:
+        "The following group routing scopes merge room conversations into the agent main session:\n" +
+        mainGroupScopes.join("\n") +
+        "\nEvery member of each affected room shares the main-session context. Use this only for mutually trusted rooms.",
+      remediation:
+        'Use session.groupScope="per-group" globally and remove binding overrides, or reserve "main" for rooms whose members you trust: https://docs.openclaw.ai/channels/groups#session-keys',
+    });
+  }
+
   const signals = listPotentialMultiUserSignals(cfg);
   if (signals.length === 0) {
     return findings;
