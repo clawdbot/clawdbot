@@ -447,6 +447,36 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("ignores an inherited namespace mount whose root is not derivable", () => {
+    // cgroup_namespaces(7): an inherited mount can report a field-4 root of "/..". Which
+    // cgroup it exposes is not derivable, so it must not be probed as if it were the
+    // process's own; the resolver falls back rather than sizing from an unrelated limit.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/\n"],
+      ["/proc/self/mountinfo", "30 25 0:26 /.. /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      ["/sys/fs/cgroup/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+      ["/proc/meminfo", `MemTotal:       ${16 * 1024 * 1024} kB\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    // Host MemTotal sizing, not the unrelated 5 GiB limit behind the inherited mount.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
+  });
+
   it("caps the tsdown heap from a cgroup-namespace-relative record", () => {
     // Inside a container the record is namespace-relative ("/") while the mount root stays
     // the host subtree. Failing to resolve that pair skips the limit and falls back to

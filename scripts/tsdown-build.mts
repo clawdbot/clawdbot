@@ -543,9 +543,15 @@ function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
   if (mountRoot === "/") {
     return cgroupPath;
   }
-  // Inside a cgroup namespace the record is namespace-relative and reads "/", while the
-  // mount root stays the host subtree it was mounted from. That namespace root is exactly
-  // what this mount exposes at its mount point, so it resolves rather than failing closed.
+  // cgroup_namespaces(7): a mount inherited across a namespace can report a field-4 root of
+  // "/.." or another non-canonical path. Which cgroup such a view exposes is not derivable
+  // here, and guessing would size the build from an unrelated cgroup's limit.
+  if (mountRoot.split("/").includes("..")) {
+    return null;
+  }
+  // Otherwise a namespace-relative record reads "/" while the mount root stays the host
+  // subtree it was mounted from. That namespace root is what this mount exposes at its
+  // mount point, so it resolves rather than failing closed.
   if (cgroupPath === "/") {
     return "/";
   }
