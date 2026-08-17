@@ -365,13 +365,13 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     }
   }
 
-  private loadPreview(target: SessionPreviewTarget): Promise<SessionPreview> {
+  private cachedOrSeededEntry(target: SessionPreviewTarget): CacheEntry | undefined {
     const key = target.sessionKey;
     const now = Date.now();
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > now) {
       this.setCacheEntry(key, cached);
-      return cached.promise;
+      return cached;
     }
     if (cached) {
       this.cache.delete(key);
@@ -381,7 +381,15 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       const value = previewFromRow(seeded, target);
       const entry = { expiresAt: now + SUCCESS_CACHE_MS, promise: Promise.resolve(value), value };
       this.setCacheEntry(key, entry);
-      return entry.promise;
+      return entry;
+    }
+    return undefined;
+  }
+
+  private loadPreview(target: SessionPreviewTarget): Promise<SessionPreview> {
+    const cached = this.cachedOrSeededEntry(target);
+    if (cached) {
+      return cached.promise;
     }
 
     const load = async () => {
@@ -395,7 +403,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       );
     };
     const entry: CacheEntry = {
-      expiresAt: now + SUCCESS_CACHE_MS,
+      expiresAt: Date.now() + SUCCESS_CACHE_MS,
       promise: Promise.resolve().then(load),
     };
     entry.promise = entry.promise.then(
@@ -408,7 +416,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
         throw error;
       },
     );
-    this.setCacheEntry(key, entry);
+    this.setCacheEntry(target.sessionKey, entry);
     return entry.promise;
   }
 
@@ -448,16 +456,8 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     if (!target) {
       return;
     }
-    const promise = this.loadPreview(target);
-    this.stampAnchor(anchor, target, this.cache.get(target.sessionKey)?.value);
-    void promise.then(
-      (preview) => {
-        if (anchor.isConnected && anchor.dataset.sessionKey === target.sessionKey) {
-          this.stampAnchor(anchor, target, preview);
-        }
-      },
-      () => undefined,
-    );
+    // Discovery must stay network-free: only an opened hovercard may populate an unseeded entry.
+    this.stampAnchor(anchor, target, this.cachedOrSeededEntry(target)?.value);
   }
 
   private readonly handlePointerOver = (event: Event) => {

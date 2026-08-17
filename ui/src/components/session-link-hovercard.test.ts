@@ -10,7 +10,6 @@ import { i18n } from "../i18n/index.ts";
 import { SessionLinkHovercardProvider } from "./session-link-hovercard.runtime.ts";
 
 const ELEMENT_NAME = `test-openclaw-session-link-hovercard-provider-${crypto.randomUUID()}`;
-const REGISTERED_ELEMENT_NAME = "openclaw-session-link-hovercard-provider";
 const SESSION_KEY = "agent:main:research";
 
 customElements.define(ELEMENT_NAME, class extends SessionLinkHovercardProvider {});
@@ -141,15 +140,18 @@ describe("openclaw-session-link-hovercard-provider", () => {
     document.body.append(provider);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(anchor.textContent).toBe("Research plan");
-    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
+    expect(anchor.textContent).toBe(SESSION_KEY);
+    expect(anchor.getAttribute("href")).toBe("/chat/main/research");
+    expect(request).not.toHaveBeenCalled();
 
     await hover(anchor);
     const card = document.querySelector<HTMLElement>(".session-link-hovercard");
+    expect(anchor.textContent).toBe("Research plan");
     expect(card?.textContent).toContain("Research plan");
     expect(card?.textContent).toContain("main · direct · webchat");
     expect(card?.textContent).toContain("The rollout notes are ready.");
     expect(card?.textContent).toContain("5m ago");
+    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
     expect(request).toHaveBeenCalledTimes(1);
 
     anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
@@ -176,10 +178,13 @@ describe("openclaw-session-link-hovercard-provider", () => {
     provider.append(anchor);
     document.body.append(provider);
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
     expect(anchor.textContent).toBe(SESSION_KEY);
     expect(anchor.getAttribute("href")).toBe("/chat/main/research");
 
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(2);
@@ -281,24 +286,45 @@ describe("openclaw-session-link-hovercard-provider", () => {
     expect(document.activeElement).toBe(anchor);
   });
 
-  it("upgrades session chips without user interaction when they appear", async () => {
-    const request = vi.fn().mockResolvedValue(previewResponse());
-    const provider = document.createElement(REGISTERED_ELEMENT_NAME) as ProviderElement;
-    provider.client = { request } as unknown as GatewayBrowserClient;
-    provider.context = sessionContext();
+  it("defers unseeded preview requests until intent across many attached anchors", async () => {
+    const seededKey = "agent:main:seeded";
+    const seededRow = {
+      key: seededKey,
+      agentId: "main",
+      kind: "direct",
+      displayName: "Seeded session",
+      updatedAt: Date.now(),
+    } as GatewaySessionRow;
+    const unseededAnchors = Array.from({ length: 50 }, (_, index) =>
+      sessionAnchor(`agent:main:unseeded-${index}`),
+    );
+    const request = vi.fn().mockResolvedValue(
+      previewResponse({
+        sessionKey: unseededAnchors[0]?.dataset.sessionKey,
+        title: "Hovered session",
+      }),
+    );
+    const { provider } = createProvider({ rows: [seededRow], request });
+    const seededAnchor = sessionAnchor(seededKey);
     document.body.append(provider);
-    await import("./session-link-hovercard-registration.ts");
-
-    const anchor = sessionAnchor();
-    provider.append(anchor);
+    provider.append(seededAnchor, ...unseededAnchors);
 
     await flushMutationBatch();
-    await vi.waitFor(() => {
-      expect(anchor.classList.contains("markdown-session-link--titled")).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+    expect(unseededAnchors.every((anchor) => anchor.hasAttribute("href"))).toBe(true);
+    expect(seededAnchor.textContent).toBe("Seeded session");
+    expect(seededAnchor.classList.contains("markdown-session-link--titled")).toBe(true);
+
+    const hoveredAnchor = unseededAnchors[0];
+    if (!hoveredAnchor) {
+      throw new Error("Expected an unseeded session anchor");
+    }
+    await hover(hoveredAnchor);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", {
+      sessionKey: hoveredAnchor.dataset.sessionKey,
     });
-    expect(anchor.textContent).toBe("Research plan");
-    expect(anchor.title).toBe(SESSION_KEY);
-    expect(anchor.getAttribute("href")).toBe("/chat/main/research");
-    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
+    expect(hoveredAnchor.textContent).toBe("Hovered session");
   });
 });
