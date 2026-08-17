@@ -4,10 +4,7 @@
  * hints that are safe to show to the model.
  */
 import path from "node:path";
-import {
-  loadExecApprovals,
-  resolveExecApprovalsFromFile,
-} from "../infra/exec-approvals.js";
+import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
 
 /**
  * Show the exact approved token in hints. Absolute paths stay absolute so the
@@ -31,9 +28,7 @@ export function describeExecTool(params?: {
     "Run shell now; background continuation supported.",
     "Use yieldMs/background, then process for logs/status/input/intervention.",
     "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
-    params?.hasCronTool
-      ? "No sleep/delay loops for reminders/follow-ups; use cron."
-      : undefined,
+    params?.hasCronTool ? "No sleep/delay loops for reminders/follow-ups; use cron." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
     params?.hasFileWriteTool
       ? "File writes: prefer dedicated file-writing tools over shell heredocs or bash -c for multi-line content."
@@ -60,9 +55,7 @@ export function describeExecTool(params?: {
         pattern.length > 0 &&
         pattern !== "*" &&
         !pattern.startsWith("=command:") &&
-        (pattern.includes("/") ||
-          pattern.includes("\\") ||
-          pattern.includes("~"))
+        (pattern.includes("/") || pattern.includes("\\") || pattern.includes("~"))
       );
     });
     if (allowlist.length > 0) {
@@ -71,9 +64,7 @@ export function describeExecTool(params?: {
       );
       for (const entry of allowlist.slice(0, 10)) {
         const shortName = deriveExecShortName(entry.pattern);
-        const argNote = entry.argPattern
-          ? "(restricted args)"
-          : "(any arguments)";
+        const argNote = entry.argPattern ? "(restricted args)" : "(any arguments)";
         lines.push(`  ${shortName} ${argNote}`);
       }
     }
@@ -84,9 +75,7 @@ export function describeExecTool(params?: {
 }
 
 /** Builds the model-facing process-control tool description. */
-export function describeProcessTool(params?: {
-  hasCronTool?: boolean;
-}): string {
+export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill.",
     "poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",

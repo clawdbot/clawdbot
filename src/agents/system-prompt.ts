@@ -65,10 +65,7 @@ import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
-import type {
-  PromptMode,
-  SilentReplyPromptMode,
-} from "./system-prompt.types.js";
+import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
 import {
@@ -103,9 +100,7 @@ type StablePromptPrefixCacheEntry = {
   value: string;
 };
 
-function normalizeSubagentDelegationMode(
-  mode?: SubagentDelegationMode,
-): SubagentDelegationMode {
+function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
   return mode === "prefer" ? "prefer" : "suggest";
 }
 
@@ -116,11 +111,7 @@ function buildSubagentDelegationPreferenceSection(params: {
   hasSubagents: boolean;
   hasSessionsYield: boolean;
 }): string[] {
-  if (
-    params.isMinimal ||
-    params.mode !== "prefer" ||
-    !params.hasSessionsSpawn
-  ) {
+  if (params.isMinimal || params.mode !== "prefer" || !params.hasSessionsSpawn) {
     return [];
   }
   return [
@@ -187,9 +178,7 @@ function normalizeContextFilePath(pathValue: string): string {
 
 function getContextFileBasename(pathValue: string): string {
   const normalizedPath = normalizeContextFilePath(pathValue);
-  return normalizeLowercaseStringOrEmpty(
-    normalizedPath.split("/").pop() ?? normalizedPath,
-  );
+  return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
 }
 
 function isDynamicContextFile(pathValue: string): boolean {
@@ -204,14 +193,10 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   // Claude Code subscription mode rejects this exact prompt-policy quote when it
   // appears in system context. The live heartbeat user turn still carries the
   // actual instruction, and the generated heartbeat section below covers behavior.
-  return content
-    .replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "")
-    .replace(/\n{3,}/g, "\n\n");
+  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
-function sortContextFilesForPrompt(
-  contextFiles: EmbeddedContextFile[],
-): EmbeddedContextFile[] {
+function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
   return contextFiles.toSorted((a, b) => {
     const aPath = normalizeContextFilePath(a.path);
     const bPath = normalizeContextFilePath(b.path);
@@ -229,13 +214,9 @@ function sortContextFilesForPrompt(
   });
 }
 
-function prepareContextFilesForPrompt(
-  contextFiles: EmbeddedContextFile[] = [],
-) {
+function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[] = []) {
   const ordered = sortContextFilesForPrompt(
-    contextFiles.filter(
-      (file) => typeof file.path === "string" && file.path.trim().length > 0,
-    ),
+    contextFiles.filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
   );
   return {
     ordered,
@@ -254,10 +235,7 @@ function buildProjectContextSection(params: {
   }
   const lines = [params.heading, ""];
   if (params.dynamic) {
-    lines.push(
-      "Frequently-changing files; below cache boundary when possible:",
-      "",
-    );
+    lines.push("Frequently-changing files; below cache boundary when possible:", "");
   } else {
     const hasSoulFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "soul.md",
@@ -270,9 +248,7 @@ function buildProjectContextSection(params: {
     );
     lines.push("Loaded project context:");
     if (hasSoulFile) {
-      lines.push(
-        "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
-      );
+      lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
     }
     if (hasMemoryFile) {
       lines.push(
@@ -287,20 +263,12 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(
-      `## ${file.path}`,
-      "",
-      sanitizeContextFileContentForPrompt(file.content),
-      "",
-    );
+    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
 }
 
-function buildHeartbeatSection(params: {
-  isMinimal: boolean;
-  heartbeatPrompt?: string;
-}) {
+function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
   if (params.isMinimal || !params.heartbeatPrompt) {
     return [];
   }
@@ -318,9 +286,7 @@ function buildExecApprovalPromptGuidance(params: {
   inlineButtonsEnabled?: boolean;
   runtimeCapabilities?: readonly string[];
 }) {
-  const runtimeChannel = normalizeOptionalLowercaseString(
-    params.runtimeChannel,
-  );
+  const runtimeChannel = normalizeOptionalLowercaseString(params.runtimeChannel);
   const usesNativeApprovalUi =
     params.inlineButtonsEnabled ||
     hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
@@ -389,8 +355,7 @@ function buildAgentBootstrapSystemContext(params: {
     return [
       "## Bootstrap Pending",
       ...buildLimitedBootstrapPromptLines({
-        introLine:
-          "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
+        introLine: "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
         nextStepLine:
           "Next: primary interactive run with normal workspace access, or user deletes canonical BOOTSTRAP.md after completion.",
       }),
@@ -403,8 +368,7 @@ function buildAgentBootstrapSystemContext(params: {
       readLine: params.hasBootstrapFileInProjectContext
         ? "BOOTSTRAP.md below; follow before normal reply."
         : "Read workspace BOOTSTRAP.md; follow before normal reply.",
-      firstReplyLine:
-        "First visible reply must follow BOOTSTRAP.md; no generic greeting.",
+      firstReplyLine: "First visible reply must follow BOOTSTRAP.md; no generic greeting.",
     }),
     "",
   ];
@@ -434,10 +398,7 @@ function buildAgentBootstrapSystemPromptSections(params: {
   return lines;
 }
 
-function buildUserIdentitySection(
-  ownerLine: string | undefined,
-  isMinimal: boolean,
-) {
+function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
   }
@@ -521,9 +482,7 @@ function buildTemporalContextSection(params: {
     "## Temporal Context",
     `Current date: ${userDate}`,
     `Time zone: ${userTimezone}`,
-    ...(params.sessionStatusAvailable
-      ? ["For the exact current time, use `session_status`."]
-      : []),
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
     "",
   ];
 }
@@ -645,8 +604,7 @@ function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
-  const messageToolOnly =
-    params.sourceReplyDeliveryMode === "message_tool_only";
+  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const visibleReplyInstruction = messageToolOnly
     ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
     : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
@@ -657,24 +615,16 @@ function buildMessagingSection(params: {
     // Restricted delivery turns still need their sole visible-reply contract;
     // omitting it makes a private final silently disappear for the requester.
     return messageToolOnly && params.availableTools.has("message")
-      ? [
-          "## Messaging",
-          visibleReplyInstruction,
-          messageToolTargetInstruction,
-          "",
-        ]
+      ? ["## Messaging", visibleReplyInstruction, messageToolTargetInstruction, ""]
       : [];
   }
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
-    messageToolOnly &&
-    (params.runtimeChatType === "group" ||
-      params.runtimeChatType === "channel");
+    messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
-  const suppressSilentTokenGuidance =
-    messageToolOnly || params.silentReplyPromptMode === "none";
+  const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
   const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or silent placeholder."
     : `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
@@ -702,9 +652,7 @@ function buildMessagingSection(params: {
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private."
             : "",
-          messageToolOnly
-            ? messageToolTargetInstruction
-            : "- `send`: `target` + `message`.",
+          messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
@@ -784,9 +732,7 @@ function buildDocsSection(params: {
     "## Documentation",
     docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
-    sourcePath
-      ? `Source: ${sourcePath}`
-      : "Source: https://github.com/openclaw/openclaw",
+    sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
     docsPath
       ? `OpenClaw behavior questions: docs first via \`${params.readToolName}\`/local search. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
       : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
@@ -800,9 +746,7 @@ function buildDocsSection(params: {
   return lines.filter((line): line is string => line !== undefined);
 }
 
-function formatFullAccessBlockedReason(
-  reason?: EmbeddedFullAccessBlockedReason,
-): string {
+function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason): string {
   if (reason === "host-policy") {
     return "host policy";
   }
@@ -817,9 +761,7 @@ function formatFullAccessBlockedReason(
 
 const MODEL_IDENTITY_PREFIX = "Current model identity:";
 
-export function buildModelIdentityPromptLine(
-  model?: string,
-): string | undefined {
+export function buildModelIdentityPromptLine(model?: string): string | undefined {
   const trimmed = model?.trim();
   if (!trimmed) {
     return undefined;
@@ -850,9 +792,7 @@ export function appendModelIdentitySystemPrompt(params: {
       return true;
     })
     .map((candidate) =>
-      candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX)
-        ? line
-        : candidate,
+      candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX) ? line : candidate,
     );
 
   if (replaced) {
@@ -1113,19 +1053,13 @@ export function buildAgentSystemPrompt(params: {
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
   const promptContribution = params.promptContribution;
-  const providerStablePrefix = normalizeProviderPromptBlock(
-    promptContribution?.stablePrefix,
-  );
-  const providerDynamicSuffix = normalizeProviderPromptBlock(
-    promptContribution?.dynamicSuffix,
-  );
+  const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
+  const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
   const providerSectionOverrides = Object.fromEntries(
     Object.entries(promptContribution?.sectionOverrides ?? {})
       .map(([key, value]) => [
         key,
-        normalizeProviderPromptBlock(
-          typeof value === "string" ? value : undefined,
-        ),
+        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
@@ -1155,9 +1089,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeChatType = normalizeChatType(runtimeInfo?.chatType);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
-  const runtimeCapabilitiesLower = new Set(
-    normalizeStringEntriesLower(runtimeCapabilities),
-  );
+  const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
@@ -1170,8 +1102,7 @@ export function buildAgentSystemPrompt(params: {
   const silentReplyPromptMode = sourceMessageToolOnly
     ? "none"
     : (params.silentReplyPromptMode ?? "generic");
-  const sandboxContainerWorkspace =
-    params.sandboxInfo?.containerWorkspaceDir?.trim();
+  const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
@@ -1241,10 +1172,7 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return [
-      "You are a personal assistant running inside OpenClaw.",
-      modelIdentityLine,
-    ]
+    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
       .filter(Boolean)
       .join("\n");
   }
@@ -1255,13 +1183,11 @@ export function buildAgentSystemPrompt(params: {
       activeProjectKeys: params.activeProjectKeys,
     }),
   );
-  const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections(
-    {
-      bootstrapMode: params.bootstrapMode,
-      bootstrapTruncationNotice: params.bootstrapTruncationNotice,
-      contextFiles: contextFiles.ordered,
-    },
-  );
+  const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
+    bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
+    contextFiles: contextFiles.ordered,
+  });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
     promptMode,
@@ -1331,9 +1257,7 @@ export function buildAgentSystemPrompt(params: {
                 ]
               : []),
             ...(availableTools.has("screen")
-              ? [
-                  "`screen` present: web/app turn may drive UI; messaging turn: don't.",
-                ]
+              ? ["`screen` present: web/app turn may drive UI; messaging turn: don't."]
               : []),
           ]
         : []),
@@ -1371,9 +1295,7 @@ export function buildAgentSystemPrompt(params: {
         hasSessionsSpawn,
       }),
       ...buildSubagentDelegationPreferenceSection({
-        mode: proactiveSubagentOrchestration
-          ? "suggest"
-          : subagentDelegationMode,
+        mode: proactiveSubagentOrchestration ? "suggest" : subagentDelegationMode,
         isMinimal,
         hasSessionsSpawn,
         hasSubagents: availableTools.has("subagents"),
@@ -1435,9 +1357,7 @@ export function buildAgentSystemPrompt(params: {
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")
         : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? ""
-        : "",
+      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
       "## Workspace",
       `Working directory: ${displayWorkspaceDir}`,
       workspaceGuidance,
@@ -1466,9 +1386,7 @@ export function buildAgentSystemPrompt(params: {
                     : ""
                 }`
               : "",
-            params.sandboxInfo.browserBridgeUrl
-              ? "Sandbox browser: enabled."
-              : "",
+            params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
             params.sandboxInfo.hostBrowserAllowed === true
               ? "Host browser control: allowed."
               : params.sandboxInfo.hostBrowserAllowed === false
@@ -1559,10 +1477,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     ...buildProjectContextSection({
       files: contextFiles.dynamic,
-      heading:
-        contextFiles.stable.length > 0
-          ? "# Dynamic Project Context"
-          : "# Project Context",
+      heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
       dynamic: true,
     }),
   );
@@ -1615,9 +1530,7 @@ export function buildAgentSystemPrompt(params: {
 
   if (extraSystemPrompt) {
     const contextHeader =
-      promptMode === "minimal"
-        ? "## Subagent Context"
-        : "## Conversation Context";
+      promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     lines.push(contextHeader, extraSystemPrompt, "");
   }
   if (params.reactionGuidance) {
@@ -1641,24 +1554,15 @@ export function buildAgentSystemPrompt(params: {
 
   // Watched sessions change rarely but per-session; keep them below the cache
   // boundary so the shared stable prefix stays byte-identical across sessions.
-  lines.push(
-    ...buildWatchedSessionsPromptLines(params.preparedWatchedSessions),
-  );
+  lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(
-      runtimeInfo,
-      runtimeChannel,
-      runtimeCapabilities,
-      params.defaultThinkLevel,
-    ),
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
-    ...buildActiveProcessSessionReferenceLines(
-      runtimeInfo?.activeProcessSessions,
-    ),
+    ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
   );
 
@@ -1675,9 +1579,7 @@ function buildActiveProcessSessionReferenceLines(
     "Active exec sessions:",
     ...sessions.map((session) => {
       const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-      const cwd = session.cwd
-        ? ` cwd=${sanitizeForPromptLiteral(session.cwd)}`
-        : "";
+      const cwd = session.cwd ? ` cwd=${sanitizeForPromptLiteral(session.cwd)}` : "";
       return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
     }),
     "Before input: process log; log/poll shows waitingForInput/stdinWritable. Lost id: process list.",
@@ -1704,24 +1606,17 @@ function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
-  const normalizedRuntimeCapabilities =
-    normalizePromptCapabilityIds(runtimeCapabilities);
+  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
   // isolated cron's volatile `:run:<id>` scope there defeats reuse across runs of the same job.
   // Render the stable base key and drop the per-run session id it duplicates.
-  const { baseSessionKey, runId } = parseCronRunScopeSuffix(
-    runtimeInfo?.sessionKey,
-  );
+  const { baseSessionKey, runId } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
   const stableSessionId =
-    runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId
-      ? runtimeInfo.sessionId
-      : undefined;
+    runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
-    stableSessionId
-      ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}`
-      : "",
+    stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os
@@ -1734,9 +1629,7 @@ function buildRuntimeLine(
       ? `active_node=${sanitizeForPromptLiteral(runtimeInfo.activeNode)}`
       : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel
-      ? `default_model=${runtimeInfo.defaultModel}`
-      : "",
+    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel

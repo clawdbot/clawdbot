@@ -18,14 +18,14 @@ export function applyToolAvailabilityDescriptions(
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
   const hasSessionsSpawnTool = tools.some((tool) => tool.name === "sessions_spawn");
   const hasFileWriteTool = tools.some(
-    (tool) =>
-      tool.name === "write" ||
-      tool.name === "edit" ||
-      tool.name === "apply_patch",
+    (tool) => tool.name === "write" || tool.name === "edit" || tool.name === "apply_patch",
   );
   return tools.map((tool) => {
     if (tool.name === "exec") {
-      return replaceDescription(tool, describeExecTool({ agentId: params?.agentId, hasCronTool, hasFileWriteTool }));
+      return replaceDescription(
+        tool,
+        describeExecTool({ agentId: params?.agentId, hasCronTool, hasFileWriteTool }),
+      );
     }
     if (tool.name === "process") {
       return replaceDescription(tool, describeProcessTool({ hasCronTool }));
