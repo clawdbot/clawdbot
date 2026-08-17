@@ -242,6 +242,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 counts: { tool: 0, block: 0, final: 0 },
               };
             }
+            userTurnRecorder.setSteerTargetRunIdForPersistence?.(undefined);
           }
           applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
           const dispatchInbound = () =>

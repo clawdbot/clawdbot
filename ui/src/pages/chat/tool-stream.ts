@@ -17,6 +17,7 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -1113,24 +1114,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   const now = Date.now();
   if (!entry) {
-    // Commit any in-progress streaming text as a segment so it renders
-    // above the tool card instead of below it.
-    if (
-      host.chatRunId &&
-      payload.runId === host.chatRunId &&
-      host.chatStream &&
-      host.chatStream.trim().length > 0
-    ) {
-      const segmentStartedAt = host.chatStreamStartedAt ?? now;
-      host.chatStreamSegments = [
-        ...host.chatStreamSegments,
-        { text: host.chatStream, ts: segmentStartedAt, runId: payload.runId, toolCallId },
-      ];
-      host.chatStream = null;
-      // The segment becomes the elapsed-time owner after the live tail is flushed.
-      // Preserve the run start or replaying a tool event resets the working timer.
-      host.chatStreamStartedAt = null;
-    }
+    // Commit in-progress text so it remains causally above the tool card.
+    rolloverChatStream(host, { runId: payload.runId, toolCallId, timestamp: now });
     entry = {
       toolCallId,
       runId: payload.runId,

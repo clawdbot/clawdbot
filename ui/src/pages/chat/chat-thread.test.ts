@@ -262,6 +262,105 @@ describe("assistant commentary grouping", () => {
     resetChatThreadState(paneId);
   });
 
+  it("scopes reused live tool IDs to their own run boundaries", () => {
+    const sharedToolCallId = "call-shared";
+    const groups = messageGroups({
+      runId: "run-a",
+      messages: [
+        userMessage("Run A", 1, { __openclaw: { idempotencyKey: "run-a:user" } }),
+        userMessage("Steer A", 2, { __openclaw: { idempotencyKey: "steer-a:user" } }),
+        userMessage("Run B", 3, { __openclaw: { idempotencyKey: "run-b:user" } }),
+        userMessage("Steer B", 4, { __openclaw: { idempotencyKey: "steer-b:user" } }),
+      ],
+      streamSegments: [
+        {
+          text: "Run A output",
+          ts: 100,
+          runId: "run-a",
+          toolCallId: sharedToolCallId,
+          boundaryRunId: "steer-a",
+        },
+        {
+          text: "Run B output",
+          ts: 101,
+          runId: "run-b",
+          toolCallId: sharedToolCallId,
+          boundaryRunId: "steer-b",
+        },
+      ],
+      toolMessages: [
+        toolResultMessage(sharedToolCallId, "shell", "Run A tool", 100, { runId: "run-a" }),
+        toolResultMessage(sharedToolCallId, "shell", "Run B tool", 101, { runId: "run-b" }),
+      ],
+    });
+    const groupIndex = (predicate: (message: Record<string, unknown>) => boolean) =>
+      groups.findIndex((group) =>
+        group.messages.some(({ message }) => predicate(requireRecord(message))),
+      );
+
+    const runAToolIndex = groupIndex((message) => message.runId === "run-a");
+    const runBToolIndex = groupIndex((message) => message.runId === "run-b");
+    const steerAIndex = groupIndex((message) => message.content === "Steer A");
+    const steerBIndex = groupIndex((message) => message.content === "Steer B");
+    expect(runAToolIndex).toBeGreaterThanOrEqual(0);
+    expect(runBToolIndex).toBeGreaterThanOrEqual(0);
+    expect(runAToolIndex).toBeLessThan(steerAIndex);
+    expect(runBToolIndex).toBeLessThan(steerBIndex);
+  });
+
+  it("keeps a post-steer tool segment and card after a textless steer", () => {
+    const toolCallId = "call-after-steer";
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "active-run",
+        messages: [
+          userMessage("Original", 1, {
+            __openclaw: { idempotencyKey: "active-run:user" },
+          }),
+          userMessage("Steer", 2, {
+            __openclaw: {
+              idempotencyKey: "steer-run:user",
+              steerTargetRunId: "active-run",
+            },
+          }),
+        ],
+        streamSegments: [
+          {
+            text: "",
+            ts: 2,
+            runId: "active-run",
+            boundaryRunId: "steer-run",
+            boundaryMarker: true,
+          },
+          {
+            text: "After steer",
+            ts: 3,
+            runId: "active-run",
+            afterBoundaryRunId: "steer-run",
+            toolCallId,
+          },
+        ],
+        toolMessages: [
+          toolResultMessage(toolCallId, "shell", "Tool after steer", 4, {
+            runId: "active-run",
+          }),
+        ],
+      }),
+    );
+    const itemText = (item: (typeof items)[number]) =>
+      item.kind === "stream"
+        ? item.text
+        : item.kind === "group"
+          ? item.messages.map(({ message }) => JSON.stringify(message)).join(" ")
+          : "";
+    const steerIndex = items.findIndex((item) => itemText(item).includes("Steer"));
+    const segmentIndex = items.findIndex((item) => itemText(item).includes("After steer"));
+    const toolIndex = items.findIndex((item) => itemText(item).includes("Tool after steer"));
+
+    expect(segmentIndex).toBeGreaterThan(steerIndex);
+    expect(toolIndex).toBeGreaterThan(steerIndex);
+  });
+
   it("keeps current live work above a future queued user turn when it becomes stable", () => {
     const paneId = "clock-skew-future-queue-transition";
     const activeUser = userMessage("Active prompt", 2_000, {

@@ -10,6 +10,8 @@ import {
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
+import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -21,6 +23,8 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 
 beforeEach(() => {
@@ -60,6 +64,28 @@ describe("canonical session message recovery", () => {
       ...overrides,
     } as unknown as ChatPageHost;
     return { request, state };
+  }
+
+  function renderedTranscript(state: ChatPageHost) {
+    return buildChatItems({
+      paneId: "test",
+      sessionKey: state.sessionKey,
+      runId: state.chatRunId,
+      messages: state.chatMessages,
+      toolMessages: state.chatToolMessages,
+      streamSegments: state.chatStreamSegments,
+      stream: state.chatStream,
+      streamStartedAt: state.chatStreamStartedAt,
+      showToolCalls: true,
+    }).flatMap((item) => {
+      if (item.kind === "group") {
+        return item.messages.map(({ message }) => ({
+          role: item.role,
+          text: extractText(message),
+        }));
+      }
+      return item.kind === "stream" ? [{ role: "assistant", text: item.text }] : [];
+    });
   }
 
   it("rejects envelope-only sequence for an incomplete imported user identity", () => {
@@ -105,6 +131,226 @@ describe("canonical session message recovery", () => {
     expect(state.chatMessages[0]).toMatchObject({
       __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
     });
+  });
+
+  it("keeps cumulative assistant output split across an authoritative steer", () => {
+    const activeRunId = "active-run";
+    const steerRunId = "steer-request";
+    const originalPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "Original prompt" }],
+      timestamp: 100,
+      __openclaw: {
+        id: "original-user",
+        idempotencyKey: `${activeRunId}:user`,
+        seq: 1,
+      },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [originalPrompt],
+      chatQueue: [
+        {
+          id: "landed-steer",
+          text: "Steer prompt",
+          createdAt: 50,
+          kind: "steered",
+          pendingRunId: steerRunId,
+          sendRunId: steerRunId,
+          steerTargetRunId: activeRunId,
+          sessionKey: "agent:main:main",
+        },
+      ],
+      chatRunId: activeRunId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "delta",
+        deltaText: "Before steer.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Before steer." }],
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: steerRunId,
+        state: "final",
+      },
+    });
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Original prompt" },
+      { role: "assistant", text: "Before steer." },
+      { role: "user", text: "Steer prompt" },
+    ]);
+    expect(state.chatRunId).toBe(activeRunId);
+    expect(state.chatQueue).toEqual([]);
+    const segmentsAfterRequestBoundary = state.chatStreamSegments;
+
+    const steerEvent = {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: activeRunId,
+        hasActiveRun: true,
+        messageId: "persisted-steer-user",
+        messageSeq: 2,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Steer prompt" }],
+          timestamp: 50,
+          __openclaw: {
+            id: "persisted-steer-user",
+            idempotencyKey: `${steerRunId}:user`,
+            seq: 2,
+            steerTargetRunId: activeRunId,
+          },
+        },
+      },
+    } satisfies Parameters<typeof handlePageGatewayEvent>[1];
+    handlePageGatewayEvent(state, steerEvent);
+    expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
+    expect(
+      state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),
+    ).toHaveLength(1);
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "delta",
+        deltaText: " After steer.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Before steer. After steer." }],
+        },
+      },
+    });
+
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Original prompt" },
+      { role: "assistant", text: "Before steer." },
+      { role: "user", text: "Steer prompt" },
+      { role: "assistant", text: "After steer." },
+    ]);
+
+    handlePageGatewayEvent(state, steerEvent);
+    expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Before steer. After steer. Final unseen suffix." }],
+        },
+      },
+    });
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Original prompt" },
+      { role: "assistant", text: "Before steer." },
+      { role: "user", text: "Steer prompt" },
+      { role: "assistant", text: "After steer. Final unseen suffix." },
+    ]);
+  });
+
+  it("keeps an ordinary queued user after the active run assistant", () => {
+    const activeRunId = "active-run";
+    const originalPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "Original prompt" }],
+      __openclaw: {
+        id: "original-user",
+        idempotencyKey: `${activeRunId}:user`,
+        seq: 1,
+      },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [originalPrompt],
+      chatRunId: activeRunId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "delta",
+        deltaText: "Active reply.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Active reply." }],
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "queued-run",
+        hasActiveRun: true,
+        messageId: "ordinary-queued-user",
+        messageSeq: 2,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Queued follow-up" }],
+          __openclaw: {
+            id: "ordinary-queued-user",
+            idempotencyKey: "queued-run:user",
+            seq: 2,
+          },
+        },
+      },
+    });
+
+    expect(state.chatStream).toBe("Active reply.");
+    expect(state.chatStreamSegments).toEqual([]);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Active reply. Final suffix." }],
+        },
+      },
+    });
+
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Original prompt" },
+      { role: "assistant", text: "Active reply. Final suffix." },
+      { role: "user", text: "Queued follow-up" },
+    ]);
+    expect(getChatSessionProjection(state, state.chatMessages).messages).toEqual(
+      state.chatMessages,
+    );
   });
 
   it("keeps a previous run final before a newer active user turn", () => {

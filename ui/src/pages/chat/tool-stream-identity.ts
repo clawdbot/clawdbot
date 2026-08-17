@@ -125,3 +125,27 @@ export function resolveMatchingLiveToolIdentity(
   );
   return matches.length === 1 ? matches[0]?.identity : undefined;
 }
+
+export function persistedCurrentToolStreamIds(
+  messages: unknown[],
+  state: LiveToolStreamHost,
+): Set<string> {
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
+  const matchedToolIds = new Set<string>();
+  if (liveToolRefs.length === 0) {
+    return matchedToolIds;
+  }
+  const lastUserIndex = messages.findLastIndex((message) => {
+    const role = asToolRecord(message)?.role;
+    return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "user";
+  });
+  for (const message of messages.slice(lastUserIndex + 1)) {
+    for (const ref of extractToolMessageRefs(message)) {
+      const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+      if (identity) {
+        matchedToolIds.add(identity);
+      }
+    }
+  }
+  return matchedToolIds;
+}

@@ -8,7 +8,11 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import type { ChatComposerMemoryFallback, ChatGuardianNotice } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatComposerMemoryFallback,
+  ChatGuardianNotice,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -78,7 +82,7 @@ export type ChatPageHost = ChatHost &
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
-    chatStreamSegments: Array<{ text: string; ts: number }>;
+    chatStreamSegments: ChatStreamSegment[];
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;

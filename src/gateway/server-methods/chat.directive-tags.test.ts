@@ -2085,6 +2085,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => expect(mockState.messageReceivedCalls).toHaveLength(1));
     expect(readPersistedUserMessages()).toHaveLength(1);
     expect(readPersistedUserMessages()[0]?.content).toBe("hello");
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
     expect(queueMessage).toHaveBeenCalledWith(
       "hello",
       expect.objectContaining({
@@ -2281,6 +2284,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
     expect(mockState.lastMessageInjectionAttempted).toBe(true);
     expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(
+      (readPersistedUserMessages()[0]?.["__openclaw"] as Record<string, unknown> | undefined)
+        ?.steerTargetRunId,
+    ).toBeUndefined();
     const broadcasts = context.broadcast.mock.calls.map(
       ([, payload]) => payload as Record<string, unknown>,
     );
@@ -7402,6 +7409,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(typeof message?.timestamp).toBe("number");
     const persistedUser = readPersistedUserMessages()[0];
     expect(persistedUser?.content).toBe("quick command");
+    expect(
+      (persistedUser?.["__openclaw"] as Record<string, unknown> | undefined)?.steerTargetRunId,
+    ).toBeUndefined();
     expect(getTotalPendingReplies()).toBe(0);
   });
 

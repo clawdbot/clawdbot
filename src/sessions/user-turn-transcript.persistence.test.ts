@@ -366,4 +366,68 @@ describe("persistUserTurnTranscript", () => {
     ]);
     expect(hookCalls).toBe(1);
   });
+
+  it.each([
+    {
+      name: "restores an erased producer target",
+      producerTarget: "active-run",
+      hookTarget: undefined,
+      expectedTarget: "active-run",
+    },
+    {
+      name: "rejects a replacement target",
+      producerTarget: "active-run",
+      hookTarget: "forged-run",
+      expectedTarget: "active-run",
+    },
+    {
+      name: "rejects a target forged without producer provenance",
+      producerTarget: undefined,
+      hookTarget: "forged-run",
+      expectedTarget: undefined,
+    },
+  ])(
+    "$name across before_message_write",
+    async ({ producerTarget, hookTarget, expectedTarget }) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const message = (event as { message: Record<string, unknown> }).message;
+              const metadata = {
+                ...(message["__openclaw"] as Record<string, unknown> | undefined),
+              };
+              delete metadata.steerTargetRunId;
+              return {
+                message: castAgentMessage({
+                  ...message,
+                  __openclaw: {
+                    ...metadata,
+                    ...(hookTarget ? { steerTargetRunId: hookTarget } : {}),
+                  },
+                }),
+              };
+            },
+          },
+        ]),
+      );
+      const dir = tempDirs.make("openclaw-user-turn-steer-target-hook-");
+      const target = createSqliteTranscriptTarget({ dir });
+
+      await persistUserTurnTranscript({
+        ...target,
+        input: {
+          text: "steer or queue",
+          idempotencyKey: "chat-run-steer-target:user",
+          ...(producerTarget ? { steerTargetRunId: producerTarget } : {}),
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+
+      const [message] = await readTranscriptMessages(target);
+      const metadata = message?.["__openclaw"] as Record<string, unknown> | undefined;
+      expect(metadata?.steerTargetRunId).toBe(expectedTarget);
+    },
+  );
 });

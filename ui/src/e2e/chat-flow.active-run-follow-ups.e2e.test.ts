@@ -44,7 +44,7 @@ async function expectChatBubbleAbove(page: Page, upperText: string, lowerText: s
 }
 
 suite.define(() => {
-  it("steers ordinary follow-ups when the server default is steer", async () => {
+  it("keeps cumulative assistant output ordered across a consumed steer", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -106,6 +106,20 @@ suite.define(() => {
       });
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
+      const preSteerReply = "Assistant output before the steer.";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: preSteerReply,
+        message: {
+          content: [{ text: preSteerReply, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: activeRunId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.getByText(preSteerReply, { exact: true }).waitFor({ timeout: 10_000 });
+
       const followUp = "tighten the active plan";
       await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
       await page.getByRole("button", { name: "Steer into the active run" }).click();
@@ -123,6 +137,18 @@ suite.define(() => {
         timeout: 10_000,
       });
       await queue.getByText(followUp).waitFor({ timeout: 10_000 });
+      await gateway.emitGatewayEvent("chat", {
+        runId: steerRunId,
+        sessionKey: "main",
+        state: "final",
+      });
+      await queue.getByText(followUp).waitFor({ state: "detached", timeout: 10_000 });
+      await expect
+        .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
+        .toBe(1);
+      await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
+      await expectChatBubbleAbove(page, preSteerReply, followUp);
+
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [activeRunId],
         clientRunId: activeRunId,
@@ -131,14 +157,15 @@ suite.define(() => {
           __openclaw: {
             id: "persisted-steer-user",
             idempotencyKey: `${steerRunId}:user`,
-            seq: 2,
+            seq: 3,
+            steerTargetRunId: activeRunId,
           },
           content: [{ text: followUp, type: "text" }],
           role: "user",
           timestamp: Date.now(),
         },
         messageId: "persisted-steer-user",
-        messageSeq: 2,
+        messageSeq: 3,
         session: {
           activeRunIds: [activeRunId],
           hasActiveRun: true,
@@ -150,11 +177,95 @@ suite.define(() => {
         sessionKey: "main",
       });
 
-      await queue.getByText(followUp).waitFor({ state: "detached", timeout: 10_000 });
       await expect
         .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
         .toBe(1);
-      await expectChatBubbleAbove(page, originalPrompt, followUp);
+      const postSteerReply = "Assistant output after the steer.";
+      const cumulativeReply = `${preSteerReply} ${postSteerReply}`;
+      const terminalPostSteerReply = `${postSteerReply} Final unseen suffix.`;
+      const terminalReply = `${preSteerReply} ${terminalPostSteerReply}`;
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: ` ${postSteerReply}`,
+        message: {
+          content: [{ text: cumulativeReply, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: activeRunId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble", { hasText: postSteerReply }).waitFor({ timeout: 10_000 });
+      await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
+      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, followUp, postSteerReply);
+      const authoritativeMessages = [
+        {
+          __openclaw: {
+            id: "persisted-original-user",
+            idempotencyKey: `${activeRunId}:user`,
+            seq: 1,
+          },
+          content: [{ text: originalPrompt, type: "text" }],
+          role: "user",
+          timestamp: 100,
+        },
+        {
+          __openclaw: { id: "persisted-pre-steer", idempotencyKey: activeRunId, seq: 2 },
+          content: [{ text: preSteerReply, type: "text" }],
+          role: "assistant",
+          timestamp: 200,
+        },
+        {
+          __openclaw: {
+            id: "persisted-steer-user",
+            idempotencyKey: `${steerRunId}:user`,
+            seq: 3,
+            steerTargetRunId: activeRunId,
+          },
+          content: [{ text: followUp, type: "text" }],
+          role: "user",
+          timestamp: 50,
+        },
+        {
+          __openclaw: { id: "persisted-post-steer", idempotencyKey: activeRunId, seq: 4 },
+          content: [{ text: terminalPostSteerReply, type: "text" }],
+          role: "assistant",
+          timestamp: 300,
+        },
+      ];
+      const terminalHistory = {
+        messages: authoritativeMessages,
+        sessionId: "control-ui-e2e-session",
+        sessionInfo: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        thinkingLevel: null,
+      };
+      await gateway.setMethodResponse("chat.history", terminalHistory);
+      await gateway.setMethodResponse("chat.startup", terminalHistory);
+      await gateway.emitChatFinal({ runId: activeRunId, text: terminalReply });
+      await page
+        .getByRole("button", { name: "Stop generating" })
+        .waitFor({ state: "detached", timeout: 10_000 });
+      await page
+        .locator(".chat-bubble", { hasText: terminalPostSteerReply })
+        .waitFor({ timeout: 10_000 });
+      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, followUp, postSteerReply);
+
+      await page.reload();
+      await page
+        .locator(".chat-bubble", { hasText: terminalPostSteerReply })
+        .waitFor({ timeout: 10_000 });
+      await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
+      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, followUp, postSteerReply);
     } finally {
       await suite.closeBrowserContext(context);
     }

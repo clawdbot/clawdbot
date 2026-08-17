@@ -86,10 +86,12 @@ function resolveChatSendToolAuthorityOverlay(params: {
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
-  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+  session: Pick<PreparedChatSendSession, "cfg" | "entry" | "expectedRunId">;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
+  userTurnTranscriptRecorder: NonNullable<
+    ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
+  >;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry } = params.session;
@@ -105,7 +107,10 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    return beginReplyMessageInjectionTarget(
+    params.userTurnTranscriptRecorder.setSteerTargetRunIdForPersistence?.(
+      params.session.expectedRunId,
+    );
+    const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
@@ -123,6 +128,10 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
+    if (!attempt) {
+      params.userTurnTranscriptRecorder.setSteerTargetRunIdForPersistence?.(undefined);
+    }
+    return attempt;
   };
 }
 
