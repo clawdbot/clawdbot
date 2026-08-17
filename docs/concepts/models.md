@@ -179,6 +179,13 @@ change, prefer a new session; use `/model` or the active-session model picker
 when you intentionally want the existing transcript to continue with another
 model.
 
+Keep the thinking or reasoning level stable for the session when cache reuse
+matters. On OpenAI, changing the reasoning effort changes the reusable request
+state and can force the next turn to process the full conversation again. Other
+providers may also include thinking configuration in their cache identity, so
+changing only the thinking level can increase latency and input-token cost even
+when the model itself stays the same.
+
 ## `/model` in chat
 
 Direct owner/admin `/model <model>` requests **default scope**: it changes this session and starts a best-effort configured-default update. Adding `-s` uses **session scope**: only this session changes. If the agent has no explicit primary model, its effective default is the shared global `agents.defaults.model` fallback.

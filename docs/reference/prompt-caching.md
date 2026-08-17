@@ -16,6 +16,21 @@ Provider references:
 - [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 - [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 
+## Keep model settings stable
+
+Prompt-cache reuse depends on provider request configuration as well as prompt
+text. Changing the model always starts a different cache lineage. Changing the
+thinking or reasoning level can also invalidate reuse even when the prompt and
+model stay the same. In particular, OpenAI reasoning-effort changes alter the
+reusable request state and can force the next turn to process the full prefix or
+conversation again. Anthropic likewise documents cache invalidation when its
+thinking budget, effort, or mode changes.
+
+If cache continuity matters, choose the model and thinking level when creating
+the session and keep both stable. Start a new session for a planned change.
+Invalidating reuse means the next request misses that cached state; it does not
+necessarily delete the provider's older cache entry before its normal expiry.
+
 ## Primary knobs
 
 ### `cacheRetention`
