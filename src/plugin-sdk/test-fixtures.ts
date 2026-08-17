@@ -8,6 +8,11 @@ export {
   spyRuntimeLogs,
 } from "../cli/test-runtime-capture.js";
 export type { CliMockOutputRuntime, CliRuntimeCapture } from "../cli/test-runtime-capture.js";
+// Deterministic pure resolver for descriptor-through-resolver proof tests: lets
+// extension tests drive a real shipped CLI backend descriptor config through the
+// production watchdog-profile selection without cold-loading the agent runtime.
+// test-fixtures is excluded from published dist, so this is not a public seam.
+export { resolveCliNoOutputTimeoutMs } from "../agents/cli-runner/reliability.js";
 export { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 export {
   createSandboxBrowserConfig,

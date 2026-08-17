@@ -4,6 +4,7 @@ import path from "node:path";
 import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { resolveCliNoOutputTimeoutMs } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 
@@ -1049,5 +1050,20 @@ describe("Gemini CLI backend descriptor watchdog defaults (#125045)", () => {
     // disables the promotion gate in pickWatchdogProfile.
     const { config } = buildGoogleGeminiCliBackend();
     expect(config.reliability?.watchdog).toBeUndefined();
+  });
+
+  it("promotes resumed cron turns to the fresh no-output budget via the real resolver", () => {
+    // Real-behavior proof: the shipped descriptor config (no reliability.watchdog block
+    // post-fix) drives the production resolver to the promoted fresh budget for a resumed
+    // cron turn. Pre-fix the resume defaults made `configured` truthy and the promotion
+    // gate dead, pinning the turn to the 180s resume ceiling.
+    const { config } = buildGoogleGeminiCliBackend();
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: config,
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "cron",
+    });
+    expect(timeoutMs).toBe(480_000);
   });
 });
