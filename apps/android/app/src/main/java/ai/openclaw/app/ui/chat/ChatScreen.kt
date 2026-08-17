@@ -1713,6 +1713,19 @@ internal fun ChatBubble(
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  val speaker =
+    when {
+      live -> nativeString("OpenClaw")
+      isUser -> nativeString("You")
+      normalizedRole == "system" -> nativeString("System")
+      else -> nativeString("OpenClaw")
+    }
+  val caption =
+    when {
+      live -> nativeString("OpenClaw · Live")
+      normalizedRole == "system" -> nativeString("System")
+      else -> null
+    }
   var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
@@ -1756,29 +1769,36 @@ internal fun ChatBubble(
       enabled = !live,
       listenActive = messageSpeech != null,
       onToggleListen = toggleListen,
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
+      modifier =
+        Modifier
+          .fillMaxWidth(if (isUser) 0.78f else 0.94f)
+          .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(7.dp),
-        color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
+        color = if (isUser) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
         contentColor = ClawTheme.colors.text,
-        border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+        border =
+          BorderStroke(
+            1.dp,
+            when {
+              isUser -> ClawTheme.colors.accentBorder
+              live -> ClawTheme.colors.borderStrong
+              else -> ClawTheme.colors.border.copy(alpha = 0.45f)
+            },
+          ),
         tonalElevation = 1.dp,
         shadowElevation = 2.dp,
       ) {
         Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(
-            text =
-              when {
-                live -> nativeString("OpenClaw · Live")
-                isUser -> nativeString("You")
-                normalizedRole == "system" -> nativeString("System")
-                else -> nativeString("OpenClaw")
-              },
-            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-            color = ClawTheme.colors.text,
-          )
+          caption?.let {
+            Text(
+              text = it,
+              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+              color = ClawTheme.colors.text,
+            )
+          }
           if (collapsibleUserText && messageText.isNotBlank()) {
             ChatUserMessageText(
               textParts = displayableContent.mapNotNull { it.text },
