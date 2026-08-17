@@ -2,7 +2,7 @@ import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type ToolProgressDetailMode,
+  ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -423,7 +423,7 @@ export class CodexToolProgressProjection {
     }
   }
 
-  toolProgressDetailMode(): ToolProgressDetailMode {
+  toolProgressDetailMode(): ToolProgressDetailModeInput {
     return resolveCodexToolProgressDetailMode(this.params.toolProgressDetail);
   }
 

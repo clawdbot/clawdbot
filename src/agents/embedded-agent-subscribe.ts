@@ -364,7 +364,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     meta: string | undefined,
     commandBearing: boolean,
   ) => {
-    const isPlain = params.verboseLevel === "plain";
+    // Plain presentation can come from verboseLevel or configured toolProgressDetail.
+    // Documented contract: toolProgressDetail "plain" applies even when verbose is only "on".
+    const isPlain = params.verboseLevel === "plain" || params.toolProgressDetail === "plain";
     // "on" hides command text for shell tools; plain keeps the sentence meta.
     const visibleMeta =
       isPlain || params.verboseLevel === "full" || !commandBearing ? meta : undefined;

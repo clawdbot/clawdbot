@@ -533,15 +533,26 @@ export {
 } from "../agents/harness/native-hook-relay.js";
 
 /**
- * Derive the same compact user-facing tool detail that embedded OpenClaw uses for progress logs.
+ * Public Plugin SDK tool-detail contract for harness plugins.
+ * Keep this union stable so existing exhaustive TypeScript handlers continue to compile.
+ *
+ * Core OpenClaw also supports a presentation-only `"plain"` mode on internal reply paths.
+ * That value is accepted by `inferToolMetaFromArgs` via the extended options type below, but
+ * is intentionally not part of this public contract until maintainers sponsor an SDK expansion.
  */
-export type ToolProgressDetailMode = "explain" | "raw" | "plain";
+export type ToolProgressDetailMode = "explain" | "raw";
+
+/**
+ * Core-supported detail modes for progress formatting helpers.
+ * Includes presentation-only `"plain"` without widening the public Plugin SDK union.
+ */
+export type ToolProgressDetailModeInput = ToolProgressDetailMode | "plain";
 
 /** Infer compact display metadata for one tool invocation from its name and arguments. */
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,
-  options?: { detailMode?: ToolProgressDetailMode },
+  options?: { detailMode?: ToolProgressDetailModeInput },
 ): string | undefined {
   return inferToolMetaFromArgsCore(toolName, args, options);
 }

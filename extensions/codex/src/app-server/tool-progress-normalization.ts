@@ -5,7 +5,7 @@
 import {
   inferToolMetaFromArgs,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type ToolProgressDetailMode,
+  ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -18,7 +18,7 @@ import {
 /** Maps OpenClaw tool-progress config to the mode used by Codex progress metadata. */
 export function resolveCodexToolProgressDetailMode(
   value: EmbeddedRunAttemptParams["toolProgressDetail"],
-): ToolProgressDetailMode {
+): ToolProgressDetailModeInput {
   if (value === "raw") {
     return "raw";
   }
@@ -97,7 +97,7 @@ export function sanitizeCodexToolResponse(
 /** Infers compact human-readable tool metadata from Codex dynamic-tool arguments. */
 export function inferCodexDynamicToolMeta(
   call: Pick<CodexDynamicToolCallParams, "tool" | "arguments">,
-  detailMode: ToolProgressDetailMode,
+  detailMode: ToolProgressDetailModeInput,
 ): string | undefined {
   return inferToolMetaFromArgs(call.tool, call.arguments, { detailMode });
 }
