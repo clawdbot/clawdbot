@@ -8,9 +8,17 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
+import {
+  getCodexAppServerClientInstanceId,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
+  type CodexAppServerClient,
+} from "./client.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
-import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  retainSharedCodexAppServerClientIfCurrent,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 
 type NativeMcpCallToolResult = {
   content: JsonValue[];
@@ -52,7 +60,7 @@ function statusTools(status: CodexMcpServerStatus): Array<Record<string, unknown
   );
 }
 
-function createNativeMcpRuntime(params: {
+export function createNativeMcpRuntime(params: {
   client: CodexAppServerClient;
   threadId: string;
   attempt: EmbeddedRunAttemptParams;
@@ -61,23 +69,38 @@ function createNativeMcpRuntime(params: {
   // a second client here would lose server-local state between render and click.
   let catalog: McpToolCatalog | null = null;
   let statuses: CodexMcpServerStatus[] | undefined;
+  let toolCallsFenced = false;
   const createdAt = Date.now();
-  const loadStatuses = async () => {
+  const request = <T = JsonValue | undefined>(
+    method: string,
+    requestParams: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> =>
+    signal
+      ? params.client.request<T>(method, requestParams, { signal })
+      : params.client.request<T>(method, requestParams);
+  const loadStatuses = async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (statuses) {
       return statuses;
     }
-    const response = await params.client.request("mcpServerStatus/list", {
-      threadId: params.threadId,
-      detail: "full",
-    });
+    const response = await request<{ data: CodexMcpServerStatus[] }>(
+      "mcpServerStatus/list",
+      {
+        threadId: params.threadId,
+        detail: "full",
+      },
+      signal,
+    );
     statuses = response.data;
     return statuses;
   };
-  const getCatalog = async (): Promise<McpToolCatalog> => {
+  const getCatalog: SessionMcpRuntime["getCatalog"] = async (options) => {
+    options?.signal?.throwIfAborted();
     if (catalog) {
       return catalog;
     }
-    const loaded = await loadStatuses();
+    const loaded = await loadStatuses(options?.signal);
     catalog = {
       version: 1,
       generatedAt: Date.now(),
@@ -119,29 +142,60 @@ function createNativeMcpRuntime(params: {
     markUsed: () => {
       runtime.lastUsedAt = Date.now();
     },
-    callTool: async (serverName, toolName, input) =>
-      (await params.client.request("mcpServer/tool/call", {
-        threadId: params.threadId,
-        server: serverName,
-        tool: toolName,
-        arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
-      })) as never,
-    listTools: async (serverName) => {
-      const status = (await loadStatuses()).find((entry) => entry.name === serverName);
+    callTool: async (serverName, toolName, input, options) => {
+      if (toolCallsFenced) {
+        throw new Error(
+          "Codex native MCP tool calls are unavailable after an indeterminate cancellation",
+        );
+      }
+      try {
+        return (await request(
+          "mcpServer/tool/call",
+          {
+            threadId: params.threadId,
+            server: serverName,
+            tool: toolName,
+            arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
+          },
+          options?.signal,
+        )) as never;
+      } catch (error) {
+        if (
+          isCodexAppServerIndeterminateRequestCancellationError(error) ||
+          isCodexAppServerIndeterminateTransportError(error)
+        ) {
+          toolCallsFenced = true;
+          retireSharedCodexAppServerClientIfCurrent(params.client);
+        }
+        throw error;
+      }
+    },
+    listTools: async (serverName, _requestParams, options) => {
+      const status = (await loadStatuses(options?.signal)).find(
+        (entry) => entry.name === serverName,
+      );
       return { tools: status ? statusTools(status) : [] } as never;
     },
-    readResource: async (serverName, uri) =>
-      await params.client.request("mcpServer/resource/read", {
-        threadId: params.threadId,
-        server: serverName,
-        uri,
-      }),
-    listResources: async (serverName) => {
-      const status = (await loadStatuses()).find((entry) => entry.name === serverName);
+    readResource: async (serverName, uri, options) =>
+      await request(
+        "mcpServer/resource/read",
+        {
+          threadId: params.threadId,
+          server: serverName,
+          uri,
+        },
+        options?.signal,
+      ),
+    listResources: async (serverName, options) => {
+      const status = (await loadStatuses(options?.signal)).find(
+        (entry) => entry.name === serverName,
+      );
       return { resources: status?.resources ?? [] };
     },
-    listResourceTemplates: async (serverName) => {
-      const status = (await loadStatuses()).find((entry) => entry.name === serverName);
+    listResourceTemplates: async (serverName, _requestParams, options) => {
+      const status = (await loadStatuses(options?.signal)).find(
+        (entry) => entry.name === serverName,
+      );
       return { resourceTemplates: status?.resourceTemplates ?? [] } as never;
     },
     dispose: async () => {},
