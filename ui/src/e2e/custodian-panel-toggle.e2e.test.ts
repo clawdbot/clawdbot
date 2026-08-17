@@ -149,6 +149,8 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
 
       // Reload: the dock restores its open state on its own and rerenders the
       // durable history with the persisted session id — no clicks required.
+      // The reload replaces the page context and restarts the request ring, so
+      // the plain wait matches only post-reload openclaw.chat traffic.
       await page.reload();
       await page.locator("openclaw-custodian-panel").getByText("Channel repaired.").waitFor();
       const reloadedRequest = await gateway.waitForRequest("openclaw.chat");
