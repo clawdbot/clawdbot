@@ -229,8 +229,10 @@ export {
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptEventWithSnapshotSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptMessageWithSnapshotSync,
   findTranscriptEvent,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,

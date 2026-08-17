@@ -570,6 +570,25 @@ export class SessionManagerCore {
     }
   }
 
+  /**
+   * Adopts a row snapshot captured inside the same write transaction as the append that
+   * produced it (via appendTranscriptEvent/MessageWithSnapshotSync). Prefer this over
+   * refreshPersistedRowSnapshot()'s separate post-commit read for persistence call sites:
+   * a foreign process's commit landing between this manager's own commit and a later
+   * out-of-transaction read would otherwise be silently folded into the tracked snapshot
+   * without ever appearing in `fileEntries`, so the next rewrite would delete that foreign
+   * row instead of rejecting it.
+   */
+  protected applyPersistedRowSnapshot(snapshot: SqliteTranscriptSnapshotRow[] | undefined): void {
+    if (!this.persistenceTarget) {
+      return;
+    }
+    if (!snapshot) {
+      throw new Error("Transcript append succeeded without a captured row snapshot");
+    }
+    this.persistedRowSnapshot = snapshot;
+  }
+
   /** SQLite appends are synchronous; retained for the AgentSession contract. */
   protected flushPendingPersistence(): void {}
 

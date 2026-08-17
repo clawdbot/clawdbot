@@ -280,11 +280,18 @@ export async function appendTranscriptEvent(
   });
 }
 
-/** Appends one raw non-message transcript event synchronously for sync session runtimes. */
-export function appendTranscriptEventSync(
+/**
+ * Shared transaction body for the sync event-append entry points. `afterAppend` runs
+ * inside the same write transaction immediately after a successful insert, so a caller
+ * that needs the resulting row set (e.g. to track a last-known-good snapshot) reads it
+ * atomically instead of racing a foreign commit that could land after this transaction
+ * commits but before a separate out-of-transaction read.
+ */
+function appendTranscriptEventSyncCore(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
-  options: TranscriptEventAppendOptions = {},
+  options: TranscriptEventAppendOptions,
+  afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
 ): Result<boolean, TranscriptEventAppendError> {
   assertNonMessageTranscriptEvent(event);
   // Every sync event append inherits and enforces the admitted writer claim.
@@ -325,18 +332,52 @@ export function appendTranscriptEventSync(
       });
       return;
     }
-    result = ok(
-      appendTranscriptEventInTransaction(
-        database,
-        resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
-      ),
+    const appended = appendTranscriptEventInTransaction(
+      database,
+      resolved,
+      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
     );
+    result = ok(appended);
+    if (appended) {
+      afterAppend?.(database, resolved);
+    }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
     throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
   }
   return result;
+}
+
+/** Appends one raw non-message transcript event synchronously for sync session runtimes. */
+export function appendTranscriptEventSync(
+  scope: SessionTranscriptWriteScope,
+  event: TranscriptEvent,
+  options: TranscriptEventAppendOptions = {},
+): Result<boolean, TranscriptEventAppendError> {
+  return appendTranscriptEventSyncCore(scope, event, options);
+}
+
+/**
+ * Appends one raw non-message transcript event and atomically captures the post-append
+ * row snapshot in the same write transaction. Callers that track their own last-known-good
+ * snapshot (e.g. SessionManagerCore) must use this instead of appendTranscriptEventSync plus
+ * a separate loadTranscriptRowSnapshotSync call: a foreign process committing between this
+ * transaction's commit and that later read would otherwise be silently folded into the
+ * tracked snapshot without ever appearing in the caller's in-memory entries.
+ */
+export function appendTranscriptEventWithSnapshotSync(
+  scope: SessionTranscriptWriteScope,
+  event: TranscriptEvent,
+  options: TranscriptEventAppendOptions = {},
+): {
+  result: Result<boolean, TranscriptEventAppendError>;
+  snapshot?: SqliteTranscriptSnapshotRow[];
+} {
+  let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
+  const result = appendTranscriptEventSyncCore(scope, event, options, (database, resolved) => {
+    snapshot = readTranscriptEventRows(database, resolved.sessionId);
+  });
+  return { result, ...(snapshot ? { snapshot } : {}) };
 }
 
 function resolveTranscriptEventAppendParent(
@@ -524,10 +565,15 @@ export async function appendTranscriptMessage<TMessage>(
   });
 }
 
-/** Appends one transcript message synchronously for sync session runtimes. */
-export function appendTranscriptMessageSync<TMessage>(
+/**
+ * Shared transaction body for the sync message-append entry points. `afterAppend` mirrors
+ * appendTranscriptEventSyncCore's contract: it runs inside the same write transaction right
+ * after a successful append, so a caller tracking a row snapshot reads it atomically.
+ */
+function appendTranscriptMessageSyncCore<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
+  afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   // Every sync message append inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
@@ -546,11 +592,41 @@ export function appendTranscriptMessageSync<TMessage>(
       return;
     }
     result = appendTranscriptMessageInTransaction(database, resolved, options);
+    if (result) {
+      afterAppend?.(database, resolved);
+    }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && result === undefined) {
     throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
   }
   return result;
+}
+
+/** Appends one transcript message synchronously for sync session runtimes. */
+export function appendTranscriptMessageSync<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): TranscriptMessageAppendResult<TMessage> | undefined {
+  return appendTranscriptMessageSyncCore(scope, options);
+}
+
+/**
+ * Appends one transcript message and atomically captures the post-append row snapshot in
+ * the same write transaction. See appendTranscriptEventWithSnapshotSync for why a separate
+ * post-commit loadTranscriptRowSnapshotSync read cannot substitute for this.
+ */
+export function appendTranscriptMessageWithSnapshotSync<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): {
+  result: TranscriptMessageAppendResult<TMessage> | undefined;
+  snapshot?: SqliteTranscriptSnapshotRow[];
+} {
+  let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
+  const result = appendTranscriptMessageSyncCore(scope, options, (database, resolved) => {
+    snapshot = readTranscriptEventRows(database, resolved.sessionId);
+  });
+  return { result, ...(snapshot ? { snapshot } : {}) };
 }
 
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */

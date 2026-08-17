@@ -21,8 +21,10 @@ import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-tran
 import {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptEventWithSnapshotSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptMessageWithSnapshotSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   rewriteTranscriptEventRowsExact,
@@ -45,8 +47,10 @@ import {
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptEventWithSnapshotSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptMessageWithSnapshotSync,
   findTranscriptEvent,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,

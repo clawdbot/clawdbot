@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessageSync,
+  appendTranscriptEventWithSnapshotSync,
+  appendTranscriptMessageWithSnapshotSync,
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
@@ -178,34 +179,37 @@ export class SessionManagerPersistence extends SessionManagerCore {
         "Session transcript header was not persisted",
       );
       this.persistenceHeaderPending = false;
-      // No refreshPersistedRowSnapshot() here: this branch always falls through to
-      // exactly one of the append branches below, whose own refresh reads the full
-      // current row set (including the header row just appended above) in one pass.
+      // No applyPersistedRowSnapshot() here: this branch always falls through to
+      // exactly one of the *WithSnapshotSync append branches below, whose own atomic
+      // snapshot capture includes the full current row set (including the header row
+      // just appended above) in one pass.
     }
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
+      const { result, snapshot } = appendTranscriptEventWithSnapshotSync(scope, entry);
       requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, entry),
+        result,
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
-      this.refreshPersistedRowSnapshot();
+      this.applyPersistedRowSnapshot(snapshot);
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
       return undefined;
     }
     if (entry.type !== "message") {
+      const { result, snapshot } = appendTranscriptEventWithSnapshotSync(
+        scope,
+        entry,
+        options?.appendIntent === "active-branch"
+          ? { appendIntent: options.appendIntent }
+          : undefined,
+      );
       requireTranscriptEventAppend(
-        appendTranscriptEventSync(
-          scope,
-          entry,
-          options?.appendIntent === "active-branch"
-            ? { appendIntent: options.appendIntent }
-            : undefined,
-        ),
+        result,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
-      this.refreshPersistedRowSnapshot();
+      this.applyPersistedRowSnapshot(snapshot);
       return undefined;
     }
     const appendOptions = {
@@ -217,12 +221,12 @@ export class SessionManagerPersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
-    } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
-    const result = appendTranscriptMessageSync(scope, appendOptions);
+    } satisfies Parameters<typeof appendTranscriptMessageWithSnapshotSync>[1];
+    const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(scope, appendOptions);
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
-    this.refreshPersistedRowSnapshot();
+    this.applyPersistedRowSnapshot(snapshot);
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&
