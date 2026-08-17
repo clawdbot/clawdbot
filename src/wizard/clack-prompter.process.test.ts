@@ -20,24 +20,28 @@ describe("classic onboarding process", () => {
   it("exits through wizard cancellation when Ctrl-D ends stdin at the first prompt", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-eof-"));
     homes.add(home);
-    const child = spawn(process.execPath, ["openclaw.mjs", "onboard", "--classic"], {
-      cwd: process.cwd(),
-      cols: 100,
-      rows: 30,
-      name: "xterm-256color",
-      env: {
-        ...process.env,
-        HOME: home,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NODE_ENV: undefined,
-        NODE_OPTIONS: undefined,
-        OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-        NO_COLOR: "1",
-        TERM: "xterm-256color",
-        VITEST: undefined,
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", "src/entry.ts", "onboard", "--classic"],
+      {
+        cwd: process.cwd(),
+        cols: 100,
+        rows: 30,
+        name: "xterm-256color",
+        env: {
+          ...process.env,
+          HOME: home,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_ENV: undefined,
+          NODE_OPTIONS: undefined,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          NO_COLOR: "1",
+          TERM: "xterm-256color",
+          VITEST: undefined,
+        },
       },
-    });
+    );
     let output = "";
     let sentEof = false;
 
