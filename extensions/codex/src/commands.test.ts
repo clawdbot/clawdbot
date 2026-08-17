@@ -11,6 +11,7 @@ import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-bindi
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  clearSessionStoreCacheForTest,
   getSessionEntry,
   resolveStorePath,
   upsertSessionEntry,
@@ -387,6 +388,7 @@ describe("codex command", () => {
     codexDiagnosticsFeedbackState.clear();
     resetSharedCodexAppServerClientForTests();
     clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -6095,7 +6097,7 @@ describe("codex command", () => {
           config: { session: { store: storePath } },
           sessionKey,
           senderIsOwner: testCase.senderIsOwner,
-          gatewayClientScopes: testCase.gatewayClientScopes,
+          gatewayClientScopes: [...testCase.gatewayClientScopes],
         }),
         { deps: createDeps() },
       ),
