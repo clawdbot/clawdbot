@@ -367,6 +367,16 @@ type SessionTranscriptUsageSnapshot = {
   trailingMessages: AgentMessage[];
 };
 
+function hasUsableProviderPromptUsage(
+  usage: SessionTranscriptUsageSnapshot | undefined,
+): usage is SessionTranscriptUsageSnapshot & { promptTokens: number } {
+  return (
+    typeof usage?.promptTokens === "number" &&
+    Number.isFinite(usage.promptTokens) &&
+    usage.promptTokens > 0
+  );
+}
+
 function isUnavailableContextBarrier(
   usage: NonNullable<ReturnType<typeof normalizeUsage>>,
 ): boolean {
@@ -482,15 +492,25 @@ function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): {
 
 function readSqliteSessionLogSnapshot(
   scope: { agentId?: string; sessionId: string; sessionKey?: string; storePath: string },
-  options: { includeByteSize: boolean; includeTurnTaint?: boolean; includeUsage: boolean },
+  options: {
+    includeByteSize: boolean;
+    includeTurnTaint?: boolean;
+    includeUsage: boolean;
+    usageEventLimit?: number;
+  },
 ): SessionLogSnapshot {
   const snapshot: SessionLogSnapshot = {};
   try {
     if (options.includeByteSize) {
-      snapshot.byteSize = readSessionTranscriptActiveStats(scope).sizeBytes;
+      const stats = readSessionTranscriptActiveStats(scope);
+      snapshot.byteSize = stats.sizeBytes;
+      snapshot.eventCount = stats.eventCount;
     }
     if (options.includeUsage || options.includeTurnTaint) {
-      const events = readRecentSessionTranscriptActiveEvents(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
+      const events = readRecentSessionTranscriptActiveEvents(
+        scope,
+        options.usageEventLimit ?? SQLITE_USAGE_TAIL_MAX_EVENTS,
+      );
       if (options.includeUsage) {
         snapshot.usage = deriveTranscriptUsageSnapshot(
           readLatestNonzeroUsageSnapshotFromTranscriptEvents(events),
@@ -513,6 +533,7 @@ function readSqliteSessionLogSnapshot(
 
 type SessionLogSnapshot = {
   byteSize?: number;
+  eventCount?: number;
   turnTainted?: boolean;
   usage?: SessionTranscriptUsageSnapshot;
 };
@@ -547,6 +568,7 @@ function readSessionLogSnapshot(params: {
   includeByteSize: boolean;
   includeTurnTaint?: boolean;
   includeUsage: boolean;
+  usageEventLimit?: number;
 }): SessionLogSnapshot {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (params.sessionId && params.storePath && agentId) {
@@ -615,20 +637,29 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       includeByteSize: true,
       includeUsage: true,
     });
-    const usage = snapshot.usage;
-    const promptTokens = usage?.promptTokens;
+    let usage = snapshot.usage;
+    if (
+      !hasUsableProviderPromptUsage(usage) &&
+      typeof snapshot.eventCount === "number" &&
+      snapshot.eventCount > SQLITE_USAGE_TAIL_MAX_EVENTS
+    ) {
+      usage = readSessionLogSnapshot({
+        agentId: params.agentId,
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        includeByteSize: false,
+        includeUsage: true,
+        usageEventLimit: snapshot.eventCount,
+      }).usage;
+    }
     const normalizedOutputTokens =
       typeof usage?.outputTokens === "number" &&
       Number.isFinite(usage.outputTokens) &&
       usage.outputTokens > 0
         ? Math.ceil(usage.outputTokens)
         : undefined;
-    if (
-      usage &&
-      typeof promptTokens === "number" &&
-      Number.isFinite(promptTokens) &&
-      promptTokens > 0
-    ) {
+    if (hasUsableProviderPromptUsage(usage)) {
       const trailingMessages = usage.trailingMessages;
       const trailingTokens = await estimateProviderPromptTokensFromMessages(
         trailingMessages,
@@ -638,7 +669,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         return undefined;
       }
       return {
-        promptTokens: Math.ceil(promptTokens) + trailingTokens,
+        promptTokens: Math.ceil(usage.promptTokens) + trailingTokens,
         promptTokenSource:
           trailingMessages.length > 0 ? "provider_usage_plus_prompt_projection" : "provider_usage",
         outputTokens: normalizedOutputTokens,

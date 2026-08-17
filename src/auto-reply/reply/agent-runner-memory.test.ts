@@ -3019,6 +3019,72 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThan(100_000);
   });
 
+  it.each([
+    ["below", 20_000, false],
+    ["above", 70_000, true],
+  ])(
+    "uses a provider usage anchor older than the scan window when pressure is %s threshold",
+    async (_label, providerPromptTokens, shouldCompact) => {
+      await writeTestSessionTranscript({
+        rootDir,
+        events: [
+          ...Array.from({ length: 50 }, () => ({
+            type: "message" as const,
+            message: { role: "user" as const, content: "x".repeat(8_192) },
+          })),
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "usage anchor",
+              usage: {
+                input: providerPromptTokens,
+                output: 100,
+                totalTokens: providerPromptTokens + 100,
+                contextUsage: {
+                  state: "available",
+                  promptTokens: providerPromptTokens,
+                  totalTokens: providerPromptTokens + 100,
+                },
+              },
+            },
+          },
+          ...Array.from({ length: 520 }, () => ({
+            type: "message" as const,
+            message: { role: "user" as const, content: "x".repeat(64) },
+          })),
+        ],
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokensFresh: false,
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+      };
+
+      await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey: "main",
+        }),
+        defaultModel: "gpt-5.5",
+        modelContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(shouldCompact ? 1 : 0);
+    },
+  );
+
   it("does not use the active run sessionFile when the session entry has no transcript path", async () => {
     const sessionFile = path.join(rootDir, "active-run-session.jsonl");
     await fs.writeFile(
