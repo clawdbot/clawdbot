@@ -23,7 +23,7 @@ describe("clearAgentSkillFilter", () => {
           },
         },
       },
-      note: "Enable all agent skills",
+      note: "Reset agent skills to inherited defaults",
       replacePaths: ["agents.entries.Research.skills"],
       canDispatch: expect.any(Function),
     });
@@ -57,7 +57,7 @@ describe("clearAgentSkillFilter", () => {
 
     expect(patch).toHaveBeenCalledWith({
       raw: { agents: { list: [{ id: "main", skills: null }] } },
-      note: "Enable all agent skills",
+      note: "Reset agent skills to inherited defaults",
       replacePaths: ["agents.list[].skills"],
       canDispatch: expect.any(Function),
     });

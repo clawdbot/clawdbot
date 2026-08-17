@@ -66,7 +66,7 @@ export async function clearAgentSkillFilter(
           list: [{ id: target.entry.id, skills: null }],
         },
       },
-      note: "Enable all agent skills",
+      note: "Reset agent skills to inherited defaults",
       replacePaths: ["agents.list[].skills"],
       canDispatch,
     });
@@ -82,7 +82,7 @@ export async function clearAgentSkillFilter(
         },
       },
     },
-    note: "Enable all agent skills",
+    note: "Reset agent skills to inherited defaults",
     replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
