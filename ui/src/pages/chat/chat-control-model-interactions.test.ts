@@ -99,12 +99,14 @@ describe("controlModelQuestionPromptCommand", () => {
       { id: "main", sessionKey: "global", agentId: "main" },
       { id: "work", sessionKey: "global", agentId: "work" },
       { id: "legacy", sessionKey: "global" },
+      { id: "unscoped", agentId: "work" },
       { id: "other", sessionKey: "agent:main:other", agentId: "main" },
     ] as never;
 
     expect(questionPromptsForRoute(prompts, "global", "work").map((prompt) => prompt.id)).toEqual([
       "work",
       "legacy",
+      "unscoped",
     ]);
     expect(questionPromptsForRoute(prompts, "global").map((prompt) => prompt.id)).toEqual([
       "legacy",

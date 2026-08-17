@@ -67,8 +67,8 @@ export function questionPromptsForRoute(
   const normalizedAgentId = agentId?.trim().toLowerCase();
   return prompts.filter(
     (prompt) =>
-      prompt.sessionKey !== undefined &&
-      areUiSessionKeysEquivalent(prompt.sessionKey, sessionKey) &&
+      (prompt.sessionKey === undefined ||
+        areUiSessionKeysEquivalent(prompt.sessionKey, sessionKey)) &&
       (normalizedAgentId
         ? !prompt.agentId || prompt.agentId.trim().toLowerCase() === normalizedAgentId
         : !prompt.agentId),
