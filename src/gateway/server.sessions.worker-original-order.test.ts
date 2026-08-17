@@ -333,7 +333,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   const events = runner.events;
   const provider: WorkerProvider = {
     id: "ordered-fallback",
-    supportedExecutionModes: ["worker-turn"],
+    supportedExecutionModes: ["remote-exec"],
     provision: async () => {
       events.push("provider:provision");
       return { leaseId: "lease-original-order", ssh: SSH_ENDPOINT };
@@ -452,7 +452,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     sessionKey: SESSION_KEY,
     agentId: "main",
     profileId: PROFILE_ID,
-    executionMode: "worker-turn",
+    executionMode: "remote-exec",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
   expect(runner.starts).toHaveLength(1);

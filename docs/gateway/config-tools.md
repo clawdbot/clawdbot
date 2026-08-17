@@ -211,6 +211,47 @@ Controls elevated exec access outside the sandbox:
 - `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
 - Elevated `exec` bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).
 
+### `tools.github`
+
+GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
+
+Use **Agents → Tools → GitHub CLI Identity** to configure a managed fine-grained personal access token. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin, verifies the account, publishes an account-owned managed `gh` profile, and stores only this secret-free config:
+
+```json5
+{
+  tools: {
+    github: {
+      profileId: "ghp_0123456789abcdef0123456789abcdef",
+      gitAuthor: { name: "Automation User", email: "automation@example.com" },
+    },
+  },
+  agents: {
+    entries: {
+      reviewer: {
+        tools: {
+          github: {
+            profileId: "ghp_fedcba9876543210fedcba9876543210",
+            gitAuthor: { name: "Review Agent" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
+
+Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. New runs switch to a replacement or inherited identity immediately. Existing local processes keep their immutable profile generation until they close; retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
+
+Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
+
+The profile is not forwarded to node hosts, OpenClaw sandboxes, remote-exec placements, or cloud workers; cloud workers remain credential-free. Direct branch or pull request publication is not part of this identity foundation and belongs to PR3 in this stacked series. Until that separate Gateway broker lands, repository remotes continue to use their existing credentials and publication workflow.
+
+Verification proves which account answered the GitHub API request. Status distinguishes missing or invalid managed credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. It does not claim that fine-grained write permissions or Git transport access were remotely verified. GitHub App and brokered publication support remain future work.
+
+Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
+
 ### `tools.exec`
 
 ```json5

@@ -38,6 +38,19 @@ export function validateWorkerProviderContract(
       message: "worker provider registration provisionBeforeInstallation must be a boolean",
     };
   }
+  const executionModes = provider.supportedExecutionModes;
+  if (
+    executionModes !== undefined &&
+    (!Array.isArray(executionModes) ||
+      executionModes.length !== 1 ||
+      (executionModes[0] !== "worker-turn" && executionModes[0] !== "remote-exec"))
+  ) {
+    return {
+      ok: false,
+      message:
+        "worker provider registration supportedExecutionModes must contain exactly one current mode",
+    };
+  }
   if (
     provider.resolveSshIdentity !== undefined &&
     typeof provider.resolveSshIdentity !== "function"

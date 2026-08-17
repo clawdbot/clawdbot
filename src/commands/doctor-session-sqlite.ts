@@ -52,12 +52,12 @@ import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
   readOnlySqliteDbStats,
-  readOnlySqliteExactSessionEntry,
   readOnlySqliteSessionEntries,
-  readOnlySqliteTranscriptEventCount,
+  readOnlySqliteValidationSnapshot,
   readTranscriptFingerprint,
   readSqliteEntryCount,
   resolveTargetSqlitePath,
+  type ReadOnlySqliteValidationSnapshot,
 } from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
@@ -349,14 +349,12 @@ async function inspectOrMigrateTarget(params: {
   }
   if (params.mode === "import") {
     await importLegacySessionRecords(params.target, records, report);
-  } else {
+  } else if (params.mode === "dry-run") {
     for (const record of records) {
-      if (params.mode === "dry-run") {
-        countLegacyTranscript(record, report);
-      } else {
-        validateLegacySessionRecord(params.target, record, report);
-      }
+      countLegacyTranscript(record, report);
     }
+  } else {
+    validateLegacySessionRecords(params.target, records, report);
   }
   if (params.mode === "import" && blockingIssueCount(report) === 0) {
     const validationPassed = validateImportedTargetBeforeArchive(params.target, records, report);
@@ -624,6 +622,7 @@ async function importLegacySessionRecords(
   report: DoctorSessionSqliteTargetReport,
 ): Promise<void> {
   const importedTranscriptSources = new Set<string>();
+  const existingSnapshot = readOnlySqliteValidationSnapshot(target);
   for (let offset = 0; offset < records.length; offset += SESSION_IMPORT_BATCH_SIZE) {
     const pending = records.slice(offset, offset + SESSION_IMPORT_BATCH_SIZE).flatMap((record) => {
       const prepared = prepareLegacySessionImport(
@@ -631,6 +630,7 @@ async function importLegacySessionRecords(
         record,
         report,
         importedTranscriptSources,
+        existingSnapshot.ok ? existingSnapshot.snapshot : undefined,
       );
       return prepared ? [prepared] : [];
     });
@@ -649,6 +649,7 @@ function prepareLegacySessionImport(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
   importedTranscriptSources: Set<string>,
+  existingSnapshot: ReadOnlySqliteValidationSnapshot | undefined,
 ) {
   const transcriptSourceKey = record.transcriptPath
     ? `${record.entry.sessionId}\0${record.transcriptPath}`
@@ -671,7 +672,7 @@ function prepareLegacySessionImport(
     storePath: target.sqlitePath ?? target.storePath,
   };
   if (result.status === "missing") {
-    if (markAlreadyMigratedTranscript(target, record, report)) {
+    if (markAlreadyMigratedTranscript(record, report, existingSnapshot)) {
       return undefined;
     }
     return {
@@ -714,11 +715,11 @@ function prepareLegacySessionImport(
 }
 
 function markAlreadyMigratedTranscript(
-  target: SessionStoreTarget,
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
+  snapshot: ReadOnlySqliteValidationSnapshot | undefined,
 ): boolean {
-  const migratedEvents = countAlreadyMigratedTranscriptEventsForImport(target, record);
+  const migratedEvents = countAlreadyMigratedTranscriptEventsForImport(snapshot, record);
   if (migratedEvents === undefined) {
     return false;
   }
@@ -733,20 +734,28 @@ function validateImportedTargetBeforeArchive(
   report: DoctorSessionSqliteTargetReport,
 ): boolean {
   const issueCountBeforeValidation = report.issues.length;
+  const validation = readOnlySqliteValidationSnapshot(target);
+  if (!validation.ok) {
+    report.issues.push({
+      code: "sqlite_read_failed",
+      message: `SQLite validation read failed: ${String(validation.error)}`,
+    });
+    return false;
+  }
   for (const record of records) {
-    validateImportedRecordBeforeArchive(target, record, report);
+    validateImportedRecordBeforeArchive(record, report, validation.snapshot);
   }
   return report.issues.length === issueCountBeforeValidation;
 }
 
 function validateImportedRecordBeforeArchive(
-  target: SessionStoreTarget,
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
+  snapshot: ReadOnlySqliteValidationSnapshot,
 ): void {
   const normalizedKey = record.sessionKey;
-  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
-  if (!sqliteEntry.ok || !sqliteEntry.entry) {
+  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
+  if (!sqliteEntry) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -754,10 +763,10 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  if (sqliteEntry.entry.entry.sessionId !== record.entry.sessionId) {
+  if (sqliteEntry.sessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteEntry.sessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
@@ -776,19 +785,11 @@ function validateImportedRecordBeforeArchive(
     }
     return;
   }
-  const sqliteEvents = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
-  if (!sqliteEvents.ok) {
-    report.issues.push({
-      code: "sqlite_read_failed",
-      message: `SQLite transcript count read failed: ${String(sqliteEvents.error)}`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (sqliteEvents.events < result.events) {
+  const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+  if (sqliteEvents < result.events) {
     report.issues.push({
       code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents.events} events; source has ${result.events}.`,
+      message: `SQLite transcript has ${sqliteEvents} events; source has ${result.events}.`,
       sessionKey: record.sessionKey,
     });
   }
@@ -972,22 +973,32 @@ function recordLegacyStoreMoveForTarget(
   recordCompletedMigrationMove(activeRun, createMigrationTargetInput(target), move);
 }
 
-function validateLegacySessionRecord(
+function validateLegacySessionRecords(
   target: SessionStoreTarget,
-  record: LegacySessionRecord,
+  records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
-  if (!sqliteEntry.ok) {
+  const validation = readOnlySqliteValidationSnapshot(target);
+  if (!validation.ok) {
     report.issues.push({
       code: "sqlite_read_failed",
-      message: `SQLite session entry read failed: ${String(sqliteEntry.error)}`,
-      sessionKey: record.sessionKey,
+      message: `SQLite validation read failed: ${String(validation.error)}`,
     });
     return;
   }
-  if (!sqliteEntry.entry) {
+  for (const record of records) {
+    validateLegacySessionRecord(record, report, validation.snapshot);
+  }
+}
+
+function validateLegacySessionRecord(
+  record: LegacySessionRecord,
+  report: DoctorSessionSqliteTargetReport,
+  snapshot: ReadOnlySqliteValidationSnapshot,
+): void {
+  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
+  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
+  if (!sqliteEntry) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -995,26 +1006,26 @@ function validateLegacySessionRecord(
     });
     return;
   }
-  if (sqliteEntry.entry.entry.sessionId !== record.entry.sessionId) {
+  if (sqliteEntry.sessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteEntry.sessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
   }
   report.validatedEntries += 1;
-  validateTranscriptEventCount(target, record, report);
+  validateTranscriptEventCount(record, report, snapshot);
 }
 
 function validateTranscriptEventCount(
-  target: SessionStoreTarget,
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
+  snapshot: ReadOnlySqliteValidationSnapshot,
 ): void {
   const result = countTranscriptEvents(record);
   if (result.status === "missing") {
-    const migratedEvents = countAlreadyMigratedTranscriptEventsForValidate(target, record);
+    const migratedEvents = countAlreadyMigratedTranscriptEventsForValidate(snapshot, record);
     if (migratedEvents !== undefined) {
       report.validatedTranscriptEvents += migratedEvents;
     }
@@ -1030,24 +1041,16 @@ function validateTranscriptEventCount(
     }
     return;
   }
-  const sqliteEvents = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
-  if (!sqliteEvents.ok) {
-    report.issues.push({
-      code: "sqlite_read_failed",
-      message: `SQLite transcript count read failed: ${String(sqliteEvents.error)}`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (sqliteEvents.events !== result.events) {
+  const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+  if (sqliteEvents !== result.events) {
     report.issues.push({
       code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents.events} events; source has ${result.events}.`,
+      message: `SQLite transcript has ${sqliteEvents} events; source has ${result.events}.`,
       sessionKey: record.sessionKey,
     });
     return;
   }
-  report.validatedTranscriptEvents += sqliteEvents.events;
+  report.validatedTranscriptEvents += sqliteEvents;
 }
 
 function hasSessionIssue(
@@ -1059,29 +1062,30 @@ function hasSessionIssue(
 }
 
 function countAlreadyMigratedTranscriptEventsForImport(
-  target: SessionStoreTarget,
+  snapshot: ReadOnlySqliteValidationSnapshot | undefined,
   record: LegacySessionRecord,
 ): number | undefined {
-  const normalizedKey = record.sessionKey;
-  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
-  if (!sqliteEntry.ok || sqliteEntry.entry?.entry.sessionId !== record.entry.sessionId) {
+  if (!snapshot) {
     return undefined;
   }
-  const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
-  return eventCount.ok ? eventCount.events : undefined;
+  const normalizedKey = record.sessionKey;
+  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
+  if (sqliteEntry?.sessionId !== record.entry.sessionId) {
+    return undefined;
+  }
+  return snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
 }
 
 function countAlreadyMigratedTranscriptEventsForValidate(
-  target: SessionStoreTarget,
+  snapshot: ReadOnlySqliteValidationSnapshot,
   record: LegacySessionRecord,
 ): number | undefined {
   const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
-  if (!sqliteEntry.ok || sqliteEntry.entry?.entry.sessionId !== record.entry.sessionId) {
+  const sqliteEntry = snapshot.entriesBySessionKey.get(normalizedKey);
+  if (sqliteEntry?.sessionId !== record.entry.sessionId) {
     return undefined;
   }
-  const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
-  return eventCount.ok ? eventCount.events : undefined;
+  return snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
 }
 
 function countTranscriptEvents(

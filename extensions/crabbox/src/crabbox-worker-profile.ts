@@ -281,7 +281,3 @@ export function operationLeaseId(operationId: string): string {
     .digest("hex")
     .slice(0, 12)}`;
 }
-
-export function identityRefId(leaseId: string): string {
-  return `/leases/${leaseId}/identity`;
-}

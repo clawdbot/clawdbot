@@ -238,6 +238,19 @@ export async function prepareGatewayServerBootstrap(input: {
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
+  try {
+    const { cleanupRetiredManagedGitHubProfiles } =
+      await import("../agents/github-tool-profile-cleanup.js");
+    const cleanup = await cleanupRetiredManagedGitHubProfiles({
+      config: cfgAtStart,
+      env: process.env,
+    });
+    for (const warning of cleanup.warnings) {
+      log.warn(`managed GitHub profile cleanup: ${warning}`);
+    }
+  } catch (error) {
+    log.warn(`managed GitHub profile cleanup failed: ${formatErrorMessage(error)}`);
+  }
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
   }

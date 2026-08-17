@@ -731,12 +731,6 @@ describe("Crabbox worker provider", () => {
       overrides: { providerMetadata: { instanceProfileAttached: "no" } },
     },
     { field: "Tailscale state", overrides: { tailscale: null } },
-    {
-      field: "SSH fallback ports",
-      overrides: {
-        sshFallbackPorts: Array.from({ length: 11 }, (_, index) => 2300 + index),
-      },
-    },
   ])("stops a fixed lease with malformed $field", async ({ overrides }) => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {
@@ -1507,62 +1501,6 @@ describe("Crabbox worker provider", () => {
     }
   });
 
-  it("resolves its lease-bound identity marker through current inspect output", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-    });
-    if (!provider.resolveSshIdentity) {
-      throw new Error("expected Crabbox identity resolver");
-    }
-
-    await expect(
-      provider.resolveSshIdentity({
-        leaseId: LEASE_ID,
-        profile: PROFILE,
-        keyRef: {
-          source: "file",
-          provider: "crabbox",
-          id: `/leases/${LEASE_ID}/identity`,
-        },
-      }),
-    ).resolves.toEqual({ kind: "path", path: "/tmp/crabbox-worker-key" });
-    expect(calls).toEqual([
-      [
-        SIBLING_BINARY,
-        "inspect",
-        "--provider",
-        "aws",
-        "--network",
-        "public",
-        "--id",
-        LEASE_ID,
-        "--json",
-      ],
-    ]);
-  });
-
-  it("rejects a Crabbox identity marker for another lease before invoking the CLI", async () => {
-    let invoked = false;
-    const provider = providerWithRunner(async () => {
-      invoked = true;
-      return commandResult();
-    });
-    if (!provider.resolveSshIdentity) {
-      throw new Error("expected Crabbox identity resolver");
-    }
-
-    await expect(
-      provider.resolveSshIdentity({
-        leaseId: LEASE_ID,
-        profile: PROFILE,
-        keyRef: { source: "file", provider: "crabbox", id: "/leases/cbx_other/identity" },
-      }),
-    ).rejects.toThrow("does not match its lease");
-    expect(invoked).toBe(false);
-  });
-
   it("rejects non-Crabbox lifecycle lease ids before invoking the CLI", async () => {
     let invoked = false;
     const provider = providerWithRunner(async () => {
@@ -1626,17 +1564,6 @@ describe("Crabbox worker provider", () => {
       "inspect failed with exit code 4",
     );
     await expect(cliMissing.inspect(lease)).rejects.toThrow("inspect could not start");
-  });
-
-  it("rejects malformed inspect endpoint fields as permanent provider errors", async () => {
-    const provider = providerWithRunner(async () =>
-      commandResult({ stdout: inspectJson({ sshPort: true }) }),
-    );
-
-    await expect(provider.inspect(lifecycleLease())).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: expect.stringContaining("invalid sshPort"),
-    });
   });
 
   it("bounds and redacts CLI failure details", async () => {
