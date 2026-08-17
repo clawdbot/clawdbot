@@ -3762,6 +3762,42 @@ describe("browser tool external content wrapping", () => {
     expect(snapshotText).not.toContain("\nMEDIA:/tmp/secret.png");
   });
 
+  it.each(["host", "node"] as const)(
+    "hard-caps oversized %s ai snapshots with snapshot guidance",
+    async (target) => {
+      const terminalSentinel = "terminal-ai-snapshot-sentinel";
+      const snapshot = {
+        ok: true,
+        format: "ai",
+        targetId: "t1",
+        url: "https://example.com",
+        snapshot: `${"x".repeat(20_000)}${terminalSentinel}`,
+      };
+      if (target === "node") {
+        mockSingleBrowserProxyNode();
+        gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+          ok: true,
+          payload: { result: snapshot },
+        });
+      } else {
+        browserClientMocks.browserSnapshot.mockResolvedValueOnce(snapshot);
+      }
+
+      const result = await createBrowserTool().execute?.("call-1", {
+        action: "snapshot",
+        target,
+        ...(target === "node" ? { node: "Browser Node" } : {}),
+        snapshotFormat: "ai",
+      });
+      const snapshotText = firstResultText(result);
+
+      expect(snapshotText.length).toBeLessThan(20_000);
+      expect(snapshotText).toContain("[truncated — retry with a smaller maxChars or limit]");
+      expect(snapshotText).not.toContain(terminalSentinel);
+      expect(result?.details).toMatchObject({ truncated: true, targetId: "t1" });
+    },
+  );
+
   it("preserves pending dialog state in ai snapshot results", async () => {
     browserClientMocks.browserSnapshot.mockResolvedValueOnce({
       ok: true,
@@ -3863,7 +3899,7 @@ describe("browser tool external content wrapping", () => {
     expect(details.messageCount).toBe(1);
   });
 
-  it("hard-caps model-visible browser JSON with filter guidance", async () => {
+  it("hard-caps model-visible browser JSON with console guidance", async () => {
     const messages = Array.from({ length: 25 }, (_, index) => ({
       type: "log",
       text: `${index}:${"x".repeat(2_000)}`,
@@ -3884,7 +3920,7 @@ describe("browser tool external content wrapping", () => {
     const text = firstResultText(result);
 
     expect(text.length).toBeLessThan(20_000);
-    expect(text).toContain("[truncated — filter with level/targetId]");
+    expect(text).toContain("[truncated — retry with a stricter level or targetId]");
     expect(text).not.toContain("terminal-console-sentinel");
     expect(result?.details).toMatchObject({ messageCount: 26, targetId: "t1" });
   });

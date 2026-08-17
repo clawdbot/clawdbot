@@ -22,6 +22,10 @@ const VALID_A2UI_V08_JSONL = [
 
 const PNG_FIXTURE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aUkcAAAAASUVORK5CYII=";
+const CANVAS_GATEWAY_PAYLOAD_BYTES = 25 * 1024 * 1024;
+const CANVAS_GATEWAY_ENVELOPE_BYTES = 64 * 1024;
+const CANVAS_MAX_SNAPSHOT_BYTES =
+  Math.floor((CANVAS_GATEWAY_PAYLOAD_BYTES - CANVAS_GATEWAY_ENVELOPE_BYTES) / 4) * 3;
 
 const canvasToolInvocationActions = [
   { args: { action: "present" }, command: "canvas.present" },
@@ -241,7 +245,7 @@ describe("Canvas tool", () => {
       Buffer.from("not-a-real-png"),
       "image/png",
       "canvas",
-      (25 * 1024 * 1024 * 3) / 4,
+      CANVAS_MAX_SNAPSHOT_BYTES,
     );
     expect(imageResultParams?.path).toBe("/tmp/openclaw-media/canvas/snapshot.png");
     expect(imageResultParams?.details).toEqual({
@@ -277,7 +281,28 @@ describe("Canvas tool", () => {
     expect(savedBuffer?.equals(snapshot)).toBe(true);
     expect(contentType).toBe("image/png");
     expect(subdir).toBe("canvas");
-    expect(maxBytes).toBe((25 * 1024 * 1024 * 3) / 4);
+    expect(maxBytes).toBe(CANVAS_MAX_SNAPSHOT_BYTES);
+  });
+
+  it("reserves Gateway response-envelope headroom for boundary snapshots", async () => {
+    const snapshot = Buffer.alloc(CANVAS_MAX_SNAPSHOT_BYTES, 0xa5);
+    const base64 = snapshot.toString("base64");
+    const nodeResponse = {
+      type: "res",
+      id: "canvas-boundary-response",
+      ok: true,
+      payload: { result: { payload: { format: "png", base64 } } },
+    };
+    expect(Buffer.byteLength(JSON.stringify(nodeResponse))).toBeLessThanOrEqual(
+      CANVAS_GATEWAY_PAYLOAD_BYTES,
+    );
+    mocks.callGatewayTool.mockResolvedValue(nodeResponse.payload.result);
+
+    await createCanvasTool().execute("boundary-snapshot", { action: "snapshot" });
+
+    const saveCall = mocks.saveMediaBuffer.mock.calls[0];
+    expect(saveCall?.[0].byteLength).toBe(CANVAS_MAX_SNAPSHOT_BYTES);
+    expect(saveCall?.[3]).toBe(CANVAS_MAX_SNAPSHOT_BYTES);
   });
 
   it("keeps private Canvas snapshots visible to the model but out of channel delivery", async () => {

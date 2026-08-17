@@ -28,7 +28,28 @@ import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 import { formatErrorMessage } from "./infra/errors.js";
 
-const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKER = "\n[truncated — filter with level/targetId]";
+type BrowserExternalJsonKind = "snapshot" | "console" | "tabs" | "act" | "download";
+
+const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
+  snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
+  console: "\n[truncated — retry with a stricter level or targetId]",
+  tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
+  act: "\n[truncated — inspect the affected targetId with action=snapshot]",
+  download: "\n[truncated — retry with a specific targetId and download ref]",
+} satisfies Record<BrowserExternalJsonKind, string>;
+
+function truncateBrowserToolText(value: string, marker: string) {
+  if (value.length <= DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS) {
+    return { text: value, truncated: false };
+  }
+  return {
+    text: `${truncateUtf16Safe(
+      value,
+      DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS - marker.length,
+    )}${marker}`,
+    truncated: true,
+  };
+}
 
 export type BrowserProxyRequest = ((opts: {
   method: string;
@@ -46,7 +67,7 @@ export type BrowserProxyRequest = ((opts: {
 
 /** Wrap page-controlled JSON payloads as untrusted browser content. */
 export function wrapBrowserExternalJson(params: {
-  kind: "snapshot" | "console" | "tabs" | "act" | "download";
+  kind: BrowserExternalJsonKind;
   payload: unknown;
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
@@ -57,13 +78,10 @@ export function wrapBrowserExternalJson(params: {
         typeof value === "string" ? neutralizeMediaDirectives(value) : value,
       2,
     ) ?? "null";
-  const extractedText =
-    serialized.length > DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
-      ? `${truncateUtf16Safe(
-          serialized,
-          DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS - BROWSER_EXTERNAL_JSON_TRUNCATION_MARKER.length,
-        )}${BROWSER_EXTERNAL_JSON_TRUNCATION_MARKER}`
-      : serialized;
+  const extractedText = truncateBrowserToolText(
+    serialized,
+    BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS[params.kind],
+  ).text;
   // Browser tabs, snapshots, and console output are page-controlled data. Keep
   // text wrapped even when details carry the structured fields for callers.
   const wrappedText = wrapExternalContent(extractedText, {
@@ -222,8 +240,12 @@ export async function executeSnapshotAction(params: {
         },
       };
     }
-    const extractedText = snapshot.snapshot ?? "";
-    const wrappedSnapshot = wrapExternalContent(neutralizeMediaDirectives(extractedText), {
+    const extractedText = neutralizeMediaDirectives(snapshot.snapshot ?? "");
+    const boundedSnapshot = truncateBrowserToolText(
+      extractedText,
+      BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
+    );
+    const wrappedSnapshot = wrapExternalContent(boundedSnapshot.text, {
       source: "browser",
       includeWarning: true,
     });
@@ -232,7 +254,7 @@ export async function executeSnapshotAction(params: {
       format: snapshot.format,
       targetId: snapshot.targetId,
       url: snapshot.url,
-      truncated: snapshot.truncated,
+      truncated: snapshot.truncated || boundedSnapshot.truncated ? true : undefined,
       newElements: snapshot.newElements,
       stats: snapshot.stats,
       refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,

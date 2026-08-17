@@ -44,8 +44,11 @@ type CanvasImageSanitizationLimits = {
 export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
-// Preserve every decoded snapshot that can fit in the 25 MiB Gateway frame after base64 encoding.
-const CANVAS_SNAPSHOT_MAX_BYTES = (25 * 1024 * 1024 * 3) / 4;
+const CANVAS_GATEWAY_PAYLOAD_BYTES = 25 * 1024 * 1024;
+// The base64 field sits inside payloadJSON and the node.invoke response frame.
+const CANVAS_GATEWAY_ENVELOPE_BYTES = 64 * 1024;
+const CANVAS_MAX_BASE64_BYTES = CANVAS_GATEWAY_PAYLOAD_BYTES - CANVAS_GATEWAY_ENVELOPE_BYTES;
+const CANVAS_SNAPSHOT_MAX_BYTES = Math.floor(CANVAS_MAX_BASE64_BYTES / 4) * 3;
 const CANVAS_EVAL_TRUNCATION_MARKER = "\n[truncated — refine the Canvas eval expression]";
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
