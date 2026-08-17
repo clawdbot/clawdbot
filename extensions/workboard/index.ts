@@ -4,6 +4,8 @@ import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
+import { createWorkboardSkillProposalHandler } from "./src/skill-proposal-observer.js";
+import { createWorkboardSkillProposalReconciler } from "./src/skill-proposal-reconciler.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -30,8 +32,10 @@ export default definePluginEntry({
       requiredScopes: ["operator.read"],
     });
     registerWorkboardGatewayMethods({ api, store });
+    api.on("skill_proposal_changed", createWorkboardSkillProposalHandler({ api, store }));
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
+    api.registerService(createWorkboardSkillProposalReconciler({ api, store }));
     api.on("subagent_ended", async (event) => {
       if (event.runId) {
         await cleanupWorkboardRunWorktree({
