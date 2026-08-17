@@ -3041,13 +3041,16 @@ private fun currentSessionTitle(
   return friendlySessionName(name)
 }
 
-private fun chatSessionChipText(
+internal fun chatSessionChipText(
   entry: ChatSessionEntry,
   mainSessionKey: String,
 ): String {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
-  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+  val name =
+    sessionPresentationTitle(entry) {
+      entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+    }
   return friendlySessionName(name)
 }
 
