@@ -293,7 +293,7 @@ describe("tool mutation helpers", () => {
   it("fails closed for replay unless the structured tool contract is read-only", () => {
     for (const toolName of [
       "agents_list",
-      "image",
+      "view_image",
       "pdf",
       "read",
       "conversations_list",

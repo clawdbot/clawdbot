@@ -137,6 +137,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional service credential used only for Control UI GitHub previews and discovery. */
+  github?: { token?: SecretInput };
   /**
    * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
    * When enabled, chat.toolTitles generates short titles through standard

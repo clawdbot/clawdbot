@@ -1,5 +1,6 @@
 import type { WorkboardExecution, WorkboardStatus } from "@openclaw/workboard-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWorkboardAutomationNudgeService } from "./automation-nudge.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
@@ -102,6 +103,189 @@ afterEach(() => {
 });
 
 describe("Workboard gateway lifecycle sync", () => {
+  it("nudges the attached board automation when a matching subagent ends", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-1";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const request = vi.fn().mockResolvedValue({ ok: true, ran: true });
+    const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+    const info = vi.fn();
+    const context = { logger: { info, warn: vi.fn() } } as never;
+    await service.start(context);
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+      onMatched: service.nudge,
+    });
+    await service.stop?.(context);
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.run",
+      { id: "job-categorize-planning", mode: "if-enabled" },
+      { scopes: ["operator.admin"] },
+    );
+    expect(info).toHaveBeenCalledWith(
+      "workboard automation nudge requested for board planning: job job-categorize-planning",
+    );
+  });
+
+  it("uses the active service owner from a prepared plugin generation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-generation";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const activeRequest = vi.fn();
+    const activeService = createWorkboardAutomationNudgeService({
+      store,
+      gateway: { request: activeRequest },
+    });
+    const generationRequest = vi.fn().mockResolvedValue({ ok: true, ran: true });
+    const generationService = createWorkboardAutomationNudgeService({
+      store,
+      gateway: { request: generationRequest },
+    });
+    const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
+    await activeService.start(context);
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+      onMatched: generationService.nudge,
+    });
+    await activeService.stop?.(context);
+
+    expect(activeRequest).not.toHaveBeenCalled();
+    expect(generationRequest).toHaveBeenCalledWith(
+      "cron.run",
+      { id: "job-categorize-planning", mode: "if-enabled" },
+      { scopes: ["operator.admin"] },
+    );
+  });
+
+  it("does not nudge a matching card whose board has no automation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-2";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const request = vi.fn();
+    const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+    const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
+    await service.start(context);
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+      onMatched: service.nudge,
+    });
+    await service.stop?.(context);
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each(["cron:job-categorize-planning", "agent:main:cron:job-categorize-planning:run:run-1"])(
+    "does not nudge from cron-originated session %s",
+    async (sessionKey) => {
+      const store = new WorkboardStore(createMemoryStore());
+      await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+      const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+      const request = vi.fn();
+      const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+      const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
+      await service.start(context);
+
+      await syncWorkboardSubagentEnded({
+        store,
+        event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+        onMatched: service.nudge,
+      });
+      await service.stop?.(context);
+
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("coalesces repeated board nudges within the debounce window", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-3";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    let resolveRun: (value: unknown) => void = () => undefined;
+    const run = new Promise<unknown>((resolve) => {
+      resolveRun = resolve;
+    });
+    const request = vi.fn().mockReturnValue(run);
+    const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+    const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
+    await service.start(context);
+    const event = {
+      targetSessionKey: sessionKey,
+      endedAt: card.updatedAt + 1,
+      outcome: "ok" as const,
+    };
+
+    const first = syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge });
+    resolveRun({ ok: true, ran: true });
+    await first;
+    await syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge });
+    await service.stop?.(context);
+
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("swallows nudge failures without affecting lifecycle sync", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-4";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const request = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const warn = vi.fn();
+    const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+    const context = { logger: { info: vi.fn(), warn } } as never;
+    await service.start(context);
+
+    await expect(
+      syncWorkboardSubagentEnded({
+        store,
+        event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+        onMatched: service.nudge,
+      }),
+    ).resolves.toBe(1);
+    await service.stop?.(context);
+
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("workboard automation nudge failed"));
+  });
+
+  it("logs disabled automation skips without affecting lifecycle sync", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-disabled";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const request = vi.fn().mockResolvedValue({ ok: true, ran: false, reason: "disabled" });
+    const warn = vi.fn();
+    const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+    const context = { logger: { info: vi.fn(), warn } } as never;
+    await service.start(context);
+
+    await expect(
+      syncWorkboardSubagentEnded({
+        store,
+        event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+        onMatched: service.nudge,
+      }),
+    ).resolves.toBe(1);
+    await service.stop?.(context);
+
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+    expect(warn).toHaveBeenCalledWith(
+      "workboard automation nudge skipped for board planning: job job-categorize-planning disabled",
+    );
+  });
+
   it("moves a linked running card to review from the subagent hook without UI involvement", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:subagent:workboard-default-card-1";

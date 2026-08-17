@@ -100,6 +100,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   const creatorId = options.creatorId?.trim();
+  if (options.involvingMe === true) {
+    params.involvingMe = true;
+  }
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }

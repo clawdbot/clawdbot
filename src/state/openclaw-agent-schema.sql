@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   created_via TEXT CHECK (created_via IS NULL OR created_via IN ('operator', 'spawn', 'channel', 'cron', 'talk', 'run', 'plugin', 'internal')),
   created_actor_type TEXT CHECK (created_actor_type IS NULL OR created_actor_type IN ('human', 'agent', 'system')),
   created_actor_id TEXT,
+  owner_actor_type TEXT,
+  owner_actor_id TEXT,
+  owner_assigned_by_type TEXT,
+  owner_assigned_by_id TEXT,
+  owner_assigned_at INTEGER,
   project_id TEXT,
   parent_session_key TEXT,
   spawned_by TEXT,
@@ -66,6 +71,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
   ON session_nodes(session_key)
   WHERE entry_valid = 0;
+
+CREATE TABLE IF NOT EXISTS session_participants (
+  session_key TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  actor_source TEXT,
+  first_prompted_at INTEGER NOT NULL,
+  last_prompted_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, actor_type, actor_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_key_contract (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),

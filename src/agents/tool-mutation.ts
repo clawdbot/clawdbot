@@ -76,7 +76,7 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "get_goal",
   "glob",
   "grep",
-  "image",
+  "view_image",
   "ls",
   "memory_get",
   "pdf",

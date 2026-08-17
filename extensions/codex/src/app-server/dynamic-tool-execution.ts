@@ -579,7 +579,7 @@ function readConfiguredDynamicToolTimeoutMs(
     );
   }
 
-  if (toolName === "image") {
+  if (toolName === "view_image") {
     const candidates = (config?.tools?.media?.models ?? []).filter(
       (entry) => !entry.capabilities || entry.capabilities.includes("image"),
     );

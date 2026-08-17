@@ -20,6 +20,7 @@ import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnectOptions,
@@ -285,6 +286,15 @@ export function createApplicationGateway(
         ? { bootstrapProfile: undefined }
         : {}),
     };
+    const credentialsChanged =
+      nextConnection.gatewayUrl !== connection.gatewayUrl ||
+      nextConnection.token !== connection.token ||
+      nextConnection.password !== connection.password ||
+      nextConnection.bootstrapToken !== connection.bootstrapToken ||
+      nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    if (credentialsChanged) {
+      void clearStoredChatSnapshots();
+    }
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
     const nextSessionKey = hasRequestedSessionKey
       ? requestedSessionKey.trim()

@@ -151,7 +151,7 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null } },
+    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
@@ -784,7 +784,13 @@ describe("chat page split layout host", () => {
     };
     let notify = () => {};
     (page as unknown as { context: unknown }).context = {
+      agents: { state: { agentsList: null } },
+      gateway: {
+        snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
+        subscribe: () => () => undefined,
+      },
       sessions: {
+        canonicalListRevision: 0,
         state: sessionsState,
         subscribe: (listener: () => void) => {
           notify = listener;
@@ -806,6 +812,8 @@ describe("chat page split layout host", () => {
     // the label anyway — including non-default agent ids.
     (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
       snapshot: {
+        assistantAgentId: "dev",
+        client: null,
         hello: {
           snapshot: {
             sessionDefaults: {
@@ -815,7 +823,9 @@ describe("chat page split layout host", () => {
             },
           },
         },
+        phase: "stopped",
       },
+      subscribe: () => () => undefined,
     };
     sessionsState.result = {
       sessions: [{ key: "agent:dev:main", displayName: "Main desk" }],
@@ -849,12 +859,25 @@ describe("chat page split layout host", () => {
       }),
     };
     const page = new ChatPage();
-    (page as unknown as { context: unknown }).context = { sessions: firstSessions };
+    const sharedContext = {
+      agents: { state: { agentsList: null } },
+      gateway: {
+        snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
+        subscribe: () => () => undefined,
+      },
+    };
+    (page as unknown as { context: unknown }).context = {
+      ...sharedContext,
+      sessions: firstSessions,
+    };
     document.body.append(page);
     await page.updateComplete;
 
     expect(firstSessions.subscribe).toHaveBeenCalledOnce();
-    (page as unknown as { context: unknown }).context = { sessions: secondSessions };
+    (page as unknown as { context: unknown }).context = {
+      ...sharedContext,
+      sessions: secondSessions,
+    };
     page.requestUpdate();
     await page.updateComplete;
 

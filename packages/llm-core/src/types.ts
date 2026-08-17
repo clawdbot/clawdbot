@@ -349,6 +349,8 @@ export interface AssistantMessage {
     audioAsVoice?: true;
     replyToCurrent?: true;
     replyToId?: string;
+    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
     tts?: AssistantDeliveryTtsFacts;
   };

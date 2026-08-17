@@ -504,6 +504,31 @@ describe("chat pane header", () => {
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
+  it("renders the bounded static participant facepile beside the owner", async () => {
+    const mounted = mount({
+      showOwnerChip: true,
+      session: row({
+        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        participants: [
+          { type: "human", id: "profile-bob", label: "Bob" },
+          { type: "agent", id: "research", label: "Research" },
+        ],
+        participantCount: 2,
+      }),
+    });
+    const facepile = mounted.container.querySelector<
+      HTMLElement & { updateComplete?: Promise<unknown> }
+    >("openclaw-viewer-facepile.chat-pane__participants");
+    await facepile?.updateComplete;
+
+    expect(mounted.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    expect(
+      [...(facepile?.querySelectorAll("[data-viewer-id]") ?? [])].map((avatar) =>
+        avatar.getAttribute("data-viewer-id"),
+      ),
+    ).toEqual(["profile-bob", "research"]);
+  });
+
   it.each([
     {
       name: "excludes the creator when the owner chip is shown",

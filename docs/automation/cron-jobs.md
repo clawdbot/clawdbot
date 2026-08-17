@@ -512,6 +512,8 @@ Archiving a session (Control UI, or `sessions.patch { key, archived: true, expec
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
 
+Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
+
 The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `automations(action: "list")`; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
 
 `openclaw automations create` is an alias for `openclaw automations add`. New jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `automations add|create` or `automations edit` to POST the finished run payload to an HTTP endpoint; webhook delivery cannot combine with chat delivery flags (`--announce`, `--channel`, `--to`, `--thread-id`, `--account`). On `automations edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag) — distinct from `--no-deliver`, which only disables runner fallback delivery.

@@ -185,7 +185,8 @@ export function createWorkerSessionToolExecutor(params: {
             createParams,
             {
               via: "spawn",
-              actor: { type: "agent", id: operation.source.sessionKey },
+              actor: { type: "agent", id: operation.source.agentId },
+              requesterSessionKey: operation.source.sessionKey,
               inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
             },
             {

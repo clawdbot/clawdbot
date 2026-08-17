@@ -1288,12 +1288,13 @@ export function buildGatewayCronService(params: {
     }
   };
   const updateCronWithPrecondition = cron.updateWithPrecondition.bind(cron);
-  cron.update = async (jobId, patch) => {
+  cron.update = async (jobId, patch, opts) => {
     let lifecycleStop: Promise<void> | undefined;
+    const routeAfterValidation = (current: CronJob, nowMs: number) => {
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+    };
     try {
-      const result = await updateCronWithPrecondition(jobId, patch, (current, nowMs) => {
-        lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
-      });
+      const result = await updateCronWithPrecondition(jobId, patch, routeAfterValidation, opts);
       await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
       await routeLiveStreamJobLogged(jobId);
       return result;
@@ -1305,13 +1306,14 @@ export function buildGatewayCronService(params: {
       throw error;
     }
   };
-  cron.updateWithPrecondition = async (jobId, patch, precondition) => {
+  cron.updateWithPrecondition = async (jobId, patch, precondition, opts) => {
     let lifecycleStop: Promise<void> | undefined;
+    const routeAfterPrecondition = async (current: CronJob, nowMs: number) => {
+      await precondition(current, nowMs);
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+    };
     try {
-      const result = await updateCronWithPrecondition(jobId, patch, async (current, nowMs) => {
-        await precondition(current, nowMs);
-        lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
-      });
+      const result = await updateCronWithPrecondition(jobId, patch, routeAfterPrecondition, opts);
       await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
       await routeLiveStreamJobLogged(jobId);
       return result;

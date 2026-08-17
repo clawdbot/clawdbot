@@ -89,7 +89,7 @@ export function createDiscordDraftPreviewController(params: {
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
-  let finalReplyDelivered = false;
+  let finalReplyError: boolean | undefined;
   // Final delivery can cancel the gate before Discord consumes collapse
   // eligibility, so keep the pre-final state until that transition occurs.
   let progressDraftStartedBeforeFinal = false;
@@ -182,7 +182,7 @@ export function createDiscordDraftPreviewController(params: {
     if (beganNewTurn) {
       progressDraftCollapsed = false;
       progressDraftStartedBeforeFinal = false;
-      finalReplyDelivered = false;
+      finalReplyError = undefined;
       finalizedViaPreviewMessage = false;
       progressNarratorLifecycle?.beginTurn();
     }
@@ -232,8 +232,8 @@ export function createDiscordDraftPreviewController(params: {
       progressDraft.markFinalReplyStarted();
       progressNarratorLifecycle?.stopTurn();
     },
-    markFinalReplyDelivered() {
-      finalReplyDelivered = true;
+    markFinalReplyDelivered(isError = false) {
+      finalReplyError = isError;
       progressDraft.markFinalReplyDelivered();
     },
     markPreviewFinalized() {
@@ -414,10 +414,10 @@ export function createDiscordDraftPreviewController(params: {
     async cleanup() {
       try {
         progressDraft.cancel();
-        if (!finalReplyDelivered) {
+        if (finalReplyError !== false) {
           await draftStream?.discardPending();
         }
-        if (!finalizedViaPreviewMessage && draftStream?.messageId()) {
+        if (finalReplyError !== true && !finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
         await draftStream?.cleanupRetargeted();

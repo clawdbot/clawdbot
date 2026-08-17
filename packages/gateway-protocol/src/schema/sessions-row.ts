@@ -23,6 +23,13 @@ export const SessionCreatedActorSchema = closedObject({
   avatarUrl: Type.Optional(NonEmptyString),
 });
 
+/** Mutable responsibility for one session; actor display data is projected at read time. */
+export const SessionOwnerSchema = closedObject({
+  actor: SessionCreatedActorSchema,
+  assignedBy: Type.Optional(SessionCreatedActorSchema),
+  assignedAt: Type.Optional(Type.Number({ minimum: 0 })),
+});
+
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
 export const SessionRowSchema = Type.Object(
   {
@@ -109,6 +116,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
+    owner: Type.Optional(SessionOwnerSchema),
+    participants: Type.Optional(Type.Array(SessionCreatedActorSchema, { maxItems: 4 })),
+    participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     createdAt: Type.Optional(Type.Number()),
@@ -134,6 +144,7 @@ export const SessionRowSchema = Type.Object(
 );
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
 export type SessionRunStatus = NonNullable<SessionRow["status"]>;

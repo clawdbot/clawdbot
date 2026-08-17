@@ -523,9 +523,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Apply Patch",
       detailKeys: [],
     },
+    // Historical transcripts retain the old name. This display-only entry
+    // preserves their presentation without restoring a runtime tool alias.
     image: {
       emoji: "🖼️",
       title: "Image",
+      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
+    },
+    view_image: {
+      emoji: "🖼️",
+      title: "View Image",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
     },
     image_generate: {

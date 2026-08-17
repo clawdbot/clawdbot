@@ -389,6 +389,130 @@ NODE
     expect(result.status).toBe(0);
   });
 
+  it("publishes fresh Git clones only after success and cleans failed staging directories", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$HOME/transactional-clone"
+      mkdir -p "$root"
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      ui_error() { :; }
+      ui_info() { :; }
+      git() {
+        local target="\${*: -1}"
+        mkdir -p "$target/.git"
+        printf 'complete\\n' > "$target/checkout.marker"
+        if [[ "$CLONE_MODE" == "failure" ]]; then
+          return 42
+        fi
+        if [[ "$CLONE_MODE" == "concurrent" ]]; then
+          mkdir -p "$CONCURRENT_REPO"
+          printf 'keep\\n' > "$CONCURRENT_REPO/user.marker"
+        fi
+        if [[ "$CLONE_MODE" == "retarget-alias" ]]; then
+          [[ "$(dirname "$target")" == "$ALIAS_TARGET" ]]
+          rm "$ALIAS_PATH"
+          ln -s "$ALIAS_REPLACEMENT" "$ALIAS_PATH"
+        fi
+      }
+
+      CLONE_MODE=success
+      success_repo="$root/success"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$success_repo" --filter=blob:none
+      [[ -f "$success_repo/checkout.marker" ]]
+
+      CLONE_MODE=failure
+      failed_repo="$root/failure"
+      set +e
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$failed_repo"
+      failure_status="$?"
+      set -e
+      [[ "$failure_status" -eq 42 ]]
+      [[ ! -e "$failed_repo" ]]
+
+      CLONE_MODE=retarget-alias
+      ALIAS_TARGET="$root/alias-target"
+      ALIAS_REPLACEMENT="$root/alias-replacement"
+      ALIAS_PATH="$root/alias"
+      mkdir -p "$ALIAS_TARGET" "$ALIAS_REPLACEMENT"
+      ln -s "$ALIAS_TARGET" "$ALIAS_PATH"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$ALIAS_PATH"
+      [[ -f "$ALIAS_TARGET/checkout.marker" ]]
+      [[ -z "$(ls -A "$ALIAS_REPLACEMENT")" ]]
+      [[ -z "$(find "$ALIAS_TARGET" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+
+      CLONE_MODE=concurrent
+      CONCURRENT_REPO="$root/concurrent"
+      set +e
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$CONCURRENT_REPO"
+      concurrent_status="$?"
+      set -e
+      [[ "$concurrent_status" -eq 1 ]]
+      [[ "$(cat "$CONCURRENT_REPO/user.marker")" == "keep" ]]
+      [[ ! -e "$CONCURRENT_REPO/checkout.marker" ]]
+
+      cleanup_tmpfiles
+      [[ -z "$(find "$root" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
+  it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$HOME/retargeted-alias"
+      target="$root/target"
+      replacement="$root/replacement"
+      alias_path="$root/alias"
+      mkdir -p "$target" "$replacement"
+      ln -s "$target" "$alias_path"
+
+      check_git() { return 0; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      resolve_git_openclaw_ref() { printf 'main\\n'; }
+      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
+      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
+      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
+      git_install_lockfile_flag() {
+        [[ "$1" == "$target" ]]
+        printf '%s\\n' '--frozen-lockfile'
+      }
+      run_pnpm() { [[ "$1" == "-C" && "$2" == "$target" ]]; }
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      ensure_user_local_bin_on_path() { mkdir -p "$HOME/.local/bin"; }
+      ui_info() { :; }
+      ui_success() { :; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      git() {
+        if [[ "$1" == "clone" ]]; then
+          local clone_target="\${*: -1}"
+          mkdir -p "$clone_target/.git"
+          printf 'complete\\n' > "$clone_target/checkout.marker"
+          rm "$alias_path"
+          ln -s "$replacement" "$alias_path"
+          return 0
+        fi
+        [[ "$1" == "-C" && "$2" == "$target" ]]
+      }
+
+      install_openclaw_from_git "$alias_path"
+      grep -F "$target/dist/entry.js" "$HOME/.local/bin/openclaw"
+      [[ -z "$(ls -A "$replacement")" ]]
+      [[ -z "$(find "$target" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
   it("accepts GNU and musl Linux shells in OS detection", () => {
     expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
     expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');
@@ -1024,13 +1148,6 @@ NODE
     expect(result?.status).toBe(0);
     const output = result?.stdout ?? "";
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
-    const mkdirParentIndex = script.indexOf('mkdir -p "$(dirname "$repo_dir")"');
-    // Ordering only. The clone flags are asserted behaviorally below, so this
-    // needle stays short enough to survive future changes to them.
-    const cloneIndex = script.indexOf('run_quiet_step "Cloning OpenClaw" git clone');
-    expect(mkdirParentIndex).toBeGreaterThan(-1);
-    expect(cloneIndex).toBeGreaterThan(-1);
-    expect(mkdirParentIndex).toBeLessThan(cloneIndex);
   });
 
   it("uses a blobless partial clone for new git installs", () => {
@@ -1038,6 +1155,7 @@ NODE
       set -euo pipefail
       source "${SCRIPT_PATH}"
       repo="$HOME/openclaw"
+      mkdir -p "$repo"
       check_git() { return 0; }
       ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
@@ -1048,7 +1166,11 @@ NODE
       git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
       run_quiet_step() {
         printf 'step:%s|%s\\n' "$1" "\${*:2}"
-        [[ "$1" == "Cloning OpenClaw" ]] && mkdir -p "$repo"
+        if [[ "$1" == "Cloning OpenClaw" ]]; then
+          target="\${*: -1}"
+          mkdir -p "$target/.git"
+          printf 'complete\\n' > "$target/checkout.marker"
+        fi
         return 0
       }
       ensure_user_local_bin_on_path() { mkdir -p "$HOME/.local/bin"; }
@@ -1064,6 +1186,7 @@ NODE
     expect(result.stdout).toContain(
       "step:Cloning OpenClaw|git clone --filter=blob:none https://github.com/openclaw/openclaw.git",
     );
+    expect(result.stdout).toContain("/.openclaw-clone.");
   });
 
   it("does not treat OS HOME config as active when OPENCLAW_HOME is set", () => {

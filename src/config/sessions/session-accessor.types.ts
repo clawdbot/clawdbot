@@ -440,7 +440,6 @@ export type SessionTranscriptManualTrimResult =
       kept: number;
     }
   | {
-      archived: string;
       compacted: true;
       kept: number;
     };

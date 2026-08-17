@@ -1,5 +1,9 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { ControlUiGitHubError } from "../control-ui-github-api.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import {
+  CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
+  ControlUiGitHubError,
+} from "../control-ui-github-api.js";
 import {
   loadControlUiGitHubPreview,
   parseControlUiGitHubPreviewTarget,
@@ -30,11 +34,15 @@ export function createControlUiHandlers(
         respond(true, await loadGitHubPreview(target), undefined);
       } catch (error) {
         const statusCode = error instanceof ControlUiGitHubError ? error.statusCode : undefined;
+        const credentialUnavailable = isTrustedSecretSurfaceUnavailableError(error);
+        const message = credentialUnavailable
+          ? CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE
+          : "GitHub preview unavailable";
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub preview unavailable", {
-            retryable: statusCode === 429 || statusCode === 502,
+          errorShape(ErrorCodes.UNAVAILABLE, message, {
+            retryable: !credentialUnavailable && (statusCode === 429 || statusCode === 502),
           }),
         );
       }

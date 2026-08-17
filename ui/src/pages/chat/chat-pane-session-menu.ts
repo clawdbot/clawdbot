@@ -112,6 +112,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         sidebarSessionStatusFilter: () => "active",
       };
       switch (action.kind) {
+        case "assign-owner":
+          await scope.sessions.assignOwner(row.key, action.owner, {
+            agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
+          });
+          break;
         case "fork":
           await operations.forkSession(host, session, scope);
           break;

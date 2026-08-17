@@ -1538,7 +1538,7 @@ packages/ai/src/providers/mistral.ts	7
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	27
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	17
+packages/ai/src/providers/openai-completions.ts	16
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	7
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -1557,7 +1557,7 @@ packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
 packages/ai/src/transports/openai-completions-params.ts	9
 packages/ai/src/transports/openai-completions-replay.ts	9
-packages/ai/src/transports/openai-completions-stream.ts	9
+packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-string-content.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	9
 packages/ai/src/transports/openai-responses-client.ts	13

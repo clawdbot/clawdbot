@@ -1,4 +1,9 @@
 import type {
+  SessionOwner,
+  SessionsAssignOwnerParams,
+  SessionsAssignOwnerResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type {
   GatewaySessionRow,
   SessionsListResult,
   SessionsPatchResult,
@@ -496,6 +501,34 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
+  const assignOwner = async (
+    key: string,
+    owner: SessionsAssignOwnerParams["owner"],
+    options: { agentId?: string | null } = {},
+  ): Promise<SessionOwner | null> => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return null;
+    }
+    try {
+      const result = await scope.client.request<SessionsAssignOwnerResult>("sessions.assignOwner", {
+        key,
+        owner,
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+      });
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
+      patchRowLocal(result.key, { owner: result.owner });
+      return result.owner;
+    } catch (error) {
+      if (host.connection.isCurrent(scope)) {
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      }
+      return null;
+    }
+  };
+
   return {
     create,
     createResult,
@@ -503,6 +536,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     delete: remove,
     deleteMany: removeMany,
     patch,
+    assignOwner,
     patchRowLocal,
     /**
      * Re-asserts in-flight pin intents over canonical Gateway rows: every

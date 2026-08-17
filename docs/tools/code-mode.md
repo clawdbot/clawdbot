@@ -43,7 +43,7 @@ commands are rejected before the QuickJS worker starts with actionable
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `image` loader whose image result
+  such as `computer` or the native-vision `view_image` loader whose image result
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.

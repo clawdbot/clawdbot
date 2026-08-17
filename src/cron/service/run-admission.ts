@@ -263,7 +263,7 @@ export async function supersedeActivatedCronRun(params: {
 export async function persistQueuedCronRunReservations(params: {
   state: CronServiceState;
   candidates: readonly CronJob[];
-  forcedJobIds?: ReadonlySet<string>;
+  immediateJobIds?: ReadonlySet<string>;
   reservedAtMs: number;
 }): Promise<Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>> {
   const pendingJobs = new Map(params.candidates.map((job) => [job.id, structuredClone(job)]));
@@ -304,7 +304,7 @@ export async function persistQueuedCronRunReservations(params: {
               !job ||
               !planned ||
               job.enabled !== planned.enabled ||
-              (!params.forcedJobIds?.has(jobId) &&
+              (!params.immediateJobIds?.has(jobId) &&
                 job.state.nextRunAtMs !== planned.state.nextRunAtMs) ||
               job.state.lastRunAtMs !== planned.state.lastRunAtMs ||
               job.state.lastRunStatus !== planned.state.lastRunStatus ||

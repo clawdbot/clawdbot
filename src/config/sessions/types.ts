@@ -31,20 +31,18 @@ import type {
   SessionCreatedActor,
   SessionCreatedVia,
   SessionEntryProvenance,
+  SessionOwnerAssignment,
+  SessionParticipant,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+import type { SessionToolOverrides } from "./session-tool-overrides.js";
+
+export type { SessionToolOverrides } from "./session-tool-overrides.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
-
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
 
 export type SessionOrigin = {
   label?: string;
@@ -384,6 +382,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
+    /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
+    owner?: SessionOwnerAssignment;
+    /** Earliest external prompt actors, projected from the participant table. */
+    participants?: SessionParticipant[];
+    /** Total external prompt actors after excluding the effective owner. */
+    participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
     /** Exact source generation and optional cut entry for an actual transcript-copy fork. */

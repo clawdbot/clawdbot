@@ -247,7 +247,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
 }
 
 /**
- * Resolve the effective image model config for the `image` tool.
+ * Resolve the effective image model config for the `view_image` tool.
  *
  * - Prefer explicit config (`agents.defaults.imageModel`).
  * - Otherwise, try to "pair" the primary model with an image-capable model:
@@ -903,22 +903,22 @@ export function createImageTool(options?: {
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   const description = modelHasVision
-    ? "Load image(s) into private model context for inspection: image one path/URL, images max 20. Does not display, attach, or send files to the user. Prompt images are already visible."
+    ? "Load image(s) into private model context for inspection: path accepts one local image path or permitted URL; paths accepts up to maxImages entries (20 by default). Does not display, attach, or send files to the user. Prompt images are already visible."
     : explicitImageModelConfig
-      ? "Inspect image(s) in private model context with the configured model: image one path/URL, images max 20. Does not display, attach, or send files to the user."
-      : "Inspect image(s) in private model context with available vision: image one path/URL, images max 20. Does not display, attach, or send files to the user.";
+      ? "Inspect image(s) in private model context with the configured model: path accepts one local image path or permitted URL; paths accepts up to maxImages entries (20 by default). Does not display, attach, or send files to the user."
+      : "Inspect image(s) in private model context with available vision: path accepts one local image path or permitted URL; paths accepts up to maxImages entries (20 by default). Does not display, attach, or send files to the user.";
 
   return {
-    label: "Inspect Image",
-    name: "image",
+    label: "View Image",
+    name: "view_image",
     description,
     ...(modelHasVision ? { catalogMode: "direct-only" as const } : {}),
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      image: Type.Optional(Type.String({ description: "One image path/URL." })),
-      images: Type.Optional(
+      path: Type.Optional(Type.String({ description: "One local image path or permitted URL." })),
+      paths: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Image paths/URLs; maxImages default 20.",
+          description: "Local image paths or permitted URLs; maxImages default 20.",
         }),
       ),
       ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
@@ -928,18 +928,18 @@ export function createImageTool(options?: {
     execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
-      // MARK: - Normalize image + images input and dedupe while preserving order
-      const imageCandidates: string[] = [];
-      if (typeof record.image === "string") {
-        imageCandidates.push(record.image);
+      // MARK: - Normalize path + paths input and dedupe while preserving order
+      const pathCandidates: string[] = [];
+      if (typeof record.path === "string") {
+        pathCandidates.push(record.path);
       }
-      if (Array.isArray(record.images)) {
-        imageCandidates.push(...record.images.filter((v): v is string => typeof v === "string"));
+      if (Array.isArray(record.paths)) {
+        pathCandidates.push(...record.paths.filter((v): v is string => typeof v === "string"));
       }
 
       const seenImages = new Set<string>();
-      const imageInputs: string[] = [];
-      for (const candidate of imageCandidates) {
+      const pathInputs: string[] = [];
+      for (const candidate of pathCandidates) {
         const trimmedCandidate = candidate.trim();
         const normalizedForDedupe = trimmedCandidate.startsWith("@")
           ? trimmedCandidate.slice(1).trim()
@@ -948,23 +948,23 @@ export function createImageTool(options?: {
           continue;
         }
         seenImages.add(normalizedForDedupe);
-        imageInputs.push(trimmedCandidate);
+        pathInputs.push(trimmedCandidate);
       }
-      if (imageInputs.length === 0) {
-        throw new Error("image required");
+      if (pathInputs.length === 0) {
+        throw new Error("path required");
       }
 
       // MARK: - Enforce max images cap
       const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
-      if (imageInputs.length > maxImages) {
+      if (pathInputs.length > maxImages) {
         return {
           content: [
             {
               type: "text",
-              text: `Too many images: ${imageInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
+              text: `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
             },
           ],
-          details: { error: "too_many_images", count: imageInputs.length, max: maxImages },
+          details: { error: "too_many_images", count: pathInputs.length, max: maxImages },
         };
       }
 
@@ -1010,7 +1010,7 @@ export function createImageTool(options?: {
           cfg: options?.config,
           imageModelConfig,
           modelOverride,
-          imageCount: imageInputs.length,
+          imageCount: pathInputs.length,
           agentDir,
           workspaceDir: options?.workspaceDir,
           metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
@@ -1031,14 +1031,14 @@ export function createImageTool(options?: {
       // MARK: - Load and resolve each image
       const loadedImages: LoadedImageForTool[] = [];
 
-      for (const imageRawInput of imageInputs) {
+      for (const pathRawInput of pathInputs) {
         // Stop before starting the next sequential download/decode when the run
         // was aborted, so a dead run cannot keep pulling up to maxImages remote images.
         signal?.throwIfAborted();
-        const trimmed = imageRawInput.trim();
+        const trimmed = pathRawInput.trim();
         const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
         if (!imageRaw) {
-          throw new Error("image required (empty string in array)");
+          throw new Error("path required (empty string in paths)");
         }
 
         const normalizedRef = normalizeMediaReferenceSource(imageRaw);
@@ -1055,18 +1055,18 @@ export function createImageTool(options?: {
             content: [
               {
                 type: "text",
-                text: `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+                text: `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
               },
             ],
             details: {
               error: "unsupported_image_reference",
-              image: imageRawInput,
+              path: pathRawInput,
             },
           };
         }
 
         if (sandboxConfig && isHttpUrl) {
-          throw new Error("Sandboxed image tool does not allow remote URLs.");
+          throw new Error("Sandboxed view_image does not allow remote URLs.");
         }
 
         const resolvedImage = (() => {

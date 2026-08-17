@@ -585,6 +585,7 @@ enum class GatewayMethod(
   PortalOpen("portal.open"),
   PortalClose("portal.close"),
   SessionsMove("sessions.move"),
+  SessionsAssignOwner("sessions.assignOwner"),
 }
 
 enum class GatewayEvent(

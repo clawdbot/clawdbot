@@ -355,6 +355,7 @@ describe("cron protocol validators", () => {
     expectCases(validateCronRunParams, true, [
       { id: "job-1", mode: "force", expectedProcessInstanceId: "process-1" },
       { jobId: "job-2", mode: "due" },
+      { jobId: "job-3", mode: "if-enabled" },
     ]);
     expectCases(validateCronRunParams, false, [{ id: "job-1", expectedProcessInstanceId: "" }]);
   });
