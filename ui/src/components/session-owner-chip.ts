@@ -155,6 +155,7 @@ export function renderSessionOwnerMenuAvatar(owner: SessionOwnerOption) {
       avatarUrl: owner.avatarUrl,
       watchedSessions: [],
     }}
+    .markAsViewer=${false}
     variant="session"
     aria-hidden="true"
   ></openclaw-viewer-avatar>`;
@@ -220,6 +221,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
                     avatarUrl: participant.avatarUrl,
                     watchedSessions: [],
                   }}
+                  .markAsViewer=${false}
                   variant="session"
                 ></openclaw-viewer-avatar>`
               : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
@@ -240,6 +242,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
                     avatarUrl: createdActor.avatarUrl,
                     watchedSessions: [],
                   }}
+                  .markAsViewer=${false}
                   variant="session"
                   aria-hidden="true"
                 ></openclaw-viewer-avatar>`
@@ -265,6 +268,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
                 avatarUrl: createdActor.avatarUrl,
                 watchedSessions: [],
               }}
+              .markAsViewer=${false}
               variant="session"
               aria-hidden="true"
             ></openclaw-viewer-avatar>`

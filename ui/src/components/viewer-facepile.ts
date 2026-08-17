@@ -150,6 +150,8 @@ export type ViewerAvatarVariant = "session" | "footer" | "profile";
 class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;
   @property() variant: ViewerAvatarVariant = "session";
+  // Presence selectors use this marker; owner and menu chrome must opt out.
+  @property({ type: Boolean, attribute: false }) markAsViewer = true;
 
   override render() {
     const user = this.user;
@@ -165,7 +167,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     });
     return html`<span
       class=${identityAvatarClass(`viewer-avatar viewer-avatar--${this.variant}`, view)}
-      data-viewer-id=${user.id}
+      data-viewer-id=${this.markAsViewer ? user.id : nothing}
       aria-label=${label}
     >
       ${renderViewerAvatar(view)}

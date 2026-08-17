@@ -508,10 +508,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
         : undefined;
-    if (
-      sessionCreation.inheritedToolPolicy &&
-      parentSessionKey !== spawnRequesterSessionKey
-    ) {
+    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
       respond(
         false,
         undefined,

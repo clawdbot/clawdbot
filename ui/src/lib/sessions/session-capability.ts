@@ -1,8 +1,8 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
-import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionOwner,
   SessionsAssignOwnerParams,
+  SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";

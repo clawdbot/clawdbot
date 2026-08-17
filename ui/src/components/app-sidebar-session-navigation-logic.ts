@@ -423,7 +423,7 @@ export function extendSidebarSessionSelection(input: {
   };
 }
 
-export function latestVisibleAgentSessionRow(input: {
+function latestVisibleAgentSessionRow(input: {
   agentId: string;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
