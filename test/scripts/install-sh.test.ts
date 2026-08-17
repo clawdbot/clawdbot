@@ -434,6 +434,7 @@ NODE
       clone_git_checkout_transactionally https://example.invalid/openclaw.git "$ALIAS_PATH"
       [[ -f "$ALIAS_TARGET/checkout.marker" ]]
       [[ -z "$(ls -A "$ALIAS_REPLACEMENT")" ]]
+      [[ -z "$(find "$ALIAS_TARGET" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
 
       CLONE_MODE=concurrent
       CONCURRENT_REPO="$root/concurrent"
@@ -447,6 +448,58 @@ NODE
 
       cleanup_tmpfiles
       [[ -z "$(find "$root" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
+  it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$HOME/retargeted-alias"
+      target="$root/target"
+      replacement="$root/replacement"
+      alias_path="$root/alias"
+      mkdir -p "$target" "$replacement"
+      ln -s "$target" "$alias_path"
+
+      check_git() { return 0; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      resolve_git_openclaw_ref() { printf 'main\\n'; }
+      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
+      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
+      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
+      git_install_lockfile_flag() {
+        [[ "$1" == "$target" ]]
+        printf '%s\\n' '--frozen-lockfile'
+      }
+      run_pnpm() { [[ "$1" == "-C" && "$2" == "$target" ]]; }
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      ensure_user_local_bin_on_path() { mkdir -p "$HOME/.local/bin"; }
+      ui_info() { :; }
+      ui_success() { :; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      git() {
+        if [[ "$1" == "clone" ]]; then
+          local clone_target="\${*: -1}"
+          mkdir -p "$clone_target/.git"
+          printf 'complete\\n' > "$clone_target/checkout.marker"
+          rm "$alias_path"
+          ln -s "$replacement" "$alias_path"
+          return 0
+        fi
+        [[ "$1" == "-C" && "$2" == "$target" ]]
+      }
+
+      install_openclaw_from_git "$alias_path"
+      grep -F "$target/dist/entry.js" "$HOME/.local/bin/openclaw"
+      [[ -z "$(ls -A "$replacement")" ]]
+      [[ -z "$(find "$target" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
     `);
 
     expect(result.status, result.stderr || result.stdout).toBe(0);

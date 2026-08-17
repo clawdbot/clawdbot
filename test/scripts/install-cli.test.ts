@@ -315,6 +315,7 @@ describe("install-cli.sh", () => {
       clone_git_checkout_transactionally https://example.invalid/openclaw.git "$ALIAS_PATH"
       [[ -f "$ALIAS_TARGET/checkout.marker" ]]
       [[ -z "$(ls -A "$ALIAS_REPLACEMENT")" ]]
+      [[ -z "$(find "$ALIAS_TARGET" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
 
       CLONE_MODE=concurrent
       CONCURRENT_REPO="$root/concurrent"
@@ -328,6 +329,55 @@ describe("install-cli.sh", () => {
     expect(readFileSync(join(root, "concurrent", "user.marker"), "utf8")).toBe("keep\n");
     expect(existsSync(join(root, "concurrent", "checkout.marker"))).toBe(false);
     expect(readdirSync(root).filter((entry) => entry.startsWith(".openclaw-clone."))).toEqual([]);
+  });
+
+  it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
+    const root = tempDirs.make("openclaw-install-cli-retargeted-alias-");
+    const result = runInstallCliShell(
+      `
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      target="$ROOT/target"
+      replacement="$ROOT/replacement"
+      alias_path="$ROOT/alias"
+      mkdir -p "$target" "$replacement"
+      ln -s "$target" "$alias_path"
+      PREFIX="$ROOT/prefix"
+
+      ensure_git() { :; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      resolve_git_openclaw_ref() { printf 'main\\n'; }
+      checkout_git_openclaw_ref() { [[ "$1" == "$target" && "$2" == "main" ]]; }
+      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
+      ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
+      activate_repo_pnpm_version() { [[ "$1" == "$target" ]]; }
+      git_install_lockfile_flag() {
+        [[ "$1" == "$target" ]]
+        printf '%s\\n' '--frozen-lockfile'
+      }
+      run_pnpm() { [[ "$1" == "-C" && "$2" == "$target" ]]; }
+      git() {
+        if [[ "$1" == "clone" ]]; then
+          local clone_target="\${*: -1}"
+          mkdir -p "$clone_target/.git"
+          printf 'complete\\n' > "$clone_target/checkout.marker"
+          rm "$alias_path"
+          ln -s "$replacement" "$alias_path"
+          return 0
+        fi
+        [[ "$1" == "-C" && "$2" == "$target" ]]
+      }
+
+      install_openclaw_from_git "$alias_path"
+      grep -F "$target/dist/entry.js" "$PREFIX/bin/openclaw"
+      [[ -z "$(ls -A "$replacement")" ]]
+      [[ -z "$(find "$target" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `,
+      { ROOT: root },
+    );
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
   it("bounds stalled curl downloads and propagates timeout failures", () => {

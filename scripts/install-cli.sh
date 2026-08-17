@@ -1392,6 +1392,7 @@ try {
     fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
     moved.push(entry);
   }
+  fs.rmdirSync(source);
 } catch (error) {
   const rollbackErrors = [];
   for (const entry of moved.reverse()) {
@@ -1432,7 +1433,11 @@ install_openclaw_from_git() {
     fail "Git install dir cannot be empty"
   fi
   mkdir -p "$(dirname "$repo_dir")"
-  repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
+  if [[ -d "$repo_dir" ]]; then
+    repo_dir="$(cd "$repo_dir" && pwd -P)"
+  else
+    repo_dir="$(cd "$(dirname "$repo_dir")" && pwd -P)/$(basename "$repo_dir")"
+  fi
 
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"method\":\"git\",\"repo\":\"${repo_url//\"/\\\"}\"}"
   if [[ -d "$repo_dir/.git" ]]; then

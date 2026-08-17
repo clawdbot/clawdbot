@@ -2464,6 +2464,7 @@ try {
     fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
     moved.push(entry);
   }
+  fs.rmdirSync(source);
 } catch (error) {
   const rollbackErrors = [];
   for (const entry of moved.reverse()) {
@@ -2938,6 +2939,13 @@ resolve_installed_openclaw_bin() {
 install_openclaw_from_git() {
     local repo_dir="$1"
     local repo_url="https://github.com/openclaw/openclaw.git"
+
+    mkdir -p "$(dirname "$repo_dir")"
+    if [[ -d "$repo_dir" ]]; then
+        repo_dir="$(cd "$repo_dir" && pwd -P)"
+    else
+        repo_dir="$(cd "$(dirname "$repo_dir")" && pwd -P)/$(basename "$repo_dir")"
+    fi
 
     if [[ -d "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
