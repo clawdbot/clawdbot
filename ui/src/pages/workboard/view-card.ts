@@ -226,7 +226,6 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     showStartControls,
     archived,
   } = getCardActionState(props, card);
-  const syncing = state.syncingCardIds.has(card.id);
   const healthHighlighted = state.activeHealthHighlight
     ? workboardCardMatchesHealthKey(card, state.activeHealthHighlight, props.sessions, task)
     : false;
@@ -332,7 +331,6 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
           ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
           : nothing}
         ${live ? html`<span class="workboard-live">${t("workboard.live")}</span>` : nothing}
-        ${syncing ? html`<span class="workboard-live">${t("common.saving")}</span>` : nothing}
       </div>
       <h3>${card.title}</h3>
       ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props, task)}
