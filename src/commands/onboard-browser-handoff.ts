@@ -216,7 +216,6 @@ export async function runBrowserHatchHandoff(
   deps: BrowserHatchHandoffDeps = {},
 ): Promise<BrowserHatchHandoffResult> {
   const env = deps.env ?? process.env;
-  const platform = deps.platform ?? process.platform;
   if (params.suppressTokenOutput === true || params.config.gateway?.controlUi?.enabled === false) {
     return { handedOff: false, reason: "target-unavailable" };
   }
