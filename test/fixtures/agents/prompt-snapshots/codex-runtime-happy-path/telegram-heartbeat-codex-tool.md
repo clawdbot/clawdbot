@@ -222,8 +222,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 54418,
-    "roughTokens": 13605
+    "chars": 54441,
+    "roughTokens": 13611
   },
   "openClawDeveloperInstructions": {
     "chars": 3370,
@@ -234,8 +234,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6950
   },
   "totalWithDynamicToolsJson": {
-    "chars": 82218,
-    "roughTokens": 20555
+    "chars": 82241,
+    "roughTokens": 20561
   },
   "userInputText": {
     "chars": 1271,
@@ -690,7 +690,7 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
     "type": "function"
   },
   {
-    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
