@@ -1,7 +1,7 @@
 // Document Extract tests cover document extractor plugin behavior.
 import { EventEmitter } from "node:events";
 import { Worker } from "node:worker_threads";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { createEngineMock, openPdfMock, pdfDocument } = vi.hoisted(() => ({
   createEngineMock: vi.fn(),
@@ -253,33 +253,37 @@ describe("PDF document extractor", () => {
       ].join("\n"),
     );
     let worker: Worker | undefined;
+    const controller = new AbortController();
     const extractor = createPdfDocumentExtractor({
       createWorker: (url, options) => {
         worker = new Worker(url, options);
         return worker;
       },
     });
+    const pending = extractor.extract(
+      request({
+        buffer,
+        maxPages: 1,
+        maxPixels: 100,
+        minTextChars: 1,
+        signal: controller.signal,
+      }),
+    );
+    const settlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      controller.abort(new Error("PDF worker test cleanup"));
+      await Promise.allSettled([
+        settlement,
+        ...(worker && worker.threadId !== -1 ? [worker.terminate()] : []),
+      ]);
+    });
 
-    try {
-      const result = await extractor.extract(
-        request({
-          buffer,
-          maxPages: 1,
-          maxPixels: 100,
-          minTextChars: 1,
-          signal: new AbortController().signal,
-        }),
-      );
+    const result = await pending;
 
-      expect(result?.text).toBe("");
-      expect(result?.images).toHaveLength(1);
-      expect(result?.images[0]).toMatchObject({ type: "image", mimeType: "image/png" });
-      expect(pdfDocument.extract).not.toHaveBeenCalled();
-    } finally {
-      if (worker && worker.threadId !== -1) {
-        await worker.terminate();
-      }
-    }
+    expect(result?.text).toBe("");
+    expect(result?.images).toHaveLength(1);
+    expect(result?.images[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+    expect(pdfDocument.extract).not.toHaveBeenCalled();
   });
 
   it("reuses a warm worker for sequential signal-aware PDF extractions", async () => {
