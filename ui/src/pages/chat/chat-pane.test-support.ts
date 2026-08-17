@@ -149,6 +149,18 @@ export type TestChatPane = HTMLElement & {
   ) => TemplateResult;
 };
 
+export function createGatewayBrowserClientFixture(
+  overrides: Partial<GatewayBrowserClient> = {},
+): GatewayBrowserClient {
+  return overrides as GatewayBrowserClient;
+}
+
+export function createSessionCapabilityFixture(
+  overrides: Partial<SessionCapability> = {},
+): SessionCapability {
+  return overrides as SessionCapability;
+}
+
 export function createSessionContext(
   client: GatewayBrowserClient,
   sessions: SessionCapability,

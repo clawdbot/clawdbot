@@ -23,7 +23,6 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
@@ -32,6 +31,7 @@ import {
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
+  createTestTemplateContext,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
@@ -472,7 +472,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -572,7 +572,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir, senderIsOwner: false }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -663,7 +663,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         senderIsOwner: true,
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -721,7 +721,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "openai/gpt-5.6-sol",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -763,7 +763,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "ollama/qwen3.5:4b",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -816,7 +816,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionId: sessionEntry.sessionId,
         sessionKey: "main",
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -871,7 +871,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -924,7 +924,7 @@ describe("runMemoryFlushIfNeeded", () => {
         authProfileId: "anthropic:auto",
         authProfileIdSource: "auto",
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -963,7 +963,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1003,7 +1003,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1042,7 +1042,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1076,7 +1076,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1167,7 +1167,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const params = {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off" as const,
@@ -1243,7 +1243,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1278,7 +1278,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1311,7 +1311,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1346,7 +1346,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1413,7 +1413,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
       followupRun: createTestFollowupRun({ provider: "anthropic", model: "claude" }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1490,7 +1490,7 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "openai",
         model: "gpt-5.4",
       }),
-      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "openai/gpt-5.4",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1544,7 +1544,7 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "openai",
         model: "gpt-5.4",
       }),
-      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "openai/gpt-5.4",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1580,7 +1580,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: {},
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "codex-cli/gpt-5.5",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1609,7 +1609,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1639,7 +1639,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1672,7 +1672,7 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1716,7 +1716,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:main",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
       }),
-      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -2608,7 +2608,7 @@ describe("runMemoryFlushIfNeeded", () => {
           sessionFile,
           sessionKey: "main",
         }),
-        sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+        sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
         defaultModel: "anthropic/claude-opus-4-6",
         modelContextTokens: 100_000,
         resolvedVerboseLevel: "off",
@@ -3440,7 +3440,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const flushResult = await runMemoryFlushIfNeeded({
       cfg,
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -3714,7 +3714,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -3876,7 +3876,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ extraSystemPrompt: "extra system" }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
