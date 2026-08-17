@@ -18,6 +18,7 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
+import { decodeMountInfoPath } from "./lib/mountinfo-path.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
@@ -506,11 +507,18 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
   for (const line of rawMountinfo.split("\n")) {
     // mountinfo separates its variable optional fields from the fstype with a lone "-".
     const [fields, describe] = line.split(" - ");
-    const [, , , root, mountPoint] = (fields ?? "").split(" ");
+    // mountinfo fields 4 and 5 are the mount root and mount point.
+    const mountFields = (fields ?? "").split(" ");
+    const rawRoot = mountFields[3];
+    const rawMountPoint = mountFields[4];
     const [fsType, , superOptions] = (describe ?? "").split(" ");
-    if (!mountPoint || !root) {
+    if (!rawMountPoint || !rawRoot) {
       continue;
     }
+    // The kernel escapes space, tab, newline, and backslash in these two fields, so
+    // matching them verbatim would miss any cgroup path containing one of them.
+    const root = decodeMountInfoPath(rawRoot);
+    const mountPoint = decodeMountInfoPath(rawMountPoint);
     if (fsType === "cgroup2") {
       unified.push({ mountPoint, root });
     } else if (fsType === "cgroup" && (superOptions ?? "").split(",").includes("memory")) {

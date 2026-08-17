@@ -447,6 +447,38 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("caps the tsdown heap when the cgroup mount point is octal-escaped in mountinfo", () => {
+    const slicePath = "/user.slice/user-999.slice/user@999.service";
+    // The kernel escapes a space in the mount point as \040. Matching the field
+    // verbatim misses this mount, and heap sizing silently falls back to host memory.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::${slicePath}/app.slice/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup\\040dir rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      [`/sys/fs/cgroup dir${slicePath}/memory.high`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    // 5 GiB slice budget minus the 768 MiB build headroom.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("caps the tsdown heap when v1 controllers are co-mounted at the cgroup root", () => {
     const slicePath = "/user.slice/user-999.slice";
     // Co-mounted v1 puts memory.limit_in_bytes under the slice directly, with no
