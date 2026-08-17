@@ -442,11 +442,9 @@ export function isDynamicToolTerminalDiagnosticEvent(
   );
 }
 
-/** Matches execution diagnostics to a specific dynamic tool call id/name. */
-export function isMatchingDynamicToolDiagnostic(params: {
-  event:
-    | TerminalToolExecutionDiagnostic
-    | Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>;
+/** Matches terminal diagnostics to a specific dynamic tool call id/name. */
+export function isMatchingDynamicToolTerminalDiagnostic(params: {
+  event: TerminalToolExecutionDiagnostic;
   call: CodexDynamicToolCallParams;
   runId?: string;
   sessionId?: string;
@@ -485,7 +483,7 @@ export function hasPendingDynamicToolTerminalDiagnostic(params: {
     if (!isDynamicToolTerminalDiagnosticEvent(event)) {
       return false;
     }
-    return isMatchingDynamicToolDiagnostic({
+    return isMatchingDynamicToolTerminalDiagnostic({
       event,
       call: params.call,
       runId: params.runId,

@@ -1,16 +1,13 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import {
-  onAgentEvent,
-  wrapToolWithBeforeToolCallHook,
-  type AgentEventPayload,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -24,6 +21,7 @@ import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-executio
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
@@ -65,17 +63,12 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
-  it("emits one audit lifecycle for a wrapped dynamic tool call", async () => {
-    const tool = wrapToolWithBeforeToolCallHook(createRuntimeDynamicTool("echo"), {
-      agentId: "main",
-      runId: "run-1",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      loopDetection: { enabled: false },
-    });
+  it("emits one audit lifecycle when runtime normalization clones a wrapped tool", async () => {
+    const tool = createRuntimeDynamicTool("echo");
     dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
     const harness = createStartedThreadHarness();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
+    let closeHostCapabilities: (() => void) | undefined;
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
       if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
         diagnosticEvents.push(event);
@@ -87,6 +80,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         path.join(tempDir, "workspace"),
       );
       setCodexTestModelSupportsTools(params, true);
+      closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
       const runtimePlan = createCodexRuntimePlanFixture();
       params.runtimePlan = {
         ...runtimePlan,
@@ -115,9 +109,78 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       await run;
       await flushDiagnosticEvents();
     } finally {
+      closeHostCapabilities?.();
       unsubscribeDiagnostics();
     }
 
+    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.completed",
+    ]);
+  });
+
+  it("emits the bridge audit start before dynamic tool execution settles", async () => {
+    const completion = createDeferred<{
+      content: Array<{ type: "text"; text: string }>;
+      details: Record<string, never>;
+    }>();
+    const tool = createRuntimeDynamicTool("echo");
+    const execute = vi.fn(async () => await completion.promise);
+    tool.execute = execute;
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    let inFlightEventTypes: DiagnosticEventPayload["type"][] | undefined;
+    let closeHostCapabilities: (() => void) | undefined;
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
+      if ("toolCallId" in event && event.toolCallId === "call-echo-in-flight") {
+        diagnosticEvents.push(event);
+      }
+    });
+    try {
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      setCodexTestModelSupportsTools(params, true);
+      closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const toolResult = harness.handleServerRequest({
+        id: "request-echo-in-flight",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-in-flight",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+        },
+      });
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      await flushDiagnosticEvents();
+      inFlightEventTypes = diagnosticEvents.map((event) => event.type);
+
+      completion.resolve({
+        content: [{ type: "text", text: "echo done" }],
+        details: {},
+      });
+      await expect(toolResult).resolves.toMatchObject({ success: true });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+      await flushDiagnosticEvents();
+    } finally {
+      completion.resolve({
+        content: [{ type: "text", text: "echo done" }],
+        details: {},
+      });
+      closeHostCapabilities?.();
+      unsubscribeDiagnostics();
+    }
+
+    expect(inFlightEventTypes).toEqual(["tool.execution.started"]);
     expect(diagnosticEvents.map((event) => event.type)).toEqual([
       "tool.execution.started",
       "tool.execution.completed",
