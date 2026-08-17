@@ -6,10 +6,11 @@ scenario:
   coverage:
     secondary:
       - gateway.identity-and-presence-apis
-  objective: Verify a real mock-provider sessions_spawn turn records bounded parent-child execution lineage that survives Gateway restart and remains inspectable through the audit CLI.
+  objective: Verify actual worker-hosted and nested-worker sessions_spawn turns record one exact bounded lineage chain that survives Gateway restart and remains inspectable through the audit CLI.
   successCriteria:
-    - A deterministic mock-provider turn invokes the real sessions_spawn tool through an ephemeral Gateway.
-    - The child identity context links to the exact parent context, execution, run, and agent principal with depth one.
+    - A deterministic mock-provider parent runs in an active paired-node worker placement and invokes the real sessions_spawn tool through the private worker RPC.
+    - The resulting worker child runs its initial model turn in an active worker placement and invokes the real sessions_spawn tool for a grandchild.
+    - The child and grandchild identity contexts link to the exact parent context, execution, run, and agent principal at depths one and two.
     - Existing V1 lineage, grant, assurance, coverage, and missing-evidence fields describe the spawn without exposing prompt, task, session, or raw principal references.
     - Audit CLI text and JSON select the exact parent and child before and after Gateway restart.
     - Persisted child context bytes remain stable across restart.
@@ -19,8 +20,8 @@ scenario:
     - docs/cli/audit.md
   codeRefs:
     - src/agents/tools/sessions-spawn-tool.ts
-    - src/agents/subagents/spawn/subagent-spawn.ts
-    - src/agents/subagents/spawn/subagent-spawn-gateway.ts
+    - src/gateway/worker-environments/worker-session-tool-executor.ts
+    - src/gateway/worker-environments/worker-turn-rpc.ts
     - src/gateway/agent-turn/agent-run-execution-lineage.ts
     - src/audit/execution-identity-context-build.ts
     - src/commands/audit.ts
@@ -34,5 +35,5 @@ scenario:
     args:
       - --output-dir
       - ${outputDir}
-    timeoutMs: 180000
-    summary: Runs a real sessions_spawn turn through an ephemeral mock-provider Gateway, inspects parent and child identity, restarts the Gateway, and verifies stable CLI and persisted evidence.
+    timeoutMs: 1800000
+    summary: Runs actual worker and nested-worker sessions_spawn turns through a paired-node worker and ephemeral mock-provider Gateway, inspects the three-level identity chain, restarts the Gateway, and verifies stable CLI, persistence, default-off behavior, privacy, and cleanup.

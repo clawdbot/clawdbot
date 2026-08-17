@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerSessionPlacementStore,
@@ -27,8 +28,10 @@ const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 const delivered = vi.hoisted(() => vi.fn());
 const gatewayRequest = vi.hoisted(() => vi.fn());
 const gatewayCreate = vi.hoisted(() => vi.fn());
+const gatewayRuntimeIdentity = vi.hoisted(() => vi.fn());
 const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
+const spawnArgs = vi.hoisted(() => vi.fn());
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -66,6 +69,7 @@ vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
     }) => ({
       execute: async (_toolCallId: string, args: { task: string }) => {
         spawnCallerIdentity(getGatewayToolCallerIdentity());
+        spawnArgs(args);
         const details = await options.callGateway("sessions.create", {
           parentSessionKey: options.agentSessionKey,
           task: args.task,
@@ -90,6 +94,10 @@ vi.mock("../../agents/tools/in-process-gateway.js", () => ({
     params: Record<string, unknown>,
     creation: unknown,
   ) => gatewayCreate({ creation, method, params }),
+  withAgentToolGatewayRuntimeIdentity: (request: unknown, identity: unknown) => {
+    gatewayRuntimeIdentity(request, identity);
+    return request;
+  },
 }));
 
 const SOURCE = {
@@ -186,8 +194,10 @@ describe("worker session tool topology", () => {
     delivered.mockReset();
     gatewayRequest.mockReset();
     gatewayCreate.mockReset();
+    gatewayRuntimeIdentity.mockReset();
     dispatchChild.mockReset();
     spawnCallerIdentity.mockReset();
+    spawnArgs.mockReset();
     scopedSessionAccess.mockClear();
     childSessionKey = undefined;
     spawnOrder = [];
@@ -213,7 +223,7 @@ describe("worker session tool topology", () => {
     });
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
-        if (request.method === "chat.send") {
+        if (request.method === "agent") {
           spawnOrder.push("send");
           expect(placements.get(CHILD.sessionId)?.state).toBe("active");
           return { runId: "spawned-child-run", status: "accepted" };
@@ -350,6 +360,7 @@ describe("worker session tool topology", () => {
     const first = await execute(request);
     const replay = await execute(request);
 
+    expect(childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
     expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
     expect(gatewayCreate).toHaveBeenCalledOnce();
     expect(gatewayCreate).toHaveBeenCalledWith(
@@ -376,13 +387,17 @@ describe("worker session tool topology", () => {
     });
     expect(gatewayRequest).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        method: "chat.send",
+        agentRunTracking: "native_subagent",
+        method: "agent",
         params: expect.objectContaining({
           idempotencyKey: expect.stringMatching(/^worker-session-spawn:/u),
           message: "run in the nested cloud session",
           sessionId: CHILD.sessionId,
         }),
       }),
+    );
+    expect(spawnArgs).toHaveBeenCalledWith(
+      expect.objectContaining({ expectsCompletionMessage: false, visible: true, worktree: true }),
     );
     expect(placements.get(CHILD.sessionId)?.state).toBe("active");
     expect(sessionEntries.get(childSessionKey!)).toMatchObject({
@@ -411,6 +426,33 @@ describe("worker session tool topology", () => {
         workerTurnClaim: sourceClaim,
       }),
     );
+    const runtimeIdentity = gatewayRuntimeIdentity.mock.calls[0]?.[1];
+    expect(runtimeIdentity).toMatchObject({
+      kind: "agentRuntime",
+      agentId: SOURCE.agentId,
+      sessionKey: SOURCE.sessionKey,
+      executionIdentity: PARENT_EXECUTION_IDENTITY_TOKEN,
+      operationalRunInstance: expect.objectContaining({ runId: sourceClaim.runId }),
+      delegatedAuthority: expect.objectContaining({ kind: "worker", turnClaim: sourceClaim }),
+      sessionSpawnContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_spawn", "sessions_send"],
+          deny: [],
+        },
+      },
+    });
+    expect(readAgentRuntimeExecutionLineage(runtimeIdentity?.sessionSpawnContext)).toMatchObject({
+      relation: "sessions_spawn",
+      requesterRef: SOURCE.sessionKey,
+      controllerRef: SOURCE.sessionKey,
+      depth: 1,
+      externalNativeActions: "observable",
+    });
+    expect(JSON.stringify(gatewayRuntimeIdentity.mock.calls[0]?.[0])).not.toContain(
+      PARENT_EXECUTION_IDENTITY_TOKEN.executionId,
+    );
+    expect(JSON.stringify(runtimeIdentity?.sessionSpawnContext)).not.toContain(SOURCE.sessionKey);
   });
 
   it("coalesces concurrent spawn retries into one cloud child", async () => {
@@ -486,7 +528,7 @@ describe("worker session tool topology", () => {
     });
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
-        if (request.method === "chat.send") {
+        if (request.method === "agent") {
           spawnOrder.push("send");
           return { runId: "spawned-child-run", status: "accepted" };
         }
@@ -514,7 +556,7 @@ describe("worker session tool topology", () => {
     const sendKeys: string[] = [];
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
-        if (request.method === "chat.send") {
+        if (request.method === "agent") {
           spawnOrder.push("send");
           sendKeys.push(String(request.params.idempotencyKey));
           if (sendKeys.length === 1) {
@@ -607,7 +649,7 @@ describe("worker session tool topology", () => {
     });
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
-        if (request.method === "chat.send") {
+        if (request.method === "agent") {
           return { runId: "spawned-grandchild-run", status: "accepted" };
         }
         throw new Error(`Unexpected gateway request: ${request.method}`);
