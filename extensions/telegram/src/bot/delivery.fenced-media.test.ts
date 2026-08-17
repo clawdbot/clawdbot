@@ -5,17 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/plugin-sdk/channel-outbound-fenced-media-warn.ts", () => ({
-  warnFencedMediaSkipsForAcceptedOutboundDelivery: (
-    ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
-  ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
-}));
-vi.mock("../../../../src/plugin-sdk/channel-outbound-fenced-media-warn.js", () => ({
-  warnFencedMediaSkipsForAcceptedOutboundDelivery: (
-    ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
-  ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
-}));
-vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-warn", () => ({
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", () => ({
+  createDirectAcceptedFencedMediaWarnLatch: () => ({
+    afterAcceptedVisibleText: (...args: unknown[]) =>
+      warnFencedMediaSkipsForAcceptedOutboundDelivery(
+        ...(args as Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>),
+      ),
+  }),
   warnFencedMediaSkipsForAcceptedOutboundDelivery: (
     ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
   ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),

@@ -275,6 +275,9 @@
       "openclaw/plugin-sdk/channel-mention-gating": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-mention-gating.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-outbound-fenced-media-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/channel-route": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-route.d.ts"
       ],
