@@ -5,7 +5,9 @@
  */
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { listConnectedNodePluginTools } from "../../gateway/node-plugin-tool-snapshot.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
 import {
   jsonResult,
   readFiniteNumberParam,
@@ -24,6 +26,7 @@ const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
   ["computer.act", "computer"],
   ["mobile.ui.observe", "mobile_ui"],
   ["mobile.ui.act", "mobile_ui"],
+  [NODE_MCP_TOOLS_CALL_COMMAND, "node-hosted MCP"],
 ]);
 
 const NODE_READ_ACTION_COMMANDS = {
@@ -189,7 +192,15 @@ export async function executeNodeCommandAction(params: {
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
         );
       }
-      const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized);
+      // Node-published agent tools own their model policy. Generic dispatch must
+      // not re-enter commands omitted from this agent's materialized tool set.
+      const dedicatedTool =
+        DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized) ??
+        listConnectedNodePluginTools().find(
+          (entry) =>
+            entry.nodeId === nodeId &&
+            normalizeLowercaseStringOrEmpty(entry.descriptor.command) === invokeCommandNormalized,
+        )?.descriptor.name;
       if (dedicatedTool) {
         throw new Error(
           `invokeCommand "${invokeCommand}" cannot be invoked through the generic nodes surface; use the dedicated ${dedicatedTool} tool`,
