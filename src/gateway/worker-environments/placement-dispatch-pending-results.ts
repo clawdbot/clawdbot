@@ -172,22 +172,26 @@ export async function recoverPendingWorkspaceResults(
           root: localPath,
           stagedResultRef: preparedWorkerWorkspaceResultRef(canonicalStagedResultRef),
         }));
-      if (active.state === "active" && (!sameGatewayInstance || stagedResultRef)) {
+      const environment = environments.get(active.environmentId);
+      if (
+        environment?.state === "attached" &&
+        (environment.attachedSessionIds.length !== 1 ||
+          environment.attachedSessionIds[0] !== active.sessionId)
+      ) {
+        // This result cannot own teardown unless the environment is attached
+        // exclusively to this session. Preserve the fence until ownership is exact.
+        continue;
+      }
+      const teardownRequired =
+        !sameGatewayInstance ||
+        Boolean(stagedResultRef) ||
+        (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed");
+      if (active.state === "active" && teardownRequired) {
         const draining = placements.startWorkspaceResultDrain(turnClaim);
         if (draining.state !== "draining") {
           throw new Error(`Pending workspace result did not drain session ${active.sessionId}`);
         }
         active = draining;
-      }
-      const environment = environments.get(active.environmentId);
-      if (
-        environment?.state === "attached" &&
-        environment.attachedSessionIds.includes(active.sessionId) &&
-        environment.attachedSessionIds.length !== 1
-      ) {
-        // This result cannot own teardown while another session remains attached.
-        // Keep the durable claim fenced until environment ownership is unambiguous.
-        continue;
       }
       const stagedResultExists = stagedResultRef
         ? await hasWorkerWorkspaceResultRef({ root: localPath, stagedResultRef })
