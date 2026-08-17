@@ -85,14 +85,14 @@ export type NpmGlobalPrefixLayout = {
 
 type NpmLifecyclePolicy = "unsupported-transition" | "unflagged" | "allow-scripts";
 
-export type SupportedNpmLifecyclePolicy = Exclude<NpmLifecyclePolicy, "unsupported-transition">;
+type SupportedNpmLifecyclePolicy = Exclude<NpmLifecyclePolicy, "unsupported-transition">;
 
-export type NpmLifecyclePolicyGate =
+type NpmLifecyclePolicyGate =
   | { policy: SupportedNpmLifecyclePolicy | null; error: null }
   | { policy: null; error: string };
 
 /** Selects npm's lifecycle policy from the version of the owning executable. */
-export function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
+function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
   const parsed = parseSemver(version);
   if (!parsed) {
     return null;

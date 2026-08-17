@@ -32,7 +32,6 @@ import {
   resolveGlobalInstallSpec,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  resolveNpmLifecyclePolicy,
   resolvePnpmGlobalDirFromGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
@@ -115,16 +114,6 @@ describe("update global helpers", () => {
         env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" },
       }),
     ).toBe("openclaw@next");
-  });
-
-  it.each([
-    ["11.12.0", "unflagged"],
-    ["11.13.0", "unsupported-transition"],
-    ["11.15.9", "unsupported-transition"],
-    ["11.16.0", "allow-scripts"],
-    ["12.0.0", "allow-scripts"],
-  ] as const)("selects npm lifecycle policy for %s", (version, expected) => {
-    expect(resolveNpmLifecyclePolicy(version)).toBe(expected);
   });
 
   it("applies an unflagged npm policy to primary and retry argv", () => {
@@ -222,7 +211,14 @@ describe("update global helpers", () => {
     });
   });
 
-  it("binds lifecycle policy to the npm executable that owns the install", async () => {
+  it.each([
+    ["11.12.0", "unflagged"],
+    ["11.13.0", "unsupported-transition"],
+    ["11.14.0", "unsupported-transition"],
+    ["11.15.9", "unsupported-transition"],
+    ["11.16.0", "allow-scripts"],
+    ["12.0.0", "allow-scripts"],
+  ] as const)("binds npm %s lifecycle policy to the owning executable", async (version, policy) => {
     await withTestDir({ prefix: "openclaw-npm-owner-" }, async (prefix) => {
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
@@ -239,7 +235,7 @@ describe("update global helpers", () => {
           return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
         }
         if (argv[0] === owningNpm && argv[1] === "--version") {
-          return { stdout: "11.15.1\n", stderr: "", code: 0 };
+          return { stdout: `${version}\n`, stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${argv.join(" ")}`);
       };
@@ -255,8 +251,8 @@ describe("update global helpers", () => {
       ).resolves.toMatchObject({
         command: owningNpm,
         npmOwner: {
-          version: "11.15.1",
-          lifecyclePolicy: "unsupported-transition",
+          version,
+          lifecyclePolicy: policy,
         },
       });
       expect(calls).toContainEqual([owningNpm, "--version"]);
