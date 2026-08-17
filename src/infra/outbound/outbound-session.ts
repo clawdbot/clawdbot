@@ -230,6 +230,7 @@ export async function resolveOutboundSessionRoute(
   const bindingRoute = resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
+    defaultAgentId: params.agentId,
     accountId: params.accountId,
     peer: route.peer,
   });

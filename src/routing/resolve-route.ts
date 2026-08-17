@@ -40,6 +40,8 @@ export type RoutePeer = {
 export type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
+  /** Known owner when no configured binding matches this route. */
+  defaultAgentId?: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
   dmScope?: DmScope;
@@ -566,6 +568,7 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
 
 function buildResolvedRouteCacheKey(params: {
   channel: string;
+  defaultAgentId: string;
   accountId: string;
   peer: RoutePeer | null;
   parentPeer: RoutePeer | null;
@@ -577,6 +580,7 @@ function buildResolvedRouteCacheKey(params: {
 }): string {
   return JSON.stringify([
     params.channel,
+    params.defaultAgentId,
     params.accountId,
     formatRouteCachePeer(params.peer),
     formatRouteCachePeer(params.parentPeer),
@@ -611,6 +615,7 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeLowercaseStringOrEmpty(input.channel);
+  const defaultAgentId = normalizeLowercaseStringOrEmpty(input.defaultAgentId);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
     ? {
@@ -638,6 +643,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const routeCacheKey = routeCache
     ? buildResolvedRouteCacheKey({
         channel,
+        defaultAgentId,
         accountId,
         peer,
         parentPeer,
@@ -811,8 +817,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
+  const unboundAgentId = defaultAgentId || tryResolveLegacyCompatibilityAgentId(input.cfg);
   return choose(
-    tryResolveLegacyCompatibilityAgentId(input.cfg) ??
+    unboundAgentId ??
       resolveDefaultAgentId(input.cfg, {
         surface: `${channel} account ${accountId} routing`,
         hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
