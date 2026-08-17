@@ -104,6 +104,16 @@ function isNativeResourceTemplate(value: unknown): value is NativeResourceTempla
   );
 }
 
+function nativeResourceTemplates(values: readonly unknown[]): NativeResourceTemplate[] {
+  const templates: NativeResourceTemplate[] = [];
+  for (const value of values) {
+    if (isNativeResourceTemplate(value)) {
+      templates.push(value);
+    }
+  }
+  return templates;
+}
+
 export function createCodexNativeMcpRuntime(params: {
   client: CodexAppServerClient;
   threadId: string;
@@ -246,7 +256,7 @@ export function createCodexNativeMcpRuntime(params: {
         (entry) => entry.name === serverName,
       );
       return {
-        resourceTemplates: (status?.resourceTemplates ?? []).filter(isNativeResourceTemplate),
+        resourceTemplates: nativeResourceTemplates(status?.resourceTemplates ?? []),
       };
     },
     dispose: async () => {},

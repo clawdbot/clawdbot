@@ -203,7 +203,7 @@ extensions/codex/src/app-server/explicit-skill-input.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
 extensions/codex/src/app-server/managed-binary.ts	2
 extensions/codex/src/app-server/native-config-fence.ts	1
-extensions/codex/src/app-server/native-mcp-app.ts	9
+extensions/codex/src/app-server/native-mcp-app.ts	4
 extensions/codex/src/app-server/native-skill-isolation.ts	1
 extensions/codex/src/app-server/native-subagent-monitor.ts	1
 extensions/codex/src/app-server/native-subagent-task-mirror.ts	2
