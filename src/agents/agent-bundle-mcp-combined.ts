@@ -94,6 +94,7 @@ export function createCombinedSessionMcpRuntime(params: {
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  let catalogInFlightToken: symbol | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
   const requesterConnect = parts.find((part) => part.requesterConnect)?.requesterConnect;
 
@@ -157,16 +158,16 @@ export function createCombinedSessionMcpRuntime(params: {
         return cachedCatalog;
       }
     });
-    let trackedLoad: Promise<McpToolCatalog>;
-    trackedLoad = (async () => {
-      try {
-        return await load;
-      } finally {
-        if (catalogInFlight === trackedLoad) {
-          catalogInFlight = undefined;
-        }
+    // Dispose can clear the slot before this load settles. Keep a separate
+    // ownership token so an older load cannot clear a subsequently installed one.
+    const loadToken = Symbol();
+    const trackedLoad = load.finally(() => {
+      if (catalogInFlightToken === loadToken) {
+        catalogInFlight = undefined;
+        catalogInFlightToken = undefined;
       }
-    })();
+    });
+    catalogInFlightToken = loadToken;
     catalogInFlight = trackedLoad;
     return await waitForSessionMcpRequest(trackedLoad, requestSignal);
   };
@@ -290,6 +291,7 @@ export function createCombinedSessionMcpRuntime(params: {
     },
     async dispose() {
       catalogInFlight = undefined;
+      catalogInFlightToken = undefined;
       await Promise.allSettled(parts.map((part) => part.dispose()));
     },
   };

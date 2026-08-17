@@ -7,7 +7,6 @@ import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resou
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   classifyMcpAppStandalonePath,
-  MCP_APP_STANDALONE_PATH,
   MCP_APP_STANDALONE_VIEW_PATH,
 } from "./gateway-http-route-contracts.js";
 import { readJsonBodyOrError, sendJson, watchClientDisconnect } from "./http-common.js";

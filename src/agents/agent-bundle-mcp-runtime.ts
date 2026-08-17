@@ -1011,12 +1011,12 @@ export function createSessionMcpRuntime(params: {
     retryBaseCatalog?: McpToolCatalog,
     options?: Pick<McpRequestOptions, "signal">,
   ): Promise<McpToolCatalog> => {
+    let currentRetryBaseCatalog = retryBaseCatalog;
     let retriedAfterSupersession = false;
     const retryAfterSupersession = (cause?: unknown) => {
       if (retriedAfterSupersession) {
-        throw new Error("bundle-mcp catalog changed repeatedly while refreshing", {
-          ...(cause === undefined ? {} : { cause }),
-        });
+        const message = "bundle-mcp catalog changed repeatedly while refreshing";
+        throw cause === undefined ? new Error(message) : new Error(message, { cause });
       }
       retriedAfterSupersession = true;
     };
@@ -1026,7 +1026,7 @@ export function createSessionMcpRuntime(params: {
 
       const refresh =
         catalogInFlight ??
-        runWithoutSessionMcpRequestSignal(() => startCatalogRefresh(retryBaseCatalog));
+        runWithoutSessionMcpRequestSignal(() => startCatalogRefresh(currentRetryBaseCatalog));
       // Caller cancellation only detaches this wait. Generation invalidation or
       // runtime disposal owns cancellation of the shared refresh itself.
       const waitSignal = options?.signal
@@ -1036,7 +1036,7 @@ export function createSessionMcpRuntime(params: {
         const nextCatalog = await waitForSessionMcpRequest(refresh.promise, waitSignal);
         if (refresh.generation !== catalogInvalidationGeneration) {
           retryAfterSupersession();
-          retryBaseCatalog = catalog ?? undefined;
+          currentRetryBaseCatalog = catalog ?? undefined;
           continue;
         }
         return nextCatalog;
@@ -1045,7 +1045,7 @@ export function createSessionMcpRuntime(params: {
         failIfDisposed();
         if (refresh.generation !== catalogInvalidationGeneration) {
           retryAfterSupersession(error);
-          retryBaseCatalog = catalog ?? undefined;
+          currentRetryBaseCatalog = catalog ?? undefined;
           continue;
         }
         throw error;

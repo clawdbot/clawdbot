@@ -11,10 +11,10 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./shared-client.js", () => sharedClientMocks);
 
-import {
-  createCodexNativeMcpAppResultDetailsPreparer,
-  createNativeMcpRuntime,
-} from "./native-mcp-app.js";
+import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
+import { testing } from "./native-mcp-app.test-support.js";
+
+const { createNativeMcpRuntime } = testing;
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {

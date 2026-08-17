@@ -54,9 +54,16 @@ const runtime = {
       { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
     ],
   })),
-  callTool: vi.fn(async (serverName: string, toolName: string) => ({
-    content: [{ type: "text", text: `${serverName}:${toolName}` }],
-  })),
+  callTool: vi.fn(
+    async (
+      serverName: string,
+      toolName: string,
+      _input: unknown,
+      _options?: { signal?: AbortSignal },
+    ) => ({
+      content: [{ type: "text", text: `${serverName}:${toolName}` }],
+    }),
+  ),
   listTools: vi.fn(async () => ({
     tools: [
       { name: "shared", inputSchema: { type: "object" } },

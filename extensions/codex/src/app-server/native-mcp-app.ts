@@ -62,7 +62,7 @@ function statusTools(status: CodexMcpServerStatus): Array<Record<string, unknown
   );
 }
 
-export function createNativeMcpRuntime(params: {
+function createNativeMcpRuntime(params: {
   client: CodexAppServerClient;
   threadId: string;
   attempt: EmbeddedRunAttemptParams;
@@ -202,6 +202,12 @@ export function createNativeMcpRuntime(params: {
     dispose: async () => {},
   };
   return runtime;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.codexNativeMcpAppTestApi")
+  ] = { createNativeMcpRuntime };
 }
 
 export function createCodexNativeMcpAppResultDetailsPreparer(params: {

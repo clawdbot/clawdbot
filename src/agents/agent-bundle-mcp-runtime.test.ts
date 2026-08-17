@@ -1811,7 +1811,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("retires a reused MCP session that exits during catalog refresh", async () => {
+  it("recovers a reused MCP session that exits during catalog refresh", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-refresh-exit-"));
     const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1849,11 +1849,12 @@ process.on("SIGINT", shutdown);`,
       );
 
       const refreshedCatalog = await runtime.getCatalog();
-      expect(refreshedCatalog.tools).toEqual([]);
-      expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("child");
-      // The refresh reports the exited server, but the runtime does not stay stuck on it:
-      // the closed transport invalidated the catalog, so the next request rebuilds against
-      // a fresh child instead of failing with "is not connected" indefinitely.
+      expect(refreshedCatalog.tools.map((catalogTool) => catalogTool.toolName)).toEqual([
+        "slow_tool",
+      ]);
+      expect(refreshedCatalog.diagnostics).toBeUndefined();
+      // The closed transport supersedes the failed refresh. The same getCatalog
+      // call returns the replacement generation instead of leaking a stale result.
       await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
         isError: false,
       });
@@ -2505,6 +2506,7 @@ process.on("SIGINT", shutdown);`,
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
+      capabilities: { tools: { listChanged: true } },
       delayMs: 50,
       listToolsReleasePath: catalogReleasePath,
       notifyListChangedOnCallTool: true,
@@ -2567,7 +2569,7 @@ process.on("SIGINT", shutdown);`,
       await fs.writeFile(catalogReleasePath, "release", "utf8");
       const completedCatalog = await runtime.getCatalog();
 
-      expect(completedCatalog.tools.map((tool) => tool.toolName)).toEqual(
+      expect(completedCatalog.tools.map((catalogTool) => catalogTool.toolName)).toEqual(
         Array.from({ length: 6 }, (_, index) => `initial_tool-${index + 2}`),
       );
       expect((await fs.readFile(logPath, "utf8")).match(/tools\/list cursor/g)).toHaveLength(
@@ -2900,7 +2902,7 @@ process.on("SIGINT", shutdown);`,
       logPath,
       capabilities: { tools: {}, resources: {} },
       resourcePageDelayMs: 120,
-      resourcePageCursors: ["2", null],
+      resourcePageCursors: ["2", null, "4", null],
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
