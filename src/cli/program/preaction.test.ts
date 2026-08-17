@@ -969,6 +969,7 @@ describe("registerPreActionHooks", () => {
       measure: expect.any(Function),
       commandPath: ["gateway", "call"],
       suppressDoctorStdout: true,
+      validateConfigOnly: true,
     });
   });
 
