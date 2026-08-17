@@ -159,7 +159,11 @@ describe("gateway hooks helpers", () => {
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
     expect(normalizeWakePayload({ text: "wake", agentId: 42 })).toEqual({
       ok: false,
-      error: "agentId must be a string",
+      error: "agentId must be a non-empty string",
+    });
+    expect(normalizeWakePayload({ text: "wake", agentId: "  " })).toEqual({
+      ok: false,
+      error: "agentId must be a non-empty string",
     });
   });
 
@@ -360,7 +364,11 @@ describe("gateway hooks helpers", () => {
 
     expect(normalizeAgentPayload({ message: "hello", agentId: 42 })).toEqual({
       ok: false,
-      error: "agentId must be a string",
+      error: "agentId must be a non-empty string",
+    });
+    expect(normalizeAgentPayload({ message: "hello", agentId: "  " })).toEqual({
+      ok: false,
+      error: "agentId must be a non-empty string",
     });
   });
 
@@ -406,10 +414,6 @@ describe("gateway hooks helpers", () => {
       error: 'unknown agentId "!!!"',
     });
     expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
-      ok: true,
-      effectiveAgentId: "main",
-    });
-    expect(resolveEffectiveHookTargetAgentId(resolved, " ", "request")).toEqual({
       ok: true,
       effectiveAgentId: "main",
     });

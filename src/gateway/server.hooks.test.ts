@@ -949,7 +949,7 @@ describe("gateway server hooks", () => {
       });
       expect(resEmptyAgent.status).toBe(400);
       const emptyAgentBody = (await resEmptyAgent.json()) as { error?: string };
-      expect(emptyAgentBody.error).toContain("hooks.allowedAgentIds");
+      expect(emptyAgentBody.error).toBe("agentId must be a non-empty string");
       expect(cronIsolatedRun).not.toHaveBeenCalled();
 
       mockIsolatedRunOkOnce();
@@ -1008,17 +1008,6 @@ describe("gateway server hooks", () => {
       expect(noAgentCall?.job?.agentId).toBe("main");
       expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
       expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
-      drainSystemEvents(resolveMainKey());
-
-      mockIsolatedRunOkOnce();
-      const resBlankAgent = await postHook(port, "/hooks/agent", {
-        message: "Blank target",
-        agentId: " ",
-      });
-      expect(resBlankAgent.status).toBe(200);
-      await waitForSystemEventTexts(resolveMainKey());
-      const blankAgentCall = cronRunCall();
-      expect(blankAgentCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
     });
   });

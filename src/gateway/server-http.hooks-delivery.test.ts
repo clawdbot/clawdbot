@@ -37,6 +37,7 @@ function createDeliveryHandler(params?: {
   mappings?: HookMappingResolved[];
   agentPolicy?: Partial<HooksConfigResolved["agentPolicy"]>;
 }) {
+  const dispatchWakeHook = vi.fn();
   const dispatchAgentHook = vi.fn((_value: HookAgentDispatchPayload) => ({
     ok: true as const,
     runId: "run-1",
@@ -57,10 +58,10 @@ function createDeliveryHandler(params?: {
       info: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
-    dispatchWakeHook: vi.fn(),
+    dispatchWakeHook,
     dispatchAgentHook,
   });
-  return { handler, dispatchAgentHook };
+  return { handler, dispatchAgentHook, dispatchWakeHook };
 }
 
 async function dispatchPayload(params: {
@@ -234,6 +235,20 @@ describe("hook request delivery normalization", () => {
         delivery: { mode: "none" },
       }),
     );
+  });
+
+  test.each([
+    ["/hooks/agent", { message: "Direct", agentId: "  " }],
+    ["/hooks/wake", { text: "Wake", agentId: "  " }],
+  ])("rejects a blank direct agentId on %s without dispatch", async (path, payload) => {
+    const { handler, dispatchAgentHook, dispatchWakeHook } = createDeliveryHandler();
+
+    const response = await dispatchPayload({ handler, path, payload });
+
+    expect(response.res.statusCode).toBe(400);
+    expect(response.getBody()).toContain("agentId must be a non-empty string");
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
+    expect(dispatchWakeHook).not.toHaveBeenCalled();
   });
 
   test("preserves config-mapping fallback for an unrepresentable agentId", async () => {

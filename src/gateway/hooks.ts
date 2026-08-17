@@ -227,10 +227,13 @@ export function normalizeHookHeaders(req: IncomingMessage) {
 }
 
 function normalizeHookPayloadAgentId(raw: unknown): Result<string | undefined, string> {
-  if (raw !== undefined && typeof raw !== "string") {
-    return { ok: false, error: "agentId must be a string" };
+  if (raw === undefined) {
+    return { ok: true, value: undefined };
   }
-  return { ok: true, value: normalizeOptionalString(raw) };
+  const agentId = typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
+  return agentId
+    ? { ok: true, value: agentId }
+    : { ok: false, error: "agentId must be a non-empty string" };
 }
 
 /** Validate a hook wake payload. */
