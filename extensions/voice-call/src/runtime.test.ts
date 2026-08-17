@@ -366,6 +366,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     const resolveInstructions = mocks.realtimeHandlerCtorArgs[0]?.[7];
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "operator" }),
+    );
     if (typeof resolveInstructions !== "function") {
       throw new Error("expected per-call realtime instruction resolver");
     }

@@ -15,7 +15,9 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
+    resolveAgentRouteMock,
     resolveRealtimeBootstrapContextInstructionsMock,
+    resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     realtimeSessionMock,
     managerModule,
@@ -418,6 +420,44 @@ defineDiscordVoiceTests(
       expect(joinOptions.guildId).toBe("g1");
       expect(joinOptions.channelId).toBe("1002");
       expectConnectedStatus(manager, "1002");
+    });
+
+    it("preserves the routed agent through realtime autoJoin startup", async () => {
+      resolveAgentRouteMock.mockReturnValue({
+        agentId: "molty",
+        sessionKey: "agent:molty:discord:channel:g1:1001",
+      });
+      resolveConfiguredRealtimeVoiceProviderMock.mockImplementation((params?: unknown) => {
+        if (requireRecord(params, "provider resolution params").agentId !== "molty") {
+          throw new Error("AGENT_SELECTION_REQUIRED: expected routed agent molty");
+        }
+        return {
+          provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
+          providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
+        };
+      });
+      createRealtimeVoiceBridgeSessionMock.mockImplementation((params?: unknown) => {
+        if (requireRecord(params, "bridge session params").agentId !== "molty") {
+          throw new Error("AGENT_SELECTION_REQUIRED: expected routed agent molty");
+        }
+        return realtimeSessionMock;
+      });
+      const manager = createManager(
+        makeVoiceConfig({
+          mode: "agent-proxy",
+          autoJoin: [{ guildId: "g1", channelId: "1001" }],
+          realtime: { provider: "openai" },
+        }),
+        undefined,
+        { agents: { list: [{ id: "helper" }, { id: "molty" }] } },
+      );
+
+      await manager.autoJoin();
+
+      expect(resolveConfiguredRealtimeVoiceProviderMock).toHaveBeenCalledTimes(1);
+      expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1);
+      expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
+      expectConnectedStatus(manager, "1001");
     });
 
     it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {

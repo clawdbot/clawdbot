@@ -572,6 +572,7 @@ describe("RealtimeCallHandler path routing", () => {
           }),
         );
         expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
+        expect(createBridge.mock.calls[0]?.[0].agentId).toBe("support");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

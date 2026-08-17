@@ -238,6 +238,7 @@ async function resolveRealtimeProvider(params: {
     configuredProviderId: params.config.realtime.provider,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
+    agentId: params.config.agentId,
   });
 }
 
