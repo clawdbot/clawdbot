@@ -3791,7 +3791,7 @@ describe("browser tool external content wrapping", () => {
       });
       const snapshotText = firstResultText(result);
 
-      expect(snapshotText.length).toBeLessThan(20_000);
+      expect(snapshotText.length).toBeLessThanOrEqual(16_000);
       expect(snapshotText).toContain("[truncated — retry with a smaller maxChars or limit]");
       expect(snapshotText).not.toContain(terminalSentinel);
       expect(result?.details).toMatchObject({ truncated: true, targetId: "t1" });
@@ -3919,7 +3919,7 @@ describe("browser tool external content wrapping", () => {
     const result = await createBrowserTool().execute?.("call-1", { action: "console" });
     const text = firstResultText(result);
 
-    expect(text.length).toBeLessThan(20_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
     expect(text).toContain("[truncated — retry with a stricter level or targetId]");
     expect(text).not.toContain("terminal-console-sentinel");
     expect(result?.details).toMatchObject({ messageCount: 26, targetId: "t1" });
@@ -4101,7 +4101,9 @@ describe("browser tool act stale target recovery", () => {
     }
 
     expect(thrown).toMatchObject({
-      message: expect.stringMatching(/No browser tabs found.*profile="user"/i),
+      message: expect.stringMatching(
+        /Chrome tab not found.*refreshing tabs failed: node tab refresh failed.*Run action=tabs profile="user"/i,
+      ),
       cause: expect.objectContaining({ message: "tab not found" }),
     });
   });

@@ -71,6 +71,16 @@ function neutralizeCanvasMediaDirectives(value: string): string {
   return value.replace(/^([^\S\n]*)(MEDIA:)/gim, "$1[neutralized] $2");
 }
 
+async function removeCanvasSnapshotFile(filePath: string): Promise<void> {
+  try {
+    await fs.unlink(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 function serializeCanvasEvalResult(result: unknown): string {
   const json =
     typeof result === "string"
@@ -246,13 +256,18 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             "canvas",
             CANVAS_SNAPSHOT_MAX_BYTES,
           );
-          return await imageResultFromFile({
-            label: "canvas:snapshot",
-            path: saved.path,
-            // Rendered pages are model observations, never automatic outbound attachments.
-            details: { node, format: payload.format, media: { outbound: false } },
-            imageSanitization,
-          });
+          try {
+            return await imageResultFromFile({
+              label: "canvas:snapshot",
+              path: saved.path,
+              // Rendered pages are model observations, never automatic outbound attachments.
+              details: { node, format: payload.format, media: { outbound: false } },
+              imageSanitization,
+            });
+          } finally {
+            // imageResultFromFile hydrates the model-visible image before returning.
+            await removeCanvasSnapshotFile(saved.path);
+          }
         }
         case "a2ui_push": {
           const jsonl =

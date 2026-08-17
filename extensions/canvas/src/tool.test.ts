@@ -1,5 +1,5 @@
 // Canvas tests cover tool plugin behavior.
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -355,20 +355,7 @@ describe("Canvas tool", () => {
         new Set(["canvas"]),
       ),
     ).toEqual([]);
-
-    const intentionalAttachment = await imageResultFromFile({
-      label: "canvas:intentional-attachment",
-      path: details.path!,
-    });
-    const intentionalArtifact = extractToolResultMediaArtifact(intentionalAttachment);
-    expect(
-      filterToolResultMediaUrls(
-        "canvas",
-        intentionalArtifact?.mediaUrls ?? [],
-        intentionalAttachment,
-        new Set(["canvas"]),
-      ),
-    ).toEqual([savedPath]);
+    await expect(readFile(savedPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects malformed snapshot base64 before creating an image result", async () => {

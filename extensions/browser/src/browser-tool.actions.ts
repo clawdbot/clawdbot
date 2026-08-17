@@ -38,6 +38,7 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
 } from "./browser/constants.js";
+import { formatErrorMessage } from "./infra/errors.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -496,17 +497,20 @@ export async function executeActAction(params: {
     );
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
+      let tabRefreshError: unknown;
       const tabs = proxyRequest
         ? await proxyRequest({ method: "GET", path: "/tabs", profile })
             .then((result) => (result as { tabs?: unknown[] }).tabs ?? [])
-            .catch(() => {
+            .catch((refreshError: unknown) => {
               params.signal?.throwIfAborted();
+              tabRefreshError = refreshError;
               return [];
             })
         : await browserToolActionDeps
             .browserTabs(baseUrl, { profile, signal: params.signal })
-            .catch(() => {
+            .catch((refreshError: unknown) => {
               params.signal?.throwIfAborted();
+              tabRefreshError = refreshError;
               return [];
             });
       const freshTargetId =
@@ -540,6 +544,12 @@ export async function executeActAction(params: {
           retryResult,
           readStringValue((retryResult as { targetId?: unknown }).targetId) ??
             readStringValue(retryRequest.targetId),
+        );
+      }
+      if (tabRefreshError) {
+        throw new Error(
+          `Chrome tab not found for profile="${profile}", and refreshing tabs failed: ${formatErrorMessage(tabRefreshError)}. Run action=tabs profile="${profile}" and retry with a returned targetId.`,
+          { cause: err },
         );
       }
       if (!tabs.length) {
