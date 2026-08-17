@@ -40,10 +40,6 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
-import {
-  deleteStoredChatSnapshot,
-  resolveChatSnapshotKey,
-} from "../pages/chat/session-snapshot-invalidation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
@@ -483,20 +479,19 @@ class OpenClawShell
     sessionState: ApplicationContext["sessions"]["state"],
   ): void {
     const context = this.context;
-    if (!context) {
+    const deletedSessions = sessionState.deletedSessions;
+    if (!context || deletedSessions.length === 0) {
       return;
     }
-    for (const { key, agentId } of sessionState.deletedSessions) {
-      const sessionKey = resolveChatSnapshotKey(
-        {
-          assistantAgentId: agentId ?? context.gateway.snapshot.assistantAgentId,
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-        },
-        { sessionKey: key, agentId },
-      );
-      void deleteStoredChatSnapshot(sessionKey);
-    }
+    const snapshotHost = {
+      assistantAgentId: context.gateway.snapshot.assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    };
+    void import("../pages/chat/session-snapshot-invalidation.ts").then(
+      ({ deleteStoredChatSessionSnapshots }) =>
+        deleteStoredChatSessionSnapshots(snapshotHost, deletedSessions),
+    );
   }
 
   exitSettings() {
