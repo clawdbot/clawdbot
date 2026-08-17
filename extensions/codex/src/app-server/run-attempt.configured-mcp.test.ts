@@ -189,7 +189,7 @@ function configureFakeMcp(params: ReturnType<typeof createParams>): void {
   params.cleanupBundleMcpOnRunEnd = true;
   params.runtimePlan = createCodexRuntimePlanFixture();
   params.preparedModelRuntime = {
-    metadataSnapshot: { manifestRegistry: { plugins: [] } },
+    metadataSnapshot: { manifestRegistry: { plugins: [] }, plugins: [] },
   } as never;
   params.config = {
     ...params.config,
@@ -232,7 +232,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     configureFakeMcp(params);
     const manifestRegistry = { plugins: [] };
     params.preparedModelRuntime = {
-      metadataSnapshot: { manifestRegistry, pluginIds: ["codex"] },
+      metadataSnapshot: { manifestRegistry, pluginIds: ["codex"], plugins: [] },
     } as never;
 
     const harness = createStartedThreadHarness();
