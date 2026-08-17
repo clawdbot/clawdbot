@@ -101,6 +101,31 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
+  it("passes the requested agent scope to explicitly selected provider checks", () => {
+    const isConfigured = vi.fn(() => true);
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "agent-scoped",
+      label: "Agent scoped",
+      isConfigured,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+
+    resolveConfiguredRealtimeVoiceProvider({
+      agentId: "voice-agent",
+      cfg: {},
+      configuredProviderId: provider.id,
+      providers: [provider],
+    });
+
+    expect(isConfigured).toHaveBeenCalledWith({
+      agentId: "voice-agent",
+      cfg: {},
+      providerConfig: {},
+    });
+  });
+
   it("keeps browser-only providers out of bridge auto-selection", () => {
     const isBrowserSessionConfigured = vi.fn(
       ({ agentId }: { agentId?: string }) => agentId === "voice-agent",

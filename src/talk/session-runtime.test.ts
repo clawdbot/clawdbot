@@ -96,7 +96,7 @@ describe("realtime voice bridge session runtime", () => {
     expect(sendMark).toHaveBeenCalledWith("mark-1");
   });
 
-  it("passes the requested audio format to the provider bridge", () => {
+  it("passes the requested agent scope and audio format to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const provider: RealtimeVoiceProviderPlugin = {
       id: "test",
@@ -110,11 +110,13 @@ describe("realtime voice bridge session runtime", () => {
 
     createRealtimeVoiceBridgeSession({
       provider,
+      agentId: "voice-agent",
       providerConfig: {},
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       audioSink: { sendAudio: vi.fn() },
     });
 
+    expect(expectBridgeRequest(request).agentId).toBe("voice-agent");
     expect(expectBridgeRequest(request).audioFormat).toEqual(
       REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     );

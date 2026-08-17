@@ -180,6 +180,31 @@ describe("OpenAI realtime voice provider routing", () => {
     });
   });
 
+  it("checks Platform API-key profiles in the requested agent scope", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir }: { agentDir?: string }) => agentDir?.includes("voice-agent") === true,
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const cfg = {
+      agents: { list: [{ id: "main" }, { id: "voice-agent" }] },
+    } as never;
+
+    expect(
+      provider.isConfigured({
+        agentId: "voice-agent",
+        cfg,
+        providerConfig: {},
+      }),
+    ).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg,
+      agentDir: expect.stringContaining("voice-agent"),
+      profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
+    });
+  });
+
   it("routes gpt-live Platform sessions through the native quicksilver broker", async () => {
     const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
     const provider = buildOpenAIRealtimeVoiceProvider({

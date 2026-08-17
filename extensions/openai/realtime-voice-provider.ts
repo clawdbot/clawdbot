@@ -214,6 +214,7 @@ async function createOpenAIRealtimeBrowserSession(
           createBridge: ({ apiKey, callId, onTerminal }) => {
             const bridge = new OpenAIRealtimeBridge({
               cfg: req.cfg,
+              agentId: req.agentId,
               providerConfig: req.providerConfig,
               apiKey,
               callId,
