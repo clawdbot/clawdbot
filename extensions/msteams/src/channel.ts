@@ -90,12 +90,24 @@ const MSTEAMS_GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "renameGroup",
 ]);
 
-const collectMSTeamsSecurityFindings = createConditionalWarningCollector.findings({
-  collectWarnings: collectMSTeamsSecurityWarnings,
-  checkId: "channels.msteams.groups.open",
-  severity: "critical",
-  title: "MS Teams security warning",
-});
+export function createMSTeamsSecurityWarningCollector(
+  findingsFactory: typeof createConditionalWarningCollector.findings | undefined,
+) {
+  // Official beta hosts expose the legacy string collector without `.findings`.
+  // Preserve their audit path while current hosts receive structured critical findings.
+  return typeof findingsFactory === "function"
+    ? findingsFactory({
+        collectWarnings: collectMSTeamsSecurityWarnings,
+        checkId: "channels.msteams.groups.open",
+        severity: "critical",
+        title: "MS Teams security warning",
+      })
+    : collectMSTeamsSecurityWarnings;
+}
+
+const collectMSTeamsSecurityFindings = createMSTeamsSecurityWarningCollector(
+  createConditionalWarningCollector.findings,
+);
 
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
