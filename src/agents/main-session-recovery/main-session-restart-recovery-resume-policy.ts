@@ -338,11 +338,15 @@ function isRestartAbortedWaitResultArtifact(message: unknown, waitMessage: unkno
   return Boolean(toolCallId && waitCall?.toolCallId === toolCallId);
 }
 
-function isApprovalPendingToolResult(message: unknown): boolean {
+function requiresRestartSafeToolResult(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
     return false;
   }
-  const details = (message as { details?: unknown }).details;
+  const record = message as Record<string, unknown>;
+  if (record.isError === true) {
+    return !isAgentToolReplaySafe({ name: normalizeOptionalString(record.toolName) });
+  }
+  const details = record.details;
   if (!details || typeof details !== "object") {
     return false;
   }
@@ -474,7 +478,7 @@ export function resolveMainSessionResumePolicy(
   if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
     return { action: "resume", forceRestartSafeTools: false };
   }
-  if (isApprovalPendingToolResult(lastMeaningful)) {
+  if (requiresRestartSafeToolResult(lastMeaningful)) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   // A later tool result can hide the checkpoint at the transcript tail; keep

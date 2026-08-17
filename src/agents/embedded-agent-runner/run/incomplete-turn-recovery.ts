@@ -2,7 +2,7 @@
 import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
-import { FAILED_TOOL_OUTCOME_INSTRUCTION } from "../../tool-outcome-instructions.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasCompletedMessagingToolDeliveryEvidence,
@@ -340,7 +340,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     return null;
   }
   return hasSettledTerminalToolFailure
-    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} ${FAILED_TOOL_OUTCOME_INSTRUCTION}`
+    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`
     : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 

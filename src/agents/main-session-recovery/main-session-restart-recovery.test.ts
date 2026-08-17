@@ -4809,7 +4809,8 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
     expect(gatewayParams().message).toContain("unknown outcome");
-    expect(gatewayParams().message).toContain("do not claim it completed or succeeded");
+    expect(gatewayParams().message).toContain("never claim completion or success");
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
   it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
