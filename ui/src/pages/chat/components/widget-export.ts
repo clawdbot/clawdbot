@@ -9,7 +9,6 @@ type WidgetExportRuntime = {
   requestSnapshot?: typeof requestWidgetSnapshot;
   copyImage?: (dataUrl: Promise<string>) => Promise<void>;
   download?: typeof downloadHref;
-  fetch?: typeof globalThis.fetch;
 };
 
 class WidgetSnapshotUnavailableError extends Error {}
@@ -85,7 +84,7 @@ export async function exportWidget(
   frame: HTMLIFrameElement,
   title: string | undefined,
   runtime: WidgetExportRuntime = {},
-): Promise<"png" | "html" | "rerender-required"> {
+): Promise<"png" | "rerender-required"> {
   const filename =
     Array.from((title ?? "").trim(), (character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -108,7 +107,10 @@ export async function exportWidget(
     const copyImage =
       runtime.copyImage ??
       ((dataUrl: Promise<string>) => {
-        const blob = dataUrl.then(async (value) => (await fetch(value)).blob());
+        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+          throw new Error("image clipboard is unavailable");
+        }
+        const blob = dataUrl.then(async (value) => (await globalThis.fetch(value)).blob());
         void blob.catch(() => {});
         // ClipboardItem keeps the click's transient activation while its PNG promise resolves.
         return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
@@ -133,27 +135,9 @@ export async function exportWidget(
     (runtime.download ?? downloadHref)(dataUrl, `${filename}.png`);
     return "png";
   } catch (error) {
-    if (!(error instanceof WidgetSnapshotUnavailableError)) {
-      throw error;
+    if (error instanceof WidgetSnapshotUnavailableError) {
+      return "rerender-required";
     }
-    const src = frame.getAttribute("src");
-    if (!src) {
-      throw new Error("widget document URL is unavailable", { cause: error });
-    }
-    const url = new URL(src, window.location.href);
-    if (url.origin !== window.location.origin) {
-      throw new Error("widget document URL is not same-origin", { cause: error });
-    }
-    const response = await (runtime.fetch ?? globalThis.fetch)(url.href);
-    if (!response.ok) {
-      throw new Error(`widget document download failed (${response.status})`, { cause: error });
-    }
-    const objectUrl = URL.createObjectURL(await response.blob());
-    try {
-      (runtime.download ?? downloadHref)(objectUrl, `${filename}.html`);
-    } finally {
-      URL.revokeObjectURL(objectUrl);
-    }
-    return "html";
+    throw error;
   }
 }

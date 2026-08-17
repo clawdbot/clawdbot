@@ -364,15 +364,21 @@ export function renderGroupedMessage(
   const assistantViewContent =
     sourceRole === "assistant" && assistantViewBlocks.length > 0
       ? html`${assistantViewBlocks.map(
-          (block) => html`${renderToolPreview(block.preview, "chat_message", {
-            onOpenSidebar,
-            rawText: block.rawText ?? null,
-            canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-            boardProvider: opts.boardProvider,
-            embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-            sessionKey: opts.sessionKey,
-          })}
-          ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
+          (block) => html`<div class="chat-tool-card__widget-host">
+            ${renderToolPreview(block.preview, "chat_message", {
+              onOpenSidebar,
+              rawText: block.rawText ?? null,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+              boardProvider: opts.boardProvider,
+              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+              sessionKey: opts.sessionKey,
+            })}
+            ${block.rawText
+              ? html`<div class="chat-tool-card__widget-raw">
+                  ${renderRawOutputToggle(block.rawText)}
+                </div>`
+              : nothing}
+          </div>`,
         )}`
       : nothing;
 

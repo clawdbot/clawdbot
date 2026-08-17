@@ -63,28 +63,22 @@ describe("widget export", () => {
     expect(download).toHaveBeenCalledWith(PNG_DATA_URL, "Current-widget.png");
   });
 
-  it("selects the copy notice and HTML download fallbacks after a timeout", async () => {
+  it("requires a new image render after a snapshot timeout", async () => {
     vi.useFakeTimers();
     const frame = createWidgetFrame();
-    const fetchDocument = vi.fn(async () => new Response("<p>Legacy</p>", { status: 200 }));
     const download = vi.fn();
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:legacy-widget");
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
 
     const copyResult = exportWidget("copy", frame, "Legacy widget", { timeoutMs: 10 });
     await vi.advanceTimersByTimeAsync(10);
     await expect(copyResult).resolves.toBe("rerender-required");
-    expect(fetchDocument).not.toHaveBeenCalled();
 
     const downloadResult = exportWidget("download", frame, "Legacy widget", {
       timeoutMs: 10,
-      fetch: fetchDocument,
       download,
     });
     await vi.advanceTimersByTimeAsync(10);
-    await expect(downloadResult).resolves.toBe("html");
-    expect(fetchDocument).toHaveBeenCalledWith(frame.src);
-    expect(download).toHaveBeenCalledWith("blob:legacy-widget", "Legacy-widget.html");
+    await expect(downloadResult).resolves.toBe("rerender-required");
+    expect(download).not.toHaveBeenCalled();
   });
 
   it("starts clipboard writing before the snapshot resolves", async () => {

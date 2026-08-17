@@ -731,11 +731,17 @@
   margin-top: 8px;
 }
 
+.chat-tool-card__widget-host {
+  width: 100%;
+}
+
 .chat-tool-card__preview {
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--card);
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
 }
 
@@ -746,7 +752,7 @@
 
 /* MCP Apps are responsive documents, so give them the assistant column instead
    of letting the content-sized reply bubble collapse their iframe to ~300px. */
-.chat-group.assistant .chat-bubble:has(> .chat-tool-card__preview[data-content-kind="mcp-app"]) {
+.chat-group.assistant .chat-bubble:has(> .chat-tool-card__widget-host) {
   align-self: stretch;
   width: 100%;
 }
@@ -763,7 +769,7 @@
 
 .chat-tool-card__preview-panel {
   overflow: hidden;
-  border-radius: inherit;
+  border-radius: 0;
 }
 
 .chat-tool-card__widget-actions {
@@ -851,6 +857,22 @@
      flashing white in dark mode. Documents from the pre-token wrapper assumed
      white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
   background: var(--card);
+}
+
+.chat-tool-card__widget-raw {
+  width: 100%;
+}
+
+.chat-tool-card__widget-raw > .chat-tool-card__raw {
+  margin-top: 8px;
+}
+
+.chat-tool-card__widget-raw .chat-tool-card__raw-toggle {
+  display: none;
+}
+
+.chat-tool-card__widget-raw .chat-tool-card__raw-body {
+  margin-top: 0;
 }
 
 .chat-tool-card__raw-toggle {

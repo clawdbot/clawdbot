@@ -189,7 +189,7 @@ describe("widget-card", () => {
     expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
       Array.from(canvas.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
-    ).toEqual(["Copy to clipboard", "Download file"]);
+    ).toEqual(["Copy as image", "Download as image"]);
 
     const app = document.createElement("div");
     render(
@@ -253,6 +253,9 @@ describe("widget-card", () => {
       ),
       canvas,
     );
+    expect(canvas.querySelector("[data-pin-widget]")?.getAttribute("aria-label")).toBe(
+      "Create dashboard",
+    );
 
     canvas.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
     await vi.waitFor(() => {
@@ -262,6 +265,32 @@ describe("widget-card", () => {
         title: "Release status",
       });
     });
+
+    snapshotSignal.value = {
+      sessionKey: "agent:main:main",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [],
+    };
+    const existingDashboard = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_release",
+          url: "/__openclaw__/canvas/documents/cv_release/index.html",
+          sandbox: "scripts",
+        },
+        "chat_message",
+        { boardProvider: provider },
+      ),
+      existingDashboard,
+    );
+    expect(existingDashboard.querySelector("[data-pin-widget]")?.getAttribute("aria-label")).toBe(
+      "Pin to dashboard",
+    );
 
     snapshotSignal.value = {
       sessionKey: "agent:main:main",
