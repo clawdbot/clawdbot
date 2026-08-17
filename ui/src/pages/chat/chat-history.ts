@@ -23,7 +23,6 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
@@ -46,7 +45,6 @@ import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts"
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
-  isUnknownGatewayMethodError,
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
@@ -926,13 +924,6 @@ async function requestChatHistory(
       if (!shouldContinue()) {
         throw err;
       }
-      if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
-        return await client.request<ChatHistoryResult>("chat.history", {
-          sessionKey,
-          ...(requestAgentId ? { agentId: requestAgentId } : {}),
-          limit: CHAT_HISTORY_REQUEST_LIMIT,
-        });
-      }
       if (shouldRetry() && isRetryableStartupUnavailable(err, method)) {
         await sleep(resolveStartupRetryDelayMs(err));
         if (!shouldContinue()) {
@@ -1322,12 +1313,6 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   if (!sessions?.listBranches || !client || !state.connected) {
     return;
   }
-  if (isGatewayMethodAdvertised(state, "sessions.branches.list") === false) {
-    state.chatBranches = [];
-    state.chatBranchesSessionKey = sessionKey;
-    state.chatBranchesConnectionEpoch = state.connectionEpoch;
-    return;
-  }
   const requests = getChatHistoryPaneRequests(state);
   const version = ++requests.branchVersion;
   const connectionEpoch = state.connectionEpoch;
@@ -1368,9 +1353,7 @@ export async function loadChatHistory(
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
-  const method =
-    opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
+  const method = opts.startup === true ? "chat.startup" : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
