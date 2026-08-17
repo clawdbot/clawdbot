@@ -93,9 +93,16 @@
 /* Keep every adjacent top-level Markdown block on the same rhythm, including
    special blocks that otherwise read as part of the preceding block. */
 .chat-text
-  :where(p, ul, ol, pre, blockquote, table, details)
+  > :where(p, ul, ol, pre, blockquote, table, details)
   + :where(p, ul, ol, pre, blockquote, table, details) {
-  margin-top: 0.75em;
+  margin-top: 1em;
+}
+
+.chat-text
+  :where(blockquote, details, li)
+  > :where(p, ul, ol, pre, blockquote, table, details)
+  + :where(p, ul, ol, pre, blockquote, table, details) {
+  margin-top: 0.5em;
 }
 
 /* Tables retain top margin even when first; the adjacent-block rule above gives
