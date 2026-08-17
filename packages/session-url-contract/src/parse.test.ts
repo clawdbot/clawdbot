@@ -186,6 +186,32 @@ describe("parseControlUiSessionPath", () => {
   });
 
   it.each([
+    ["agent:main:main", "/chat/main", "main"],
+    ["agent:main:standup", "/chat/main/standup", "literal"],
+    ["agent:main:sessions", "/chat/main/~key/sessions", "literal"],
+    ["agent:main:12345678", "/chat/main/~key/12345678", "literal"],
+    [
+      "agent:main:12345678-90ab-cdef-1234-567890abcdef",
+      "/chat/main/~key/12345678-90ab-cdef-1234-567890abcdef",
+      "literal",
+    ],
+    [
+      "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+      "literal",
+    ],
+  ] as const)("round-trips exact key %s", (sessionKey, expectedPath, expectedKind) => {
+    const path = buildControlUiSessionPath({ namespace: "chat", sessionKey, exactKey: true });
+
+    expect(path).toBe(expectedPath);
+    const parsed = parseControlUiSessionPath(path ?? "");
+    expect(parsed?.kind).toBe(expectedKind);
+    if (parsed?.kind === "literal") {
+      expect(parsed.sessionKey).toBe(sessionKey);
+    }
+  });
+
+  it.each([
     {
       sessionKey: "agent:main:main",
       agentId: "main",

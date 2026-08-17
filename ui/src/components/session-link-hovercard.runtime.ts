@@ -428,6 +428,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       this.context?.basePath,
       {
         displayName: title,
+        exactKey: true,
         mainKey: this.mainKey(),
       },
     );

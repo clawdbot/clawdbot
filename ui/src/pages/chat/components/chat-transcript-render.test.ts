@@ -396,4 +396,70 @@ describe("chat transcript rendering", () => {
       transcript.hostDisconnected();
     },
   );
+
+  it.each(["click", "Enter"])("SPA-routes transcript session hrefs with %s", async (action) => {
+    const transcript = createTestTranscript();
+    const onOpenSessionLink = vi.fn();
+    const onHistoryIntent = vi.fn();
+    const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+    const href = `/control/chat/main/~key/${literalUuid}?view=full#latest`;
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-session-href", "agent:main:main", [
+        { role: "assistant", content: `[Open session](${href})`, timestamp: 1_000 },
+      ]),
+      basePath: "/control",
+      onOpenSessionLink,
+      onHistoryIntent,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>(`a[href^="/control/chat/"]`);
+    const event =
+      action === "click"
+        ? new MouseEvent("click", { bubbles: true, button: 0, cancelable: true })
+        : new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onOpenSessionLink).toHaveBeenCalledWith({
+      namespace: "chat",
+      pathname: `/control/chat/main/~key/${literalUuid}`,
+      search: "?view=full",
+      hash: "#latest",
+    });
+    expect(onHistoryIntent).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
+  });
+
+  it("leaves external transcript hrefs to the browser", async () => {
+    const transcript = createTestTranscript();
+    const onOpenSessionLink = vi.fn();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-external-href", "agent:main:main", [
+        {
+          role: "assistant",
+          content: "[External session](https://example.com/chat/main/~key/12345678)",
+          timestamp: 1_000,
+        },
+      ]),
+      onOpenSessionLink,
+    };
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const link = container.querySelector<HTMLAnchorElement>('a[href^="https://example.com/"]');
+    const event = new MouseEvent("click", { bubbles: true, button: 0, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onOpenSessionLink).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
+  });
 });

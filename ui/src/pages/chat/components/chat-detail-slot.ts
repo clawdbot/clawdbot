@@ -44,6 +44,7 @@ export function renderChatDetailSlot(params: {
   return html`<openclaw-chat-detail-panel
     class="chat-sidebar"
     .content=${content}
+    .basePath=${params.chat.basePath ?? ""}
     .loadFullMessage=${params.fullMessageLoader}
     .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
     .embedSandboxMode=${host.embedSandboxMode}

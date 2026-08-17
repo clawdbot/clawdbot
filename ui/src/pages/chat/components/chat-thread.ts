@@ -6,6 +6,7 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
+  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
@@ -123,8 +124,11 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget = markdownSessionLinkFromKeyboardEvent(event);
+        const sessionTarget =
+          markdownSessionLinkFromKeyboardEvent(event) ??
+          (event.key === "Enter" ? markdownSessionHref(event, props.basePath) : null);
         if (sessionTarget) {
+          event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
           return;
         }
@@ -145,7 +149,8 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget = markdownSessionLinkFromEvent(event);
+        const sessionTarget =
+          markdownSessionLinkFromEvent(event) ?? markdownSessionHref(event, props.basePath);
         if (sessionTarget && shouldHandleNavigationClick(event)) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);

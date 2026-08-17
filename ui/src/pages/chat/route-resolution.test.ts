@@ -838,14 +838,19 @@ describe("gateway-backed session route resolution", () => {
       ok: true,
       key: shortMatch.key,
     });
+    const chipTarget = sessionNavigationTarget({
+      context,
+      face: "chat",
+      sessionKey: literal.key,
+      agentId: "main",
+      preferenceDerivedFace: true,
+      exactKey: true,
+    });
+
+    expect(chipTarget.options.pathname).toBe(`/chat/main/~key/${literalUuid}`);
 
     await expect(
-      loadChatRoute(
-        context,
-        { pathname: `/chat/main/~key/${literalUuid}`, search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
+      loadChatRoute(context, targetLocation(chipTarget), "chat", new AbortController().signal),
     ).resolves.toMatchObject({ kind: "session", sessionKey: literal.key });
 
     // Plain literal paths remain short-first, so this collision opens the short match.

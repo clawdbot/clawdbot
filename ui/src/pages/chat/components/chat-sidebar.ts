@@ -10,6 +10,7 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
+  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
@@ -699,6 +700,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailContent | null = null;
   @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
+  @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
@@ -1316,7 +1318,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       this.onOpenWorkspaceFile?.(target);
       return;
     }
-    const sessionTarget = markdownSessionLinkFromEvent(event);
+    const sessionTarget =
+      markdownSessionLinkFromEvent(event) ?? markdownSessionHref(event, this.basePath);
     if (sessionTarget && shouldHandleNavigationClick(event)) {
       event.preventDefault();
       this.onOpenSessionLink?.(sessionTarget);
@@ -1329,8 +1332,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       this.onOpenWorkspaceFile?.(target);
       return;
     }
-    const sessionTarget = markdownSessionLinkFromKeyboardEvent(event);
+    const sessionTarget =
+      markdownSessionLinkFromKeyboardEvent(event) ??
+      (event.key === "Enter" ? markdownSessionHref(event, this.basePath) : null);
     if (sessionTarget) {
+      event.preventDefault();
       this.onOpenSessionLink?.(sessionTarget);
     }
   };

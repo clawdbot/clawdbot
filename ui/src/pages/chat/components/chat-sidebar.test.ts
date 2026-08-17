@@ -158,6 +158,40 @@ describe("markdown sidebar", () => {
     },
   );
 
+  it.each(["click", "Enter"])(
+    "SPA-routes markdown preview session hrefs with %s",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        basePath?: string;
+        content: unknown;
+        onOpenSessionLink?: (target: unknown) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+      const href = `${window.location.origin}/control/dashboard/main/~key/${literalUuid}`;
+      panel.basePath = "/control";
+      panel.content = { kind: "markdown", content: `[Open session](${href})` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>(`a[href^="${window.location.origin}"]`);
+      const event =
+        action === "click"
+          ? new MouseEvent("click", { bubbles: true, button: 0, cancelable: true })
+          : new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      link?.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(onOpenSessionLink).toHaveBeenCalledWith({
+        namespace: "dashboard",
+        pathname: `/control/dashboard/main/~key/${literalUuid}`,
+      });
+      panel.remove();
+    },
+  );
+
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

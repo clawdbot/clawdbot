@@ -1,14 +1,25 @@
+import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
 import type MarkdownIt from "markdown-it";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 
 export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
-export type SessionLinkTarget = {
+type SessionKeyTarget = {
   sessionKey: string;
   agentId: string;
 };
+
+type SessionPathTarget = {
+  namespace: ControlUiSessionNamespace;
+  pathname: string;
+  search?: string;
+  hash?: string;
+};
+
+export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
 
 type SessionLinkMeta = {
   sessionKey: string;
@@ -24,7 +35,7 @@ function isSessionLinkBoundaryAfter(value: string, index: number): boolean {
   return char === undefined || /\s/.test(char) || ".,;:!?)]}>\"'".includes(char);
 }
 
-function parseSessionLinkKey(raw: string): SessionLinkTarget | null {
+function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   const sessionKey = raw.trim();
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed || `agent:${parsed.agentId}:${parsed.rest}` !== sessionKey.toLowerCase()) {
@@ -131,6 +142,37 @@ export function markdownSessionLinkFromEvent(event: Event): SessionLinkTarget | 
   return sessionKey ? parseSessionLinkKey(sessionKey) : null;
 }
 
+export function markdownSessionHref(event: Event, basePath = ""): SessionPathTarget | null {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return null;
+  }
+  const href = target.closest<HTMLAnchorElement>("a[href]")?.getAttribute("href")?.trim();
+  const location = globalThis.location;
+  if (!href || !location) {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(href, location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== location.origin) {
+    return null;
+  }
+  const parsed = sessionRefFromPath(url.pathname, basePath);
+  if (!parsed) {
+    return null;
+  }
+  return {
+    namespace: parsed.namespace,
+    pathname: url.pathname,
+    ...(url.search ? { search: url.search } : {}),
+    ...(url.hash ? { hash: url.hash } : {}),
+  };
+}
+
 export function markdownSessionLinkFromKeyboardEvent(
   event: KeyboardEvent,
 ): SessionLinkTarget | null {
@@ -148,11 +190,17 @@ export function navigateMarkdownSession(
   context: ApplicationContext,
   target: SessionLinkTarget,
 ): void {
+  if ("pathname" in target) {
+    const { namespace, ...options } = target;
+    context.navigate(namespace, options);
+    return;
+  }
   const navigation = sessionNavigationTarget({
     context,
     face: "chat",
     sessionKey: target.sessionKey,
     agentId: target.agentId,
+    exactKey: true,
     preferenceDerivedFace: true,
   });
   context.navigate("chat", navigation.options);

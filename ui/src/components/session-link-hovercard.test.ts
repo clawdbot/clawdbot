@@ -115,6 +115,25 @@ describe("openclaw-session-link-hovercard-provider", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("stamps single-segment UUID keys with a forced-literal href", () => {
+    const uuid = "12345678-90ab-cdef-1234-567890abcdef";
+    const sessionKey = `agent:main:${uuid}`;
+    const row = {
+      key: sessionKey,
+      agentId: "main",
+      kind: "direct",
+      updatedAt: Date.now(),
+    } as GatewaySessionRow;
+    const { provider, request } = createProvider({ rows: [row] });
+    const anchor = sessionAnchor(sessionKey);
+
+    provider.append(anchor);
+    document.body.append(provider);
+
+    expect(anchor.getAttribute("href")).toBe(`/chat/main/~key/${uuid}`);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("upgrades from the RPC, renders the card, and reuses one cache entry", async () => {
     const { provider, request } = createProvider({ response: previewResponse() });
     const anchor = sessionAnchor();

@@ -24,7 +24,7 @@ describe("markdown session links", () => {
     navigateMarkdownSession(context, target);
 
     expect(navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/roboclaw/2139bddb",
+      pathname: "/chat/roboclaw/dashboard/2139bddb-3211-4641-b993-10f619f124e6",
       search: "?__openclawSessionFacePreference=1",
     });
   });
