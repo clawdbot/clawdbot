@@ -858,7 +858,7 @@ export class ControlModelConversation {
 
   async loadMoreHistory(options?: ControlModelRequestOptions): Promise<void> {
     this.#assertCommandReady("chat.history");
-    if (this.#historyLoop) {
+    while (this.#historyLoop) {
       const activeLoop = this.#historyLoop;
       const activeOffset = this.#historyOffsetRequested;
       await activeLoop;
@@ -1906,7 +1906,7 @@ export class ControlModelConversation {
       return;
     }
     const sessionKey = text(approval.sessionKey) ?? text(approval.sourceSessionKey);
-    if (sessionKey && sessionKey !== this.#sessionKey) {
+    if (sessionKey && !this.#host.sessionMessageKeysEquivalent(sessionKey, this.#sessionKey)) {
       return;
     }
     this.#approvals.set(id, { ...approval });
@@ -1928,7 +1928,7 @@ export class ControlModelConversation {
       return;
     }
     const sessionKey = text(question.sessionKey);
-    if (sessionKey && sessionKey !== this.#sessionKey) {
+    if (sessionKey && !this.#host.sessionMessageKeysEquivalent(sessionKey, this.#sessionKey)) {
       return;
     }
     this.#questions.set(id, { ...question, sessionKey: this.#sessionKey });

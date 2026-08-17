@@ -437,13 +437,14 @@ describe("Control Model conversations", () => {
 
     const refresh = conversation.refreshHistory();
     const older = conversation.loadMoreHistory();
+    const concurrentOlder = conversation.loadMoreHistory();
     resolveTail({
       messages: [message(3), message(4)],
       hasMore: true,
       nextOffset: 2,
       totalMessages: 4,
     });
-    await Promise.all([refresh, older]);
+    await Promise.all([refresh, older, concurrentOlder]);
 
     expect(harness.callsFor("chat.history").map((call) => call.params.offset ?? 0)).toEqual([0, 2]);
     expect(messageIds(conversation.getSnapshot())).toEqual([
@@ -843,8 +844,28 @@ describe("Control Model conversations", () => {
       event: "chat",
       payload: { sessionKey: "global", runId: "alias-run", state: "delta" },
     });
+    harness.emit({
+      event: "session.approval",
+      payload: {
+        sessionKey: "global",
+        approval: { id: "alias-approval", status: "pending", sessionKey: "global" },
+      },
+    });
+    harness.emit({
+      event: "question.requested",
+      payload: {
+        sessionKey: "global",
+        question: { id: "alias-question", status: "pending", sessionKey: "global" },
+      },
+    });
 
     expect(conversation.getSnapshot().activeRun?.runId).toBe("alias-run");
+    expect(conversation.getSnapshot().approvals).toContainEqual(
+      expect.objectContaining({ id: "alias-approval" }),
+    );
+    expect(conversation.getSnapshot().questions).toContainEqual(
+      expect.objectContaining({ id: "alias-question", sessionKey: "agent:main:main" }),
+    );
     expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
       id: "artifact-calendar",
       state: "ready",
