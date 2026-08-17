@@ -193,11 +193,8 @@
   list-style: none;
 }
 
-:is(.chat-text, .chat-thinking) :where(ul:has(> .task-list-item)) {
-  padding-inline-start: 0;
-}
-
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
+  margin-inline-start: calc(-1 * var(--chat-markdown-indent));
   padding-inline-start: calc(var(--space-4) + var(--chat-markdown-marker-gap));
 }
 
