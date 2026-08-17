@@ -298,6 +298,9 @@ export function renderGroupedMessage(
     sessionLinks: true,
     documentId: messageKey,
   };
+  const reasoningRenderOptions: MarkdownRenderOptions = {
+    documentId: `reasoning:${messageKey}`,
+  };
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -507,7 +510,9 @@ export function renderGroupedMessage(
                       ${assistantViewContent}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                            ${unsafeHTML(
+                              toSanitizedMarkdownHtml(reasoningMarkdown, reasoningRenderOptions),
+                            )}
                           </div>`
                         : nothing}
                       ${jsonResult
@@ -573,7 +578,9 @@ export function renderGroupedMessage(
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                  ${unsafeHTML(
+                    toSanitizedMarkdownHtml(reasoningMarkdown, reasoningRenderOptions),
+                  )}
                 </div>`
               : nothing}
             ${assistantViewContent}

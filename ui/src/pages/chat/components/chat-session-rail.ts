@@ -423,7 +423,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           ${question}
         </div>
         <div class="chat-session-rail__answer" dir=${detectTextDirection(answer)}>
-          ${unsafeHTML(toSanitizedMarkdownHtml(answer))}
+          ${unsafeHTML(
+            toSanitizedMarkdownHtml(answer, {
+              documentId: `rail:${this.sessionKey}:${ts}`,
+            }),
+          )}
         </div>
         <time class="chat-session-rail__timestamp" datetime=${new Date(ts).toISOString()}>
           ${t("chat.rail.asOf", {

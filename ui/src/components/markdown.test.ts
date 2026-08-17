@@ -503,6 +503,7 @@ PY
       expect(fragment.querySelector("annotation")?.getAttribute("encoding")).toBe(
         "application/x-tex",
       );
+      expect(fragment.querySelector("semantics > annotation")?.textContent).toBe("E = mc^2");
     });
 
     it("keeps currency and Mermaid fences out of math rendering", () => {

@@ -23,6 +23,7 @@ import {
 
 const allowedTags = [
   "a",
+  "annotation",
   "b",
   "blockquote",
   "br",
@@ -70,6 +71,7 @@ const allowedTags = [
   "pre",
   "s",
   "section",
+  "semantics",
   "span",
   "strong",
   "summary",

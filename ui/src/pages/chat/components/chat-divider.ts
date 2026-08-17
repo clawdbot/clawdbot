@@ -86,7 +86,12 @@ export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
       ${item.text
         ? html`
             <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
-              ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
+              ${unsafeHTML(
+                toSanitizedMarkdownHtml(item.text, {
+                  codeBlockChrome: "none",
+                  documentId: `notice:${item.key}`,
+                }),
+              )}
             </div>
           `
         : nothing}
