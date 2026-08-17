@@ -2566,6 +2566,19 @@ openclaw-chat-session-rail {
   transform: rotate(90deg);
 }
 
+.code-block-json-node-opening {
+  display: none;
+  font-style: normal;
+}
+
+.code-block-json-node.is-expanded > .code-block-json-node-toggle > .code-block-json-node-summary {
+  display: none;
+}
+
+.code-block-json-node.is-expanded > .code-block-json-node-toggle > .code-block-json-node-opening {
+  display: inline;
+}
+
 .code-block-json-node-content {
   display: none;
 }

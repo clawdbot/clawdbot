@@ -204,7 +204,7 @@ function renderCodeBlockHeader(lang: string, copyButton: string): string {
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${copyButton}</div></div>`;
 }
 
-function renderJsonTree(value: unknown, depth = 0): string {
+function renderJsonPrimitive(value: unknown): string {
   if (value === null) {
     return '<span class="code-block-json-value code-block-json-value--null">null</span>';
   }
@@ -214,31 +214,36 @@ function renderJsonTree(value: unknown, depth = 0): string {
   if (typeof value === "number" || typeof value === "boolean") {
     return `<span class="code-block-json-value code-block-json-value--literal">${String(value)}</span>`;
   }
-  if (typeof value !== "object" || depth >= 20) {
-    return `<span class="code-block-json-value">${escapeMarkdownHtml(String(value))}</span>`;
-  }
+  return `<span class="code-block-json-value">${escapeMarkdownHtml(String(value))}</span>`;
+}
 
+function renderJsonNode(value: object, depth: number, expanded: boolean): string {
   const entries = Array.isArray(value)
     ? value.map((item, index) => [String(index), item] as const)
     : Object.entries(value as Record<string, unknown>);
   const opening = Array.isArray(value) ? "[" : "{";
   const closing = Array.isArray(value) ? "]" : "}";
+  const count = entries.length;
+  const summary = Array.isArray(value) ? `[ ${count} items ]` : `{ ${count} keys }`;
   const rows = entries
     .map(([key, item], index) => {
       const comma = index < entries.length - 1 ? "," : "";
       const label = Array.isArray(value)
-        ? `<span class="code-block-json-index">${key}</span>`
-        : `<span class="code-block-json-key">${escapeMarkdownHtml(JSON.stringify(key))}</span>`;
+        ? ""
+        : `<span class="code-block-json-key">${escapeMarkdownHtml(JSON.stringify(key))}</span><span class="code-block-json-colon">: </span>`;
       if (item !== null && typeof item === "object") {
-        const count = Array.isArray(item) ? item.length : Object.keys(item).length;
-        const summary = Array.isArray(item) ? `[ ${count} items ]` : `{ ${count} keys }`;
-        const expanded = depth === 0;
-        return `<li>${label}<span class="code-block-json-colon">: </span><span class="code-block-json-node${expanded ? " is-expanded" : ""}"><button type="button" class="code-block-json-node-toggle" aria-expanded="${String(expanded)}">${escapeMarkdownHtml(summary)}</button><span class="code-block-json-node-content">${renderJsonTree(item, depth + 1)}</span></span>${comma}</li>`;
+        return `<li>${label}${renderJsonNode(item, depth + 1, depth === 0)}${comma}</li>`;
       }
-      return `<li>${label}<span class="code-block-json-colon">: </span>${renderJsonTree(item, depth + 1)}${comma}</li>`;
+      return `<li>${label}${renderJsonPrimitive(item)}${comma}</li>`;
     })
     .join("");
-  return `<span class="code-block-json-bracket">${opening}</span><ul>${rows}</ul><span class="code-block-json-bracket">${closing}</span>`;
+  return `<span class="code-block-json-node${expanded ? " is-expanded" : ""}"><button type="button" class="code-block-json-node-toggle" aria-expanded="${String(expanded)}"><span class="code-block-json-node-summary">${escapeMarkdownHtml(summary)}</span><span class="code-block-json-node-opening">${opening}</span></button><span class="code-block-json-node-content"><ul>${rows}</ul><span class="code-block-json-bracket">${closing}</span></span></span>`;
+}
+
+function renderJsonTree(value: unknown): string {
+  return value !== null && typeof value === "object"
+    ? renderJsonNode(value, 0, true)
+    : renderJsonPrimitive(value);
 }
 
 export function renderMarkdownCodeBlock(
