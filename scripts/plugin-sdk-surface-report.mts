@@ -292,7 +292,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: strict explicit agent-id normalization without default-agent fallback.
       // +5: session-catalog paging capability, family/node-host composers, and option contracts.
       // +3: two focused primitives and the closed read-only SecretRef result contract.
-      4327,
+      // -2: remove obsolete transcript display helper exports.
+      4325,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -370,7 +371,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: strict explicit agent-id normalization without default-agent fallback.
       // +2: session-catalog family and node-host binding composers.
       // +2: bounded provider stream and read-only SecretRef resolver.
-      2570,
+      // -1: remove the obsolete transcript tool-call predicate.
+      2569,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
