@@ -37,9 +37,11 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
+export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
+
 export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
-  | { kind: "text"; text: string; source?: "refusal" };
+  | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
 
 type OpenAICompletionsReasoningBatch = {
   readonly deltas: readonly OpenAICompletionsContentDelta[];
@@ -137,7 +139,11 @@ export function readOpenAICompletionsReasoningBatch(
       // their order with adjacent structured thinking instead of inferring commentary.
       if (typeof detail.type === "string" && visibleReasoningDetailTypes.has(detail.type)) {
         batch ??= createOpenAICompletionsReasoningBatch();
-        appendOpenAICompletionsReasoningDelta(batch, { kind: "text", text: detail.text });
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "text",
+          text: detail.text,
+          source: "reasoning_detail",
+        });
       }
     }
   }

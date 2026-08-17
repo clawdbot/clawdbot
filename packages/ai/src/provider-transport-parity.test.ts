@@ -235,6 +235,19 @@ const openAiOrderedVisibleReasoningDetailsChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiSplitVisibleReasoningDetailsChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
+  }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
+  }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "response.text", text: " Visible third." }],
+  }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({ reasoning_content: "First thought." }),
   makeOpenAiChunk({ content: "Answer." }),
@@ -692,23 +705,22 @@ describe("provider and transport observable parity fixtures", () => {
 
   it("preserves ordered visible OpenRouter reasoning details across both producers", async () => {
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await runOpenAi(
-        implementation,
-        "success",
+      for (const chunks of [
         openAiOrderedVisibleReasoningDetailsChunks,
-        true,
-        openRouterModel,
-      );
+        openAiSplitVisibleReasoningDetailsChunks,
+      ]) {
+        const result = await runOpenAi(implementation, "success", chunks, true, openRouterModel);
 
-      expect(result.terminal.content).toEqual([
-        { type: "text", text: "Visible first." },
-        {
-          type: "thinking",
-          thinking: " Hidden second.",
-          thinkingSignature: "reasoning_details",
-        },
-        { type: "text", text: " Visible third." },
-      ]);
+        expect(result.terminal.content).toEqual([
+          { type: "text", text: "Visible first." },
+          {
+            type: "thinking",
+            thinking: " Hidden second.",
+            thinkingSignature: "reasoning_details",
+          },
+          { type: "text", text: " Visible third." },
+        ]);
+      }
     }
   });
 });

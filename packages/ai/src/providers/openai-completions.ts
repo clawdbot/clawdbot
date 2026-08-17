@@ -25,6 +25,7 @@ import {
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
   type OpenAICompletionsContentDelta,
+  type OpenAICompletionsTextSource,
 } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
@@ -197,6 +198,7 @@ export const streamOpenAICompletions: StreamFunction<
       >[number];
 
       let textBlock: TextContent | null = null;
+      let textBlockSource: OpenAICompletionsTextSource | undefined;
       let thinkingBlock: ThinkingContent | null = null;
       let pendingInterruptedTextBlock: TextContent | null = null;
       let confirmedInterruptedTextBlock: TextContent | null = null;
@@ -265,10 +267,15 @@ export const streamOpenAICompletions: StreamFunction<
         }
         finishBlock(textBlock);
         textBlock = null;
+        textBlockSource = undefined;
       };
-      const ensureTextBlock = () => {
+      const ensureTextBlock = (source: OpenAICompletionsTextSource | undefined) => {
+        if (textBlock && textBlockSource !== source) {
+          finishTextBlock();
+        }
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
+          textBlockSource = source;
           appendBlock(textBlock);
           stream.push({
             type: "text_start",
@@ -305,9 +312,9 @@ export const streamOpenAICompletions: StreamFunction<
           thinkingBlock = null;
         }
       };
-      const appendTextDelta = (delta: string) => {
+      const appendTextDelta = (delta: string, source?: OpenAICompletionsTextSource) => {
         sealNativeReasoningBeforeText();
-        const block = ensureTextBlock();
+        const block = ensureTextBlock(source);
         block.text += delta;
         if (pendingInterruptedTextBlock && delta.trim()) {
           confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
@@ -344,7 +351,7 @@ export const streamOpenAICompletions: StreamFunction<
                 : signature;
             appendThinkingDelta(thinkingSignature, reasoningDelta.text);
           } else {
-            appendTextDelta(reasoningDelta.text);
+            appendTextDelta(reasoningDelta.text, reasoningDelta.source);
           }
         }
       };
@@ -414,7 +421,7 @@ export const streamOpenAICompletions: StreamFunction<
         }
         // Resumed reasoning makes the preceding visible text interim. Preserve
         // the candidate boundary only if later text confirms a final answer.
-        if (textBlock.text.trim()) {
+        if (textBlockSource !== "reasoning_detail" && textBlock.text.trim()) {
           pendingInterruptedTextBlock = textBlock;
         }
         finishTextBlock();

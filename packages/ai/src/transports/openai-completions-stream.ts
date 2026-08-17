@@ -34,6 +34,7 @@ import {
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
+  type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 
@@ -105,6 +106,7 @@ export async function processCompletionsStream(
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
     | ToolCallBlock
     | null = null;
+  let currentTextSource: OpenAICompletionsTextSource | undefined;
   let pendingInterruptedTextBlock: TextBlock | null = null;
   let confirmedInterruptedTextBlock: TextBlock | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
@@ -131,7 +133,11 @@ export async function processCompletionsStream(
     }
     pendingPostToolCallBytes += nextBytes;
     const previous = pendingPostToolCallDeltas[pendingPostToolCallDeltas.length - 1];
-    if (!previous || previous.kind !== next.kind) {
+    if (
+      !previous ||
+      previous.kind !== next.kind ||
+      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source)
+    ) {
       pendingPostToolCallDeltas.push(next);
       return;
     }
@@ -163,9 +169,13 @@ export async function processCompletionsStream(
       partial: output,
     });
   };
-  const appendTextDeltaInternal = (text: string) => {
+  const appendTextDeltaInternal = (text: string, source?: OpenAICompletionsTextSource) => {
+    if (currentBlock?.type === "text" && currentTextSource !== source) {
+      currentBlock = null;
+    }
     if (!currentBlock || currentBlock.type !== "text") {
       currentBlock = { type: "text", text: "" };
+      currentTextSource = source;
       output.content.push(currentBlock);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
@@ -194,7 +204,7 @@ export async function processCompletionsStream(
     pendingPostToolCallBytes = 0;
     for (const delta of bufferedDeltas) {
       if (delta.kind === "text") {
-        appendTextDeltaInternal(delta.text);
+        appendTextDeltaInternal(delta.text, delta.source);
       } else if (emitReasoning) {
         appendThinkingDeltaInternal(delta);
       }
@@ -205,9 +215,9 @@ export async function processCompletionsStream(
     flushPendingPostToolCallDeltas();
     appendThinkingDeltaInternal(reasoningDelta);
   };
-  const appendTextDelta = (text: string) => {
+  const appendTextDelta = (text: string, source?: OpenAICompletionsTextSource) => {
     flushPendingPostToolCallDeltas();
-    appendTextDeltaInternal(text);
+    appendTextDeltaInternal(text, source);
   };
   const appendVisibleTextDelta = (text: string) => {
     if (!text) {
@@ -229,7 +239,7 @@ export async function processCompletionsStream(
         continue;
       }
       if (reasoningDelta.kind === "text") {
-        appendTextDelta(reasoningDelta.text);
+        appendTextDelta(reasoningDelta.text, reasoningDelta.source);
       } else if (emitReasoning) {
         appendThinkingDelta(reasoningDelta);
       }
@@ -356,10 +366,11 @@ export async function processCompletionsStream(
     }
     // Resumed reasoning makes the preceding visible text interim. Preserve
     // the candidate boundary only if later text confirms a final answer.
-    if (currentBlock.text.trim()) {
+    if (currentTextSource !== "reasoning_detail" && currentBlock.text.trim()) {
       pendingInterruptedTextBlock = currentBlock;
     }
     currentBlock = null;
+    currentTextSource = undefined;
   };
   const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
     if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
