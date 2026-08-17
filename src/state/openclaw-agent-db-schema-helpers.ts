@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
@@ -246,7 +247,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     return null;
   }
   return {
-    agentId: typeof row.agent_id === "string" ? row.agent_id : null,
+    agentId: normalizeNullableString(row.agent_id),
     role: typeof row.role === "string" ? row.role : null,
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };

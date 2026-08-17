@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
 import { isErrno } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
@@ -73,13 +74,17 @@ export function inspectLegacyAgentDir(
   try {
     const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
     database = opened;
-    const schemaOwner = opened // sqlite-allow-raw -- Read-only legacy schema ownership inspection.
-      .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'primary' AND role = 'agent' LIMIT 1")
-      .get();
-    if (!schemaOwner) {
+    const schemaOwner = readExistingAgentSchemaMeta(opened);
+    if (!schemaOwner || schemaOwner.role !== "agent") {
       return legacyAgentInspectionFailure(
         `legacy agent database ${databasePath}`,
         "agent schema ownership metadata is missing",
+      );
+    }
+    if (!schemaOwner.agentId) {
+      return legacyAgentInspectionFailure(
+        `legacy agent database ${databasePath}`,
+        "agent schema owner is missing or blank",
       );
     }
     const tableNames = opened // sqlite-allow-raw -- Read-only legacy migration payload inspection.
