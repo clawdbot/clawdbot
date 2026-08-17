@@ -170,7 +170,6 @@ describe("runConfigureWizard default-agent ownership", () => {
         entries: {
           main: {
             agentDir: "/tmp/main-agent",
-            workspace: "/tmp/main-workspace",
           },
           ops: {
             agentDir: "/tmp/ops-agent",

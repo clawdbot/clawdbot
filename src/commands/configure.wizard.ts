@@ -667,7 +667,7 @@ export async function runConfigureWizard(
       const target = resolveSetupTarget();
       const targetEntry = nextConfig.agents?.entries?.[target.agentId];
       nextConfig =
-        targetEntry?.workspace !== undefined
+        targetEntry !== undefined
           ? {
               ...nextConfig,
               agents: {
