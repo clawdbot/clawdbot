@@ -1,4 +1,4 @@
-import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Browser setup entry. It auto-enables the Browser plugin when config or tool
  * policies reference browser control.

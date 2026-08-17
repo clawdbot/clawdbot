@@ -1,4 +1,4 @@
-import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Discord plugin module cleans up reactions left by the retired subagent progress feature.
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
