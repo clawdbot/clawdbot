@@ -293,6 +293,9 @@ export async function admitReplyTurn(
             // admittedSessionEntry is a pre-claim snapshot: a concurrent /new or reset that
             // wins the race during the awaited claim can replace this row, so re-read the
             // current entry rather than trusting the stale tombstone it may still describe.
+            // The replacement row can itself carry an unrelated tombstone (a different
+            // session that also failed), so only trust the reason when it still describes
+            // the exact session this claim was for.
             const currentSessionEntry = storePath
               ? (loadSessionEntry({
                   storePath,
@@ -300,7 +303,10 @@ export async function admitReplyTurn(
                   readConsistency: "latest",
                 }) as InternalSessionEntry | undefined)
               : undefined;
-            const tombstoneReason = currentSessionEntry?.mainRestartRecovery?.tombstone?.reason;
+            const tombstoneReason =
+              currentSessionEntry?.sessionId === sessionId
+                ? currentSessionEntry?.mainRestartRecovery?.tombstone?.reason
+                : undefined;
             rejectLifecycleInvalidatedWork({
               kind: params.kind,
               message: tombstoneReason

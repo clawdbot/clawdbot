@@ -746,6 +746,71 @@ describe("reply turn admission", () => {
     },
   );
 
+  it.each(["visible", "heartbeat"] as const)(
+    "does not attribute a replacement session's own tombstone to the claimed session, for %s admission",
+    async (kind) => {
+      // Regression: the replacement row from a concurrent /new or reset can itself already
+      // be tombstoned (a different session that also failed). Reading "any current tombstone
+      // reason at this sessionKey" without checking whose session it belongs to would tell
+      // the caller of the OLD claim to fix a problem that describes the NEW session instead.
+      const sessionKey = `agent:main:telegram:topic:recovery-race-tombstone-mismatch:${kind}`;
+      const sessionId = "tombstoned-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "failed",
+          abortedLastRun: false,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 4,
+            chargedAttempts: 3,
+            tombstone: { reason: "automatic recovery exhausted" },
+          },
+        },
+      });
+
+      // Simulate a concurrent /new replacing the row with a *different* session that has
+      // already accumulated its own, unrelated tombstone by the time we re-read state.
+      const claimSpy = vi
+        .spyOn(mainSessionRecoveryStore, "claimMainSessionRecoveryOwner")
+        .mockImplementation(async () => {
+          replaceSessionEntrySync({ storePath, sessionKey }, {
+            sessionId: "replacement-session",
+            updatedAt: 200,
+            status: "failed",
+            abortedLastRun: false,
+            mainRestartRecovery: {
+              cycleId: "cycle-2",
+              revision: 1,
+              chargedAttempts: 3,
+              tombstone: { reason: "replacement session unrelated failure" },
+            },
+          } as SessionEntry);
+          return { kind: "invalidated", reason: "state_changed" } as const;
+        });
+
+      let caught: unknown;
+      try {
+        await admitTestReplyTurn({
+          sessionKey,
+          sessionId,
+          expectedSessionId: sessionId,
+          storePath,
+          kind,
+        });
+      } catch (err) {
+        caught = err;
+      } finally {
+        claimSpy.mockRestore();
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).not.toContain("automatic recovery exhausted");
+      expect((caught as Error).message).not.toContain("replacement session unrelated failure");
+      expect((caught as Error).message).toMatch(/changed while starting work/i);
+    },
+  );
+
   it("admits a visible turn after clearing orphaned restart-recovery fences", async () => {
     const sessionKey = "agent:main:telegram:topic:orphaned-recovery-fence";
     const sessionId = "healthy-session";
