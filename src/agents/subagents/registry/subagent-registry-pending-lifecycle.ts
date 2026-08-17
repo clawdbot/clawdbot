@@ -1,10 +1,10 @@
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
-const LIFECYCLE_RETRY_GRACE_MS = 15_000;
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000;
 
 type PendingLifecycleKind = "error" | "timeout";
@@ -82,7 +82,7 @@ export function createPendingLifecycleScheduler(params: {
         },
         `lifecycle-${kind}-grace`,
       );
-    }, LIFECYCLE_RETRY_GRACE_MS);
+    }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     timer.unref?.();
     pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer });
   }

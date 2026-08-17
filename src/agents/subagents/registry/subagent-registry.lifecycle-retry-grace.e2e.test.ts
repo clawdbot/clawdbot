@@ -20,6 +20,9 @@ type LifecycleData = {
   aborted?: boolean;
   error?: string;
   terminalReply?: AgentRunTerminalReplySnapshot;
+  status?: string;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
 };
 type LifecycleEvent = {
   stream?: string;
@@ -840,28 +843,53 @@ describe("subagent registry lifecycle error grace", () => {
     expect(run.completion?.capturedAt).toBeTypeOf("number");
   });
 
-  it("completes with timeout status when aborted end event fires after grace window", async () => {
-    registerCompletionRun("run-timeout", "timeout", "timeout test");
-    setAssistantOutput("agent:main:subagent:timeout", "Partial output before timeout");
+  it("records a bare aborted end event as cancellation without a completion announcement", async () => {
+    registerCompletionRun("run-aborted", "aborted", "aborted test");
+    setAssistantOutput("agent:main:subagent:aborted", "Partial output before cancellation");
 
-    // Emit an end event with aborted=true which triggers the timeout grace path
-    emitLifecycleEvent("run-timeout", {
+    emitLifecycleEvent("run-aborted", {
       phase: "end",
       aborted: true,
       endedAt: 3_000,
-    } as LifecycleData & { aborted: boolean });
+    });
+    await flushAsync();
+
+    expect(getAgentCalls()).toHaveLength(0);
+    const run = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-aborted");
+    expect(run).toMatchObject({
+      endedReason: "subagent-killed",
+      execution: { outcome: { status: "error", error: "subagent run terminated" } },
+    });
+  });
+
+  it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {
+    registerCompletionRun("run-provider-timeout", "provider-timeout", "provider timeout test");
+    setAssistantOutput(
+      "agent:main:subagent:provider-timeout",
+      "Partial output before provider timeout",
+    );
+
+    emitLifecycleEvent("run-provider-timeout", {
+      phase: "end",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      endedAt: 3_000,
+      error: "provider timed out",
+    });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
 
-    // Advance past the lifecycle timeout retry grace window
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
-
     await waitForAgentCallCount(1);
 
+    expect(readFirstAnnounceOutcome()?.status).toBe("timeout");
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === "run-timeout");
+      .find((candidate) => candidate.runId === "run-provider-timeout");
     expect(run?.execution.outcome?.status).toBe("timeout");
   });
 
@@ -869,12 +897,15 @@ describe("subagent registry lifecycle error grace", () => {
     registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
     setAssistantOutput("agent:main:subagent:timeout-cancel", "Final answer after recovery");
 
-    // Emit an aborted end event (starts timeout grace)
+    // Emit a structured timeout terminal (starts timeout grace).
     emitLifecycleEvent("run-timeout-cancel", {
       phase: "end",
       aborted: true,
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
       endedAt: 4_000,
-    } as LifecycleData & { aborted: boolean });
+    });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
 
