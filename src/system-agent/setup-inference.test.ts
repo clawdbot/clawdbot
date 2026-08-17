@@ -344,6 +344,7 @@ async function activateSetupInference(
   if (!deps.ensurePluginRegistryLoaded) {
     deps.ensurePluginRegistryLoaded = () => {};
   }
+  deps.refreshPreparedModelRuntimeSnapshots ??= vi.fn(async () => {}) as never;
   if (!deps.resolveCliRuntimeArtifactFingerprint) {
     deps.resolveCliRuntimeArtifactFingerprint = vi.fn(
       async () => testCliRuntimeArtifactFingerprint,
@@ -4432,6 +4433,7 @@ describe("activateSetupInference", () => {
       expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
       return successfulRun("openai", "gpt-5.4", params);
     });
+    const refreshPreparedModelRuntimeSnapshots = vi.fn(async () => {});
     const result = await activateCodexSetup({
       modelRef: "openai/gpt-5.4",
       workspace: "/tmp/work",
@@ -4440,6 +4442,7 @@ describe("activateSetupInference", () => {
         ensureCodexRuntimePlugin: ensureCodex as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
+        refreshPreparedModelRuntimeSnapshots: refreshPreparedModelRuntimeSnapshots as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
     });
@@ -4513,6 +4516,8 @@ describe("activateSetupInference", () => {
         },
       },
     });
+    expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+    expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(configHarness.current());
   });
 
   it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {

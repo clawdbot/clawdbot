@@ -606,6 +606,19 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
+    if (committedConfig) {
+      try {
+        const refreshPreparedModelRuntimeSnapshots =
+          deps.refreshPreparedModelRuntimeSnapshots ??
+          (await import("../agents/prepared-model-runtime.js"))
+            .refreshPreparedModelRuntimeSnapshots;
+        await refreshPreparedModelRuntimeSnapshots(committedConfig);
+      } catch {
+        throw new SetupInferenceActivationIndeterminateError(
+          "Inference activation committed, but the prepared model catalog could not be refreshed. Restart the Gateway before using the new inference route.",
+        );
+      }
+    }
     const announceAutoLocalModelLean =
       autoLocalModelLeanApplied &&
       committedConfig?.agents?.defaults?.experimental?.localModelLean === true;
