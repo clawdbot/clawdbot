@@ -39,7 +39,7 @@ import {
   loadOriginDeviceTokenReadOnly,
 } from "../infra/device-auth-store.js";
 import {
-  loadDeviceIdentityIfPresentReadOnly,
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
@@ -501,7 +501,7 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
 function resolveDeviceIdentityForGatewayCall(sharedStateMode?: "read-only"): DeviceIdentity | null {
   try {
     return sharedStateMode === "read-only"
-      ? loadDeviceIdentityIfPresentReadOnly()
+      ? loadDeviceIdentityIfPresent()
       : loadOrCreateDeviceIdentity();
   } catch {
     // Read-only or restricted environments should still be able to call the

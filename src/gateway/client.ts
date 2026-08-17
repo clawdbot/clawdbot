@@ -18,7 +18,7 @@ import {
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import {
-  loadDeviceIdentityIfPresentReadOnly,
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -99,7 +99,7 @@ function createOpenClawGatewayClientHostDeps(
       ? {
           // Read-only is an authoritative lifecycle policy: caller overrides
           // must not restore identity creation or token writes behind it.
-          loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresentReadOnly() ?? undefined,
+          loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
           ...deviceAuthDeps,
         }
       : {}),

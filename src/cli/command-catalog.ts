@@ -227,7 +227,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
     }),
   ),
-  { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "diagnostics"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "health"],
