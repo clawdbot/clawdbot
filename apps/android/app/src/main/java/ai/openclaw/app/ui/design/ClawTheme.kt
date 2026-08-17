@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui.design
 
-import ai.openclaw.app.ui.mobileFontFamily
+import ai.openclaw.app.R
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -13,11 +13,20 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+internal val clawFontFamily =
+  FontFamily(
+    Font(resId = R.font.manrope_400_regular, weight = FontWeight.Normal),
+    Font(resId = R.font.manrope_500_medium, weight = FontWeight.Medium),
+    Font(resId = R.font.manrope_600_semibold, weight = FontWeight.SemiBold),
+    Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
+  )
 
 /**
  * App color tokens consumed by ClawTheme and bridged into Material components.
@@ -149,7 +158,7 @@ private val ClawLightColors =
 private val LocalClawColors = staticCompositionLocalOf { ClawDarkColors }
 private val LocalClawSpacing = staticCompositionLocalOf { ClawSpacing() }
 private val LocalClawRadii = staticCompositionLocalOf { ClawRadii() }
-private val LocalClawTypography = staticCompositionLocalOf { clawTypography(mobileFontFamily) }
+private val LocalClawTypography = staticCompositionLocalOf { clawTypography(clawFontFamily) }
 
 /**
  * Composition-local access point for OpenClaw Android design tokens.
@@ -185,7 +194,7 @@ internal fun ClawDesignTheme(
   content: @Composable () -> Unit,
 ) {
   val colors = if (dark) ClawDarkColors else ClawLightColors
-  val typography = clawTypography(mobileFontFamily)
+  val typography = clawTypography(clawFontFamily)
 
   CompositionLocalProvider(
     LocalClawColors provides colors,
