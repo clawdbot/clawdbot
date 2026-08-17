@@ -426,20 +426,23 @@ describe("device identity SQLite store", () => {
       const creator = await startPausedBootstrapCreator(rootDir);
       try {
         const sqlite = await import("node:sqlite");
+        // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
         const prepare = sqlite.DatabaseSync.prototype.prepare;
         let committedDuringRead = false;
-        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (sql) {
-          try {
-            return prepare.call(this, sql);
-          } catch (error) {
-            if (!committedDuringRead && /device_identities/iu.test(sql)) {
-              committedDuringRead = true;
-              fs.writeFileSync(creator.continuePath, "continue");
-              waitForFileSync(creator.committedPath);
+        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(
+          function (this: InstanceType<typeof sqlite.DatabaseSync>, sql) {
+            try {
+              return prepare.call(this, sql);
+            } catch (error) {
+              if (!committedDuringRead && /device_identities/iu.test(sql)) {
+                committedDuringRead = true;
+                fs.writeFileSync(creator.continuePath, "continue");
+                waitForFileSync(creator.committedPath);
+              }
+              throw error;
             }
-            throw error;
-          }
-        });
+          },
+        );
 
         expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toBeNull();
         expect(committedDuringRead).toBe(true);
