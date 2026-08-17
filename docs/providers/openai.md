@@ -1557,7 +1557,7 @@ not declared Codex-compatible.
     is already the default) and inert on unsupported provider/model pairs.
 
     With `strict-agentic` active, OpenClaw:
-    - Auto-enables `update_plan` for substantial work
+    - Makes `progress_card` available for substantial work unless `tools.updatePlan` disables it
     - Retries structurally empty or reasoning-only turns with a visible-answer
       continuation
     - Uses explicit harness plan events when the selected harness provides

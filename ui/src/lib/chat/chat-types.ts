@@ -118,8 +118,7 @@ export type ChatItem =
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string; startedAt: number }
-  | { kind: "question"; key: string; questionId: string; startedAt: number }
-  | { kind: "plan"; key: string };
+  | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
   text: string;

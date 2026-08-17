@@ -542,6 +542,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { startup: true, controlPlaneWrite: true },
   ],
   ["sessions.assignOwner", "sessions-mutations", "operator.write", "2026.8"],
+  ["progressCard.get", "progress-card", "operator.read", "2026.8"],
+  ["progressCard.put", "progress-card", "operator.write", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

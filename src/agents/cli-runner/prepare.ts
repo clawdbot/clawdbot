@@ -260,8 +260,17 @@ async function resolveCliSkillsPrompt(params: {
     workspaceDir: params.workspaceDir,
   });
   if (!sandboxWorkspace) {
+    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } =
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        skillsSnapshot: params.skillsSnapshot,
+      });
     return resolveSkillsPrompt({
       skillsSnapshot: params.skillsSnapshot,
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      loadEntries: loadSkillEntries,
       workspaceDir: params.workspaceDir,
       config: params.config,
       agentId: params.agentId,

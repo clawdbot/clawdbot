@@ -315,10 +315,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Goal",
       detailKeys: ["status"],
     },
-    update_plan: {
+    progress_card: {
       emoji: "🗺️",
-      title: "Update Plan",
-      detailKeys: ["explanation", "plan.0.step"],
+      title: "Progress Card",
+      detailKeys: ["plan.0.step", "markdown"],
     },
     ask_user: {
       emoji: "❓",

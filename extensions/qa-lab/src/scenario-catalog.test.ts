@@ -385,7 +385,7 @@ describe("qa scenario catalog", () => {
 
     for (const scenario of [
       readQaScenarioById("control-ui-chat-flow-playwright"),
-      readQaScenarioById("control-ui-plan-replay-reconnect"),
+      readQaScenarioById("control-ui-progress-card-live-placement"),
     ]) {
       expect(scenario.execution.kind, scenario.id).toBe("playwright");
       expect(scenario.coverage?.primary, scenario.id).not.toContain(coverageId);

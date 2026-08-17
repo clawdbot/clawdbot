@@ -4242,6 +4242,32 @@ describe("session accessor seam", () => {
     ).not.toHaveProperty("sessionFile");
   });
 
+  it("reads imported transcripts before opening the SQLite transaction", async () => {
+    const agentId = "main";
+    const sessionId = "session-1";
+    const database = openOpenClawAgentDatabase({
+      agentId,
+      path: expectDefined(
+        resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
+        "session database path",
+      ),
+    });
+    let readInsideTransaction: boolean | undefined;
+
+    await importSqliteSessionRows({
+      agentId,
+      entry: { sessionId, updatedAt: 10 },
+      readTranscriptEvents: (append) => {
+        readInsideTransaction = database.db.isTransaction;
+        append({ sessionId, type: "session" });
+      },
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+
+    expect(readInsideTransaction).toBe(false);
+  });
+
   it("tracks replacement and deletion transcript mutations", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const scope = {

@@ -710,6 +710,25 @@ export async function processGatewayAllowlist(
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
     requiresSecurityAuditSuppressionApproval;
+  const denyHeadlessApproval = (): ProcessGatewayAllowlistResult => {
+    const text = params.approvalFollowupText
+      ? `${params.approvalFollowupText}\nCommand: ${params.command}`
+      : `Exec denied (approval_required): ${params.command}`;
+    return {
+      deniedResult: {
+        content: [{ type: "text", text }],
+        details: {
+          status: "failed",
+          exitCode: null,
+          failureKind: "approval_required",
+          durationMs: 0,
+          aggregated: text,
+          timedOut: false,
+          cwd: params.workdir,
+        },
+      },
+    };
+  };
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
@@ -719,6 +738,9 @@ export async function processGatewayAllowlist(
     params.warnings.push(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
+  }
+  if (policyRequiresAsk && params.nonInteractiveApproval) {
+    return denyHeadlessApproval();
   }
   const shouldDenyUnpromptedShellExpansion =
     requiresAllowlistPlanApproval &&
@@ -807,21 +829,7 @@ export async function processGatewayAllowlist(
   }
   if (requiresAsk) {
     if (params.nonInteractiveApproval) {
-      const text = `Exec denied (approval_required): ${params.command}`;
-      return {
-        deniedResult: {
-          content: [{ type: "text", text }],
-          details: {
-            status: "failed",
-            exitCode: null,
-            failureKind: "approval_required",
-            durationMs: 0,
-            aggregated: text,
-            timedOut: false,
-            cwd: params.workdir,
-          },
-        },
-      };
+      return denyHeadlessApproval();
     }
     if (!mutableFileBinding) {
       return {

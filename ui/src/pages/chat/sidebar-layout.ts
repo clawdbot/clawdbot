@@ -39,6 +39,16 @@ export function sidebarDock(layout: SidebarLayout): SidebarDock {
   return layout.dock === "bottom" ? "bottom" : "right";
 }
 
+export function isSidebarSlotVisible(layout: SidebarLayout, slot: SidebarSlotId): boolean {
+  if (layout.open !== true) {
+    return false;
+  }
+  return layout.columns.some((column) => {
+    const active = column.panels.find((panel) => panel.id === column.activePanelId);
+    return active?.slot === slot;
+  });
+}
+
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
   const used = new Set(layout.columns.flatMap((column) => column.panels.map((panel) => panel.id)));
   if (!used.has(slot)) {

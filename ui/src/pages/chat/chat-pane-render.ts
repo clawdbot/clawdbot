@@ -74,6 +74,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   closeSlot,
+  isSidebarSlotVisible,
   openSlot,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -128,6 +129,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const hasPanelSlot = (slot: SidebarSlotId) =>
       sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+    const progressCardInRail =
+      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
+      isSidebarSlotVisible(sidebarLayout, "companion");
     const openPanelSlot = (slot: SidebarSlotId) => {
       state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
       if (slot === "companion") {
@@ -324,7 +328,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
-      planStatus: state.planStatus,
+      progressCard: progressCardInRail ? null : this.progressCard.card,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -570,7 +574,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
       queuedEdit: {
         editingId: activeQueuedMessageEdit(state)?.id ?? null,
+        editingText: activeQueuedMessageEdit(state)?.draftText,
         onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
+        onEditChange: sessionParticipationBlocked ? undefined : state.updateQueuedChatMessageEdit,
+        onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,
         onCancel: state.cancelQueuedChatMessageEdit,
       },
       onGoalCommand: (command) => void state.handleSendChat(command),
@@ -658,6 +665,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
+      progressCard: progressCardInRail ? this.progressCard.card : null,
       companion: companionThread,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>

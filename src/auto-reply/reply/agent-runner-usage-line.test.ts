@@ -6,6 +6,15 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 
 describe("appendUsageLine", () => {
+  it("marks a standalone usage footer as non-terminal status", () => {
+    expect(
+      appendUsageLine([{ mediaUrl: "file:///tmp/result.png" }], "Usage: 12 in / 3 out"),
+    ).toEqual([
+      { mediaUrl: "file:///tmp/result.png" },
+      { text: "Usage: 12 in / 3 out", isStatusNotice: true },
+    ]);
+  });
+
   it("prices response usage for the selected agent in an explicit fleet", () => {
     const line = resolveResponseUsageLine({
       config: {

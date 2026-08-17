@@ -11,7 +11,6 @@ export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP sessio
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
 export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
-export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
@@ -154,11 +153,6 @@ export function describeSessionStatusTool(): string {
     '`sessionKey="current"` for current; UI labels are not keys.',
     "`model` overrides; `model=default` resets. Use for active model/session questions.",
   ].join(" ");
-}
-
-/** Describes the update_plan tool for model-facing instructions. */
-export function describeUpdatePlanTool(): string {
-  return "Maintain a user-visible work plan: ordered steps, each pending/in_progress/completed. Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
 }
 
 /** Describes the ask_user tool and its decision-only use policy. */

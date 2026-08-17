@@ -207,6 +207,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   }));
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
@@ -748,9 +749,6 @@ vi.mock("../../tool-call-id.js", async (importOriginal) => {
 });
 
 vi.mock("../../tool-fs-policy.js", () => ({
-  createToolFsPolicy: (params: { workspaceOnly?: boolean }) => ({
-    workspaceOnly: params.workspaceOnly === true,
-  }),
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
@@ -1081,6 +1079,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   });
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);

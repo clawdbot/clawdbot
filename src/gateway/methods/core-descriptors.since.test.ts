@@ -111,6 +111,8 @@ const CURRENT_TRAIN_METHODS = [
   "sessions.move",
   "sessions.assignOwner",
   "controlUi.sessionPreview",
+  "progressCard.get",
+  "progressCard.put",
 ] as const;
 
 describe("core gateway method release trains", () => {

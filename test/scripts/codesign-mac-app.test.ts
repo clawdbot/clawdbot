@@ -101,6 +101,37 @@ fi
   chmodSync(fakeCodesign, 0o755);
 }
 
+function installElevationFakeCodesign(binDir: string) {
+  const fakeCodesign = path.join(binDir, "codesign");
+  writeFileSync(
+    fakeCodesign,
+    `#!/usr/bin/env bash
+set -euo pipefail
+
+for arg in "$@"; do
+  if [ "$arg" = "-dv" ]; then
+    printf '%s\n' 'TeamIdentifier=FWJYW4S8P8' >&2
+    if [ "\${CODESIGN_FAKE_NO_AUTHORITY:-0}" != "1" ]; then
+      printf '%s\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2
+    fi
+    if [ "\${CODESIGN_FAKE_SECOND_AUTHORITY:-0}" = "1" ]; then
+      printf '%s\n' 'Authority=Unexpected Secondary Authority' >&2
+    fi
+    for i in $(seq 1 20000); do
+      printf 'Metadata-%s=value\n' "$i" >&2
+    done
+    if [ "\${CODESIGN_FAKE_FAIL_AFTER_METADATA:-0}" = "1" ]; then
+      exit 7
+    fi
+    exit 0
+  fi
+done
+exit 0
+`,
+  );
+  chmodSync(fakeCodesign, 0o755);
+}
+
 describe("codesign-mac-app temp file hygiene", () => {
   it("does not generate unused entitlement plist files", () => {
     const script = readFileSync(scriptPath, "utf8");
@@ -261,6 +292,88 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(elevationProfile).not.toContain("com.apple.security.automation.apple-events");
     expect(script).toContain("verify_elevation_signature");
     expect(script).toContain('assert_no_apple_events_entitlement "$APP_BUNDLE"');
+  });
+
+  it("consumes complete codesign metadata under pipefail before validating authority", () => {
+    const tempRoot = tempDirs.make("openclaw-codesign-elevation-metadata-");
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+    installElevationFakeCodesign(binDir);
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CODESIGN_FAKE_SECOND_AUTHORITY: "1",
+        OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+        TMPDIR: tempRoot,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toContain(`Codesign complete for ${app}`);
+    expect(result.stderr).not.toContain("Elevation host requires");
+  });
+
+  it("preserves the precise diagnostic when codesign omits Authority", () => {
+    const tempRoot = tempDirs.make("openclaw-codesign-elevation-no-authority-");
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+    installElevationFakeCodesign(binDir);
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CODESIGN_FAKE_NO_AUTHORITY: "1",
+        OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+        TMPDIR: tempRoot,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("got 'not set'");
+  });
+
+  it("preserves a codesign failure after metadata output", () => {
+    const tempRoot = tempDirs.make("openclaw-codesign-elevation-failed-metadata-");
+    const app = path.join(tempRoot, "Fake.app");
+    const binDir = path.join(tempRoot, "bin");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+    installElevationFakeCodesign(binDir);
+
+    const result = spawnSync("bash", [scriptPath, app], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CODESIGN_FAKE_FAIL_AFTER_METADATA: "1",
+        OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+        TMPDIR: tempRoot,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).not.toContain(`Codesign complete for ${app}`);
+    expect(result.stderr).toContain("got 'not set'");
   });
 
   it("retries only transient Apple timestamp failures", () => {

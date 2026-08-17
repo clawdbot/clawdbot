@@ -1710,34 +1710,6 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
   });
 
-  it("renders the active plan card inside the working stream group", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderStreamGroup(
-        [
-          { kind: "reading-indicator", key: "reading", startedAt: 1_000 },
-          { kind: "plan", key: "plan:main:active" },
-        ],
-        {
-          planActive: true,
-          planStatus: {
-            explanation: "Keep the change focused",
-            steps: [
-              { step: "Inspect", status: "completed" },
-              { step: "Implement", status: "in_progress" },
-            ],
-          },
-        },
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-group--working .plan-checklist--card")).not.toBeNull();
-    expect(container.querySelectorAll(".plan-checklist__step")).toHaveLength(2);
-    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
-  });
-
   it("keeps streamed assistant content in the guttered group without an avatar", () => {
     const container = document.createElement("div");
 

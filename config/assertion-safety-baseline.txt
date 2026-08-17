@@ -2175,7 +2175,6 @@ src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
-src/agents/tools/update-plan-tool.ts	4
 src/agents/tools/video-generate-tool.ts	4
 src/agents/tools/web-fetch.ts	3
 src/agents/tools/web-guarded-fetch.ts	2
@@ -2583,7 +2582,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	12
+src/commands/doctor-session-sqlite-readers.ts	11
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
@@ -3014,7 +3013,7 @@ src/gateway/server-methods/chat.ts	2
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
 src/gateway/server-methods/conversations.ts	4
-src/gateway/server-methods/cron.ts	20
+src/gateway/server-methods/cron.ts	17
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	6
 src/gateway/server-methods/doctor.ts	5

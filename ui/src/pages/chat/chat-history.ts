@@ -86,7 +86,7 @@ import {
 } from "./stream-segment-pruning.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
-import { handleAgentEvent, normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -298,10 +298,6 @@ export type ChatHistoryResult = {
       agentId?: string;
       data: Record<string, unknown>;
     }>;
-    plan?: {
-      steps: Array<PlanStatus["steps"][number] | string>;
-      explanation?: string;
-    };
   };
 };
 
@@ -378,34 +374,6 @@ function mergeInFlightAssistantTails(
   // Every Gateway delta carries its full assistant message. Comparing complete
   // projections preserves repeated tokens without guessing delta overlap.
   return cumulativeLiveTail;
-}
-
-function reconcileHistoryPlanStatus(params: {
-  canAdoptRunSnapshot: boolean;
-  inFlightRun: ChatHistoryResult["inFlightRun"];
-  retainedPlan: PlanStatus | null;
-  sessionInfo: GatewaySessionRow | undefined;
-}): PlanStatus | null {
-  if (!params.canAdoptRunSnapshot) {
-    return params.retainedPlan;
-  }
-  const run = params.inFlightRun;
-  const runId = run?.runId?.trim();
-  if (run && runId) {
-    if (Object.hasOwn(run, "plan")) {
-      return run.plan ? normalizePlanSnapshot(run.plan, runId) : null;
-    }
-    return params.retainedPlan?.runId === runId ? params.retainedPlan : null;
-  }
-  const retainedRunId = params.retainedPlan?.runId;
-  if (!retainedRunId) {
-    return params.retainedPlan;
-  }
-  const activeRunIds = params.sessionInfo?.activeRunIds;
-  const confirmsTerminal =
-    params.sessionInfo?.hasActiveRun === false ||
-    (Array.isArray(activeRunIds) && !activeRunIds.includes(retainedRunId));
-  return confirmsTerminal ? null : params.retainedPlan;
 }
 
 export function resolveChatHistoryPagination(
@@ -1562,7 +1530,6 @@ async function loadChatHistoryUncached(
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
-    const planStatusBeforeStreamReset = state.planStatus ?? null;
     let activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
@@ -1711,14 +1678,6 @@ async function loadChatHistoryUncached(
       replayInFlightRunEvents(state, res.inFlightRun);
     }
 
-    // Plan reconciliation shares stream adoption: rejected history cannot clobber newer live state.
-    // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
-    state.planStatus = reconcileHistoryPlanStatus({
-      canAdoptRunSnapshot: resetStream,
-      inFlightRun: res.inFlightRun,
-      retainedPlan: planStatusBeforeStreamReset,
-      sessionInfo: res.sessionInfo,
-    });
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,
       requestAgentId,

@@ -8,6 +8,7 @@ import {
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
   resetCleanupCommandMocks,
+  resolveCleanupPlanForRemoval,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
 
@@ -46,6 +47,20 @@ describe("resetCommand", () => {
 
     expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
     expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+  });
+
+  it("stops the managed Gateway before loading the destructive cleanup plan", async () => {
+    gatewayService.stop.mockImplementation(async () => {
+      expect(resolveCleanupPlanForRemoval).not.toHaveBeenCalled();
+    });
+
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(resolveCleanupPlanForRemoval).toHaveBeenCalledOnce();
   });
 
   it("recommends creating a backup before state-destructive reset scopes", async () => {

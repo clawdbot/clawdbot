@@ -601,11 +601,14 @@ Codex's own tool-search surface:
 - `apply_patch`
 - `exec`
 - `process`
-- `update_plan`
 - `tool_call`
 - `tool_describe`
 - `tool_search`
 - `tool_search_code`
+
+`progress_card` is not filtered with those native workspace tools. It remains
+available through the OpenClaw dynamic-tool bridge as the durable session status
+surface.
 
 When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
 empty execution-environment selection. In that direct, unsandboxed case,

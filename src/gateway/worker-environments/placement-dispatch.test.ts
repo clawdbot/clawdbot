@@ -653,7 +653,7 @@ describe("worker placement dispatch", () => {
 
   it("rejects and tears down a freshly provisioned bundle without execution context", async () => {
     const harness = createTestHarness();
-    harness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
+    harness.markEnvironmentProtocolFeatures(["worker-execution-context-v1"]);
 
     await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(
       "current execution-context contract",

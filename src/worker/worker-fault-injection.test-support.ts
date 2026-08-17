@@ -294,7 +294,7 @@ export class ComposedGatewayHarness {
       throw new Error("fault descriptor epoch does not match its exact placement claim");
     }
     return {
-      version: 3,
+      version: 4,
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,

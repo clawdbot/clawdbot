@@ -4,9 +4,9 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
-  CliParseError,
   formatCliFailureLines,
   formatCliJsonFailure,
+  isExpectedCliError,
 } from "./cli/failure-output.js";
 import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
@@ -155,7 +155,7 @@ if (isMain && !handledRootVersion) {
       })) {
         console.error(line);
       }
-      if (!(err instanceof CliParseError)) {
+      if (!isExpectedCliError(err)) {
         for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
           console.error("[openclaw]", message);
         }

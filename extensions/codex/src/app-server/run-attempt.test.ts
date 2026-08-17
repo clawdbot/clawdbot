@@ -65,9 +65,11 @@ import {
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
+  isJsonObject,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
+  type JsonObject,
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
@@ -166,7 +168,7 @@ const testing = {
       names.push("message");
     }
     if (params.pluginHarnessToolPolicyRestricted === true) {
-      names.push("update_plan");
+      names.push("progress_card");
     }
     return names;
   },
@@ -1475,6 +1477,7 @@ describe("runCodexAppServerAttempt", () => {
         "exec",
         "process",
         "update_plan",
+        "progress_card",
         "tool_call",
         "tool_describe",
         "tool_search",
@@ -1497,6 +1500,7 @@ describe("runCodexAppServerAttempt", () => {
         [],
     );
     expect(dynamicToolNames).toContain("message");
+    expect(dynamicToolNames).toContain("progress_card");
     expect(dynamicToolNames).toContain("web_search");
     for (const toolName of [
       "read",
@@ -2312,14 +2316,45 @@ describe("runCodexAppServerAttempt", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
 
-  it("replaces the native surface with an exact conversation-policy-filtered catalog", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests((options) =>
-      createOpenClawCodingTools(options).filter((tool) =>
-        ["read", "write", "edit", "apply_patch", "exec", "process", "update_plan"].includes(
+  it("replaces the native surface with a filtered catalog and canonical plan persistence", async () => {
+    const persistedProgressCardInputs: JsonObject[] = [];
+    const executeProgressCard = vi.fn(async (_toolCallId: string, input: unknown) => {
+      if (!isJsonObject(input)) {
+        throw new Error("progress card input must be an object");
+      }
+      const { markdown, plan } = input;
+      const planSteps = Array.isArray(plan) ? plan.filter(isJsonObject) : [];
+      const activeSteps = planSteps.filter((entry) => entry.status === "in_progress");
+      const hasOversizedStep = planSteps.some((entry) => {
+        const { step } = entry;
+        return typeof step === "string" && Buffer.byteLength(step, "utf8") > 512;
+      });
+      if (
+        planSteps.length > 50 ||
+        activeSteps.length > 1 ||
+        hasOversizedStep ||
+        (typeof markdown === "string" && Buffer.byteLength(markdown, "utf8") > 8 * 1024)
+      ) {
+        throw new Error("progress card input exceeded its persistence contract");
+      }
+      persistedProgressCardInputs.push(input);
+      return {
+        content: [{ type: "text" as const, text: "Progress card updated" }],
+        details: {},
+      };
+    });
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      const tools = createOpenClawCodingTools(options).filter((tool) =>
+        ["read", "write", "edit", "apply_patch", "exec", "process", "progress_card"].includes(
           tool.name,
         ),
-      ),
-    );
+      );
+      const progressCardTool = tools.find((tool) => tool.name === "progress_card");
+      if (progressCardTool) {
+        progressCardTool.execute = executeProgressCard;
+      }
+      return tools;
+    });
     const params = createRunParams();
     params.disableTools = false;
     setCodexTestModelSupportsTools(params, true);
@@ -2358,12 +2393,13 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(startParams?.environments).toEqual([]);
-    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read", "update_plan"]);
-    const updatePlanSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
-      (tool) => tool.name === "update_plan",
+    expect(startParams?.config?.["tools.update_plan.enabled"]).toBe(false);
+    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "progress_card", "read"]);
+    const progressCardSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
+      (tool) => tool.name === "progress_card",
     );
-    expect(updatePlanSpec).not.toHaveProperty("namespace");
-    expect(updatePlanSpec).not.toHaveProperty("deferLoading");
+    expect(progressCardSpec).not.toHaveProperty("namespace");
+    expect(progressCardSpec).not.toHaveProperty("deferLoading");
     expect(startParams?.config).toMatchObject({
       "features.hooks": false,
       "hooks.PreToolUse": [],
@@ -2385,8 +2421,8 @@ describe("runCodexAppServerAttempt", () => {
         turnId: "turn-1",
         callId: "call-plan-1",
         namespace: null,
-        tool: "update_plan",
-        arguments: { explanation: "Plan restored", plan },
+        tool: "progress_card",
+        arguments: { markdown: "Plan restored", plan },
       },
     });
     expect(response).toMatchObject({ success: true });
@@ -2396,10 +2432,10 @@ describe("runCodexAppServerAttempt", () => {
         phase: "update",
         title: "Plan updated",
         source: "openclaw",
-        explanation: "Plan restored",
         steps: plan,
       },
     });
+    expect(executeProgressCard).toHaveBeenCalledTimes(1);
 
     await harness.notify(
       itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
@@ -2407,10 +2443,10 @@ describe("runCodexAppServerAttempt", () => {
     await harness.notify(
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
-    const planRestoreRequest = harness.requests.find(
+    let planRestoreRequests = harness.requests.filter(
       (request) => request.method === "thread/inject_items",
     );
-    expect(planRestoreRequest?.params).toMatchObject({
+    expect(planRestoreRequests[0]?.params).toMatchObject({
       threadId: "thread-1",
       items: [
         {
@@ -2419,12 +2455,102 @@ describe("runCodexAppServerAttempt", () => {
           content: [
             {
               type: "input_text",
-              text: expect.stringContaining('"step":"Restore progress","status":"in_progress"'),
+              text: expect.stringContaining('"markdown":"Plan restored"'),
             },
           ],
         },
       ],
     });
+    expect(JSON.stringify(planRestoreRequests[0]?.params)).toContain("progress_card");
+
+    const nativePlan = Array.from({ length: 51 }, (_, index) => ({
+      step: index === 0 ? `Ship ${"🚀".repeat(200)}` : `Native step ${index}`,
+      status: index < 2 ? "inProgress" : "pending",
+    }));
+    await harness.notify({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "m".repeat(9_000),
+        plan: nativePlan,
+      },
+    });
+    expect(executeProgressCard).toHaveBeenCalledTimes(2);
+    const persistedNativeInput = persistedProgressCardInputs[1];
+    expect(persistedNativeInput).toBeDefined();
+    if (!persistedNativeInput) {
+      throw new Error("native progress card input was not persisted");
+    }
+    const canonicalPlan = Array.isArray(persistedNativeInput.plan)
+      ? persistedNativeInput.plan.filter(isJsonObject)
+      : [];
+    expect(canonicalPlan).toHaveLength(50);
+    expect(canonicalPlan.at(-1)?.step).toBe("Native step 49");
+    expect(canonicalPlan[0]?.status).toBe("in_progress");
+    expect(canonicalPlan[1]?.status).toBe("pending");
+    const firstStep = canonicalPlan[0]?.step;
+    expect(
+      Buffer.byteLength(typeof firstStep === "string" ? firstStep : "", "utf8"),
+    ).toBeLessThanOrEqual(512);
+    const canonicalMarkdown = persistedNativeInput.markdown;
+    expect(
+      Buffer.byteLength(typeof canonicalMarkdown === "string" ? canonicalMarkdown : "", "utf8"),
+    ).toBeLessThanOrEqual(8 * 1024);
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-2" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-2" }),
+    );
+    planRestoreRequests = harness.requests.filter(
+      (request) => request.method === "thread/inject_items",
+    );
+    expect(planRestoreRequests).toHaveLength(2);
+    expect(planRestoreRequests[1]?.params).toMatchObject({
+      items: [
+        {
+          content: [
+            {
+              text: expect.stringContaining('"markdown":"mmm'),
+            },
+          ],
+        },
+      ],
+    });
+
+    const clearResponse = await harness.handleServerRequest({
+      id: "request-plan-clear",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-plan-clear",
+        namespace: null,
+        tool: "progress_card",
+        arguments: {},
+      },
+    });
+    expect(clearResponse).toMatchObject({ success: true });
+    expect(executeProgressCard).toHaveBeenCalledTimes(3);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        steps: [],
+      },
+    });
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-3" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-3" }),
+    );
+    expect(
+      harness.requests.filter((request) => request.method === "thread/inject_items"),
+    ).toHaveLength(2);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -2479,11 +2605,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(text).toBeDefined();
     const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
     const payload = JSON.parse(payloadText) as {
-      explanation?: string;
+      markdown?: string;
       plan: Array<{ step: string; status: string }>;
     };
     expect(Buffer.byteLength(payloadText, "utf8")).toBeLessThanOrEqual(32 * 1024);
-    expect(Buffer.byteLength(payload.explanation ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
+    expect(Buffer.byteLength(payload.markdown ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
     expect(payload.plan.length).toBeLessThanOrEqual(50);
     expect(payload.plan.every((step) => Buffer.byteLength(step.step, "utf8") <= 512)).toBe(true);
     expect(payload.plan[0]?.status).toBe("in_progress");

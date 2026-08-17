@@ -36,7 +36,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "sessions_list",
   "sessions_search",
   "sessions_yield",
-  "update_plan",
+  "progress_card",
   "web_fetch",
   "web_search",
   "write",
