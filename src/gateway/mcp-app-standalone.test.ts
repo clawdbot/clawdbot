@@ -699,5 +699,4 @@ describe("MCP App standalone host", () => {
       ).res.statusCode,
     ).toBe(400);
   });
-
 });

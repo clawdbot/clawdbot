@@ -2026,7 +2026,7 @@ describe("shared Codex app-server client", () => {
 
   it("shares native MCP tool-call fences across duplicate module copies", async () => {
     const duplicate = await import(
-      "./shared-client.js?duplicate-native-mcp-fence" as "./shared-client.js",
+      "./shared-client.js?duplicate-native-mcp-fence" as "./shared-client.js"
     );
     const client = {} as CodexAppServerClient;
 

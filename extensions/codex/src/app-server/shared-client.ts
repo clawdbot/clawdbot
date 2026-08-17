@@ -1195,9 +1195,7 @@ export function fenceSharedCodexAppServerClientToolCalls(client: CodexAppServerC
   getSharedCodexAppServerClientState().toolCallFences.add(client);
 }
 
-export function isSharedCodexAppServerClientToolCallFenced(
-  client: CodexAppServerClient,
-): boolean {
+export function isSharedCodexAppServerClientToolCallFenced(client: CodexAppServerClient): boolean {
   return getSharedCodexAppServerClientState().toolCallFences.has(client);
 }
 
