@@ -136,14 +136,19 @@ function readBoundaryEvents(
     executeSqliteQuerySync(
       projection.database.db,
       db
-        .selectFrom("transcript_event_identities as identity")
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_event_identities as identity", (join) =>
+          join
+            .onRef("identity.session_id", "=", "active.session_id")
+            .onRef("identity.seq", "=", "active.event_seq"),
+        )
         .innerJoin("transcript_events as event", (join) =>
           join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
         )
         .select(["event.seq", "event.event_json"])
-        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("active.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_type", "in", ["compaction", "reset"])
         .where("identity.seq", ">=", firstSeq)
         .where("identity.seq", "<=", lastSeq),

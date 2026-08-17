@@ -4846,16 +4846,13 @@ describe("gateway server chat", () => {
         const homeDir = path.join(sessionDir, "home");
         const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
         const secret = "sk-abcdef1234567890-large-snapshot";
-        const ignoredLine = JSON.stringify({
+        const oversizedIgnoredLine = JSON.stringify({
           type: "queue-operation",
           operation: "enqueue",
           sessionId: cliSessionId,
-          content: "q".repeat(2_048),
+          content: "q".repeat(34 * 1024 * 1024),
         });
-        const ignoredBlock = `${ignoredLine}\n`.repeat(
-          Math.ceil((34 * 1024 * 1024) / (Buffer.byteLength(ignoredLine, "utf8") + 1)),
-        );
-        const jsonl = `${ignoredBlock}${[
+        const jsonl = `${oversizedIgnoredLine}\n${[
           JSON.stringify({
             type: "user",
             uuid: "large-snapshot-user",

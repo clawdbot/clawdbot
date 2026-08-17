@@ -233,6 +233,72 @@ describe("SQLite transcript history events", () => {
     expect(page.events.map(({ seq }) => seq)).toEqual([3]);
   });
 
+  it("does not read an inactive boundary between active sequence bounds", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const boundaryEvents = [
+      {
+        seq: 2,
+        id: "active-boundary-2",
+        eventJson: JSON.stringify({
+          type: "compaction",
+          id: "active-boundary-2",
+          parentId: "seed",
+          timestamp: "2026-08-15T00:00:01.000Z",
+          summary: "active",
+        }),
+        activePosition: 1,
+      },
+      { seq: 3, id: "inactive-boundary", eventJson: "{", activePosition: undefined },
+      {
+        seq: 4,
+        id: "active-boundary-4",
+        eventJson: JSON.stringify({
+          type: "compaction",
+          id: "active-boundary-4",
+          parentId: "active-boundary-2",
+          timestamp: "2026-08-15T00:00:02.000Z",
+          summary: "active",
+        }),
+        activePosition: 2,
+      },
+    ];
+    const insertEvent = database.db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    );
+    const insertIdentity = database.db.prepare(
+      `INSERT INTO transcript_event_identities
+         (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+       VALUES (?, ?, ?, 'compaction', NULL, NULL, ?)`,
+    );
+    const insertActive = database.db.prepare(
+      `INSERT INTO session_transcript_active_events
+         (session_id, active_position, event_seq, message_position)
+       VALUES (?, ?, ?, NULL)`,
+    );
+    for (const event of boundaryEvents) {
+      insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
+      insertIdentity.run(scope.sessionId, event.id, event.seq, event.seq);
+      if (event.activePosition !== undefined) {
+        insertActive.run(scope.sessionId, event.activePosition, event.seq);
+      }
+    }
+    database.db
+      .prepare(
+        `UPDATE session_transcript_index_state
+         SET indexed_seq = 4, leaf_event_id = 'active-boundary-4', active_event_count = 3
+         WHERE session_id = ?`,
+      )
+      .run(scope.sessionId);
+
+    const events = readSessionTranscriptHistoryEvents(scope);
+
+    expect(events.map(historyEventId)).toEqual(["seed", "active-boundary-2", "active-boundary-4"]);
+  });
+
   it("bounds metadata bindings when the raw history window exceeds SQLite's limit", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],

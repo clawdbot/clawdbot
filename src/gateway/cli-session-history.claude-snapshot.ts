@@ -1,18 +1,62 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 import {
   appendCoalescedClaudeCliToolMessage,
   createClaudeReseedImportState,
   decodeClaudeCliProjectEntry,
+  type ClaudeCliProjectEntry,
   parseClaudeCliHistoryEntry,
   redactClaudeCliHistoryMessage,
   resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.claude.js";
 
 const YIELD_BYTES = 256 * 1024;
+const OFFTHREAD_JSONL_LINE_CHARS = 1024 * 1024;
+const OVERSIZED_HISTORY_PLACEHOLDER =
+  "[Claude CLI history record omitted from context because it exceeded 1 MiB.]";
+const OVERSIZED_ENTRY_WORKER_SOURCE = `
+  const { parentPort, workerData } = require("node:worker_threads");
+  const boundedString = (value, max) =>
+    typeof value === "string" && value.length <= max ? value : undefined;
+  try {
+    const entry = JSON.parse(workerData);
+    const type = entry?.type;
+    const message = entry?.message;
+    if ((type !== "user" && type !== "assistant") || !message || message.role !== type) {
+      parentPort.postMessage(null);
+    } else {
+      const rawUsage = message.usage;
+      const usage = rawUsage && typeof rawUsage === "object"
+        ? Object.fromEntries(
+            ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+              .flatMap((key) => Number.isFinite(rawUsage[key]) ? [[key, rawUsage[key]]] : []),
+          )
+        : undefined;
+      parentPort.postMessage({
+        type,
+        timestamp: boundedString(entry.timestamp, 128),
+        uuid: boundedString(entry.uuid, 1_024),
+        isSidechain: entry.isSidechain === true,
+        isMeta: entry.isMeta === true,
+        isCompactSummary: entry.isCompactSummary === true,
+        message: {
+          role: type,
+          content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
+          model: boundedString(message.model, 256),
+          stop_reason: boundedString(message.stop_reason, 128),
+          usage,
+        },
+      });
+    }
+  } catch {
+    parentPort.postMessage(null);
+  }
+`;
 type Message = Record<string, unknown>;
 type HistoryParams = {
   cliSessionId: string;
@@ -21,6 +65,63 @@ type HistoryParams = {
   reseedReceipt?: CliSessionReseedReceipt;
 };
 let snapshotCache: { key: string; pending: Promise<readonly Message[]> } | undefined;
+
+function normalizeOversizedEntry(value: unknown): ClaudeCliProjectEntry | null {
+  if (!isRecord(value) || (value.type !== "user" && value.type !== "assistant")) {
+    return null;
+  }
+  const message = value.message;
+  if (!isRecord(message) || message.role !== value.type) {
+    return null;
+  }
+  const usage = isRecord(message.usage) ? message.usage : undefined;
+  return {
+    type: value.type,
+    ...(typeof value.timestamp === "string" ? { timestamp: value.timestamp } : {}),
+    ...(typeof value.uuid === "string" ? { uuid: value.uuid } : {}),
+    ...(value.isSidechain === true ? { isSidechain: true } : {}),
+    ...(value.isMeta === true ? { isMeta: true } : {}),
+    ...(value.isCompactSummary === true ? { isCompactSummary: true } : {}),
+    message: {
+      role: value.type,
+      content: OVERSIZED_HISTORY_PLACEHOLDER,
+      ...(typeof message.model === "string" ? { model: message.model } : {}),
+      ...(typeof message.stop_reason === "string" ? { stop_reason: message.stop_reason } : {}),
+      ...(usage
+        ? {
+            usage: {
+              input_tokens: usage.input_tokens,
+              output_tokens: usage.output_tokens,
+              cache_read_input_tokens: usage.cache_read_input_tokens,
+              cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+async function decodeOversizedClaudeEntry(line: string): Promise<ClaudeCliProjectEntry | null> {
+  let worker: Worker;
+  try {
+    worker = new Worker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true, workerData: line });
+  } catch {
+    return null;
+  }
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(normalizeOversizedEntry(value));
+    };
+    worker.once("message", finish);
+    worker.once("error", () => finish(null));
+    worker.once("exit", () => finish(null));
+  });
+}
 
 function fingerprint(stats: fs.Stats): string {
   return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(":");
@@ -62,17 +163,30 @@ async function parseSnapshot(filePath: string, params: HistoryParams): Promise<r
   let lineNumber = 0;
   for await (const line of lines) {
     lineNumber += 1;
-    bytesSinceYield += Buffer.byteLength(line, "utf8") + 1;
-    if (bytesSinceYield >= YIELD_BYTES) {
+    const oversized = line.length > OFFTHREAD_JSONL_LINE_CHARS;
+    if (oversized) {
       bytesSinceYield = 0;
-      await yieldToEventLoop();
-    }
-    if (!line.trim()) {
-      continue;
+    } else {
+      bytesSinceYield += Buffer.byteLength(line, "utf8") + 1;
+      if (bytesSinceYield >= YIELD_BYTES) {
+        bytesSinceYield = 0;
+        await yieldToEventLoop();
+      }
+      if (!line.trim()) {
+        continue;
+      }
     }
     try {
+      // Keep large valid user/assistant records visible through a bounded projection;
+      // unsupported external records are still ignored, but JSON.parse runs off-loop.
+      const entry = oversized
+        ? await decodeOversizedClaudeEntry(line)
+        : decodeClaudeCliProjectEntry(line);
+      if (!entry) {
+        continue;
+      }
       const message = parseClaudeCliHistoryEntry(
-        decodeClaudeCliProjectEntry(line),
+        entry,
         params.cliSessionId,
         lineNumber,
         toolNames,
