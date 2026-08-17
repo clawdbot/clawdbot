@@ -9,7 +9,7 @@ describe("OpenAI Responses compact threshold", () => {
       expected: 190_400,
     },
     {
-      name: "uses the active runtime cap for the Codex Sol budget",
+      name: "uses the active runtime cap when the window is only modestly larger",
       model: { contextWindow: 372_000, contextTokens: 272_000 },
       expected: 190_400,
     },
