@@ -337,7 +337,7 @@ describe("mcp-app-view localization", () => {
         sessionKey: "agent:main:main",
         viewId: expect.any(String),
       },
-      expect.objectContaining({ signal: expect.anything() }),
+      { signal: expect.anything(), timeoutMs: null },
     );
     expect(request).toHaveBeenLastCalledWith(
       "mcp.app.callTool",

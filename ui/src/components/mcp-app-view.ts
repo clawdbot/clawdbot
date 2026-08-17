@@ -200,7 +200,7 @@ export class McpAppView extends LitElement {
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
-    timeoutMs?: number,
+    timeoutMs?: number | null,
   ): Promise<unknown> {
     try {
       const requestParams = {
@@ -301,11 +301,14 @@ export class McpAppView extends LitElement {
     const { sessionKey, viewId } = binding;
     let resources: McpAppResources | null = null;
     try {
+      // This bootstrap response establishes the server-owned operation deadline.
+      // Disable the generic client timer while the task signal still owns teardown.
       const payload = (await this.request(
         binding,
         "mcp.app.view",
         {},
         signal,
+        null,
       )) as McpAppViewPayload;
       const mount = this.mount.value;
       signal.throwIfAborted();
