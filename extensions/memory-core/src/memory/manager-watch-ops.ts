@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { logMemorySyncOutcome } from "./manager-embedding-errors.js";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 import {
   countChokidarWatchedEntries,
@@ -109,7 +110,7 @@ function isWithinMemoryWatchRoot(root: string, candidate: string): boolean {
 
 function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
   void sync().catch((err: unknown) => {
-    log.warn(`memory sync failed (${reason}): ${String(err)}`);
+    logMemorySyncOutcome(log, reason, err);
   });
 }
 

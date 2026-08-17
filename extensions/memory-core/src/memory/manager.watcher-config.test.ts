@@ -17,6 +17,7 @@ const {
   createdChokidarWatchers,
   createdNativeWatchers,
   memoryLoggerWarn,
+  memoryLoggerDebug,
   watchMock,
   nativeWatchMock,
   nativeWatchMockFailingDir,
@@ -99,6 +100,7 @@ const {
     createdChokidarWatchers: chokidarWatchers,
     createdNativeWatchers: nativeWatchers,
     memoryLoggerWarn: vi.fn(),
+    memoryLoggerDebug: vi.fn(),
     watchMock: vi.fn(() => {
       const watcher = createMockChokidarWatcher();
       chokidarWatchers.push(watcher);
@@ -145,6 +147,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importO
     createSubsystemLogger: (subsystem: string) => ({
       ...actual.createSubsystemLogger(subsystem),
       warn: memoryLoggerWarn,
+      debug: memoryLoggerDebug,
     }),
   };
 });
@@ -171,6 +174,7 @@ vi.mock("./embeddings.js", () => ({
 
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
@@ -348,6 +352,40 @@ describe("memory watcher config", () => {
     extraWatcher?.emit("change", path.join("notes", "keep.md"));
     await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("demotes a cooldown-skipped watch sync to debug instead of warn", async () => {
+    // Regression: the detached watch/interval sync wrapper used to call log.warn
+    // directly, so an expected billing-cooldown skip re-warned on every watched-file
+    // change instead of going through logMemorySyncOutcome like every other async
+    // sync entrypoint (manager-embedding-errors.ts).
+    await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
+    const cfg = createWatcherConfig();
+    await expectWatcherManager(cfg);
+    const memoryWatcher = createdNativeWatchers.find((watcher) => watcher.dir.endsWith("memory"));
+    expect(memoryWatcher).toBeDefined();
+    vi.useFakeTimers();
+    vi.spyOn(
+      manager as unknown as { sync: (params?: { reason?: string }) => Promise<void> },
+      "sync",
+    ).mockRejectedValue(
+      createMemoryEmbeddingOperationError({
+        operation: "query",
+        cause: new Error("402 quota exceeded"),
+        skippedDueToCooldown: true,
+      }),
+    );
+
+    memoryWatcher?.emit("change", "notes.md");
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    await vi.waitFor(() => {
+      expect(memoryLoggerDebug).toHaveBeenCalledWith(
+        expect.stringContaining("memory sync skipped (watch)"),
+      );
+    });
+    expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("memory sync failed"),
+    );
   });
 
   it("does not start watchers for one-shot CLI managers", async () => {

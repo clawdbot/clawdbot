@@ -146,6 +146,13 @@ export function isBillingExhaustedMemoryEmbeddingError(message: string): boolean
   if (!BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
     return false;
   }
+  // A message can carry both signals -- e.g. "429: quota exceeded" matches the bare
+  // "quota exceeded" billing wording above but is still a plain rate limit, not a durable
+  // billing exhaustion. Retryable classification wins: it recovers on its own shortly,
+  // unlike the 30-minute cooldown this function's callers apply when it returns true.
+  if (isRetryableMemoryEmbeddingError(message)) {
+    return false;
+  }
   return !isTransientMemoryEmbedding402Signal(message);
 }
 

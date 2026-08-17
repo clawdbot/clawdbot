@@ -392,6 +392,15 @@ describe("memory embedding policy", () => {
     ).toBe(true);
   });
 
+  it("does not classify a retryable 429 that happens to say quota exceeded as durable billing", () => {
+    // Regression: "quota exceeded" alone matches the billing regex, but a message that
+    // also matches the retryable regex (here via "429") must stay retryable -- entering the
+    // 30-minute cooldown here would turn an ordinary rate limit into an availability outage.
+    const message = "openai embeddings failed: 429 quota exceeded";
+    expect(isBillingExhaustedMemoryEmbeddingError(message)).toBe(false);
+    expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
+  });
+
   it("does not classify a transient 5xx that happens to mention billing as durable exhaustion", () => {
     // Regression: a bare "billing" word alone used to match this classifier even without
     // any 402/quota/payment signal, so a transient "500 billing service unavailable" (which
