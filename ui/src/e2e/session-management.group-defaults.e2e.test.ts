@@ -275,19 +275,25 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill("wait for fresh defaults");
       await expect.poll(() => start.isEnabled()).toBe(true);
 
+      // Pin each wait past earlier sessions.groups.list traffic (the route
+      // load already fetched the catalog) so a slow runner can't return a
+      // stale earlier request.
+      const groupListsBeforeInvalidation = (await gateway.getRequests("sessions.groups.list"))
+        .length;
       await gateway.deferNext("sessions.groups.list");
       await gateway.emitGatewayEvent("sessions.changed", { reason: "groups" });
-      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeInvalidation });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await expect
         .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
         .toBe(true);
+      const groupListsBeforeReject = (await gateway.getRequests("sessions.groups.list")).length;
       await gateway.deferNext("sessions.groups.list");
       await gateway.rejectDeferred("sessions.groups.list", {
         code: "UNAVAILABLE",
         message: "catalog reload failed",
       });
-      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeReject });
       await expect
         .poll(() => page.locator(".new-session-page__catalog-unavailable").textContent())
         .toContain("This session target is unavailable.");
@@ -405,9 +411,12 @@ suite.define(() => {
       await expect.poll(() => defaultsAction.textContent()).toContain("Retry");
       await expect.poll(() => defaultsAction.isEnabled()).toBe(true);
 
+      // Pin past the load-time sessions.groups.list so the retry wait can't
+      // return it stale.
+      const groupListsBeforeRetry = (await gateway.getRequests("sessions.groups.list")).length;
       await gateway.deferNext("sessions.groups.list");
       await defaultsAction.click();
-      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeRetry });
       await gateway.resolveDeferred("sessions.groups.list", {
         groups: [{ name: "Client work", position: 0 }],
       });
