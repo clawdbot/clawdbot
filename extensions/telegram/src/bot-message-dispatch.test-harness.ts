@@ -116,9 +116,7 @@ const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
 );
 const resolveAgentScopedOutboundMediaAccessHoisted = vi.hoisted(() =>
-  vi.fn((params: { agentId?: string }) => ({
-    localRoots: [`/tmp/.openclaw/workspace-${params.agentId ?? "default"}`],
-  })),
+  vi.fn(() => ({ localRoots: [] })),
 );
 const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
