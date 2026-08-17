@@ -230,6 +230,7 @@ export function prepareWorktreeSessionTitle(params: {
   const generated = withTimeout(
     generateDashboardSessionTitle({
       ...params,
+      entry: params.entry ?? undefined,
       timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS,
     }),
     WORKTREE_SESSION_TITLE_TIMEOUT_MS,
