@@ -159,6 +159,68 @@ describe("runConfigureWizard default-agent ownership", () => {
     );
   });
 
+  it("uses the configured system agent when ownership is explicit", async () => {
+    const baseConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          workspace: "/tmp/global-workspace",
+          systemAgent: { agentId: "main" },
+        },
+        entries: {
+          main: {
+            agentDir: "/tmp/main-agent",
+            workspace: "/tmp/main-workspace",
+          },
+          ops: {
+            agentDir: "/tmp/ops-agent",
+            workspace: "/tmp/ops-workspace",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "config-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+      issues: [],
+    };
+    mocks.text.mockResolvedValue("/tmp/new-main-workspace");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["workspace", "plugins", "skills"] },
+      runtime,
+    );
+
+    expect(mocks.commitConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            entries: expect.objectContaining({
+              main: expect.objectContaining({ workspace: "/tmp/new-main-workspace" }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/new-main-workspace" }),
+    );
+    expect(mocks.setupSkills).toHaveBeenCalledWith(
+      expect.any(Object),
+      "/tmp/new-main-workspace",
+      runtime,
+      expect.any(Object),
+    );
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/new-main-workspace",
+      runtime,
+      expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
   it("does not persist an unprovisionable workspace", async () => {
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
 

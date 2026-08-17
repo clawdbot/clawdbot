@@ -43,7 +43,7 @@ import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
 import {
   ensureOnboardingAgentWorkspace,
-  resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -608,7 +608,7 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    const resolveSetupTarget = () => resolveSystemAgentOnboardingTarget(nextConfig);
     let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
