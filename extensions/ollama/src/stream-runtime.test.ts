@@ -1310,7 +1310,7 @@ describe("parseNdjsonStream", () => {
     try {
       const encoder = new TextEncoder();
       const terminal = encoder.encode(
-        '{"model":"m","message":{"role":"assistant","content":""},"done":true}',
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
       );
       const value = new Uint8Array(terminal.byteLength + 16 * 1024 * 1024 + 2);
       value.set(terminal);
@@ -1347,6 +1347,28 @@ describe("parseNdjsonStream", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps terminal-line whitespace under the NDJSON record cap", async () => {
+    const encoder = new TextEncoder();
+    const terminal = encoder.encode(
+      '{"model":"m","message":{"role":"assistant","content":""},"done":true}',
+    );
+    const value = new Uint8Array(terminal.byteLength + 16 * 1024 * 1024 + 2);
+    value.set(terminal);
+    value.fill(0x20, terminal.byteLength, value.length - 1);
+    value[value.length - 1] = 0x0a;
+    const reader = mockChunkSequenceReader([value]);
+
+    const chunksPromise = (async () => {
+      const chunks = [];
+      for await (const chunk of parseNdjsonStream(reader)) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    })();
+
+    await expect(chunksPromise).rejects.toThrow(/Ollama NDJSON record exceeds/);
   });
 
   it("does not apply the NDJSON record cap to a large later tail", async () => {
@@ -1403,13 +1425,13 @@ describe("parseNdjsonStream", () => {
 
       expect(chunks).toHaveLength(1);
       expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-      expect(reader.read).toHaveBeenCalledTimes(2);
+      expect(reader.read).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("counts a split three-byte UTF-8 prefix before the terminal-tail cap", async () => {
+  it("accepts a split three-byte UTF-8 suffix at the terminal-tail cap", async () => {
     vi.useFakeTimers();
     try {
       const encoder = new TextEncoder();
@@ -1433,8 +1455,11 @@ describe("parseNdjsonStream", () => {
         return chunks;
       })();
 
-      await expect(chunksPromise).rejects.toThrow(/utf-8/i);
-      expect(reader.read).toHaveBeenCalledTimes(1);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(reader.read).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

@@ -93,18 +93,6 @@ function findNewlineEnd(value: Uint8Array, lineIndex: number): number | undefine
   return undefined;
 }
 
-function countTerminalTrailingWhitespaceBytes(value: Uint8Array, terminalLineEnd: number): number {
-  let count = 0;
-  for (let offset = terminalLineEnd - 2; offset >= 0; offset -= 1) {
-    const byte = value[offset];
-    if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0d) {
-      break;
-    }
-    count += 1;
-  }
-  return count;
-}
-
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
@@ -966,13 +954,8 @@ export async function* parseNdjsonStream(
           if (terminalLineEnd === undefined) {
             throw new Error("Ollama terminal record was not newline-terminated");
           }
-          const terminalTrailingBytes = countTerminalTrailingWhitespaceBytes(
-            value,
-            terminalLineEnd,
-          );
-          const terminalTailStart = terminalLineEnd - terminalTrailingBytes - 1;
           pendingRecordBytes = checkNdjsonRecordCap(
-            value.subarray(0, terminalTailStart),
+            value.subarray(0, terminalLineEnd),
             pendingRecordBytes,
           );
           // Hold the terminal record until the whole response body has been
@@ -981,7 +964,7 @@ export async function* parseNdjsonStream(
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
           terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
-          terminalTailBytes += value.byteLength - terminalTailStart;
+          terminalTailBytes += value.byteLength - terminalLineEnd;
           buffer = "";
           terminalFound = true;
           if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
