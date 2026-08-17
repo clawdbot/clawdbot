@@ -54,6 +54,23 @@ function activeSession(placementMove?: {
   };
 }
 
+function localSession() {
+  return {
+    key: "agent:main:placement-move",
+    kind: "direct" as const,
+    label: "Move proof",
+    updatedAt: 3,
+    hasActiveRun: false,
+    placement: {
+      state: "local" as const,
+      generation: 10,
+      createdAtMs: 1,
+      updatedAtMs: 3,
+      stateChangedAtMs: 3,
+    },
+  };
+}
+
 suite.define(() => {
   beforeAll(async () => {
     if (captureProof) {
@@ -96,13 +113,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Moving session…" }).waitFor();
       await capture(page, "03-moving.png");
 
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([localSession()]));
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
         key: "agent:main:placement-move",
         sessionId: "session-placement-move",
         placement: { state: "local", generation: 10 },
       });
-      await page.getByRole("button", { name: "Runs on Cloud" }).waitFor();
+      await page.getByRole("button", { name: "Runs on Cloud" }).waitFor({ state: "detached" });
       await capture(page, "04-moved.png");
     } finally {
       await suite.closeBrowserContext(context);
