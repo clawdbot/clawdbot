@@ -1,5 +1,6 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
+import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
@@ -126,7 +127,9 @@ function renderTranscriptShell(
         }
         const sessionTarget =
           markdownSessionLinkFromKeyboardEvent(event) ??
-          (event.key === "Enter" ? markdownSessionHref(event, props.basePath) : null);
+          (event.key === "Enter"
+            ? markdownSessionHref(event, sessionRefFromPath, props.basePath)
+            : null);
         if (sessionTarget) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
@@ -150,7 +153,8 @@ function renderTranscriptShell(
           return;
         }
         const sessionTarget =
-          markdownSessionLinkFromEvent(event) ?? markdownSessionHref(event, props.basePath);
+          markdownSessionLinkFromEvent(event) ??
+          markdownSessionHref(event, sessionRefFromPath, props.basePath);
         if (sessionTarget && shouldHandleNavigationClick(event)) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);

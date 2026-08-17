@@ -1,6 +1,5 @@
 import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
 import type MarkdownIt from "markdown-it";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -18,6 +17,8 @@ type SessionPathTarget = {
   search?: string;
   hash?: string;
 };
+
+type SessionPathParser = typeof import("../app-session-route-paths.ts").sessionRefFromPath;
 
 export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
 
@@ -142,7 +143,11 @@ export function markdownSessionLinkFromEvent(event: Event): SessionLinkTarget | 
   return sessionKey ? parseSessionLinkKey(sessionKey) : null;
 }
 
-export function markdownSessionHref(event: Event, basePath = ""): SessionPathTarget | null {
+export function markdownSessionHref(
+  event: Event,
+  parseSessionPath: SessionPathParser,
+  basePath = "",
+): SessionPathTarget | null {
   const target = event.target;
   if (!(target instanceof Element)) {
     return null;
@@ -161,7 +166,7 @@ export function markdownSessionHref(event: Event, basePath = ""): SessionPathTar
   if (url.origin !== location.origin) {
     return null;
   }
-  const parsed = sessionRefFromPath(url.pathname, basePath);
+  const parsed = parseSessionPath(url.pathname, basePath);
   if (!parsed) {
     return null;
   }

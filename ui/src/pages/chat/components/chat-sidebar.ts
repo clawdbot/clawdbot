@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
@@ -1319,7 +1320,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     const sessionTarget =
-      markdownSessionLinkFromEvent(event) ?? markdownSessionHref(event, this.basePath);
+      markdownSessionLinkFromEvent(event) ??
+      markdownSessionHref(event, sessionRefFromPath, this.basePath);
     if (sessionTarget && shouldHandleNavigationClick(event)) {
       event.preventDefault();
       this.onOpenSessionLink?.(sessionTarget);
@@ -1334,7 +1336,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
     const sessionTarget =
       markdownSessionLinkFromKeyboardEvent(event) ??
-      (event.key === "Enter" ? markdownSessionHref(event, this.basePath) : null);
+      (event.key === "Enter"
+        ? markdownSessionHref(event, sessionRefFromPath, this.basePath)
+        : null);
     if (sessionTarget) {
       event.preventDefault();
       this.onOpenSessionLink?.(sessionTarget);
