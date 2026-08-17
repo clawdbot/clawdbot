@@ -71,7 +71,9 @@ export function mergeImplicitProviderCatalog(params: {
     if (!implicitModel || "input" in model) {
       return model;
     }
-    return { ...implicitModel, ...model, input: implicitModel.input };
+    const mergedModel = { ...implicitModel, ...model };
+    mergedModel.input = implicitModel.input;
+    return mergedModel;
   });
 
   return { ...implicit, ...existing, models };
