@@ -66,14 +66,20 @@ export function mergeImplicitProviderCatalog(params: {
   }
 
   const implicitById = new Map(implicitModels.map((model) => [model.id, model] as const));
+  const mergeModel = (
+    model: (typeof existingModels)[number],
+    implicitModel: (typeof implicitModels)[number],
+  ) => {
+    const mergedModel = { ...implicitModel, ...model };
+    mergedModel.input = implicitModel.input;
+    return mergedModel;
+  };
   const models = existingModels.map((model) => {
     const implicitModel = implicitById.get(model.id);
     if (!implicitModel || "input" in model) {
       return model;
     }
-    const mergedModel = { ...implicitModel, ...model };
-    mergedModel.input = implicitModel.input;
-    return mergedModel;
+    return mergeModel(model, implicitModel);
   });
 
   return { ...implicit, ...existing, models };
