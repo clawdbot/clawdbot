@@ -231,6 +231,7 @@ vi.mock("../daemon/service.js", () => ({
     issues.map((issue) => issue.message).join("; "),
   startGatewayService,
   resolveGatewayService: vi.fn(() => ({
+    label: "Mock Platform Service",
     isLoaded: gatewayServiceIsLoaded,
     restart: gatewayServiceRestart,
     uninstall: gatewayServiceUninstall,
@@ -356,7 +357,6 @@ function createModelAuthFinalizeArgs(params: {
       authMode: "token" as const,
       gatewayToken: undefined,
       tailscaleMode: "off" as const,
-      tailscaleResetOnExit: false,
     },
     prompter: params.prompter,
     runtime: createRuntime(),
@@ -402,7 +402,6 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
       authMode: "token" as const,
       gatewayToken: undefined,
       tailscaleMode: "off" as const,
-      tailscaleResetOnExit: false,
     },
     prompter: params.prompter ?? createLaterPrompter(),
     runtime: params.runtime ?? createRuntime(),
@@ -581,7 +580,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "password",
           gatewayToken: undefined,
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime,
@@ -860,7 +858,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1021,7 +1018,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1070,7 +1066,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "token",
           gatewayToken: undefined,
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: createRuntime(),
@@ -1114,7 +1109,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1161,7 +1155,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "token",
           gatewayToken: "test-token",
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: createRuntime(),
@@ -1222,7 +1215,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "session-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime,
@@ -1306,8 +1298,48 @@ describe("finalizeSetupWizard", () => {
     expectNoteContains(prompter, "service install exploded", "Gateway");
     expectNoteContains(prompter, "Gateway: not detected (service install exploded)", "Control UI");
     expect(prompter.outro).toHaveBeenCalledWith(
-      "Gateway not detected yet. Start now: openclaw gateway run",
+      expect.stringContaining("managed Mock Platform Service setup failed"),
     );
+    expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway install --force", "Gateway");
+    expectNoteNotContains(prompter, "openclaw gateway run");
+    expectNoteNotContains(prompter, "openclaw gateway restart");
+  });
+
+  it.each([
+    ["readiness timeout", "gateway readiness timed out"],
+    ["service crash", "gateway closed (1006 abnormal closure)"],
+    ["occupied port", "listen EADDRINUSE: address already in use 127.0.0.1:18789"],
+  ])("keeps managed %s recovery on the canonical service path", async (_name, detail) => {
+    waitForGatewayReachable.mockResolvedValue({ ok: false, detail });
+    probeGatewayReachable.mockResolvedValue({ ok: false, detail });
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter });
+
+    await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+
+    expectNoteContains(prompter, "managed Mock Platform Service", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
+    expectNoteNotContains(prompter, "openclaw gateway run");
+    expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
+    expectNoteNotContains(prompter, "openclaw gateway install --force");
+  });
+
+  it("localizes managed service recovery at the finalize boundary", async () => {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
+      waitForGatewayReachable.mockResolvedValue({ ok: false, detail: "readiness timed out" });
+      probeGatewayReachable.mockResolvedValue({ ok: false, detail: "readiness timed out" });
+      const prompter = createLaterPrompter();
+      const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter });
+
+      await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+
+      expectNoteContains(prompter, "托管的 Mock Platform Service 在设置后仍无法访问", "Gateway");
+      expectNoteContains(prompter, "检查服务状态和日志", "Gateway");
+      expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
+      expectNoteNotContains(prompter, "openclaw gateway run");
+    });
   });
 
   it("returns an authoritative failed outcome when gateway installation fails", async () => {
@@ -1538,7 +1570,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "session-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1587,7 +1618,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1832,7 +1862,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "session-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1905,7 +1934,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "token",
           gatewayToken: "test-token",
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: createRuntime(),
@@ -1971,7 +1999,6 @@ describe("finalizeSetupWizard", () => {
             authMode: "token",
             gatewayToken: "test-token",
             tailscaleMode: "off",
-            tailscaleResetOnExit: false,
           },
           prompter,
           runtime: createRuntime(),
@@ -2017,7 +2044,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "password",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -2076,7 +2102,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "test-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime,
@@ -2128,7 +2153,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),

@@ -236,7 +236,7 @@ describe("formatMessageCliText poll results", () => {
         via: "direct",
         result: {
           messageId: "p1",
-          conversationId: "conv-1",
+          target: { kind: "conversation", id: "conv-1" },
           pollId: "poll-1",
         },
       },

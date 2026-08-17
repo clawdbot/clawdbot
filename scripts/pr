@@ -50,6 +50,8 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
+  scripts/verify-pr-hosted-gates.mjs
+  scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
 )
@@ -102,6 +104,16 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
         if [ "$dev_wrapper_opt_in" = "1" ] && [ -n "$requested_classification" ]; then
           echo "subcommand '$requested_subcommand' is classified $requested_classification; dev-wrapper opt-in is unavailable." >&2
         fi
+        # Worktrees routinely sit on a base that predates (or carries) wrapper
+        # changes relative to main. When the canonical checkout is byte-identical
+        # to the fetched origin/main anchor, exec-ing it runs exactly the trusted
+        # anchor code; announce the substitution so it is never silent.
+        if [ -n "$anchor_wrapper_revision" ] &&
+          [ "$canonical_wrapper_revision" = "$anchor_wrapper_revision" ] &&
+          [ "$canonical_wrapper_clean" = "1" ]; then
+          echo "scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
+          exec "$canonical_self" "$@"
+        fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
         # already exited for any staged or unstaged edit to these paths, so
         # the working tree matches HEAD and this list matches what was rejected.
@@ -153,8 +165,9 @@ is_supervised_pr_process() {
 
 if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
   if is_supervised_pr_process; then
-    # Do not leak the one-shot marker to tools or nested wrapper calls.
-    unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
+    # operation-lock.sh consumes the one-shot marker when it installs the
+    # leader-only completion trap, before PR command tools can inherit it.
+    :
   else
     unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
     unset OPENCLAW_PR_LOCK_NOTIFY_FD

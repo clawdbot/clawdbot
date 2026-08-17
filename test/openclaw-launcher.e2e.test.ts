@@ -6,6 +6,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import { isSupportedOpenClawNodeVersion } from "../node-version.mjs";
+import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
 async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
@@ -13,6 +15,10 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   await fs.copyFile(
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-version.mjs"),
+    path.join(fixtureRoot, "node-version.mjs"),
   );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   return fixtureRoot;
@@ -155,27 +161,13 @@ describe("openclaw launcher", () => {
       "utf8",
     );
 
-    const cases = [
-      { version: "22.22.2", supported: false },
-      { version: "22.22.3", supported: true },
-      { version: "23.11.0", supported: false },
-      { version: "24.14.1", supported: false },
-      { version: "24.15.0", supported: true },
-      { version: "25.8.1", supported: false },
-      { version: "25.9.0", supported: true },
-      { version: "26.0.0", supported: true },
-    ] as const;
-
-    for (const testCase of cases) {
-      const mockNodeVersionPath = path.join(
-        fixtureRoot,
-        `mock-node-version-${testCase.version}.mjs`,
-      );
+    for (const version of NODE_RELEASE_VERSION_CASES) {
+      const mockNodeVersionPath = path.join(fixtureRoot, `mock-node-version-${version}.mjs`);
       await fs.writeFile(
         mockNodeVersionPath,
         [
           "Object.defineProperty(process.versions, 'node', {",
-          `  value: ${JSON.stringify(testCase.version)},`,
+          `  value: ${JSON.stringify(version)},`,
           "});",
         ].join("\n"),
         "utf8",
@@ -196,16 +188,47 @@ describe("openclaw launcher", () => {
         },
       );
 
-      if (testCase.supported) {
-        expect(result.status, testCase.version).toBe(0);
-        expect(result.stdout, testCase.version).toContain("runtime-loaded");
+      if (isSupportedOpenClawNodeVersion(version)) {
+        expect(result.status, version).toBe(0);
+        expect(result.stdout, version).toContain("runtime-loaded");
       } else {
-        expect(result.status, testCase.version).toBe(1);
-        expect(result.stderr, testCase.version).toContain(
-          `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v${testCase.version}).`,
+        expect(result.status, version).toBe(1);
+        expect(result.stderr, version).toContain(
+          `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v${version}).`,
         );
       }
     }
+  });
+
+  it("prints recovery guidance before legacy-incompatible modules can load", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const legacyRuntimePath = path.join(fixtureRoot, "mock-legacy-runtime.mjs");
+    await fs.writeFile(
+      legacyRuntimePath,
+      [
+        "Object.defineProperty(Array.prototype, 'at', { value: undefined });",
+        "Object.defineProperty(process.versions, 'node', { value: '20.0.0' });",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(legacyRuntimePath).href, path.join(fixtureRoot, "openclaw.mjs")],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v20.0.0).",
+    );
+    expect(result.stderr).toContain("nvm install 26");
+    expect(result.stderr).not.toContain("TypeError");
   });
 
   it("rejects Bun without node:sqlite even when its Node compatibility version is new enough", async () => {

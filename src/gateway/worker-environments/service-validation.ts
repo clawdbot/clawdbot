@@ -1,11 +1,63 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerLease,
-  WorkerLeaseStatus,
-  WorkerSshEndpoint,
+import { Value } from "typebox/value";
+import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import {
+  WorkerProviderError,
+  type WorkerDesktopEndpoint,
+  type WorkerLease,
+  type WorkerLeaseStatus,
+  type WorkerMachineOption,
+  type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireProviderProvisionTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
+    throw new WorkerProviderError(
+      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+    );
+  }
+  return timeoutMs;
+}
+
+function isWorkerMachineOptions(value: unknown): value is readonly WorkerMachineOption[] {
+  return Value.Check(WorkerMachineOptionsSchema, value);
+}
+
+export function normalizeWorkerMachineOptions(
+  value: unknown,
+): readonly WorkerMachineOption[] | undefined {
+  if (!isWorkerMachineOptions(value)) {
+    return undefined;
+  }
+  const ids = new Set<string>();
+  let hasDefault = false;
+  for (const option of value) {
+    if (
+      option.id.trim() !== option.id ||
+      option.label.trim() !== option.label ||
+      (option.description !== undefined && option.description.trim() !== option.description) ||
+      ids.has(option.id) ||
+      (option.default === true && hasDefault)
+    ) {
+      return undefined;
+    }
+    ids.add(option.id);
+    hasDefault ||= option.default === true;
+  }
+  return value.map((option) => ({
+    id: option.id,
+    label: option.label,
+    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.default === undefined ? {} : { default: option.default }),
+  }));
+}
 
 export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   if (!isRecord(value)) {

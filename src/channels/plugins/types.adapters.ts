@@ -20,18 +20,10 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
+import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
-export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
-export type {
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelOutboundPayloadContext,
-  ChannelOutboundPayloadHint,
-  ChannelOutboundTargetRef,
-  ChannelDeliveryCapabilities,
-} from "./outbound.types.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -44,6 +36,15 @@ import type {
   ChannelSecurityDmPolicy,
   ChannelStatusIssue,
 } from "./types.core.js";
+export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
+export type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelOutboundPayloadContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
+  ChannelDeliveryCapabilities,
+} from "./outbound.types.js";
 export type { ChannelPairingAdapter } from "./pairing.types.js";
 
 type ConfiguredBindingRule = AgentBinding;
@@ -614,7 +615,7 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     accountId?: string | null;
     senderId?: string | null;
     action: "approve";
-    approvalKind: "exec" | "plugin";
+    approvalKind: ChannelApprovalKind;
   }) => {
     authorized: boolean;
     reason?: string;
@@ -832,7 +833,9 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
     ) => { kind: "core" | "isolated" } | { sessionKey: string } | undefined;
   };
   collectWarnings?: ChannelAdapterCallback<
-    (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[]
+    (
+      ctx: ChannelSecurityContext<ResolvedAccount>,
+    ) => Promise<Array<string | SecurityAuditFinding>> | Array<string | SecurityAuditFinding>
   >;
   collectAuditFindings?: ChannelAdapterCallback<
     (
@@ -841,23 +844,7 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
         orderedAccountIds: string[];
         hasExplicitAccountPath: boolean;
       },
-    ) =>
-      | Promise<
-          Array<{
-            checkId: string;
-            severity: "info" | "warn" | "critical";
-            title: string;
-            detail: string;
-            remediation?: string;
-          }>
-        >
-      | Array<{
-          checkId: string;
-          severity: "info" | "warn" | "critical";
-          title: string;
-          detail: string;
-          remediation?: string;
-        }>
+    ) => Promise<SecurityAuditFinding[]> | SecurityAuditFinding[]
   >;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

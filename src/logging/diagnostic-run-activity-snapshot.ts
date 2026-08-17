@@ -17,6 +17,7 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
+  activeModelCallRequestTimeoutMs?: number;
 };
 
 type SnapshotTool = { toolName: string; toolCallId?: string; startedAt: number };
@@ -24,6 +25,7 @@ type SnapshotActivity = DiagnosticArgumentChurnActivity &
   DiagnosticRepeatedRequestActivity & {
     activeEmbeddedRuns: ReadonlyMap<string, { runId: string; sequence: number }>;
     activeModelCalls: ReadonlyMap<string, unknown>;
+    activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
     activeTools: ReadonlyMap<string, SnapshotTool>;
     lastProgressAt: number;
     lastProgressReason?: string;
@@ -33,10 +35,24 @@ export function buildDiagnosticSessionActivitySnapshot(
   activity: SnapshotActivity,
   now: number,
 ): DiagnosticSessionActivitySnapshot {
+  let activeCoreModelCallCount = 0;
+  let activeModelCallRequestTimeoutMs: number | undefined;
+  for (const calls of activity.activeCoreModelCalls.values()) {
+    activeCoreModelCallCount += calls.size;
+    for (const call of calls.values()) {
+      if (
+        call.requestTimeoutMs !== undefined &&
+        (activeModelCallRequestTimeoutMs === undefined ||
+          call.requestTimeoutMs > activeModelCallRequestTimeoutMs)
+      ) {
+        activeModelCallRequestTimeoutMs = call.requestTimeoutMs;
+      }
+    }
+  }
   const activeWorkKind: DiagnosticSessionActiveWorkKind | undefined =
     activity.activeTools.size > 0
       ? "tool_call"
-      : activity.activeModelCalls.size > 0
+      : activity.activeModelCalls.size > 0 || activeCoreModelCallCount > 0
         ? "model_call"
         : activity.activeEmbeddedRuns.size > 0
           ? "embedded_run"
@@ -65,5 +81,6 @@ export function buildDiagnosticSessionActivitySnapshot(
       activity.activeEmbeddedRuns.values(),
       now,
     ),
+    activeModelCallRequestTimeoutMs,
   };
 }

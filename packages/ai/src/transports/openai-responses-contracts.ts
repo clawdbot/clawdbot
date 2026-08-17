@@ -1,5 +1,4 @@
 import {
-  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type Api,
   type ProviderReplayState,
@@ -36,18 +35,6 @@ export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
   "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
-
-export class OpenAIResponsesWebSocketResponseFailedError extends Error {
-  readonly code: string;
-
-  constructor(hasOutput: boolean) {
-    super("OpenAI Responses WebSocket returned response.failed");
-    this.name = "OpenAIResponsesWebSocketResponseFailedError";
-    this.code = hasOutput
-      ? PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE
-      : PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
-  }
-}
 
 export class OpenAIResponsesWebSocketPreDispatchError extends Error {
   constructor(cause: unknown) {

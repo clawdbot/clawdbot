@@ -6,6 +6,8 @@ import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
+const findCallMatchesInStoreMock = vi.hoisted(() => vi.fn());
+const loadActiveCallsFromStoreMock = vi.hoisted(() => vi.fn());
 const sleepMock = vi.hoisted(() =>
   vi.fn(
     async (ms: number) =>
@@ -22,6 +24,11 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
 vi.mock("../api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api.js")>()),
   sleep: sleepMock,
+}));
+vi.mock("./manager/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manager/store.js")>()),
+  findCallMatchesInStore: findCallMatchesInStoreMock,
+  loadActiveCallsFromStore: loadActiveCallsFromStoreMock,
 }));
 
 import { registerVoiceCallCli } from "./cli.js";
@@ -41,6 +48,8 @@ function captureStdout() {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
+    findCallMatchesInStoreMock.mockReset();
+    loadActiveCallsFromStoreMock.mockReset();
     sleepMock.mockReset();
     sleepMock.mockImplementation(
       async (ms: number) =>
@@ -66,53 +75,72 @@ describe("voice-call CLI status fallback", () => {
     return program;
   }
 
-  async function runStatusWithUnavailableGateway(
-    manager: Record<string, unknown>,
-    error = new Error("connect ECONNREFUSED 127.0.0.1:18789"),
-  ): Promise<unknown> {
-    callGatewayFromCliMock.mockRejectedValue(error);
-    const program = buildProgram(manager);
+  async function runStatusWithUnavailableGateway(params: {
+    persisted?: unknown;
+    error?: Error;
+    args?: string[];
+  }): Promise<unknown> {
+    callGatewayFromCliMock.mockRejectedValue(
+      params.error ?? new Error("connect ECONNREFUSED 127.0.0.1:18789"),
+    );
+    findCallMatchesInStoreMock.mockResolvedValue({ byCallId: params.persisted });
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("status fallback must not initialize the telephony runtime");
+    });
+    const program = new Command();
+    registerVoiceCallCli({
+      program,
+      config: {} as never,
+      ensureRuntime,
+      stateRuntime: {} as never,
+      logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
+    });
     const capturer = captureStdout();
     try {
-      await program.parseAsync(["voicecall", "status", "--call-id", "call-1", "--json"], {
-        from: "user",
-      });
+      await program.parseAsync(
+        ["voicecall", "status", ...(params.args ?? ["--call-id", "call-1"]), "--json"],
+        { from: "user" },
+      );
     } finally {
       capturer.restore();
     }
+    expect(ensureRuntime).not.toHaveBeenCalled();
     return JSON.parse(capturer.output().trim());
   }
 
   it("uses the manager's persisted fallback when the gateway is unavailable", async () => {
     const result = await runStatusWithUnavailableGateway({
-      getActiveCalls: () => [],
-      getCallFromMemoryOrStore: async () => ({
+      persisted: {
         callId: "call-1",
         providerCallId: "CA123",
         state: "completed",
         endReason: "completed",
         endedAt: 1,
-      }),
+      },
     });
     expect(result).toMatchObject({ callId: "call-1", state: "completed" });
   });
 
   it("reports found:false when the call is neither active nor persisted", async () => {
-    const result = await runStatusWithUnavailableGateway({
-      getActiveCalls: () => [],
-      getCallFromMemoryOrStore: async () => undefined,
-    });
+    const result = await runStatusWithUnavailableGateway({});
     expect(result).toEqual({ found: false });
   });
 
+  it("lists persisted active calls without initializing the telephony runtime", async () => {
+    loadActiveCallsFromStoreMock.mockReturnValue({
+      activeCalls: new Map([["call-1", { callId: "call-1", state: "ringing" }]]),
+    });
+    expect(await runStatusWithUnavailableGateway({ args: [] })).toEqual({
+      found: true,
+      calls: [{ callId: "call-1", state: "ringing" }],
+    });
+  });
+
   it("falls back after an abnormal local gateway close", async () => {
-    const result = await runStatusWithUnavailableGateway(
-      {
-        getActiveCalls: () => [],
-        getCallFromMemoryOrStore: async () => ({ callId: "call-1", state: "completed" }),
-      },
-      new Error("gateway closed (1006 abnormal closure (no close frame)): no close reason"),
-    );
+    const result = await runStatusWithUnavailableGateway({
+      persisted: { callId: "call-1", state: "completed" },
+      error: new Error("gateway closed (1006 abnormal closure (no close frame)): no close reason"),
+    });
     expect(result).toMatchObject({ callId: "call-1", state: "completed" });
   });
 

@@ -692,7 +692,8 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
     expect(rawToggle).toBeInstanceOf(HTMLButtonElement);
     expect(rawBody).toBeInstanceOf(HTMLElement);
-    expect([...rawToggle!.classList]).toEqual(["chat-tool-card__raw-toggle"]);
+    expect(rawToggle!.classList).toContain("chat-inline-disclosure");
+    expect(rawToggle!.classList).toContain("chat-tool-card__raw-toggle");
     expect(rawToggle!.textContent?.trim()).toBe("Raw details");
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("false");
     expect(rawBody!.hidden).toBe(true);
@@ -961,6 +962,42 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
   });
+
+  it.each([
+    {
+      args: {
+        markdown: "Implementation is moving.",
+        plan: [
+          { step: "Inspect", status: "completed" },
+          { step: "Implement", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+      },
+      expected: "Progress updated — 1/3 · Implement",
+    },
+    { args: { markdown: "Waiting on review." }, expected: "Progress note updated" },
+  ])("renders progress_card as a compact receipt: $expected", ({ args, expected }) => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: `progress:${expected}`,
+          name: "progress_card",
+          args,
+          outputText: "Progress card updated",
+          completed: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent?.trim()).toBe(expected);
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(container.textContent).not.toContain("Waiting on review.");
+  });
+
   it("does not add a full-message request for ambiguous tool details", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();

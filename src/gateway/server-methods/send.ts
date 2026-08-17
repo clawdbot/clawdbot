@@ -1352,14 +1352,23 @@ export const sendHandlers: GatewayRequestHandlers = {
               };
             }
           }
-          if (outboundRoute) {
+          // Durable route/session persistence commits only after platform
+          // evidence: a failed send must not rebind the folded main session's
+          // delivery route. Once-only across multi-payload results, and before
+          // the in-delivery transcript mirror so first contacts have a row.
+          let outboundRoutePersisted = false;
+          const commitOutboundSessionRoute = async () => {
+            if (outboundRoutePersisted || !outboundRoute) {
+              return;
+            }
+            outboundRoutePersisted = true;
             await ensureOutboundSessionEntry({
               cfg,
               channel,
               accountId,
               route: outboundRoute,
             });
-          }
+          };
           const outboundSession = buildOutboundSessionContext({
             cfg,
             agentId: effectiveAgentId,
@@ -1386,6 +1395,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             gatewayClientScopes: client?.connect?.scopes ?? [],
             silent: request.silent,
             formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
+            onDeliveryResult: commitOutboundSessionRoute,
             mirror: outboundSessionKey
               ? {
                   sessionKey: outboundSessionKey,
@@ -1396,6 +1406,11 @@ export const sendHandlers: GatewayRequestHandlers = {
                 }
               : undefined,
           });
+          // Safety net for adapters whose results carry no platform identity:
+          // any partially or fully sent batch still binds the route.
+          if (send.status === "sent" || send.status === "partial_failed") {
+            await commitOutboundSessionRoute();
+          }
           if (send.status === "failed" || send.status === "partial_failed") {
             throw send.error;
           }

@@ -8,7 +8,8 @@ import "./logs-page.ts";
 type TestLogsPage = HTMLElement & {
   context: ApplicationContext;
   logsAutoFollow: boolean;
-  logsEntries: unknown[];
+  logsEntries: Array<{ raw: string }>;
+  logsFile: string | null;
   logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   streamFollow: {
     atBottom: boolean;
@@ -212,6 +213,39 @@ describe("LogsPage lifecycle", () => {
     expect(page.logsEntries).toHaveLength(1);
   });
 
+  it("reloads from the beginning when the gateway log file changes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 6, file: "/tmp/source-a.log", lines: ["A-one"] })
+      .mockResolvedValueOnce({
+        cursor: 18,
+        file: "/tmp/source-b.log",
+        lines: ["B-tail"],
+        reset: false,
+      })
+      .mockResolvedValueOnce({
+        cursor: 18,
+        file: "/tmp/source-b.log",
+        lines: ["B-one", "B-tail"],
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    page.context = contextWithClient(client, true);
+    page.logsEntries = [{ raw: "seed" }];
+    document.body.append(page);
+    await page.updateComplete;
+    page.logsEntries = [];
+
+    await page.loadLogs({ reset: true });
+    await page.loadLogs();
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 6 });
+    expect(request.mock.calls[2]?.[1]).toMatchObject({ cursor: undefined });
+    expect(page.logsFile).toBe("/tmp/source-b.log");
+    expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["B-one", "B-tail"]);
+  });
+
   it("retains loaded logs as stale after failure and clears the marker on retry success", async () => {
     const request = vi
       .fn()
@@ -232,7 +266,7 @@ describe("LogsPage lifecycle", () => {
     await page.loadLogs({ reset: true });
     expect(page.logsEntries).toHaveLength(1);
     expect(page.logsStatus).toEqual({
-      error: "Error: logs unavailable",
+      error: "logs unavailable",
       hasLoaded: true,
       stale: true,
     });

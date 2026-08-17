@@ -9,6 +9,7 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -444,11 +445,6 @@ function resolvePath(baseDir: string, target: string): string {
   return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
 }
 
-function escapesBase(baseDir: string, candidate: string): boolean {
-  const relative = path.relative(baseDir, candidate);
-  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-}
-
 function safeRealpathSync(candidate: string): string | null {
   try {
     // Hook containment prefers native canonicalization when Node exposes it.
@@ -481,7 +477,7 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
     throw new Error(`${label} module path is required`);
   }
   const resolved = resolvePath(base, trimmed);
-  if (escapesBase(base, resolved)) {
+  if (!isPathInside(base, resolved)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
 
@@ -493,7 +489,7 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   if (
     baseRealpath &&
     existingAncestorRealpath &&
-    escapesBase(baseRealpath, existingAncestorRealpath)
+    !isPathInside(baseRealpath, existingAncestorRealpath)
   ) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }

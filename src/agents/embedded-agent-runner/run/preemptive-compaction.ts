@@ -232,7 +232,6 @@ function estimateRenderedPromptTokens(params: { systemPrompt?: string; prompt: s
 
 type TranscriptBoundaryTokenPressure = {
   estimatedPromptTokens: number;
-  messagesForPressure: AgentMessage[];
   source: "provider_context_usage" | "transcript_estimate";
 };
 
@@ -259,19 +258,18 @@ function estimateTranscriptBoundaryTokenPressure(params: {
   prompt: string;
 }): TranscriptBoundaryTokenPressure {
   const boundary = resolveProviderContextBoundary(params.messages);
-  // The provider total owns every prompt item through its assistant record.
-  // Only later transcript items and the new prompt still need local estimation.
+  // The provider total owns transcript items through its assistant record. It has
+  // no system-prompt provenance, so the current rendered prompt stays local too.
   const messagesForPressure = boundary
     ? params.messages.slice(boundary.index + 1)
     : params.messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    estimateRenderedPromptTokens(boundary ? { prompt: params.prompt } : params),
+    estimateRenderedPromptTokens(params),
   );
   return {
     estimatedPromptTokens:
       (boundary?.totalTokens ?? 0) + Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN),
-    messagesForPressure,
     source: boundary ? "provider_context_usage" : "transcript_estimate",
   };
 }
@@ -334,9 +332,6 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
         systemPrompt: params.systemPrompt,
         prompt: params.prompt,
       });
-  if (transcriptTokenPressure) {
-    messagesForPressure = transcriptTokenPressure.messagesForPressure;
-  }
   let estimatedPromptTokens =
     llmBoundaryTokenPressure?.estimatedPromptTokens ??
     transcriptTokenPressure?.estimatedPromptTokens ??
@@ -351,7 +346,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     });
     if (unwindowedTokenPressure.estimatedPromptTokens > estimatedPromptTokens) {
       estimatedPromptTokens = unwindowedTokenPressure.estimatedPromptTokens;
-      messagesForPressure = unwindowedTokenPressure.messagesForPressure;
+      messagesForPressure = params.unwindowedMessages;
       pressureSource = `unwindowed_${unwindowedTokenPressure.source}`;
     }
   }

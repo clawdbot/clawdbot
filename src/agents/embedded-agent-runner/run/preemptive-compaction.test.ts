@@ -157,14 +157,14 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
-  it("uses exact provider context plus only later transcript pressure", () => {
+  it("uses exact provider context plus later transcript and current prompt pressure", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [
         { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
         makeProviderAssistant({ promptTokens: 240_000, totalTokens: 240_304 }),
         { role: "user", content: "small tail", timestamp: timestamp++ } as AgentMessage,
       ],
-      systemPrompt: "already provider-accounted system prompt".repeat(1_000),
+      systemPrompt: "current system prompt",
       prompt: "continue",
       contextTokenBudget: 272_000,
       reserveTokens: 20_000,
@@ -174,6 +174,24 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeGreaterThan(240_304);
     expect(result.estimatedPromptTokens).toBeLessThan(252_000);
     expect(result.route).toBe("fits");
+  });
+
+  it("counts the current system prompt after a provider usage boundary", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+        makeProviderAssistant({ promptTokens: 240_000, totalTokens: 240_304 }),
+        { role: "user", content: "small tail", timestamp: timestamp++ } as AgentMessage,
+      ],
+      systemPrompt: "new system instruction ".repeat(5_000),
+      prompt: "continue",
+      contextTokenBudget: 272_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.pressureSource).toBe("provider_context_usage");
+    expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
+    expect(result.route).toBe("compact_only");
   });
 
   it("uses the later assistant boundary when distinct responses have equal totals", () => {

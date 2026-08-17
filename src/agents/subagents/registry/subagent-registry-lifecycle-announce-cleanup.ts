@@ -42,13 +42,13 @@ import {
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow =
   (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type SubagentAnnounceFlowOutcome = Awaited<ReturnType<RunSubagentAnnounceFlow>>;
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
   entry.expectsCompletionMessage === true &&

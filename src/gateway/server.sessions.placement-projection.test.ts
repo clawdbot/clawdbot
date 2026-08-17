@@ -5,12 +5,13 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-function activePlacementRecord(): WorkerSessionPlacementRecord {
+function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
   return {
     sessionId: "sess-main",
     agentId: "main",
@@ -99,6 +100,46 @@ test("sessions.list batch-projects durable worker placement", async () => {
     diskSpace,
   });
   expect(other?.placement).toBeUndefined();
+});
+
+test("sessions.list projects durable placement move progress", async () => {
+  await seedSessionRows();
+  const placement = activePlacementRecord();
+  const move: WorkerPlacementMoveIntent = {
+    operationId: "move:v1:opaque",
+    sessionId: placement.sessionId,
+    source: {
+      generation: placement.generation,
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+    },
+    target: { kind: "gateway" },
+    lastError: "workspace reconciliation is waiting",
+    createdAtMs: 320,
+    updatedAtMs: 340,
+  };
+  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
+    () => new Map([[placement.sessionId, placement]]),
+  );
+  const getPlacementMoves = vi.fn<NonNullable<WorkerSessionPlacementReader["getPlacementMoves"]>>(
+    () => new Map([[move.sessionId, move]]),
+  );
+
+  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
+    "sessions.list",
+    {},
+    { context: { workerSessionPlacementService: { getMany, getPlacementMoves } } },
+  );
+
+  expect(result.ok).toBe(true);
+  const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
+  expect(main?.placementMove).toEqual({
+    target: { kind: "gateway" },
+    error: "workspace reconciliation is waiting",
+    updatedAtMs: 340,
+  });
+  expect(main?.placementMove).not.toHaveProperty("operationId");
+  expect(getPlacementMoves).toHaveBeenCalledOnce();
 });
 
 test("sessions.describe projects durable worker placement", async () => {

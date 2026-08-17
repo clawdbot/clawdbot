@@ -151,6 +151,15 @@ describe("SQLite backup commands", () => {
     expect(listed.snapshots).toHaveLength(1);
     expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
 
+    const missingScratchPath = path.join(tempDir, "missing-scratch");
+    await expect(
+      backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+        scratch: missingScratchPath,
+      }),
+    ).rejects.toThrow(
+      `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
+    );
+
     const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
       scratch: scratchPath,
       json: true,
@@ -181,6 +190,31 @@ describe("SQLite backup commands", () => {
     } finally {
       restoredDatabase.close();
     }
+  });
+
+  it("reports missing snapshot paths for verify and restore", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-missing-");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    const snapshotPath = path.join(repositoryPath, "missing-snapshot");
+    const restorePath = path.join(tempDir, "restored.sqlite");
+    const runtime = createRuntimeCapture();
+    const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
+
+    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
+      missingRepositoryMessage,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
+    ).rejects.toThrow(missingRepositoryMessage);
+
+    await fs.mkdir(repositoryPath, { mode: 0o700 });
+    const missingSnapshotMessage = `SQLite snapshot does not exist: ${snapshotPath}. Run \`openclaw backup sqlite list --repository ${repositoryPath}\` to inspect available snapshots.`;
+    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
+      missingSnapshotMessage,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
+    ).rejects.toThrow(missingSnapshotMessage);
   });
 
   it("creates a snapshot for a normalized per-agent database", async () => {

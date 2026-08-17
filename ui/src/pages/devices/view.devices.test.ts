@@ -248,7 +248,7 @@ describe("devices inventory rendering", () => {
     const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
 
     expect(statusesByText(gatewayEntry, "gateway")).toHaveLength(1);
-    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(1);
+    expect(statusesByText(gatewayEntry, "connected")).toHaveLength(0);
     expect(gatewayEntry.textContent).toContain("gateway-host");
     expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
     expect(gatewayEntry.querySelector("button")).toBeNull();
@@ -358,6 +358,45 @@ describe("devices inventory rendering", () => {
     expect(section.textContent).toContain("approval needed");
     findButton(section, "Approve").click();
     expect(approvals).toEqual(["node-req-1"]);
+  });
+
+  it("keeps installed workers quiet and warns when the retained bundle is missing", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "node-installed",
+          displayName: "Installed Mac",
+          connected: true,
+          paired: true,
+          workerBundle: { status: "installed", version: "2026.8.9" },
+        },
+        {
+          nodeId: "node-missing",
+          displayName: "Missing Mac",
+          connected: true,
+          paired: true,
+          workerBundle: { status: "missing" },
+        },
+      ],
+    });
+    const section = getInventorySection(container);
+    const rows = Array.from(section.querySelectorAll(".device-entry"));
+    const installed = rows.find((row) => row.textContent?.includes("Installed Mac"));
+    const missing = rows.find((row) => row.textContent?.includes("Missing Mac"));
+
+    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
+      "Worker 2026.8.9",
+    );
+    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(0);
+    expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);
+    expect(missing ? statusesByText(missing, "worker missing") : []).toHaveLength(1);
+    expect(
+      Array.from(missing?.querySelectorAll<HTMLElement>("[title]") ?? [])
+        .find((element) => element.textContent?.trim() === "worker missing")
+        ?.getAttribute("title"),
+    ).toBe(
+      "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
+    );
   });
 
   it("shows device and Gateway version drift", () => {
@@ -561,7 +600,7 @@ describe("devices inventory rendering", () => {
     );
     expect(entry?.textContent).toContain("unpaired");
     expect(entry?.textContent).toContain("macOS 26.5.2");
-    expect(entry ? statusesByText(entry, "connected") : []).toHaveLength(1);
+    expect(entry ? statusesByText(entry, "connected") : []).toHaveLength(0);
     expect(entry?.querySelector("button")).toBeNull();
   });
 

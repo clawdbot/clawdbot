@@ -3,7 +3,8 @@ import { vi } from "vitest";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-const resolveCleanupPlanFromDisk = vi.fn();
+const resolveCleanupPlanForDryRun = vi.fn();
+export const resolveCleanupPlanForRemoval = vi.fn();
 const removePath = vi.fn();
 export const listAgentSessionDirs = vi.fn();
 export const prepareLegacyWorkspaceStateReset = vi.fn();
@@ -28,6 +29,7 @@ vi.mock("../config/config.js", () => ({
   get isNixMode() {
     return cleanupConfigState.isNixMode;
   },
+  resolveConfigPath: () => "/tmp/.openclaw/openclaw.json",
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -35,7 +37,8 @@ vi.mock("../daemon/service.js", () => ({
 }));
 
 vi.mock("./cleanup-plan.js", () => ({
-  resolveCleanupPlanFromDisk,
+  resolveCleanupPlanForDryRun,
+  resolveCleanupPlanForRemoval,
 }));
 
 vi.mock("./cleanup-utils.js", () => ({
@@ -51,14 +54,16 @@ export function createCleanupCommandRuntime() {
 
 export function resetCleanupCommandMocks() {
   vi.clearAllMocks();
-  resolveCleanupPlanFromDisk.mockReturnValue({
+  const cleanupPlan = {
     stateDir: "/tmp/.openclaw",
     configPath: "/tmp/.openclaw/openclaw.json",
     oauthDir: "/tmp/.openclaw/credentials",
     configInsideState: true,
     oauthInsideState: true,
     workspaceDirs: ["/tmp/.openclaw/workspace"],
-  });
+  };
+  resolveCleanupPlanForDryRun.mockResolvedValue(cleanupPlan);
+  resolveCleanupPlanForRemoval.mockResolvedValue(cleanupPlan);
   removePath.mockResolvedValue({ ok: true });
   listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
   prepareLegacyWorkspaceStateReset.mockImplementation((workspaceDir: string) => ({ workspaceDir }));

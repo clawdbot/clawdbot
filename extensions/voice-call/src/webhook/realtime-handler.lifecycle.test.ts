@@ -55,9 +55,36 @@ function createBridge(
   };
 }
 
+function makeRealtimeProvider(
+  createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
+): RealtimeVoiceProviderPlugin {
+  return {
+    id: "openai",
+    label: "OpenAI",
+    isConfigured: () => true,
+    createBridge: createBridgeForCall,
+  };
+}
+
+function makeCallRegistrationResolver(
+  provider: RealtimeVoiceProviderPlugin,
+): ConstructorParameters<typeof RealtimeCallHandler>[3] {
+  return (call) => ({
+    agentId: call.agentId ?? "main",
+    instructions: "Be helpful.",
+    provider,
+    providerConfig: { apiKey: "test-key" },
+  });
+}
+
 function createCarrierLifecycleHarness(
   createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
+  options: {
+    initialMessage?: string;
+    resolveCallRegistration?: ConstructorParameters<typeof RealtimeCallHandler>[3];
+  } = {},
 ) {
+  const realtimeProvider = makeRealtimeProvider(createBridgeForCall);
   const call: CallRecord = {
     callId: "call-startup",
     providerCallId: "CA-startup",
@@ -69,6 +96,7 @@ function createCarrierLifecycleHarness(
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
+    ...(options.initialMessage ? { metadata: { initialMessage: options.initialMessage } } : {}),
   };
   const processEvent = vi.fn();
   const hangupCall = vi.fn(async () => {});
@@ -79,13 +107,7 @@ function createCarrierLifecycleHarness(
       getCallByProviderCallId: vi.fn(() => call),
     } as unknown as CallManager,
     { name: "twilio", hangupCall } as unknown as VoiceCallProvider,
-    {
-      id: "openai",
-      label: "OpenAI",
-      isConfigured: () => true,
-      createBridge: createBridgeForCall,
-    },
-    { apiKey: "test-key" },
+    options.resolveCallRegistration ?? makeCallRegistrationResolver(realtimeProvider),
     "/voice/webhook",
   );
   return { call, handler, hangupCall, processEvent };
@@ -206,6 +228,144 @@ describe("RealtimeCallHandler lifecycle", () => {
     }
   });
 
+  it("ends an initial call when routed realtime admission fails", async () => {
+    const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>();
+    const resolveCallRegistration = vi.fn(() => {
+      throw new Error("routed agent realtime is unavailable");
+    });
+    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(
+      createBridgeForCall,
+      {
+        initialMessage: "Hello from the routed agent.",
+        resolveCallRegistration,
+      },
+    );
+    const { server, ws } = await connectCarrierStream(handler);
+
+    try {
+      const closed = waitForClose(ws);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-admission-failure", callSid: call.providerCallId },
+        }),
+      );
+
+      expect(await closed).toEqual({
+        code: 1011,
+        reason: "Check realtime configuration for routed agent",
+      });
+      expect(resolveCallRegistration).toHaveBeenCalledExactlyOnceWith(call);
+      expect(createBridgeForCall).not.toHaveBeenCalled();
+      expect(processEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        "call.initiated",
+        "call.ended",
+      ]);
+      expect(processEvent.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          callId: call.callId,
+          providerCallId: call.providerCallId,
+          reason: "error",
+        }),
+      );
+      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
+        callId: call.callId,
+        providerCallId: call.providerCallId,
+        reason: "error",
+      });
+      expect(call.metadata?.initialMessage).toBe("Hello from the routed agent.");
+      expect(handler.speak(call.callId, "still connected")).toEqual({
+        success: false,
+        error: "No active realtime bridge for call",
+      });
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
+  it("preserves the active predecessor when replacement admission fails", async () => {
+    const predecessorGreeting = vi.fn();
+    const realtimeProvider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: vi.fn(() =>
+        createBridge(vi.fn(), {
+          triggerGreeting: predecessorGreeting,
+        }),
+      ),
+    };
+    const resolveCallRegistration = vi
+      .fn<ConstructorParameters<typeof RealtimeCallHandler>[3]>()
+      .mockReturnValueOnce({
+        agentId: "main",
+        instructions: "Be helpful.",
+        provider: realtimeProvider,
+        providerConfig: { apiKey: "test-key" },
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("replacement agent realtime is unavailable");
+      });
+    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(
+      realtimeProvider.createBridge,
+      { resolveCallRegistration },
+    );
+    const predecessor = await connectCarrierStream(handler);
+    let replacement: Awaited<ReturnType<typeof connectCarrierStream>> | undefined;
+
+    try {
+      predecessor.ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-predecessor", callSid: call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1));
+
+      replacement = await connectCarrierStream(handler);
+      const replacementClosed = waitForClose(replacement.ws);
+      replacement.ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-replacement-admission", callSid: call.providerCallId },
+        }),
+      );
+
+      expect(await replacementClosed).toEqual({
+        code: 1011,
+        reason: "Check realtime configuration for routed agent",
+      });
+      expect(resolveCallRegistration).toHaveBeenCalledTimes(2);
+      expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1);
+      expect(
+        processEvent.mock.calls.filter(([event]) => event.type === "call.answered"),
+      ).toHaveLength(1);
+      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
+        0,
+      );
+      expect(hangupCall).not.toHaveBeenCalled();
+      expect(predecessor.ws.readyState).toBe(WebSocket.OPEN);
+      expect(handler.speak(call.callId, "predecessor remains connected")).toEqual({
+        success: true,
+      });
+      expect(predecessorGreeting).toHaveBeenCalledWith("predecessor remains connected");
+    } finally {
+      if (predecessor.ws.readyState !== WebSocket.CLOSED) {
+        predecessor.ws.terminate();
+      }
+      if (replacement && replacement.ws.readyState !== WebSocket.CLOSED) {
+        replacement.ws.terminate();
+      }
+      await handler.close();
+      await replacement?.server.close();
+      await predecessor.server.close();
+    }
+  });
+
   it("does not hang up a replacement when its stale predecessor rejects startup", async () => {
     let rejectStartup: (error: Error) => void = () => {};
     const pendingStartup = new Promise<void>((_resolve, reject) => {
@@ -299,13 +459,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
     );
     const { streamUrl } = handler.issueStreamSession();
@@ -414,13 +568,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
     );
     const { streamUrl } = handler.issueStreamSession();
@@ -507,13 +655,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
     );
     const consult = vi.fn(async () => ({ text: "This should not run." }));
@@ -628,13 +770,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
     );
     handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {

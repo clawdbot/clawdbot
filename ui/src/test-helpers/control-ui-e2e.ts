@@ -197,7 +197,7 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/yaml",
 ] as const;
 
-const defaultControlUiFeatureMethods = [
+export const defaultControlUiFeatureMethods = [
   "chat.abort",
   "chat.metadata",
   "chat.startup",
@@ -271,8 +271,6 @@ export type ControlUiMockGatewayScenario = {
   serverBuildId?: string;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
-  /** Simulate the one-time legacy Control UI device-auth pairing transition. */
-  deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
@@ -854,7 +852,6 @@ function normalizeScenario(
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
-    deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
@@ -951,6 +948,18 @@ function installControlUiMockGateway(
     method: string;
     match?: Record<string, unknown>;
   };
+  type MockTerminalSession = {
+    sessionId: string;
+    agentId: string;
+    shell: string;
+    cwd: string;
+    confined: boolean;
+    attached: boolean;
+    owner: "conn";
+    createdAtMs: number;
+    buffer: string;
+    seq: number;
+  };
   type ExposedGateway = {
     closeLatest: (code?: number, reason?: string) => void;
     deliverLatest: (frame: unknown) => void;
@@ -1009,6 +1018,8 @@ function installControlUiMockGateway(
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const createdSessions = new Map<string, Record<string, unknown>>();
+  const terminalSessions = new Map<string, MockTerminalSession>();
+  let terminalSessionSequence = 0;
   const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{
     readonly readyState: number;
@@ -1016,8 +1027,6 @@ function installControlUiMockGateway(
     close: (code?: number, reason?: string) => void;
     openConnection: () => void;
   }> = [];
-  let deviceAuthMigrationPending = scenario.deviceAuthMigrationPending;
-  let deviceAuthMigrationDeviceId = "";
   let sessionMessageEventIndex = 0;
   let sessionMessageEventTimer: number | null = null;
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -1521,28 +1530,6 @@ function installControlUiMockGateway(
   }
 
   function buildResponse(method: string, params: unknown): unknown {
-    if (method === "connect") {
-      const device = isRecord(params) ? params.device : undefined;
-      deviceAuthMigrationDeviceId =
-        isRecord(device) && typeof device.id === "string" ? device.id : "";
-    }
-    if (deviceAuthMigrationPending && method === "device.pair.list") {
-      return {
-        paired: [],
-        pending: deviceAuthMigrationDeviceId
-          ? [
-              {
-                requestId: "mock-device-auth-migration-request",
-                deviceId: deviceAuthMigrationDeviceId,
-              },
-            ]
-          : [],
-      };
-    }
-    if (deviceAuthMigrationPending && method === "device.pair.approve") {
-      deviceAuthMigrationPending = false;
-      return { requestId: "mock-device-auth-migration-request" };
-    }
     if (method === "sessions.patch") {
       recordSessionPatch(params);
     }
@@ -1647,9 +1634,8 @@ function installControlUiMockGateway(
           auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
         return {
           auth: {
-            ...(deviceAuthMigrationPending
-              ? {}
-              : { deviceToken: connectedDeviceToken, recoveryMigrationAllowed: true as const }),
+            deviceToken: connectedDeviceToken,
+            recoveryMigrationAllowed: true as const,
             recoveryScope: "e2e-recovery-scope",
             role: "operator",
             scopes: scenario.operatorScopes,
@@ -1661,9 +1647,6 @@ function installControlUiMockGateway(
           },
           controlUiTabs: scenario.controlUiTabs,
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,
-          ...(deviceAuthMigrationPending
-            ? { deviceAuthMigration: { pending: true as const } }
-            : {}),
           protocol: protocolVersion,
           server: {
             buildId: serverBuildId,
@@ -1812,6 +1795,19 @@ function installControlUiMockGateway(
         };
       case "models.list":
         return { models: scenario.models };
+      case "sessions.create": {
+        const agentId =
+          isRecord(params) && typeof params.agentId === "string"
+            ? params.agentId
+            : scenario.defaultAgentId;
+        const requestedKey =
+          isRecord(params) && typeof params.key === "string" ? params.key.trim() : "";
+        const response = {
+          key: requestedKey || `agent:${agentId}:mock-created-${createdSessions.size + 1}`,
+        };
+        recordMaterializedSession(params, response);
+        return response;
+      }
       case "sessions.list":
         return applySessionPatches(
           {
@@ -1914,9 +1910,99 @@ function installControlUiMockGateway(
         };
       case "sessions.messages.unsubscribe":
         return { ok: true };
+      case "terminal.open": {
+        const sessionId = `control-ui-mock-terminal-${++terminalSessionSequence}`;
+        const session: MockTerminalSession = {
+          sessionId,
+          agentId:
+            isRecord(params) && typeof params.agentId === "string"
+              ? params.agentId
+              : scenario.defaultAgentId,
+          shell: "/bin/zsh",
+          cwd: scenario.workspace || "/workspace/openclaw",
+          confined: false,
+          attached: true,
+          owner: "conn",
+          createdAtMs: Date.now(),
+          buffer: "",
+          seq: 0,
+        };
+        terminalSessions.set(sessionId, session);
+        return {
+          sessionId: session.sessionId,
+          agentId: session.agentId,
+          shell: session.shell,
+          cwd: session.cwd,
+          confined: session.confined,
+        };
+      }
+      case "terminal.attach": {
+        const sessionId = isRecord(params) ? params.sessionId : undefined;
+        const session = typeof sessionId === "string" ? terminalSessions.get(sessionId) : null;
+        return session
+          ? {
+              sessionId: session.sessionId,
+              agentId: session.agentId,
+              shell: session.shell,
+              cwd: session.cwd,
+              confined: session.confined,
+              buffer: session.buffer,
+              seq: session.seq,
+            }
+          : {};
+      }
+      case "terminal.list":
+        return {
+          sessions: [...terminalSessions.values()].map(
+            ({ buffer: _buffer, seq: _seq, ...session }) => session,
+          ),
+        };
+      case "terminal.input":
+      case "terminal.resize":
+        return { ok: true };
+      case "terminal.close": {
+        const sessionId = isRecord(params) ? params.sessionId : undefined;
+        if (typeof sessionId === "string") {
+          terminalSessions.delete(sessionId);
+        }
+        return { ok: true };
+      }
       default:
         return {};
     }
+  }
+
+  function emitTerminalOutput(
+    socket: { deliver: (frame: unknown) => void },
+    method: string,
+    params: unknown,
+    response: unknown,
+  ): void {
+    let data = "";
+    let session: MockTerminalSession | undefined;
+    if (
+      method === "terminal.open" &&
+      isRecord(response) &&
+      typeof response.sessionId === "string"
+    ) {
+      session = terminalSessions.get(response.sessionId);
+      data = "OpenClaw mock terminal\r\nType anything and the mock Gateway will echo it.\r\n$ ";
+    } else if (method === "terminal.input" && isRecord(params)) {
+      session =
+        typeof params.sessionId === "string" ? terminalSessions.get(params.sessionId) : undefined;
+      data = typeof params.data === "string" ? params.data : "";
+    }
+    if (!session || !data) {
+      return;
+    }
+    session.buffer += data;
+    session.seq += data.length;
+    socket.deliver({
+      event: "terminal.data",
+      payload: { sessionId: session.sessionId, seq: session.seq, data },
+      seq: ++seq,
+      type: "event",
+    });
   }
 
   function shouldDefer(method: string, params: unknown): boolean {
@@ -2036,6 +2122,9 @@ function installControlUiMockGateway(
             ? { id, ok: false, error: mockError, type: "res" }
             : { id, ok: true, payload, type: "res" },
         );
+        if (!mockError) {
+          emitTerminalOutput(this, method, frame.params, payload);
+        }
         if (!mockError && method === "connect" && this.readyState === MockWebSocket.OPEN) {
           this.tickTimer = window.setInterval(() => {
             this.deliver({ event: "tick", payload: {}, seq: ++seq, type: "event" });

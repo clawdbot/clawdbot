@@ -1,4 +1,4 @@
-import type { AgentHarness } from "../agents/harness/types.js";
+import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
@@ -78,7 +78,6 @@ import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
   ContextEngineFactory,
   MemoryCorpusSupplement,
-  MemoryEmbeddingProviderAdapter,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
@@ -309,7 +308,7 @@ export type OpenClawPluginApi = {
     provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
   /** Register an agent harness implementation. */
-  registerAgentHarness: (harness: AgentHarness) => void;
+  registerAgentHarness: (harness: AgentHarness, options?: AgentHarnessRegistrationOptions) => void;
   /**
    * Register a Codex app-server extension factory for Codex harness tool-result
    * middleware. Only bundled plugins may use this seam, and
@@ -441,13 +440,6 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
-  /**
-   * Register a memory embedding provider adapter. Multiple adapters may coexist.
-   * @deprecated New embedding providers should use `registerEmbeddingProvider`
-   * and `contracts.embeddingProviders`. This memory-specific seam is retained
-   * while existing memory providers migrate.
-   */
-  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

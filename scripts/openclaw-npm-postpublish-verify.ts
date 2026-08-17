@@ -12,8 +12,7 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
-import { builtinModules } from "node:module";
-import { createRequire } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, posix as pathPosix, relative, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";

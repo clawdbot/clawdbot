@@ -514,10 +514,14 @@ suite.define(() => {
         await expect.poll(() => message.inputValue()).toBe("retry this draft after reconnect");
         await expect.poll(() => message.isEnabled()).toBe(true);
         await expect.poll(() => start.isDisabled()).toBe(true);
+        // The gate table also surfaces this reason in the Start tooltip, so
+        // scope to the page callout instead of a bare text match.
         await page
-          .getByText(
-            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
-          )
+          .getByRole("alert")
+          .filter({
+            hasText:
+              "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+          })
           .waitFor();
         expect(new URL(page.url()).pathname).toBe("/new");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);

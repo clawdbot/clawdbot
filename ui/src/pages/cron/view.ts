@@ -10,8 +10,11 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
 import type {
+  ChannelUiMetaEntry,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
   CronRunsStatusValue,
@@ -49,6 +52,7 @@ import type {
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { renderSegmented } from "./segmented-control.ts";
@@ -812,7 +816,7 @@ function renderDisabledNote(job: CronJob) {
   return html`<span
     class="cron-table__paused-note cron-table__auto-disabled"
     data-test-id=${`cron-row-auto-disabled-${job.id}`}
-    title=${lastError ?? label}
+    title=${lastError ? formatUiExternalText(lastError) : label}
     >${label}</span
   >`;
 }

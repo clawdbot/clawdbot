@@ -5,10 +5,17 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
+import { custodianErrorMessage } from "./transcript.ts";
 
 describe("CustodianSessionStore", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("redacts secrets in displayed request failures", () => {
+    expect(custodianErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
+      "OPENAI_API_KEY=sk-123...cdef",
+    );
   });
 
   it("shares one live session across repeated surface connections", async () => {

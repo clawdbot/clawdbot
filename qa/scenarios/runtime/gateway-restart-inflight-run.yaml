@@ -1,4 +1,4 @@
-title: Gateway restart Code Mode wait recovery
+title: Gateway three-restart Code Mode wait recovery
 
 scenario:
   id: gateway-restart-inflight-run
@@ -9,6 +9,8 @@ scenario:
     secondary:
       - gateway.restart-and-stop-gateway-restart
       - session-memory.recovery-delivery
+  gatewayRuntime:
+    preserveDebugArtifacts: true
   gatewayConfigPatch:
     # Channel restart recovery deliberately fails closed when reply hooks are active.
     # This scenario isolates the replay-safe Code Mode contract from those hooks.
@@ -20,6 +22,9 @@ scenario:
           enabled: false
         memory-core:
           enabled: false
+    logging:
+      audit:
+        executionIdentity: true
     tools:
       alsoAllow:
         - qa_restart_wait
@@ -27,11 +32,11 @@ scenario:
       codeMode:
         enabled: true
         timeoutMs: 60000
-  objective: Verify replay-safe Code Mode work interrupted on its wait control reconstructs and delivers automatically after a gateway restart.
+  objective: Verify replay-safe Code Mode work reconstructs automatically through three sequential Gateway replacements while retaining one admitted turn and its audit identity.
   successCriteria:
-    - Scenario persists a Code Mode wait call before applying a restart-required config change.
-    - Gateway and qa-channel return healthy after the restart.
-    - The interrupted work reconstructs automatically under a host-owned restart-safe policy, rejects a non-replay-safe probe before execution, and emits its marker exactly once without a resend notice or manual follow-up.
+    - One qa-channel inbound turn persists three distinct pending Code Mode wait checkpoints before three restart-required config changes.
+    - Gateway and qa-channel return healthy after every restart while the delivery run and lifecycle fence rotate and the original audit identity remains stable.
+    - The interrupted work reconstructs automatically under a host-owned restart-safe policy, hides the non-replay-safe probe, and emits its marker exactly once without a resend notice or manual follow-up.
   docsRefs:
     - docs/gateway/configuration.md
     - docs/automation/tasks.md
@@ -45,16 +50,19 @@ scenario:
     runtime: openclaw
     timeoutMs: 420000
     retryCount: 0
-    summary: Restart while replay-safe Code Mode wait is executing, then verify automatic reconstruction and delivery.
+    summary: Restart three times while replay-safe Code Mode waits are pending, then verify identity-preserving automatic reconstruction and delivery.
+    suiteIsolation: isolated
+    isolationReason: Replaces the Gateway child three times and inspects one persistent in-flight session.
     config:
       requiredProviderMode: mock-openai
-      prompt: "Code Mode restart wait QA check. Reply exactly: RESTART-CODE-MODE-WAIT-OK"
-      interruptedMarker: RESTART-CODE-MODE-WAIT-OK
+      prompt: "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT. Complete three sequential restart checkpoints, then reply with exactly two lines: unsafeVisible=false and RESTART-CODE-MODE-WAIT-OK"
+      promptMarker: RESTART-CODE-MODE-PROMPT
+      finalMarker: RESTART-CODE-MODE-WAIT-OK
       restartNoticeNeedle: "couldn't safely resume"
 
 flow:
   steps:
-    - name: completes one in-flight run across restart
+    - name: completes one in-flight run across three restarts
       actions:
         - call: waitForGatewayHealthy
           args:
@@ -77,12 +85,18 @@ flow:
         - set: sessionKey
           value:
             expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
-        - set: restartPatch
-          value:
-            expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } }, tools: { codeMode: { enabled: false } } })"
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: checkpointDeliveryRunIds
+          value:
+            expr: "[]"
+        - set: checkpointLifecycleFences
+          value:
+            expr: "[]"
+        - set: auditAnchorIdentity
+          value:
+            expr: "null"
         # Real channel ingress owns the durable delivery context needed by recovery.
         # Synthetic chat/agent RPC starts cannot prove recovered channel delivery.
         - sendInbound:
@@ -96,114 +110,207 @@ flow:
             senderName: QA Restart Operator
             text:
               expr: config.prompt
-        - call: waitForCondition
-          saveAs: plannedWait
-          args:
-            - lambda:
-                async: true
-                expr: "fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`).then((requests) => requests.find((request) => request.plannedToolName === 'wait' && String(request.allInputText ?? '').includes(config.interruptedMarker)))"
-            - expr: liveTurnTimeoutMs(env, 120000)
-            - 25
-        - call: waitForCondition
-          saveAs: interruptedTranscript
-          args:
-            - lambda:
-                async: true
-                expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => summary.lastMessageRole === 'assistant' && summary.lastAssistantToolNames?.includes('wait') ? summary : undefined)"
-            - expr: liveTurnTimeoutMs(env, 120000)
-            - 25
-        - call: readRawQaSessionStore
-          saveAs: preRestartStore
-          args:
-            - ref: env
-        - set: preRestartEntry
-          value:
-            expr: preRestartStore[sessionKey]
-        - assert:
-            expr: "preRestartEntry?.restartRecoveryDeliveryContext?.channel === 'qa-channel' && preRestartEntry.restartRecoveryDeliveryContext.to === `dm:${conversationId}`"
-            message:
-              expr: "`restart recovery delivery claim missing before restart: ${JSON.stringify(preRestartEntry ?? null)}`"
-        - call: restartGatewayWithConfigPatch
-          args:
-            - env:
-                ref: env
-              patch:
-                ref: restartPatch
-        - call: waitForGatewayHealthy
-          args:
-            - ref: env
-            - 180000
-        - call: waitForQaChannelReady
-          args:
-            - ref: env
-            - 180000
-        - call: waitForCondition
-          saveAs: settledRecovery
-          args:
-            - lambda:
-                async: true
-                expr: "(async () => { const recoveryRequests = env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)) : []; const restartRecoveryRequests = recoveryRequests.filter((request) => String(request.prompt ?? '').includes('Your previous turn was interrupted by a gateway restart') && String(request.allInputText ?? '').includes(config.interruptedMarker)); const transcript = await readSessionTranscriptSummary(env, sessionKey); return restartRecoveryRequests.length >= 1 && transcript.lastMessageRole === 'assistant' && String(transcript.finalText ?? '').includes(config.interruptedMarker) ? { recoveryRequests, restartRecoveryRequests, transcript } : undefined; })()"
-            - expr: liveTurnTimeoutMs(env, 120000)
-            - 25
-        - set: recoveryRequestsBeforeOutbound
-          value:
-            expr: settledRecovery.recoveryRequests
-        - set: restartRecoveryRequestsBeforeOutbound
-          value:
-            expr: settledRecovery.restartRecoveryRequests
-        - set: postRestartTranscript
-          value:
-            expr: settledRecovery.transcript
-        - assert:
-            expr: "postRestartTranscript.lastAssistantStopReason !== 'error' && postRestartTranscript.lastAssistantStopReason !== 'aborted'"
-            message:
-              expr: "`restart recovery left an abort artifact: ${JSON.stringify(postRestartTranscript)}`"
-        - assert:
-            expr: "restartRecoveryRequestsBeforeOutbound.length === 1 && String(restartRecoveryRequestsBeforeOutbound[0].prompt ?? '').includes('Your previous turn was interrupted by a gateway restart') && String(restartRecoveryRequestsBeforeOutbound[0].allInputText ?? '').includes(config.interruptedMarker)"
-            message:
-              expr: "`expected exactly one scoped restart recovery provider request before delivery, got ${restartRecoveryRequestsBeforeOutbound.length}; total post-cursor requests=${recoveryRequestsBeforeOutbound.length}`"
-        - assert:
-            expr: "!String(restartRecoveryRequestsBeforeOutbound[0].prompt ?? '').includes('[OpenClaw heartbeat poll]')"
-            message: restart recovery provider request was replaced by a heartbeat poll
+          saveAs: inbound
+        - forEach:
+            items:
+              - 1
+              - 2
+              - 3
+            item: checkpoint
+            actions:
+              - call: waitForCondition
+                saveAs: checkpointTranscript
+                args:
+                  - lambda:
+                      async: true
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint ? summary : undefined).catch(() => undefined)"
+                  - expr: liveTurnTimeoutMs(env, 120000)
+                  - 25
+              - assert:
+                  expr: "(checkpointTranscript.completedToolCallCounts.wait ?? 0) < checkpoint"
+                  message:
+                    expr: "`checkpoint ${checkpoint} wait was not pending before restart: ${JSON.stringify(checkpointTranscript)}`"
+              - set: checkpointRequests
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => request.plannedToolName === 'qa_restart_wait' && request.plannedWireToolName === 'exec')"
+              - assert:
+                  expr: "checkpointRequests.length === checkpoint"
+                  message:
+                    expr: "`checkpoint ${checkpoint} was not issued exactly once in sequence: ${JSON.stringify(checkpointRequests)}`"
+              - call: readRawQaSessionStore
+                saveAs: checkpointStore
+                args:
+                  - ref: env
+              - set: checkpointEntry
+                value:
+                  expr: checkpointStore[sessionKey]
+              - assert:
+                  expr: "Boolean(checkpointEntry) && checkpointTranscript.userMessageCount >= 1 && checkpointTranscript.eventCursor > 0 && (checkpointTranscript.probeTextEndLine ?? 0) > 0 && checkpointEntry.restartRecoveryDeliveryContext?.channel === 'qa-channel' && checkpointEntry.restartRecoveryDeliveryContext.to === `dm:${conversationId}`"
+                  message:
+                    expr: "`checkpoint ${checkpoint} did not persist the one original prompt and canonical delivery claim: entry=${JSON.stringify(checkpointEntry ?? null)} transcript=${JSON.stringify(checkpointTranscript)}`"
+              - set: currentDeliveryRunId
+                value:
+                  expr: checkpointEntry.restartRecoveryDeliveryRunId
+              - set: currentDeliveryFence
+                value:
+                  expr: "checkpointEntry.restartRecoveryRuns?.find((candidate) => candidate.runId === currentDeliveryRunId)"
+              - assert:
+                  expr: "typeof currentDeliveryRunId === 'string' && (checkpoint === 1 || Boolean(currentDeliveryFence)) && (checkpoint <= 2 || (currentDeliveryRunId !== checkpointDeliveryRunIds.at(-1) && currentDeliveryFence.lifecycleGeneration !== checkpointLifecycleFences.at(-1).lifecycleGeneration))"
+                  message:
+                    expr: "`checkpoint ${checkpoint} did not rotate the accepted delivery run/lifecycle fence before its next generation: deliveryRun=${currentDeliveryRunId} fence=${JSON.stringify(currentDeliveryFence)} priorDeliveryRuns=${JSON.stringify(checkpointDeliveryRunIds)} priorFences=${JSON.stringify(checkpointLifecycleFences)}`"
+              - if:
+                  expr: "checkpoint > 1 && currentDeliveryRunId !== checkpointDeliveryRunIds.at(-1) && auditAnchorIdentity === null"
+                  then:
+                    - set: auditAnchorRunId
+                      value:
+                        expr: checkpointDeliveryRunIds.at(-1)
+                    - call: waitForCondition
+                      saveAs: capturedAuditAnchorInspection
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "runQaCli(env, ['audit', '--run', auditAnchorRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => value.identity?.state === 'present' ? value : undefined).catch(() => undefined)"
+                        - 60000
+                        - 250
+                    - set: capturedAuditAnchorIdentity
+                      value:
+                        expr: capturedAuditAnchorInspection.identity.context
+                    - assert:
+                        expr: "capturedAuditAnchorIdentity.runId === auditAnchorRunId"
+                        message:
+                          expr: "`checkpoint ${checkpoint} could not capture the original admitted audit identity for run ${auditAnchorRunId}: ${JSON.stringify(capturedAuditAnchorIdentity)}`"
+                    - set: auditAnchorIdentity
+                      value:
+                        expr: capturedAuditAnchorIdentity
+              - set: checkpointDeliveryRunIds
+                value:
+                  expr: "[...checkpointDeliveryRunIds, currentDeliveryRunId]"
+              - set: checkpointLifecycleFences
+                value:
+                  expr: "currentDeliveryFence ? [...checkpointLifecycleFences, currentDeliveryFence] : checkpointLifecycleFences"
+              - call: restartGatewayWithConfigPatch
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      gateway:
+                        controlUi:
+                          allowedOrigins:
+                            - expr: "`http://127.0.0.1:${64000 + checkpoint}`"
+              - call: waitForGatewayHealthy
+                args:
+                  - ref: env
+                  - 180000
+              - call: waitForQaChannelReady
+                args:
+                  - ref: env
+                  - 180000
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      expr: "readGatewayLogs().slice(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
+                  - expr: liveTurnTimeoutMs(env, 120000)
+                  - 25
         - call: waitForOutboundMessage
           saveAs: outbound
           args:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === conversationId && candidate.text.includes(config.interruptedMarker)"
+                expr: "candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker)"
             - expr: liveTurnTimeoutMs(env, 180000)
             - sinceIndex:
                 ref: startIndex
-        - set: settledRecoveryRequests
+        - set: outboundCountAfterDelivery
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - waitForNoOutbound:
+            quietMs: 3000
+            sinceIndex:
+              ref: outboundCountAfterDelivery
+        - assert:
+            expr: "auditAnchorIdentity !== null"
+            message: third replacement completed without capturing the original admitted audit identity
+        - set: auditAnchorRunId
+          value:
+            expr: auditAnchorIdentity.runId
+        - call: waitForCondition
+          saveAs: postDeliveryAuditAnchorInspection
+          args:
+            - lambda:
+                async: true
+                expr: "runQaCli(env, ['audit', '--run', auditAnchorRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => value.identity?.state === 'present' ? value : undefined).catch(() => undefined)"
+            - 60000
+            - 250
+        - set: postDeliveryAuditAnchorIdentity
+          value:
+            expr: postDeliveryAuditAnchorInspection.identity.context
+        - assert:
+            expr: "postDeliveryAuditAnchorIdentity.runId === auditAnchorRunId && postDeliveryAuditAnchorIdentity.contextId === auditAnchorIdentity.contextId && postDeliveryAuditAnchorIdentity.executionId === auditAnchorIdentity.executionId && JSON.stringify(postDeliveryAuditAnchorIdentity) === JSON.stringify(auditAnchorIdentity)"
+            message:
+              expr: "`original admitted audit identity changed after the third replacement: anchor=${JSON.stringify(auditAnchorIdentity)} afterDelivery=${JSON.stringify(postDeliveryAuditAnchorIdentity)}`"
+        - call: readSessionTranscriptSummary
+          saveAs: finalTranscript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - set: settledRequests
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)) : []"
-        - set: settledRestartRecoveryRequests
+        - set: finalMatches
           value:
-            expr: "settledRecoveryRequests.filter((request) => String(request.prompt ?? '').includes('Your previous turn was interrupted by a gateway restart') && String(request.allInputText ?? '').includes(config.interruptedMarker))"
-        - assert:
-            expr: "settledRestartRecoveryRequests.length === 1 && settledRestartRecoveryRequests[0].cursor === restartRecoveryRequestsBeforeOutbound[0].cursor"
-            message:
-              expr: "`restart recovery provider request was duplicated after delivery: before=${JSON.stringify(restartRecoveryRequestsBeforeOutbound)} settled=${JSON.stringify(settledRestartRecoveryRequests)}`"
-        - set: interruptedMatches
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker))"
+        - set: inboundMatches
           value:
-            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.interruptedMarker))"
-        - assert:
-            expr: "interruptedMatches.length === 1"
-            message:
-              expr: "`expected exactly one automatically recovered marker, got ${interruptedMatches.length}; outbound=${recentOutboundSummary(state)}`"
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'inbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.promptMarker))"
         - set: restartNotices
           value:
             expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.restartNoticeNeedle))"
         - assert:
+            expr: "inboundMatches.length === 1 && inboundMatches[0].id === inbound.id"
+            message:
+              expr: "`expected one real qa-channel inbound turn, got ${inboundMatches.length}`"
+        - assert:
+            expr: "finalMatches.length === 1 && outbound.text.split(config.finalMarker).length - 1 === 1"
+            message:
+              expr: "`expected exactly one automatically recovered marker, got ${finalMatches.length}; outbound=${recentOutboundSummary(state)}`"
+        - assert:
             expr: "restartNotices.length === 0"
             message:
               expr: "`automatic recovery emitted ${restartNotices.length} resend notice(s); outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "outbound.text.includes('unsafeVisible=false') && !settledRequests.some((request) => request.plannedToolName === 'qa_restart_unsafe_probe') && !String(finalTranscript.finalText ?? '').includes('unsafe-probe-executed')"
+            message:
+              expr: "`unsafe probe became visible or executed: outbound=${outbound.text} requests=${JSON.stringify(settledRequests)} transcript=${JSON.stringify(finalTranscript)}`"
+        - assert:
+            expr: "(finalTranscript.assistantToolCallCounts.exec ?? 0) === 3 && (finalTranscript.assistantToolCallCounts.wait ?? 0) >= 3 && checkpointDeliveryRunIds.length === 3 && new Set(checkpointDeliveryRunIds).size >= 2 && checkpointDeliveryRunIds[2] !== checkpointDeliveryRunIds[1] && auditAnchorIdentity !== null"
+            message:
+              expr: "`expected three checkpoint pairs, accepted-delivery rotation, and one stable audit anchor: transcript=${JSON.stringify(finalTranscript)} deliveryRuns=${JSON.stringify(checkpointDeliveryRunIds)} auditAnchor=${JSON.stringify(auditAnchorIdentity)}`"
+        - assert:
+            expr: "finalTranscript.lastAssistantStopReason !== 'error' && finalTranscript.lastAssistantStopReason !== 'aborted'"
+            message:
+              expr: "`restart recovery left a terminal artifact: ${JSON.stringify(finalTranscript)}`"
         - set: recoveryLogs
           value:
             expr: readGatewayLogs().slice(gatewayLogCursor)
+        - set: recoveryDispatches
+          value:
+            expr: "recoveryLogs.split('dispatching restart-safe recovery').length - 1"
+        - set: retainedPolicies
+          value:
+            expr: "recoveryLogs.split('restart-safe recovery tool policy retained').length - 1"
         - assert:
-            expr: "recoveryLogs.includes('dispatching restart-safe recovery') && recoveryLogs.includes('restart-safe recovery tool policy retained')"
+            expr: "recoveryDispatches === 3 && retainedPolicies === 3"
             message:
-              expr: "`restart-safe host policy was not observed; logs=${recoveryLogs}`"
-      detailsExpr: "`session=${sessionKey} plannedTool=${plannedWait.plannedToolName} persistedTail=${interruptedTranscript.lastMessageRole}/${interruptedTranscript.lastAssistantStopReason}/${interruptedTranscript.lastAssistantToolNames?.join(',')} recoveredTail=${postRestartTranscript.lastMessageRole}/${postRestartTranscript.lastAssistantStopReason}/${postRestartTranscript.lastAssistantContentTypes?.join(',')} recoveredMarkers=${interruptedMatches.length} resendNotices=${restartNotices.length} restartSafePolicy=true recoveryPromptHeartbeat=false\\n${outbound.text}`"
+              expr: "`expected exactly three restart-safe dispatches and retained policies; dispatches=${recoveryDispatches} retained=${retainedPolicies}`"
+        - assert:
+            expr: "!recoveryLogs.includes('unsafe-probe-executed')"
+            message: non-replay-safe QA probe executed during recovery
+        - assert:
+            expr: "!recoveryLogs.split(String.fromCharCode(10)).some((line) => line.includes('tool policy removed') && line.includes('qa_restart_wait'))"
+            message: replay-safe QA checkpoint tool was removed before Code Mode catalog construction
+        - call: assertNoGatewayLogSentinels
+          args:
+            - sinceIndex:
+                ref: gatewayLogCursor
+      detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} deliveryRunIds=${checkpointDeliveryRunIds.join(',')} auditAnchorRunId=${auditAnchorIdentity.runId} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"

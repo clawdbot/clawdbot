@@ -2,10 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { loadPluginManifest } from "./manifest.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const tempRoots: string[] = [];
 
@@ -22,9 +23,58 @@ function writeJson(filePath: string, value: unknown): void {
 
 describe("listOpenClawPluginManifestMetadata", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
+    clearPluginMetadataLifecycleCaches();
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("keeps manifest metadata stable until explicit lifecycle invalidation", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const bundledRoot = path.join(root, "extensions");
+    const pluginDir = path.join(bundledRoot, "lifecycle-catalog");
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const env = {
+      HOME: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    };
+    const writeManifest = (generation: string) =>
+      writeJson(manifestPath, { id: "lifecycle-catalog", generation });
+
+    writeManifest("first");
+    clearPluginMetadataLifecycleCaches();
+    const statSpy = vi.spyOn(fs, "statSync");
+    const readdirSpy = vi.spyOn(fs, "readdirSync");
+
+    expect(
+      listOpenClawPluginManifestMetadata(env).find(
+        (record) => record.manifest.id === "lifecycle-catalog",
+      )?.manifest.generation,
+    ).toBe("first");
+    const firstStatCalls = statSpy.mock.calls.length;
+    const firstReaddirCalls = readdirSpy.mock.calls.length;
+    expect(firstReaddirCalls).toBeGreaterThan(0);
+
+    writeManifest("second");
+    expect(
+      listOpenClawPluginManifestMetadata(env).find(
+        (record) => record.manifest.id === "lifecycle-catalog",
+      )?.manifest.generation,
+    ).toBe("first");
+    expect(statSpy).toHaveBeenCalledTimes(firstStatCalls);
+    expect(readdirSpy).toHaveBeenCalledTimes(firstReaddirCalls);
+
+    clearPluginMetadataLifecycleCaches();
+    expect(
+      listOpenClawPluginManifestMetadata(env).find(
+        (record) => record.manifest.id === "lifecycle-catalog",
+      )?.manifest.generation,
+    ).toBe("second");
+    expect(statSpy).toHaveBeenCalledTimes(firstStatCalls);
+    expect(readdirSpy.mock.calls.length).toBeGreaterThan(firstReaddirCalls);
   });
 
   it("prefers the active bundled manifest over stale persisted bundled installs", () => {

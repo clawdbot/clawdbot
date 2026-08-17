@@ -29,6 +29,7 @@ import type { SessionEntry } from "./types.js";
 type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  preserveRecentMs?: number | null;
 };
 
 export type SessionDiskBudgetSweepResult = {
@@ -316,7 +317,7 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
   return files.some((file) => isRetainedSessionTranscriptArchiveName(file.name));
 }
 
-/** Removes oldest retained reset/delete archives, remeasuring physical usage after each file. */
+/** Removes oldest retained archives and legacy compact backups, remeasuring after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
   excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;
@@ -846,7 +847,14 @@ export async function enforceSessionDiskBudget(params: {
       if (!entry) {
         continue;
       }
-      if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
+      if (
+        shouldPreserveMaintenanceEntry({
+          key,
+          entry,
+          preserveKeys: params.preserveKeys,
+          preserveRecentMs: params.maintenance.preserveRecentMs,
+        })
+      ) {
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;

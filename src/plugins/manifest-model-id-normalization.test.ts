@@ -129,7 +129,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 
-  it("reuses manifest metadata while file fingerprints are unchanged", () => {
+  it("reuses manifest metadata for the same environment identity", () => {
     const stateDir = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDir = path.join(stateDir, "extensions", "normalizer");
     writeInstallIndex({ stateDir, pluginDir });

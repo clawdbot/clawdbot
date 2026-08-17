@@ -4,7 +4,7 @@ import {
 } from "../../agents/auth-profiles/legacy-source-diagnostic.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../../config/recovery-policy.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { collectCandidateAgentDirs } from "../../secrets/runtime-fast-path.js";
@@ -75,7 +75,7 @@ export async function getServiceActionPreflightFailure(
     if (snapshot.exists && !snapshot.valid) {
       const message =
         snapshot.issues.length > 0
-          ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+          ? renderConfigValidationIssueLines(snapshot, "").join("\n")
           : "Unknown validation issue.";
       return {
         message,

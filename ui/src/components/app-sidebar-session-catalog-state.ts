@@ -5,12 +5,13 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 export function sessionCatalogRequestError(error: unknown): NonNullable<SessionCatalog["error"]> {
   return {
     code: error instanceof GatewayRequestError ? error.gatewayCode : "UNAVAILABLE",
-    message: error instanceof Error ? error.message : String(error),
+    message: formatUiError(error),
   };
 }
 

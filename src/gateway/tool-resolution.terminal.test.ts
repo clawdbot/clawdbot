@@ -62,7 +62,7 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
         throw new Error("expected loopback terminal tool");
       }
 
-      await terminal.execute("terminal-open", { action: "open", show: false });
+      await terminal.execute("terminal-open", { action: "open" });
 
       expect(taskStatusMocks.findTaskByRunIdForChildSessionForStatus).toHaveBeenCalledWith(
         "shared-run",

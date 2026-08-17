@@ -151,6 +151,7 @@ export function buildCliMcpGrantContext(params: {
       : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.run.modelHasVision,
     messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     currentChannelId,
@@ -159,6 +160,7 @@ export function buildCliMcpGrantContext(params: {
       params.run.currentMessageId == null
         ? undefined
         : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
+    replyToMode: params.run.replyToMode,
     currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
     accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,

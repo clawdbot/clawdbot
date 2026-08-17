@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ClawHubDownloadResult } from "../../infra/clawhub-artifacts.js";
 import {
+  CLAWHUB_SKILLS_SH_REF_PREFIX,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
   type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
@@ -110,8 +111,8 @@ export function parseRequestedClawHubSkillRef(raw: string): ClawHubSkillRef {
   if (value.startsWith("skills-sh/")) {
     throw new Error(`Invalid skills.sh skill reference: ${raw}`);
   }
-  if (value.startsWith("skills-sh:")) {
-    const parts = value.slice("skills-sh:".length).split("/");
+  if (value.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
+    const parts = value.slice(CLAWHUB_SKILLS_SH_REF_PREFIX.length).split("/");
     if (parts.length !== 3) {
       throw new Error(`Invalid skills.sh skill reference: ${raw}`);
     }

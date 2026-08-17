@@ -13,7 +13,6 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
   consumeSessionWorkAdmissionHandoff,
-  getCurrentSessionWorkAdmissionRelease,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
@@ -38,95 +37,6 @@ it("counts one multi-identity admission once", async () => {
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
 });
 
-it("exposes completion only to the matching admitted session turn", async () => {
-  const scope = "store-self-archive-release";
-  const sessionKey = "agent:main:self-archive";
-  const sessionId = "session-self-archive";
-  const admission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, sessionId],
-    assertAllowed: () => {},
-  });
-  let settled = false;
-  let release: Promise<void> | undefined;
-
-  try {
-    expect(
-      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
-    ).toBeUndefined();
-
-    await admission.run(async () => {
-      expect(
-        getCurrentSessionWorkAdmissionRelease({ scope, identities: ["agent:main:other"] }),
-      ).toBeUndefined();
-      release = getCurrentSessionWorkAdmissionRelease({
-        scope,
-        identities: [sessionKey, sessionId],
-      });
-      expect(release).toBeInstanceOf(Promise);
-      void release?.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    });
-
-    expect(settled).toBe(false);
-  } finally {
-    admission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
-});
-
-it("waits for every nested admission that owns the same session", async () => {
-  const scope = "store-self-archive-nested";
-  const sessionKey = "agent:main:nested-self-archive";
-  const outerAdmission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, "outer-session"],
-    assertAllowed: () => {},
-  });
-  let release: Promise<void> | undefined;
-  let settled = false;
-
-  try {
-    await outerAdmission.run(async () => {
-      const innerAdmission = await beginSessionWorkAdmission({
-        scope,
-        identities: [sessionKey, "inner-session"],
-        assertAllowed: () => {},
-      });
-
-      try {
-        await innerAdmission.run(async () => {
-          release = getCurrentSessionWorkAdmissionRelease({
-            scope,
-            identities: [sessionKey],
-          });
-          void release?.then(() => {
-            settled = true;
-          });
-        });
-      } finally {
-        innerAdmission.release();
-      }
-
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    });
-    expect(settled).toBe(false);
-  } finally {
-    outerAdmission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
-});
-
 it("waits for a competing session admission outside the caller context", async () => {
   const scope = "store-competing-self-archive";
   const sessionKey = "agent:main:competing-self-archive";
@@ -139,9 +49,6 @@ it("waits for a competing session admission outside the caller context", async (
   let release: Promise<void> | undefined;
 
   try {
-    expect(
-      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
-    ).toBeUndefined();
     release = getSessionWorkAdmissionRelease({ scope, identities: [sessionKey] });
     expect(release).toBeInstanceOf(Promise);
     void release?.then(() => {

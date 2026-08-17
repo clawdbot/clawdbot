@@ -57,7 +57,7 @@ export function buildSidebarAttentionItems(params: {
     items.push({
       kind: "pendingApproval",
       severity: "warning",
-      icon: "shieldCheck",
+      icon: "shieldQuestion",
       label: t(count === 1 ? "attention.pendingApproval" : "attention.pendingApprovals", {
         count: String(count),
       }),

@@ -124,6 +124,7 @@ type CommandPaletteProps = {
   query: string;
   activeIndex: number;
   sessionItems: readonly PaletteItem[];
+  sessionSearchFailed: boolean;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
@@ -315,7 +316,11 @@ function renderCommandPalette(props: CommandPaletteProps) {
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                   >${icons.search}</span
                 >
-                <span>${t("palette.noResults")}</span>
+                <span
+                  >${props.sessionSearchFailed
+                    ? t("palette.searchFailed")
+                    : t("palette.noResults")}</span
+                >
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
@@ -369,6 +374,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private query = "";
   @state() private activeIndex = 0;
   @state() private sessionItems: readonly PaletteItem[] = [];
+  @state() private sessionSearchFailed = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -458,6 +464,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }
     this.sessionSearchId += 1;
     this.sessionItems = [];
+    this.sessionSearchFailed = false;
   }
 
   private scheduleSessionSearch(query: string) {
@@ -469,6 +476,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     // repopulate selectable stale rows during the debounce window.
     this.sessionSearchId += 1;
     this.sessionItems = [];
+    this.sessionSearchFailed = false;
     const search = normalizeOptionalString(query);
     if (!this.open || !search || !this.onSelectSession) {
       return;
@@ -551,7 +559,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       }));
       this.activeIndex = 0;
     } catch {
-      // Session search is best-effort; navigation commands stay usable.
+      // Session search is best-effort; navigation commands stay usable. But a
+      // failed search must not render as "No results" — that reads as a
+      // successful search with zero matches and hides gateway-side failures
+      // (e.g. a store needing doctor migration) from the operator.
+      if (requestId === this.sessionSearchId && this.open) {
+        this.sessionSearchFailed = true;
+      }
     }
   }
 
@@ -573,6 +587,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeIndex: this.activeIndex,
       sessionItems: this.sessionItems,
+      sessionSearchFailed: this.sessionSearchFailed,
       desktopAvailable: this.desktopAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {

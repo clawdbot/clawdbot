@@ -132,7 +132,7 @@ describe("runMessageAction context isolation", () => {
     {
       name: "a channel id passed as channel",
       actionParams: { channel: "C_TARGET" },
-      expectedError: "Unknown channel: c_target",
+      expectedError: 'Unknown channel "c_target"',
     },
     {
       name: "targets passed instead of target",

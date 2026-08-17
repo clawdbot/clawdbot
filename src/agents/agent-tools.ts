@@ -77,6 +77,7 @@ import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
+import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
 import {
   createCodingTools,
   createEditTool,
@@ -84,7 +85,8 @@ import {
   createWriteTool,
 } from "./sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
-import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
+import { resolveToolFsConfig } from "./tool-fs-policy.js";
+import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
@@ -218,6 +220,7 @@ type OpenClawCodingToolsOptions = {
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /**
    * Workspace directory that spawned subagents should inherit.
    * When sandboxing uses a copied workspace (`ro` or `none`), workspaceDir is the
@@ -346,11 +349,9 @@ type OpenClawCodingToolsOptions = {
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
-  /** Lower routine policy-removal audits for diagnostic-only tool probes. */
-  toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
@@ -431,6 +432,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
       scheduledToolPolicy: options?.scheduledToolPolicy,
+      pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
 
@@ -501,15 +503,17 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
-  const fsPolicy = createToolFsPolicy({
-    workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
-  });
+  const sessionPermissionPolicy = options?.sessionPermissionPolicy;
+  const sessionCoreToolPolicy = sessionPermissionPolicy
+    ? resolveSessionPermissionCoreToolPolicy(sessionPermissionPolicy)
+    : undefined;
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = capabilityProfile.workspace.workspaceRoot;
   const runtimeRoot = capabilityProfile.workspace.runtimeRoot;
   const codingRoot = sandboxRoot ?? runtimeRoot;
+  const containmentRoot = sandboxRoot ?? sessionPermissionPolicy?.root ?? codingRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
   // Flush exposes one append-only target; its fallback records inherited taint after success.
   const memoryWriteProvenance = isMemoryFlushRun
@@ -536,12 +540,21 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includeOpenClawTools = includeCoreTools && toolConstructionPlan.includeOpenClawTools;
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
-  const workspaceOnly = fsPolicy.workspaceOnly;
+  const workspaceOnly =
+    isMemoryFlushRun || (sessionCoreToolPolicy?.workspaceOnly ?? fsConfig.workspaceOnly === true);
+  const fsPolicy = {
+    workspaceOnly,
+    ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
+  };
+  const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  const applyPatchWorkspaceOnly =
+    sessionCoreToolPolicy?.applyPatchWorkspaceOnly ??
+    (workspaceOnly || applyPatchConfig?.workspaceOnly !== false);
   const applyPatchEnabled =
+    !readOnly &&
     applyPatchConfig?.enabled !== false &&
     isApplyPatchAllowedForModel({
       modelProvider: options?.modelProvider,
@@ -555,9 +568,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
   const coreTools = createCoreCodingTools({
     codingRoot,
+    containmentRoot,
     includeBaseCodingTools,
     includeShellTools,
     workspaceOnly,
+    readOnly,
     sandbox,
     skillsSnapshot: options?.skillsSnapshot,
     modelContextWindowTokens: options?.modelContextWindowTokens,
@@ -907,7 +922,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       includeRuntimeToolPolicy: true,
       unavailableCoreToolReason,
     }),
-    auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
       metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,

@@ -47,6 +47,18 @@ npx openclaw connect https://gateway.example/j/<shortcode> --display-name "Build
 
 The node stays in the foreground until you stop it.
 
+## Environment-managed cloud nodes
+
+Worker providers use `--ephemeral` for disposable cloud machines:
+
+```bash
+npx openclaw connect <setup-code> --ephemeral
+```
+
+This process hosts worker sessions even when the machine's durable node config has worker hosting disabled. It does not install a service and cannot be combined with `--service`. The Gateway owns the setup identity and paired-node lifetime: provider replay resumes the persisted device token after the one-shot setup credential is consumed, and environment teardown removes the node role after releasing the cloud lease.
+
+`--ephemeral` is intended for provider-managed state directories on throwaway machines, not as a shortcut for enrolling a personal device.
+
 ## Install as a service
 
 Pass `--service` to redeem the bootstrap credential and install the node host as
@@ -84,8 +96,9 @@ A join code and a paired device have separate lifecycles:
 
 - Burning or expiring a join code prevents another enrollment with that code.
 - It does not disconnect or remove a node that already redeemed it.
-- To revoke an enrolled machine, remove its paired device with
+- To revoke a normal enrolled machine, remove its paired device with
   [`openclaw devices remove <deviceId>`](/cli/devices#openclaw-devices-remove-%3Cdeviceid%3E).
+- Environment-managed `--ephemeral` nodes are removed automatically when their owning cloud environment is destroyed.
 
 ## Troubleshooting
 

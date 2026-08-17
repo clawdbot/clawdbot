@@ -2,28 +2,20 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveGatewayLockDir } from "../config/paths.js";
-import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
-import {
-  openNodeSqliteDatabase,
-  tryAcquireExclusiveSqliteCoordinator,
-} from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   createSqliteLifecycleAggregateError,
-  ensurePrivateSqliteCoordinatorDirectory,
   runWithSqliteCoordinator,
-  SqliteCoordinatorError,
 } from "../infra/sqlite-coordinator.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-readonly-location.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.paths.js";
 
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
 const MAX_OWNERSHIP_TIMESTAMP_MS = 8_640_000_000_000_000;
@@ -178,30 +170,13 @@ function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
   }
 }
 
-function resolveOpenClawStateOwnershipCoordinatorPath(databasePath: string): string {
-  const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-  const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
-  return path.join(
-    resolveGatewayLockDir(stateDir),
-    `state-ownership.${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite`,
-  );
-}
-
 function acquireOpenClawStateOwnershipCoordinator(databasePath: string): {
   release: () => void;
 } {
-  const coordinatorPath = resolveOpenClawStateOwnershipCoordinatorPath(databasePath);
-  ensurePrivateSqliteCoordinatorDirectory(
-    path.dirname(coordinatorPath),
-    "state ownership coordinator",
-  );
-  const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
+  return acquireStateDatabaseCoordinator({
+    databasePath,
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
-  if (!coordinator) {
-    throw new SqliteCoordinatorError("another OpenClaw process is changing shared state ownership");
-  }
-  return coordinator;
 }
 
 export function runWithOpenClawStateOwnershipCoordinator<T>(
@@ -284,18 +259,22 @@ export function runWithOpenClawStateWriteAccess<T>(
   );
 }
 
-/** Check path-based write admission without retaining the coordinator past this call. */
+/** Check write admission; callers may defer orphan-sidecar recovery until mutation is certain. */
 export async function assertOpenClawStateWriteAllowedAtPath(options: {
   databasePath: string;
   env?: NodeJS.ProcessEnv;
+  recoverOrphanedSidecars?: boolean;
 }): Promise<void> {
   const databasePath = path.resolve(options.databasePath);
-  quarantineOrphanedSqliteSidecars(databasePath);
+  const recoverOrphanedSidecars = options.recoverOrphanedSidecars !== false;
+  if (recoverOrphanedSidecars) {
+    quarantineOrphanedSqliteSidecars(databasePath);
+  }
   if (!existsSync(databasePath)) {
     return;
   }
   const env = options.env ?? process.env;
-  if (isGatewayExternallySupervised(env)) {
+  if (recoverOrphanedSidecars && isGatewayExternallySupervised(env)) {
     runWithOpenClawStateWriteAccess(
       { ...options, databasePath },
       "shared state write admission",
@@ -303,8 +282,6 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     return;
   }
-  // Unmarked startup must discover ownership without opening the source writable.
-  // The async private snapshot keeps Windows PowerShell work off the sync startup path.
   const prepared = await prepareSqliteReadOnlyLocation(databasePath);
   try {
     assertOwnershipAllowsWrite(

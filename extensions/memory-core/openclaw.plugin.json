@@ -4,6 +4,13 @@
     "stateMigrations": true
   },
   "name": "OpenClaw Memory",
+  "cliCommands": [
+    {
+      "name": "memory",
+      "description": "Search, inspect, and reindex memory files",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false
   },
@@ -12,6 +19,9 @@
     "tools": ["intent", "memory_get", "memory_search"]
   },
   "toolMetadata": {
+    "intent": {
+      "profiles": ["coding", "messaging"]
+    },
     "memory_get": {
       "replaySafe": true
     }

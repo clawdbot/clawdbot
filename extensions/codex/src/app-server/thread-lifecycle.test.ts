@@ -64,6 +64,33 @@ describe("Codex incognito thread persistence", () => {
   });
 });
 
+describe("Codex context window config", () => {
+  it("forwards only a prepared cap on thread start and resume (#124702)", () => {
+    const appServer = createAppServerOptions() as never;
+    const capped = createAttemptParams({ provider: "openai" });
+    capped.authoredContextTokenCap = 32_000;
+    const uncapped = createAttemptParams({ provider: "openai" });
+    const build = (params: EmbeddedRunAttemptParams) => [
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      }),
+      buildThreadResumeParams(params, {
+        appServer,
+        threadId: "thread-1",
+      }),
+    ];
+
+    for (const request of build(capped)) {
+      expect(request.config?.model_context_window).toBe(32_000);
+    }
+    for (const request of build(uncapped)) {
+      expect(request.config).not.toHaveProperty("model_context_window");
+    }
+  });
+});
+
 describe("Codex ring-zero thread config", () => {
   it("accepts upstream-shaped inactive rows for the disabled MCP names", async () => {
     const request = vi.fn(async () => ({
@@ -237,6 +264,36 @@ describe("Codex delegation capability", () => {
     }
   });
 
+  it("disables only native image generation for an audited image_generate deny", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.image_generation"]).toBe(false);
+      expect(request.config?.["features.multi_agent"]).toBe(true);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(request.config?.["agents.enabled"]).toBeUndefined();
+    }
+  });
+
   it("keeps message-only completion threads and prompts free of native delegation", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["message"];
@@ -312,20 +369,30 @@ describe("Codex delegation capability", () => {
     }
     expect(start.environments).toEqual([]);
 
-    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-      appServer,
-      cwd: "/repo",
-      dynamicTools,
-      config,
-    });
-    expect(normal.config?.["features.apps"]).toBe(true);
-    expect(normal.config?.["features.image_generation"]).toBe(true);
-    expect(normal.config?.["features.multi_agent"]).toBe(true);
-    expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
-    expect(normal.config?.["features.plugins"]).toBe(true);
-    expect(normal.config?.["tools.update_plan.enabled"]).toBe(true);
-    expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
-    expect(normal.developerInstructions).toContain("`spawn_agent`");
+    const normalRequests = [
+      buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        cwd: "/repo",
+        dynamicTools,
+        config,
+      }),
+      buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        dynamicTools,
+        config,
+        threadId: "thread-normal",
+      }),
+    ];
+    for (const normal of normalRequests) {
+      expect(normal.config?.["features.apps"]).toBe(true);
+      expect(normal.config?.["features.image_generation"]).toBe(true);
+      expect(normal.config?.["features.multi_agent"]).toBe(true);
+      expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(normal.config?.["features.plugins"]).toBe(true);
+      expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
+      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.developerInstructions).toContain("`spawn_agent`");
+    }
   });
 });
 
@@ -1195,6 +1262,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1340,6 +1408,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -1468,6 +1537,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1490,6 +1560,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1548,6 +1619,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1573,6 +1645,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1593,6 +1666,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1623,6 +1697,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1647,6 +1722,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1849,6 +1925,7 @@ describe("Codex app-server turn params", () => {
         "features.code_mode": true,
         "features.code_mode_only": false,
         "features.goals": false,
+        "tools.update_plan.enabled": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",

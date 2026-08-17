@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   collectActiveSessionWorkAdmissionIdentities,
   runExclusiveSessionLifecycleMutation,
@@ -38,13 +39,17 @@ import {
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import {
+  isRecentSessionMaintenanceEntry,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 
 type SessionHistoryDiskBudgetParams = {
   agentId?: string;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   storePath: string;
-  maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes">;
+  maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
+    Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
 };
 
 function createPhysicalBudgetResult(params: {
@@ -102,8 +107,9 @@ export async function inspectSqliteSessionHistoryDiskBudget(
   }
   const candidates = readHistoricalSessionIds({
     database,
-    protectedSessionIds: collectProtectedHistoricalSessionIds({
+    protectedSessionIds: collectInitialProtectedHistoricalSessionIds({
       database,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
       storePath: params.storePath,
     }),
   });
@@ -117,6 +123,103 @@ function collectProtectedHistoricalSessionIds(params: {
   const protectedSessionIds = readReferencedSessionIds(params.database);
   for (const sessionId of collectAdmissionProtectedSessionIds(params)) {
     protectedSessionIds.add(sessionId);
+  }
+  return protectedSessionIds;
+}
+
+function collectInitialProtectedHistoricalSessionIds(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+  storePath: string;
+}): Set<string> {
+  const protectedSessionIds = collectProtectedHistoricalSessionIds(params);
+  for (const sessionId of collectRecentSessionHistoryIds(params)) {
+    protectedSessionIds.add(sessionId);
+  }
+  return protectedSessionIds;
+}
+
+function collectRecentSessionHistoryIds(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+}): Set<string> {
+  if (params.preserveRecentMs == null) {
+    return new Set();
+  }
+  const db = getSessionKysely(params.database.db);
+  const rows = executeSqliteQuerySync(
+    params.database.db,
+    db
+      .selectFrom("session_windows")
+      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+      .select([
+        "session_nodes.current_session_id",
+        "session_nodes.entry_json",
+        "session_nodes.session_key",
+        "session_nodes.updated_at",
+        "session_windows.session_id",
+      ]),
+  ).rows;
+  return new Set(
+    rows.flatMap((row) => {
+      const entry = parseSessionEntryJson(row);
+      return entry &&
+        isRecentSessionMaintenanceEntry({
+          key: row.session_key,
+          entry,
+          preserveRecentMs: params.preserveRecentMs,
+        })
+        ? [row.session_id]
+        : [];
+    }),
+  );
+}
+
+function isRecentHistoricalSessionId(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+  sessionId: string;
+}): boolean {
+  if (params.preserveRecentMs == null) {
+    return false;
+  }
+  const db = getSessionKysely(params.database.db);
+  const row = executeSqliteQuerySync(
+    params.database.db,
+    db
+      .selectFrom("session_windows")
+      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+      .select([
+        "session_nodes.current_session_id",
+        "session_nodes.entry_json",
+        "session_nodes.session_key",
+        "session_nodes.updated_at",
+      ])
+      .where("session_windows.session_id", "=", params.sessionId),
+  ).rows[0];
+  if (!row) {
+    return false;
+  }
+  const entry = parseSessionEntryJson(row);
+  return Boolean(
+    entry &&
+    isRecentSessionMaintenanceEntry({
+      key: row.session_key,
+      entry,
+      preserveRecentMs: params.preserveRecentMs,
+    }),
+  );
+}
+
+function collectCandidateProtectedHistoricalSessionIds(params: {
+  database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
+  sessionId: string;
+  storePath: string;
+}): Set<string> {
+  const protectedSessionIds = collectProtectedHistoricalSessionIds(params);
+  if (isRecentHistoricalSessionId(params)) {
+    protectedSessionIds.add(params.sessionId);
   }
   return protectedSessionIds;
 }
@@ -339,6 +442,8 @@ async function pruneAllSessionTranscriptArchivesToHighWater(params: {
   };
 }
 
+const log = createSubsystemLogger("sessions/history-eviction");
+
 const PHYSICAL_BUDGET_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 // Single-slot per store: ordinary entry writes kick a throttled background
 // budget pass so an over-budget database self-heals without waiting for a
@@ -401,8 +506,14 @@ export function kickSessionHistoryDiskBudgetMaintenance(params: {
     mode: maintenance.mode,
     maintenance,
   })
-    .catch(() => {
-      // Best-effort: budget pressure is retried on the next throttled kick.
+    .catch((error: unknown) => {
+      // Best-effort: budget pressure is retried on the next throttled kick,
+      // but a persistently failing sweep must stay operator-visible — silent
+      // failure here means unbounded disk growth with no signal.
+      log.warn("session history disk-budget sweep failed; retrying on next kick", {
+        error,
+        storePath: params.storePath,
+      });
     })
     .finally(() => {
       state.running = false;
@@ -479,8 +590,9 @@ async function enforceSessionHistoryMaintenanceSerialized(
   }
   const candidates = readHistoricalSessionIds({
     database,
-    protectedSessionIds: collectProtectedHistoricalSessionIds({
+    protectedSessionIds: collectInitialProtectedHistoricalSessionIds({
       database,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
       storePath: params.storePath,
     }),
   });
@@ -494,8 +606,10 @@ async function enforceSessionHistoryMaintenanceSerialized(
       identities: [sessionId],
       run: async () => {
         const plan = await runExclusiveSqliteSessionWrite(resolved, async () => {
-          const protectedBeforeArchive = collectProtectedHistoricalSessionIds({
+          const protectedBeforeArchive = collectCandidateProtectedHistoricalSessionIds({
             database,
+            preserveRecentMs: params.maintenance.preserveRecentMs,
+            sessionId,
             storePath: params.storePath,
           });
           const candidate = planSessionStateDeleteIfUnreferenced({
@@ -521,8 +635,10 @@ async function enforceSessionHistoryMaintenanceSerialized(
           let deleted = false;
           let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> = [];
           runOpenClawAgentWriteTransaction((transactionDb) => {
-            const protectedAtDelete = collectProtectedHistoricalSessionIds({
+            const protectedAtDelete = collectCandidateProtectedHistoricalSessionIds({
               database: transactionDb,
+              preserveRecentMs: params.maintenance.preserveRecentMs,
+              sessionId,
               storePath: params.storePath,
             });
             archivedTranscripts = deleteMaterializedSessionStatePlans(
