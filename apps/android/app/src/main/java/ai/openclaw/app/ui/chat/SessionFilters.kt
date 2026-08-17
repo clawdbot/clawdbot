@@ -143,9 +143,8 @@ internal fun compactSessionChoices(
           }
         },
         { it.index },
-      )
-    )
-    .take(maxOptions)
+      ),
+    ).take(maxOptions)
     .map { it.value }
 }
 
