@@ -1,7 +1,10 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionsAssignOwnerResult,
+  SessionsPatchResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   SESSION_ICON_GLYPH_IDS,
@@ -19,7 +22,7 @@ import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -46,6 +49,7 @@ const ACTIONS = [
   "patch",
   "reset",
   "delete",
+  "assign_owner",
   "group_list",
   "group_set",
   "group_rename",
@@ -135,6 +139,12 @@ const SessionsToolSchema = Type.Object(
     ),
     model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
+    ownerType: Type.Optional(
+      stringEnum(["human", "agent"] as const, {
+        description: "New owner kind for assign_owner",
+      }),
+    ),
+    ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
     names: Type.Optional(Type.Array(Type.String(), { description: "Ordered group names" })),
     name: Type.Optional(Type.String({ description: "Group name" })),
     to: Type.Optional(Type.String({ description: "New group name" })),
@@ -215,14 +225,16 @@ async function resolvePatchTarget(
   cfg: OpenClawConfig;
   isRequesterSession: boolean;
   key: string;
+  requesterAgentId: string;
+  requesterSessionKey: string;
 }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
-  const requesterAgentId = resolveSessionAgentIds({
+  const requesterAgentId = resolveSessionAgentId({
     config: context.cfg,
     sessionKey: context.effectiveRequesterKey,
     agentId: opts.requesterAgentIdOverride,
-  }).sessionAgentId;
+  });
   const normalizedRawKey = rawKey.trim();
   const isCurrentSession = normalizedRawKey === "current";
   const isConfiguredMainAlias =
@@ -296,6 +308,8 @@ async function resolvePatchTarget(
     cfg: context.cfg,
     isRequesterSession,
     key: resolved.key,
+    requesterAgentId,
+    requesterSessionKey: context.effectiveRequesterKey,
   };
 }
 
@@ -309,7 +323,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, ownership, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; assign_owner hands responsibility to a human or agent; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -366,6 +380,39 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "group_list") {
         return jsonResult(await callGateway("sessions.groups.list", {}));
+      }
+      if (action === "assign_owner") {
+        const ownerType = readToolStringParam(params, "ownerType", { required: true });
+        const ownerId = normalizeOptionalString(
+          readToolStringParam(params, "ownerId", { required: true }),
+        );
+        if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
+          throw new ToolInputError("assign_owner requires ownerType and ownerId");
+        }
+        const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
+          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+          gatewayRequest,
+        );
+        const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
+        const result = await gatewayRequest<SessionsAssignOwnerResult>({
+          method: "sessions.assignOwner",
+          params: {
+            key,
+            ...agentScope,
+            owner: { type: ownerType, id: ownerId },
+          },
+          agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
+        });
+        return jsonResult({
+          status: "updated",
+          sessionKey: result.key,
+          owner: {
+            type: result.owner.actor.type,
+            id: result.owner.actor.id,
+            ...(result.owner.actor.label ? { label: result.owner.actor.label } : {}),
+          },
+        });
       }
       // Group catalog is global by contract. Owner-only tool gating protects mutations.
       if (action === "group_set") {

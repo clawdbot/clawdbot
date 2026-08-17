@@ -216,6 +216,15 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "gives setup detection enough transport grace",
+      argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
+      assert: () => {
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("openclaw.setup.detect");
+        expect((opts as { timeout?: string } | undefined)?.timeout).toBe("40000");
+      },
+    },
+    {
       name: "projects gateway call --port into local config",
       argv: ["gateway", "call", "health", "--port", "19084", "--json"],
       assert: () => {

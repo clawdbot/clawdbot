@@ -517,10 +517,10 @@ export function buildGatewayCronService(params: {
       agentId: agentId ?? resolveSessionStoreCompatibilityAgentId(getRuntimeConfig()),
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
-  const scriptRuntime =
-    params.cfg.cron?.triggers?.enabled === true
-      ? createCronScriptRuntime({ config: params.cfg })
-      : undefined;
+  const cronTriggersEnabled = params.cfg.cron?.triggers?.enabled !== false;
+  const scriptRuntime = cronTriggersEnabled
+    ? createCronScriptRuntime({ config: params.cfg })
+    : undefined;
 
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
     const hookRunner = getGlobalHookRunner();
@@ -623,11 +623,7 @@ export function buildGatewayCronService(params: {
         const jobs: CronJob[] = Array.isArray(result)
           ? result
           : (result as { jobs: CronJob[] }).jobs;
-        await watchers.reconcile(
-          jobs,
-          cronEnabled && params.cfg.cron?.triggers?.enabled === true,
-          params.cfg.cron?.triggers?.enabled === true,
-        );
+        await watchers.reconcile(jobs, cronEnabled && cronTriggersEnabled, cronTriggersEnabled);
         return;
       }
       cronLogger.warn({}, "cron-stream: reconcile skipped after repeated concurrent mutations");
@@ -659,13 +655,13 @@ export function buildGatewayCronService(params: {
         job.enabled &&
         !job.state.streamRestartExhausted &&
         cronEnabled &&
-        params.cfg.cron?.triggers?.enabled === true
+        cronTriggersEnabled
       ) {
         await watchers.start(job);
         return;
       }
       const reason = resolveStreamStopReason({
-        triggersEnabled: params.cfg.cron?.triggers?.enabled === true,
+        triggersEnabled: cronTriggersEnabled,
         cronEnabled,
         restartExhausted: job?.state.streamRestartExhausted === true,
         isStream: job?.schedule.kind === "stream",
@@ -1292,12 +1288,13 @@ export function buildGatewayCronService(params: {
     }
   };
   const updateCronWithPrecondition = cron.updateWithPrecondition.bind(cron);
-  cron.update = async (jobId, patch) => {
+  cron.update = async (jobId, patch, opts) => {
     let lifecycleStop: Promise<void> | undefined;
+    const routeAfterValidation = (current: CronJob, nowMs: number) => {
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+    };
     try {
-      const result = await updateCronWithPrecondition(jobId, patch, (current, nowMs) => {
-        lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
-      });
+      const result = await updateCronWithPrecondition(jobId, patch, routeAfterValidation, opts);
       await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
       await routeLiveStreamJobLogged(jobId);
       return result;
@@ -1309,13 +1306,14 @@ export function buildGatewayCronService(params: {
       throw error;
     }
   };
-  cron.updateWithPrecondition = async (jobId, patch, precondition) => {
+  cron.updateWithPrecondition = async (jobId, patch, precondition, opts) => {
     let lifecycleStop: Promise<void> | undefined;
+    const routeAfterPrecondition = async (current: CronJob, nowMs: number) => {
+      await precondition(current, nowMs);
+      lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
+    };
     try {
-      const result = await updateCronWithPrecondition(jobId, patch, async (current, nowMs) => {
-        await precondition(current, nowMs);
-        lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
-      });
+      const result = await updateCronWithPrecondition(jobId, patch, routeAfterPrecondition, opts);
       await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
       await routeLiveStreamJobLogged(jobId);
       return result;

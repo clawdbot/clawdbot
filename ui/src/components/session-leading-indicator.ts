@@ -105,8 +105,10 @@ export function renderSessionLeadingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
-  attribution: "created" | "archived",
+  attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
+  participants?: readonly SessionCreatedActor[],
+  participantCount?: number,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -187,7 +189,14 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(ownerActor, "row", attribution, ownerViewing),
+        content: renderSessionOwnerChip(
+          ownerActor,
+          "row",
+          attribution,
+          ownerViewing,
+          participants,
+          participantCount,
+        ),
         running: false,
         circular: true,
       }),

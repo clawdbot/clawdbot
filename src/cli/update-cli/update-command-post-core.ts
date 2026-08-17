@@ -55,6 +55,8 @@ import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/ins
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { printResult } from "./progress.js";
 import {
@@ -161,6 +163,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   }
 
   assertConfigWriteAllowedInCurrentMode();
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
 
   const root = await resolveUpdateRoot();
   let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
@@ -614,8 +619,11 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
             if (!pluginUpdate) {
               return;
             }
-            stopPostCoreUpdateChild(child);
+            // Claim the settle before stopping: the stop delivers a signal, and the exit
+            // handler below rejects on any signal it still owns. Stopping first would fail
+            // an update this child already committed and roll its plugin index back.
             finish({ kind: "plugin-update", pluginUpdate });
+            stopPostCoreUpdateChild(child);
           })
           .catch(() => undefined);
       }, POST_CORE_UPDATE_RESULT_POLL_MS);

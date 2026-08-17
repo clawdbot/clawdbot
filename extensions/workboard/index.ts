@@ -1,6 +1,7 @@
 // Workboard plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
+import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
@@ -23,6 +24,10 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    const automationNudge = createWorkboardAutomationNudgeService({
+      store,
+      gateway: api.runtime.gateway,
+    });
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "board",
@@ -44,6 +49,7 @@ export default definePluginEntry({
     registerWorkboardGatewayMethods({ api, store });
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
+    api.registerService(automationNudge);
     api.registerService(
       createWorkboardLifecycleService({
         store,
@@ -52,7 +58,7 @@ export default definePluginEntry({
     );
     api.on("subagent_ended", async (event) => {
       await Promise.all([
-        syncWorkboardSubagentEnded({ store, event }),
+        syncWorkboardSubagentEnded({ store, event, onMatched: automationNudge.nudge }),
         event.runId
           ? cleanupWorkboardRunWorktree({
               store,
@@ -63,7 +69,12 @@ export default definePluginEntry({
       ]);
     });
     api.on("agent_end", async (event, context) => {
-      await syncWorkboardAgentEnded({ store, event, context });
+      await syncWorkboardAgentEnded({
+        store,
+        event,
+        context,
+        onMatched: automationNudge.nudge,
+      });
     });
     api.registerCli(
       async ({ program }) => {

@@ -67,6 +67,48 @@ openclaw-session-owner-chip {
   font-size: inherit;
 }
 
+.session-owner-stack {
+  position: relative;
+  display: inline-flex;
+  width: 24px;
+  height: 20px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.session-owner-stack__back {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.session-owner-stack__back .viewer-avatar,
+.session-owner-stack__overflow {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--sidebar-bg, var(--bg));
+  border-radius: var(--radius-full);
+  font-size: 7px;
+}
+
+.session-owner-stack__overflow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.session-owner-stack__front {
+  position: relative;
+  z-index: 1;
+}
+
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
    ring and corner badge, so run state always reads at the row's left edge. */
 .session-glyph {

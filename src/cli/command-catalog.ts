@@ -1,5 +1,5 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
-import { getCommandPositionalsWithRootOptions, hasFlag } from "./argv.js";
+import { hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -65,29 +65,6 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
     }
   }
   return false;
-}
-
-const UPDATE_BOOLEAN_FLAGS = [
-  "--acknowledge-clawhub-risk",
-  "--dry-run",
-  "--json",
-  "--no-restart",
-  "--update",
-  "--yes",
-] as const;
-const UPDATE_VALUE_FLAGS = ["--channel", "--tag", "--timeout"] as const;
-
-function isRootUpdateDryRun(argv: string[], commandPath: string[]): boolean {
-  if (commandPath.length !== 1 || !hasFlag(argv, "--dry-run")) {
-    return false;
-  }
-  const usesRootShorthand = hasFlag(argv, "--update");
-  const positionals = getCommandPositionalsWithRootOptions(argv, {
-    commandPath: usesRootShorthand ? [] : ["update"],
-    booleanFlags: UPDATE_BOOLEAN_FLAGS,
-    valueFlags: UPDATE_VALUE_FLAGS,
-  });
-  return positionals?.length === 0;
 }
 
 /** Command path registry used before Commander registration has loaded all plugins. */
@@ -243,12 +220,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "gateway-status" },
   },
-  { commandPath: ["gateway", "call"], exact: true, policy: { networkProxy: "bypass" } },
-  ...["suspend", "resume"].map(
+  ...["call", "restart", "suspend", "resume"].map(
     (subcommand): CliCommandCatalogEntry => ({
       commandPath: ["gateway", subcommand],
       exact: true,
-      policy: { configGuard: "validate", networkProxy: "bypass" },
+      policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
     }),
   ),
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
@@ -263,7 +239,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "stability"],
     exact: true,
@@ -561,8 +536,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["update"],
     policy: {
-      configGuard: ({ argv, commandPath }) =>
-        isRootUpdateDryRun(argv, commandPath) ? "skip" : "run",
+      configGuard: "skip",
       hideBanner: true,
     },
   },

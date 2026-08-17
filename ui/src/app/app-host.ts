@@ -40,6 +40,7 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
+import { deleteStoredChatSessionSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
@@ -318,7 +319,10 @@ class OpenClawShell
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
-        (sessions) => this.recoverDeletedActiveSession(sessions.state),
+        (sessions) => {
+          this.invalidateDeletedSessionSnapshots(sessions.state);
+          this.recoverDeletedActiveSession(sessions.state);
+        },
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -470,6 +474,23 @@ class OpenClawShell
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
     this.shellNavigation.recoverDeletedActiveSession(sessionState);
+  }
+
+  private invalidateDeletedSessionSnapshots(
+    sessionState: ApplicationContext["sessions"]["state"],
+  ): void {
+    const context = this.context;
+    if (!context || sessionState.deletedSessions.length === 0) {
+      return;
+    }
+    void deleteStoredChatSessionSnapshots(
+      {
+        assistantAgentId: context.gateway.snapshot.assistantAgentId,
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      },
+      sessionState.deletedSessions,
+    );
   }
 
   exitSettings() {

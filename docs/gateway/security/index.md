@@ -226,7 +226,11 @@ Set per channel or per room/conversation - see [Groups](/channels/groups#context
 
 ## Prompt injection
 
-An attacker crafts a message that manipulates the model into unsafe action ("ignore your instructions", "dump your filesystem", "follow this link and run commands"). Prompt injection is **not solved** by system prompt guardrails alone - those are soft guidance; hard enforcement comes from tool policy, exec approvals, sandboxing, and channel allowlists (which operators can still disable by design).
+An attacker crafts a message that manipulates the model into unsafe action ("ignore your instructions", "dump your filesystem", "follow this link and run commands").
+
+Model choice now carries real weight here. Frontier models have become substantially more resistant: in a 2026 crowdsourced arena of 272K attacks across 41 agent scenarios - scored only when the agent both executed the harmful action **and** hid it from the user - success rates were 0.5% for Claude Opus 4.5, 1.0% for Sonnet 4.5, 1.3% for Haiku 4.5, and 8.5% for Gemini 2.5 Pro. Robustness tracked capability within a model family, so the models we recommend are a meaningful mitigation in their own right, not just a soft guardrail.
+
+Two caveats keep this from being a solved problem. Adaptive human attackers still break models that score well on static benchmarks, with published success rates above 80% against state-of-the-art defenses once the attacker adapts. And smaller or older models remain markedly easier to steer. So treat model choice as your first and cheapest layer, then keep hard enforcement - tool policy, exec approvals, sandboxing, and channel allowlists - for anything whose blast radius you would not accept on a bad day.
 
 Prompt injection does not require public DMs: even if only you can message the bot, any **untrusted content** it reads (web search/fetch results, browser pages, emails, docs, attachments, pasted logs/code) can carry adversarial instructions. The content itself is a threat surface, not just the sender.
 
@@ -239,7 +243,7 @@ Red flags to treat as untrusted:
 
 What helps in practice:
 
-- Keep inbound DMs locked down (pairing/allowlists); prefer mention gating in groups; avoid always-on bots in public rooms.
+- Keep inbound DMs locked down (pairing/allowlists). Groups are a supported deployment, not a last resort: use mention gating and `contextVisibility` so the agent reads what it needs and no more. Reserve extra caution for genuinely public rooms, where anyone can post untrusted content.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent's reachable filesystem. Sandboxing is opt-in: if sandbox mode is off, implicit `host=auto` resolves to the gateway host, while explicit `host=sandbox` still fails closed (no sandbox runtime available). Set `host=gateway` to make that behavior explicit in config.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
@@ -840,7 +844,7 @@ Details: [Logging](/gateway/logging)
 }
 ```
 
-Keeps the Gateway private, requires DM pairing, and avoids always-on group bots. For safer tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (see "Per-agent access profiles" above).
+Keeps the Gateway private, requires DM pairing, and gates group replies behind a mention. Groups are fully supported - sender identity is threaded through to the agent, and per-group settings let one room run different defaults than another - so the goal here is scoping the agent's attention, not avoiding groups. For safer tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (see "Per-agent access profiles" above).
 
 ### Separate numbers (WhatsApp, Signal, Telegram)
 

@@ -1,4 +1,8 @@
-import type { WorkboardExecutionStatus, WorkboardStatus } from "@openclaw/workboard-contract";
+import type {
+  WorkboardCard,
+  WorkboardExecutionStatus,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import {
@@ -36,6 +40,11 @@ type WorkboardLifecycleSessionSnapshot = {
   complete: boolean;
 };
 
+type WorkboardLifecycleMatchHandler = (input: {
+  cards: readonly WorkboardCard[];
+  sessionKey?: string;
+}) => Promise<void>;
+
 const LIFECYCLE_TARGETS = {
   running: { card: "running", execution: "running" },
   succeeded: { card: "review", execution: "review" },
@@ -69,17 +78,22 @@ async function syncWorkboardLifecycleEvent(params: {
   source: { sessionKey?: string; runId?: string };
   observation: WorkboardLifecycleObservation;
   now: number;
+  onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
-  let count = 0;
-  for (const card of await params.store.list()) {
-    if (card.metadata?.archivedAt || !workboardCardMatchesLifecycleLink(card, params.source)) {
-      continue;
-    }
-    if (await syncWorkboardCardLifecycle({ ...params, cardId: card.id })) {
-      count += 1;
-    }
-  }
-  return count;
+  const cards = (await params.store.list()).filter(
+    (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
+  );
+  const updates = Promise.all(
+    cards.map(async (card) => await syncWorkboardCardLifecycle({ ...params, cardId: card.id })),
+  );
+  await Promise.all([
+    updates,
+    params.onMatched?.({
+      cards,
+      ...(params.source.sessionKey ? { sessionKey: params.source.sessionKey } : {}),
+    }),
+  ]);
+  return (await updates).filter(Boolean).length;
 }
 
 export async function syncWorkboardSubagentEnded(params: {
@@ -91,6 +105,7 @@ export async function syncWorkboardSubagentEnded(params: {
     outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
   };
   now?: number;
+  onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
   return await syncWorkboardLifecycleEvent({
@@ -101,6 +116,7 @@ export async function syncWorkboardSubagentEnded(params: {
       sourceUpdatedAt: params.event.endedAt ?? now,
     },
     now,
+    ...(params.onMatched ? { onMatched: params.onMatched } : {}),
   });
 }
 
@@ -109,6 +125,7 @@ export async function syncWorkboardAgentEnded(params: {
   event: { runId?: string; success: boolean };
   context: { runId?: string; sessionKey?: string };
   now?: number;
+  onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
   return await syncWorkboardLifecycleEvent({
@@ -122,6 +139,7 @@ export async function syncWorkboardAgentEnded(params: {
       sourceUpdatedAt: now,
     },
     now,
+    ...(params.onMatched ? { onMatched: params.onMatched } : {}),
   });
 }
 

@@ -219,12 +219,14 @@ async function processDiscordMessageInner(
   let pendingToolWarningFinal:
     | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
     | undefined;
-  const markUserFacingFinalDelivered = () => {
-    userFacingFinalDelivered = true;
-    userFacingFinalDeliveryFailed = false;
-    pendingToolWarningFinal = undefined;
-    draftPreview.markFinalReplyDelivered();
-    observer?.onFinalReplyDelivered?.();
+  const markFinalReplyDelivered = (isError = false) => {
+    draftPreview.markFinalReplyDelivered(isError);
+    if (!isError) {
+      userFacingFinalDelivered = true;
+      userFacingFinalDeliveryFailed = false;
+      pendingToolWarningFinal = undefined;
+      observer?.onFinalReplyDelivered?.();
+    }
   };
   // Set when a progress draft collapses: the draft message deletes once the
   // final answer has actually delivered.
@@ -432,7 +434,7 @@ async function processDiscordMessageInner(
             });
           },
           onPreviewFinalized: () => {
-            markUserFacingFinalDelivered();
+            markFinalReplyDelivered();
             draftPreview.markPreviewFinalized();
             replyReference.markSent();
           },
@@ -483,7 +485,7 @@ async function processDiscordMessageInner(
           return deliveryResult.visibleReplySent;
         },
         onNormalDelivered: () => {
-          markUserFacingFinalDelivered();
+          markFinalReplyDelivered();
           replyReference.markSent();
         },
       });
@@ -533,9 +535,9 @@ async function processDiscordMessageInner(
       return result;
     }
     replyReference.markSent();
-    if (isFinal && deliverablePayload.isError !== true) {
-      markUserFacingFinalDelivered();
-      if (clearProgressDraftAfterFinalDelivery) {
+    if (isFinal) {
+      markFinalReplyDelivered(deliverablePayload.isError === true);
+      if (deliverablePayload.isError !== true && clearProgressDraftAfterFinalDelivery) {
         clearProgressDraftAfterFinalDelivery = false;
         // Commit only after Discord accepted the final. A failed send leaves
         // the draft intact as the visible record for the queued retry.
@@ -673,7 +675,7 @@ async function processDiscordMessageInner(
           logVerbose(`discord: failed to finalize adopted thread progress (${String(error)})`);
         }
       }
-      markUserFacingFinalDelivered();
+      markFinalReplyDelivered();
     }
   } catch (err) {
     if (isProcessAborted(abortSignal)) {

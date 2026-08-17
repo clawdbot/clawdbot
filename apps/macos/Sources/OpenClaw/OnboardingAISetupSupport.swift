@@ -24,6 +24,28 @@ extension OnboardingAISetupModel {
         let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     }
 
+    @MainActor
+    struct ReconciliationDeadline {
+        private let clock: ContinuousClock
+        private let deadline: ContinuousClock.Instant
+
+        init(timeout: ContinuousClock.Duration, clock: ContinuousClock = .init()) {
+            self.clock = clock
+            self.deadline = clock.now.advanced(by: timeout)
+        }
+
+        var hasTimeRemaining: Bool {
+            self.clock.now < self.deadline
+        }
+
+        func remainingMilliseconds(cappedAt capMs: Int) -> Int {
+            OnboardingAISetupModel.remainingMilliseconds(
+                until: self.deadline,
+                clock: self.clock,
+                cappedAt: capMs)
+        }
+    }
+
     struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
             let brandId: String?

@@ -1,17 +1,27 @@
-title: Discord progress draft retires after a receipt-free final
+title: Discord progress draft finalization
 scenario:
   id: discord-progress-draft-lifecycle
   surface: channels
   coverage:
     primary:
       - agent-runtime.streaming-replies-delivery
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
   regressionRefs:
     - openclaw/openclaw#124972
-  objective: Verify a real Discord tool-progress draft stays transient and does not synthesize activity into the final answer.
+  objective: Verify Discord retires successful progress drafts without altering the final and retains failed-turn drafts as diagnostic context.
   successCriteria:
     - A tool-using turn creates a visible Discord progress draft while the tool is running.
     - The final answer contains no tool-count, elapsed-time, or Discord subtext receipt.
     - The working draft is deleted only after the final answer lands.
+    - A delivered error final leaves its working draft visible.
   codeRefs:
     - extensions/discord/src/monitor/message-handler.process.ts
     - extensions/discord/src/monitor/message-handler.draft-preview.ts
@@ -24,7 +34,7 @@ scenario:
     timeoutMs: 90000
     retryCount: 0
     suiteIsolation: isolated
-    isolationReason: Enables Discord progress streaming and observes one real draft create/final/delete lifecycle.
+    isolationReason: Enables Discord progress streaming and observes successful and failed draft finalization.
 flow:
   module: ./live-transports/discord/scenario-runtime.js
   call: runDiscordScenario

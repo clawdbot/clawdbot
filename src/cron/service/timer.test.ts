@@ -482,7 +482,7 @@ describe("cron service timer seam coverage", () => {
 
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("cron.triggers.enabled=true"),
+      error: expect.stringContaining("the operator set cron.triggers.enabled: false"),
     });
     expect(runScriptJob).not.toHaveBeenCalled();
   });

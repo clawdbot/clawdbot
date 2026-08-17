@@ -1180,10 +1180,10 @@ describe("Codex app-server dynamic tool build", () => {
     runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
     runtimePolicyParams.config = {
       agents: {
-        list: [
-          { id: "main", tools: { exec: { host: "gateway" } } },
-          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
-        ],
+        entries: {
+          main: { tools: { exec: { host: "gateway" } } },
+          policy: { tools: { exec: { host: "node", node: "worker-1" } } },
+        },
       },
     } as never;
     const runtimePolicyNativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -2068,7 +2068,7 @@ describe("Codex app-server dynamic tool build", () => {
     agentParams.disableTools = false;
     agentParams.config = {
       agents: {
-        list: [{ id: "main", tools: { exec: { host: "node" } } }],
+        entries: { main: { tools: { exec: { host: "node" } } } },
       },
     } as never;
 
@@ -2087,10 +2087,10 @@ describe("Codex app-server dynamic tool build", () => {
     runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
     runtimePolicyParams.config = {
       agents: {
-        list: [
-          { id: "main", tools: { exec: { host: "gateway" } } },
-          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
-        ],
+        entries: {
+          main: { tools: { exec: { host: "gateway" } } },
+          policy: { tools: { exec: { host: "node", node: "worker-1" } } },
+        },
       },
     } as never;
 

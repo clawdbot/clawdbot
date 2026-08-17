@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { OPENCLAW_PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import {
   type WorkerAdmissionHandshake,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -78,7 +78,7 @@ export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationAr
 }
 
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
-const nodeSafe = ${OPENCLAW_PROCESS_NODE_VERSION_CHECK};
+const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
 if (!nodeSafe) process.exit(1);
 try { const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");
   const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));

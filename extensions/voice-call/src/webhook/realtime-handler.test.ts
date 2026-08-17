@@ -91,6 +91,20 @@ const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
   supportsBargeIn: true,
 } satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
 
+function makeCallRegistrationResolver(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: Record<string, unknown>;
+  instructions: string;
+  resolveInstructions?: (call: CallRecord) => string;
+}) {
+  return (call: CallRecord) => ({
+    agentId: call.agentId ?? "main",
+    provider: params.provider,
+    providerConfig: params.providerConfig,
+    instructions: params.resolveInstructions?.(call) ?? params.instructions,
+  });
+}
+
 function makeHandler(
   overrides?: Partial<VoiceCallRealtimeConfig>,
   deps?: {
@@ -125,6 +139,8 @@ function makeHandler(
     providers: overrides?.providers ?? {},
     ...(overrides?.provider ? { provider: overrides.provider } : {}),
   };
+  const realtimeProvider = deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge());
+  const providerConfig = deps?.providerConfig ?? { apiKey: "test-key" };
   return new RealtimeCallHandler(
     config,
     {
@@ -145,11 +161,14 @@ function makeHandler(
       getCallStatus: vi.fn(),
       ...deps?.provider,
     } as unknown as VoiceCallProvider,
-    deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
-    deps?.providerConfig ?? { apiKey: "test-key" },
+    makeCallRegistrationResolver({
+      provider: realtimeProvider,
+      providerConfig,
+      instructions: config.instructions,
+      resolveInstructions: deps?.resolveInstructions,
+    }),
     "/voice/webhook",
     undefined,
-    deps?.resolveInstructions,
   );
 }
 

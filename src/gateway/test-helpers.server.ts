@@ -367,6 +367,7 @@ function resetGatewayMutableTestFixtures(): void {
   testState.migrationConfig = null;
   testState.migrationChanges = [];
   testState.cronEnabled = false;
+  testState.cronTriggersEnabled = undefined;
   testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
   testState.sessionStorePath = undefined;

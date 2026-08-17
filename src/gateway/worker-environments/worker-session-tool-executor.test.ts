@@ -318,6 +318,11 @@ describe("worker session tool topology", () => {
     expect(gatewayCreate).toHaveBeenCalledOnce();
     expect(gatewayCreate).toHaveBeenCalledWith(
       expect.objectContaining({
+        creation: expect.objectContaining({
+          actor: { type: "agent", id: SOURCE.agentId },
+          requesterSessionKey: SOURCE.sessionKey,
+          via: "spawn",
+        }),
         method: "sessions.create",
         params: expect.not.objectContaining({ task: expect.anything() }),
       }),

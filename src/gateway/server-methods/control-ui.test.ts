@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import type { ControlUiGitHubPreview } from "../control-ui-contract.js";
 import { ControlUiGitHubError } from "../control-ui-github-api.js";
 import { createControlUiHandlers } from "./control-ui.js";
@@ -96,6 +97,33 @@ describe("controlUi.githubPreview", () => {
       code: "UNAVAILABLE",
       message: "GitHub preview unavailable",
       retryable: true,
+    });
+  });
+
+  it("preserves a configured-unavailable preview credential diagnostic", async () => {
+    const error = new SecretSurfaceUnavailableError({
+      ownerKind: "capability",
+      ownerId: "control-ui-github",
+      state: "unavailable",
+      paths: ["gateway.controlUi.github.token"],
+      refKeys: [],
+      reason: "secret reference was not found",
+    });
+    const handlers = createControlUiHandlers(vi.fn().mockRejectedValue(error));
+    const respond = vi.fn<RespondFn>();
+
+    await expectDefined(
+      handlers["controlUi.githubPreview"],
+      'handlers["controlUi.githubPreview"] test invariant',
+    )(
+      requestOptions({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" }, respond),
+    );
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message:
+        "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
+      retryable: false,
     });
   });
 });

@@ -1132,7 +1132,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as CronJobIdParams & {
-      mode?: "due" | "force";
+      mode?: "due" | "force" | "if-enabled";
       expectedProcessInstanceId?: string;
     };
     const callerScope = readCronCallerScope(client);

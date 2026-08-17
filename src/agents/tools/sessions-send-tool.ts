@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
@@ -45,6 +46,7 @@ import {
   parseSessionDeliveryRoute,
 } from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -100,6 +102,24 @@ const SessionsSendToolSchema = Type.Object({
 });
 
 const log = createSubsystemLogger("agents/sessions-send");
+
+function recordSessionsSendParticipant(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  sessionKey: string;
+  targetAgentId: string;
+}): void {
+  recordSessionParticipantBestEffort({
+    actor: { type: "agent", id: params.requesterAgentId },
+    agentId: params.targetAgentId,
+    sessionKey: params.sessionKey,
+    source: "agent",
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+      agentId: params.targetAgentId,
+    }),
+    onError: (error) => log.warn("failed to record session participant", { error }),
+  });
+}
 
 const SessionsSendDeliverySchema = Type.Object(
   {
@@ -1118,6 +1138,12 @@ export function createSessionsSendTool(opts?: {
             if (!start.ok) {
               return start.result;
             }
+            recordSessionsSendParticipant({
+              cfg,
+              requesterAgentId,
+              sessionKey: start.a2aSessionKey ?? resolvedKey,
+              targetAgentId,
+            });
             runId = start.runId;
             const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
             if (!start.activeRunQueue) {
@@ -1142,6 +1168,12 @@ export function createSessionsSendTool(opts?: {
           if (!start.ok) {
             return start.result;
           }
+          recordSessionsSendParticipant({
+            cfg,
+            requesterAgentId,
+            sessionKey: start.a2aSessionKey ?? resolvedKey,
+            targetAgentId,
+          });
           runId = start.runId;
           const watchField = registerWatchIfRequested(resolvedKey);
           const result = await waitForAgentRunAndReadUpdatedAssistantReply({

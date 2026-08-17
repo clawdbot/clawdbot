@@ -113,8 +113,12 @@ parameters. Choosing **All boards** returns to `/workboard`.
 
 A board can store an `automationJobId` reference to the automation job that
 owns its AI-categorization prompt, model, schedule, and run history. The board
-page shows an **Automation** link when that reference is present. Deleting the
-board does not delete or otherwise mutate the operator-owned automation job.
+page shows an **Automation** link when that reference is present. Matching
+session events nudge the attached automation to run immediately, with events
+for the same board coalesced for 60 seconds. The automation's schedule remains
+the backstop. Disabled and auto-disabled automations are never nudged. Deleting
+the board does not delete or otherwise mutate the
+operator-owned automation job.
 
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).

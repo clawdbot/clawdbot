@@ -73,4 +73,4 @@ function renderProcessNodeVersionCheck() {
 
 // Worker bootstrap runs before OpenClaw is transferred. Carry the canonical
 // release policy as a self-contained expression instead of a second parser.
-export const OPENCLAW_PROCESS_NODE_VERSION_CHECK = renderProcessNodeVersionCheck();
+export const PROCESS_NODE_VERSION_CHECK = renderProcessNodeVersionCheck();

@@ -29,6 +29,7 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -36,6 +37,7 @@ export type TestChatPane = HTMLElement & {
   presented: boolean;
   presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
+  sessionSnapshotStore?: SessionSnapshotStore;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
@@ -96,6 +98,8 @@ export type TestChatPane = HTMLElement & {
   paneId: string;
   sessionKey: string;
   updateComplete: Promise<boolean>;
+  requestUpdate: () => void;
+  performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
     transcriptLoad: Promise<unknown>,

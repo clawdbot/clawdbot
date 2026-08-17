@@ -9,11 +9,15 @@ it("projects session actors and explicitly clears absent attribution", () => {
         kind: "direct",
         updatedAt: 1,
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        participants: [{ type: "human", id: "profile-bob", label: "Bob" }],
+        participantCount: 1,
       },
     }),
   ).toMatchObject({
     createdActor: { type: "human", id: "profile-ada", label: "Ada" },
     archivedBy: null,
+    participants: [{ type: "human", id: "profile-bob", label: "Bob" }],
+    participantCount: 1,
   });
 
   expect(
@@ -28,6 +32,8 @@ it("projects session actors and explicitly clears absent attribution", () => {
   ).toMatchObject({
     createdActor: null,
     archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+    participants: [],
+    participantCount: 0,
   });
 });
 

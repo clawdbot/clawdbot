@@ -256,6 +256,11 @@ export interface SessionNodes {
   last_activity_at: number | null;
   last_interaction_at: number | null;
   last_read_at: number | null;
+  owner_actor_id: string | null;
+  owner_actor_type: string | null;
+  owner_assigned_at: number | null;
+  owner_assigned_by_id: string | null;
+  owner_assigned_by_type: string | null;
   parent_session_key: string | null;
   pinned_at: number | null;
   project_id: string | null;
@@ -263,6 +268,15 @@ export interface SessionNodes {
   spawned_by: string | null;
   status: string | null;
   updated_at: number;
+}
+
+export interface SessionParticipants {
+  actor_id: string;
+  actor_source: string | null;
+  actor_type: string;
+  first_prompted_at: number;
+  last_prompted_at: number;
+  session_key: string;
 }
 
 export interface SessionSuggestions {
@@ -477,6 +491,7 @@ export interface DB {
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
+  session_participants: SessionParticipants;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;
