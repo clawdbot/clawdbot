@@ -14,6 +14,7 @@ import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
   bashExecutionToText,
+  calculateContextTokens,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
   IMAGE_BLOCK_TOKENS,
@@ -235,11 +236,27 @@ type TranscriptBoundaryTokenPressure = {
   source: "provider_context_usage" | "transcript_estimate";
 };
 
+function isProviderContextUsageBarrier(message: AgentMessage): boolean {
+  if (message.role !== "assistant" || !message.usage) {
+    return false;
+  }
+  // Zero unavailable and legacy CLI records describe a newer context without
+  // provider provenance; scanning past them can undercount the active transcript.
+  return (
+    (message.api === "cli" && message.usage.contextUsage === undefined) ||
+    (message.usage.contextUsage?.state === "unavailable" &&
+      calculateContextTokens(message.usage) === 0)
+  );
+}
+
 function resolveProviderContextBoundary(
   messages: AgentMessage[],
 ): { index: number; totalTokens: number } | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
+    if (message && isProviderContextUsageBarrier(message)) {
+      return undefined;
+    }
     const contextUsage = message?.role === "assistant" ? message.usage?.contextUsage : undefined;
     if (
       contextUsage?.state === "available" &&

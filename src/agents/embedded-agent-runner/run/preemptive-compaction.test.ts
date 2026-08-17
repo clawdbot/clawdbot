@@ -62,6 +62,28 @@ function makeProviderAssistant(params: {
   } as AgentMessage;
 }
 
+function makeUnavailableAssistant(params: {
+  totalTokens: number;
+  legacyCli?: boolean;
+}): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "usage unavailable" }],
+    api: params.legacyCli ? "cli" : "anthropic-messages",
+    usage: {
+      input: params.totalTokens,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: params.totalTokens,
+      ...(params.legacyCli ? {} : { contextUsage: { state: "unavailable" as const } }),
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: timestamp++,
+  } as AgentMessage;
+}
+
 function makeToolResultMessage(...texts: string[]): AgentMessage {
   return {
     role: "toolResult",
@@ -244,6 +266,54 @@ describe("preemptive-compaction", () => {
 
     expect(result.pressureSource).toBe("transcript_estimate");
     expect(result.route).not.toBe("fits");
+  });
+
+  it("does not scan past a zero unavailable context marker", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+        makeUnavailableAssistant({ totalTokens: 0 }),
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.pressureSource).toBe("transcript_estimate");
+    expect(result.route).toBe("compact_only");
+  });
+
+  it("treats legacy CLI usage without context provenance as a barrier", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+        makeUnavailableAssistant({ totalTokens: 1_000, legacyCli: true }),
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.pressureSource).toBe("transcript_estimate");
+    expect(result.route).toBe("compact_only");
+  });
+
+  it("can reuse an older provider boundary past nonzero unavailable billing usage", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+        makeUnavailableAssistant({ totalTokens: 927_907 }),
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.pressureSource).toBe("provider_context_usage");
+    expect(result.route).toBe("fits");
   });
 
   it("formats all-route pre-prompt diagnostics for a fits decision", () => {
