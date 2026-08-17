@@ -53,6 +53,8 @@ export type DiscordQaScenarioRun =
     }
   | {
       kind: "progress-draft-lifecycle";
+      errorFinalText: string;
+      errorInput: string;
       finalMarker: string;
       input: string;
       progressLabel: string;
@@ -295,6 +297,12 @@ export const discordQaProgressDraftLifecycleScenario: DiscordQaScenarioImplement
     const finalMarker = `DISCORD_QA_PROGRESS_FINAL_${suffix}`;
     return {
       kind: "progress-draft-lifecycle",
+      errorFinalText:
+        "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.",
+      errorInput: [
+        `<@${sutApplicationId}> Tool progress QA check: Provider HTTP 503 after tool QA check:`,
+        "call the exec tool exactly once with this exact command before answering: `sleep 5`.",
+      ].join(" "),
       finalMarker,
       progressLabel: `Discord progress QA ${suffix}`,
       input: [
