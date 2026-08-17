@@ -1,5 +1,6 @@
 // Doctor node-hosting preconditions expose config combinations that leave browser auth healthy
 // while machine authentication or onboarding remains unavailable.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasConfiguredGatewayAuthSecretInput } from "../gateway/auth-config-utils.js";
@@ -7,10 +8,6 @@ import { hasConfiguredGatewayAuthSecretInput } from "../gateway/auth-config-util
 const CHECK_ID = "core/doctor/node-hosting-preconditions";
 const LOOPBACK_JOIN_CODE_MESSAGE =
   "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.";
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function usesIdentityHeadersWithoutMachineCredentials(cfg: OpenClawConfig): boolean {
   const hasToken = hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.token");
@@ -38,8 +35,8 @@ function lacksNodeOnboardingUrl(cfg: OpenClawConfig): boolean {
   const remoteUrl = cfg.gateway?.remote?.url;
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   return (
-    !hasNonEmptyString(publicUrl) &&
-    !hasNonEmptyString(remoteUrl) &&
+    !normalizeOptionalString(publicUrl) &&
+    !normalizeOptionalString(remoteUrl) &&
     tailscaleMode !== "serve" &&
     tailscaleMode !== "funnel"
   );
