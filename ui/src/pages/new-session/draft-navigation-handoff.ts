@@ -1,5 +1,4 @@
-import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
-import { navigateWithRouteTransition } from "../../app/route-transition.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
@@ -70,20 +69,4 @@ export function restoreDraftOwner(
     recoveryScope,
     Boolean(submission.pendingCloud.sessionKey),
   );
-}
-
-export function navigateToStartedSession(
-  context: ApplicationContext,
-  options: ApplicationNavigationOptions,
-): Promise<void> {
-  // Keep transition code on the lazy new-session path instead of the startup bundle.
-  return navigateWithRouteTransition({
-    document,
-    from: "new-session",
-    to: "chat",
-    prefersReducedMotion:
-      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-    prepare: () => context.preload("chat", options),
-    navigate: () => context.navigateAndWait("chat", options),
-  }).catch(() => undefined);
 }

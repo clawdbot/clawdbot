@@ -26,7 +26,6 @@ import {
   type NewSessionVisibility,
 } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { navigateToStartedSession } from "./draft-navigation-handoff.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type {
@@ -34,6 +33,7 @@ import type {
   DraftSubmissionSnapshot,
 } from "./draft-submission-contract.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
+import { navigateToStartedSession } from "./started-session-navigation.ts";
 import {
   PAGE_RENDERED_GATES,
   resolveNewSessionSubmitBlock,
