@@ -16,6 +16,7 @@ import {
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
+  sqliteLifecycleTargetSnapshotsEqual,
   sqliteSessionEntriesEqual,
   sqliteSessionSnapshotRowsEqual,
 } from "./session-accessor.sqlite-entry-equality.js";
@@ -346,16 +347,6 @@ export function assertLifecycleTargetSnapshotUnchanged(
   if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
     throw new SqliteSessionMutationConflictError(operationLabel);
   }
-}
-
-export function sqliteLifecycleTargetSnapshotsEqual(
-  expected: SqliteLifecycleTargetSnapshot,
-  current: SqliteLifecycleTargetSnapshot,
-): boolean {
-  const primaryMatches =
-    expected.primary?.key === current.primary?.key &&
-    sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry);
-  return primaryMatches && sqliteSessionSnapshotRowsEqual(expected.rows, current.rows);
 }
 
 export function normalizeLifecycleTarget(target: { canonicalKey: string; storeKeys: string[] }): {
