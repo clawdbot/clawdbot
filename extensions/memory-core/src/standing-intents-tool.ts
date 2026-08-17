@@ -19,7 +19,7 @@ const INTENT_KEYWORD_MAX_CHARS = 120;
 const STANDING_INTENT_AUTOMATION_GUIDANCE =
   "The system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks.";
 const STANDING_INTENT_SCOPE_GUIDANCE =
-  'Use "channel" (the default) for any "whenever I mention X" request. Use "conversation" only when the user explicitly limits the reminder to the current thread. Use "anywhere" when the user asks for it everywhere.';
+  'Use "channel" for any "whenever I mention X" request when channel identity is available. Use "conversation" only when the user explicitly limits the reminder to the current thread. Use "anywhere" when the user asks for it everywhere or the turn has no channel identity.';
 
 type IntentSenderScope = "sender" | "anyone";
 type IntentToolParams = {
@@ -139,12 +139,16 @@ function parseScope<T extends string>(
 
 export function createStandingIntentTool(options: {
   agentId: string;
+  creatorPrincipal: string;
   sourceSessionId?: string;
   conversationId?: string;
   provider?: string;
   accountId?: string;
   senderId?: string;
 }): AnyAgentTool {
+  const defaultScope: IntentScope = options.provider?.trim() ? "channel" : "anywhere";
+  const defaultSenderScope: IntentSenderScope =
+    options.provider?.trim() && options.senderId?.trim() ? "sender" : "anyone";
   return {
     label: "Standing Intent",
     name: "intent",
@@ -163,13 +167,13 @@ export function createStandingIntentTool(options: {
         scope: {
           type: "string",
           enum: ["conversation", "channel", "anywhere"],
-          default: "channel",
+          default: defaultScope,
           description: STANDING_INTENT_SCOPE_GUIDANCE,
         },
         senderScope: {
           type: "string",
           enum: ["sender", "anyone"],
-          default: "sender",
+          default: defaultSenderScope,
         },
         expiresAt: { type: "string" },
         maxFires: { type: "integer", minimum: 1 },
@@ -190,13 +194,13 @@ export function createStandingIntentTool(options: {
           params.scope,
           "scope",
           ["conversation", "channel", "anywhere"],
-          "channel",
+          defaultScope,
         );
         const senderScope = parseScope<IntentSenderScope>(
           params.senderScope,
           "senderScope",
           ["sender", "anyone"],
-          "sender",
+          defaultSenderScope,
         );
         const intent = createStandingIntent({
           agentId: options.agentId,
@@ -223,7 +227,7 @@ export function createStandingIntentTool(options: {
                   accountId: options.accountId,
                   senderId: options.senderId ?? "",
                 }),
-          creatorSender: options.senderId ?? "",
+          creatorSender: options.creatorPrincipal,
           expiresAt: parseExpiry(params.expiresAt, nowMs),
           maxFires: positiveInteger(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES),
           cooldownSeconds: nonNegativeInteger(

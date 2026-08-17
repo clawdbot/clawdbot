@@ -171,6 +171,7 @@ describe("memory-core plugin runtime registration", () => {
   });
 
   it("hides intent create, list, and cancel from non-owner turns", () => {
+    const warn = vi.fn();
     let intentFactory:
       | ((ctx: { config?: OpenClawConfig; senderIsOwner?: boolean }) => unknown)
       | undefined;
@@ -178,6 +179,7 @@ describe("memory-core plugin runtime registration", () => {
       createTestPluginApi({
         config: {},
         runtime: hostRuntime,
+        logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
         registerTool(factory, options) {
           if (options?.names?.includes("intent") && typeof factory === "function") {
             intentFactory = factory as typeof intentFactory;
@@ -191,7 +193,17 @@ describe("memory-core plugin runtime registration", () => {
 
     expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
     expect(intentFactory({ config: {} })).toBeNull();
-    expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
+    const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as {
+      name?: string;
+      parameters?: {
+        properties?: Record<string, { default?: string }>;
+      };
+    };
+    expect(ownerTool).toMatchObject({ name: "intent" });
+    expect(ownerTool.parameters?.properties?.scope?.default).toBe("anywhere");
+    expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("anyone");
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("owner authorization"));
   });
 
   it("keeps memory manager initialization demand-driven", () => {

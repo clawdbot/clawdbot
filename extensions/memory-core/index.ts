@@ -152,14 +152,21 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
   });
 }
 
-function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
+function createLazyStandingIntentTool(
+  ctx: OpenClawPluginToolContext,
+  reportUnavailable: (reason: string) => void,
+): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
+    reportUnavailable("owner authorization is unavailable for this turn");
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();
+  const defaultScope = provider ? "channel" : "anywhere";
+  const defaultSenderScope = provider && senderId ? "sender" : "anyone";
   if (!cfg) {
+    reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
   const { sessionAgentId: agentId } = resolveSessionAgentIds({
@@ -172,6 +179,7 @@ function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentT
     toolPromise ??= loadStandingIntentToolModule().then((module: StandingIntentToolModule) =>
       module.createStandingIntentTool({
         agentId,
+        creatorPrincipal: senderId || "owner",
         ...(ctx.sessionId ? { sourceSessionId: ctx.sessionId } : {}),
         ...(ctx.nativeChannelId ? { conversationId: ctx.nativeChannelId } : {}),
         ...(provider ? { provider } : {}),
@@ -196,12 +204,12 @@ function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentT
         scope: {
           type: "string",
           enum: ["conversation", "channel", "anywhere"],
-          default: "channel",
+          default: defaultScope,
         },
         senderScope: {
           type: "string",
           enum: ["sender", "anyone"],
-          default: "sender",
+          default: defaultSenderScope,
         },
         expiresAt: { type: "string" },
         maxFires: { type: "integer", minimum: 1 },
@@ -302,9 +310,13 @@ export default definePluginEntry({
       names: ["memory_get"],
     });
 
-    api.registerTool((ctx) => createLazyStandingIntentTool(ctx), {
-      names: ["intent"],
-    });
+    api.registerTool(
+      (ctx) =>
+        createLazyStandingIntentTool(ctx, (reason) => {
+          api.logger.warn(`memory-core: intent tool unavailable: ${reason}`);
+        }),
+      { names: ["intent"] },
+    );
 
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger !== "user") {

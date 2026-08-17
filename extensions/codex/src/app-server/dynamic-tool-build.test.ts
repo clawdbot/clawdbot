@@ -1500,22 +1500,29 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("turn-capability-1");
   });
 
-  it("passes owner identity into Codex dynamic tool construction", async () => {
+  it("materializes an owner-gated prepared plugin tool for Codex", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.senderIsOwner = true;
+    params.preparedModelRuntime = { metadataSnapshot: { plugins: [] } } as never;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
-      return [];
+      return options?.senderIsOwner && options.preparedModelRuntime
+        ? [createRuntimeDynamicTool("intent")]
+        : [];
     });
 
-    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
-    expect(factoryOptions[0]).toMatchObject({ senderIsOwner: true });
+    expect(tools.map((tool) => tool.name)).toContain("intent");
+    expect(factoryOptions[0]).toMatchObject({
+      senderIsOwner: true,
+      preparedModelRuntime: params.preparedModelRuntime,
+    });
   });
 
   it("passes native and routable channel targets into Codex dynamic tools", async () => {
