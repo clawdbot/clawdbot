@@ -233,13 +233,10 @@ export function isRequestedExecTargetAllowed(params: {
     }
     return true;
   }
-  // When configuredTarget is "gateway" and requestedTarget is "auto", they resolve
-  // to the same effective host when no sandbox is available.
-  if (
-    params.configuredTarget === "gateway" &&
-    params.requestedTarget === "auto" &&
-    !params.sandboxAvailable
-  ) {
+  // Allow when the requested target resolves to the same effective host as the
+  // configured target. This covers both the no-sandbox auto→gateway case and the
+  // elevated-routing case where every non-node target maps to gateway.
+  if (params.configuredTarget === "gateway" && params.requestedTarget === "auto") {
     return true;
   }
   return false;

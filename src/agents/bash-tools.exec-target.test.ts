@@ -156,16 +156,23 @@ describe("resolveExecTarget", () => {
     );
   });
 
-  it("requires an exact match for non-auto configured targets", () => {
-    expect(() =>
+  it("allows gateway configured with auto requested (same effective host)", () => {
+    // auto resolves to gateway when no sandbox is available, and elevated routing
+    // maps auto→gateway regardless. The configured gateway target is always a valid
+    // resolution of auto.
+    expectExecTarget(
       resolveExecTarget({
         configuredTarget: "gateway",
         requestedTarget: "auto",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toThrow(
-      "exec host not allowed (requested auto; configured host is gateway; set tools.exec.host=auto to allow this override).",
+      {
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        selectedTarget: "auto",
+        effectiveHost: "sandbox",
+      },
     );
   });
 
