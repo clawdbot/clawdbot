@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -8,26 +9,39 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "chat sidebar panel contract",
+  name: "chat sidebar cold-open invariant",
   startServerBeforeBrowser: true,
 });
+
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
+  "base64",
+);
 
 type ColdOpenOutcome = {
   outcome: "content" | "generic-empty";
   emptyStateOffersAction: boolean;
 };
 
-const expectedColdOpenOutcomes: Record<string, ColdOpenOutcome> = {
-  Review: { outcome: "generic-empty", emptyStateOffersAction: false },
-  Terminal: { outcome: "content", emptyStateOffersAction: false },
-  Browser: { outcome: "generic-empty", emptyStateOffersAction: true },
-  // Files deliberately defaults to the project browser when the session has no items.
-  Files: { outcome: "content", emptyStateOffersAction: false },
-  "Side chat": { outcome: "generic-empty", emptyStateOffersAction: false },
-  Tasks: { outcome: "generic-empty", emptyStateOffersAction: false },
-  Desktop: { outcome: "content", emptyStateOffersAction: false },
-  Discussion: { outcome: "generic-empty", emptyStateOffersAction: true },
-};
+const offeredSlotLabels = [
+  "Review",
+  "Terminal",
+  "Browser",
+  "Files",
+  "Side chat",
+  "Tasks",
+  "Desktop",
+  "Discussion",
+] as const;
+
+type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
+
+const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
+  // Review: no git checkout, nothing to diff.
+  "Review",
+  // Tasks: no background tasks, nothing to inspect.
+  "Tasks",
+]);
 
 function coldOpenScenario(): ControlUiMockGatewayScenario {
   return {
@@ -39,6 +53,7 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "environments.list",
       "session.discussion.info",
       "session.discussion.open",
+      "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
       "tasks.list",
@@ -77,11 +92,138 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
   };
 }
 
-async function openColdSidebar(page: Page) {
-  const gateway = await installMockGateway(page, coldOpenScenario());
+function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
+  const sparse = coldOpenScenario();
+  return {
+    ...sparse,
+    methodResponses: {
+      ...sparse.methodResponses,
+      "browser.request": {
+        cases: [
+          {
+            match: { method: "GET", path: "/tabs" },
+            response: {
+              running: true,
+              tabs: [
+                {
+                  targetId: "target-1",
+                  tabId: "tab-1",
+                  title: "OpenClaw",
+                  url: "https://example.test/",
+                },
+              ],
+            },
+          },
+          {
+            match: { method: "POST", path: "/screenshot" },
+            response: {
+              path: "/proof/browser.png",
+              targetId: "target-1",
+              url: "https://example.test/",
+            },
+          },
+        ],
+      },
+      "environments.list": {
+        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+      },
+      "session.discussion.info": {
+        embedUrl: "https://discussion.example/embed/thread/session",
+        openUrl: "https://discussion.example/session",
+        state: "open",
+      },
+      "sessions.companion.state": {
+        exchanges: [
+          {
+            question: "What changed?",
+            answer: "Every offered panel now opens with useful content.",
+            ts: Date.now() - 1_000,
+          },
+        ],
+      },
+      "sessions.diff": {
+        additions: 1,
+        baseRef: "main",
+        branch: "feature/sidebar-invariant",
+        deletions: 0,
+        files: [
+          {
+            additions: 1,
+            deletions: 0,
+            patch: [
+              "diff --git a/README.md b/README.md",
+              "--- a/README.md",
+              "+++ b/README.md",
+              "@@ -1 +1,2 @@",
+              " OpenClaw",
+              "+Cold-open invariant",
+              "",
+            ].join("\n"),
+            path: "README.md",
+            status: "modified",
+          },
+        ],
+        root: "/tmp/checkout",
+        sessionKey: "main",
+      },
+      "sessions.files.list": {
+        browser: {
+          entries: [{ kind: "file", name: "README.md", path: "README.md" }],
+          path: "",
+        },
+        files: [
+          {
+            kind: "modified",
+            missing: false,
+            name: "README.md",
+            path: "/tmp/checkout/README.md",
+            size: 128,
+          },
+        ],
+        gitCheckout: true,
+        root: "/tmp/checkout",
+        sessionKey: "main",
+      },
+      "tasks.list": {
+        tasks: [
+          {
+            agentId: "main",
+            createdAt: Date.now() - 2_000,
+            id: "task-sidebar-invariant",
+            kind: "subagent",
+            ownerKey: "main",
+            progressSummary: "Checking every offered panel",
+            runtime: "subagent",
+            startedAt: Date.now() - 1_000,
+            status: "running",
+            taskId: "task-sidebar-invariant",
+            title: "Verify cold-open behavior",
+            updatedAt: Date.now(),
+          },
+        ],
+      },
+      "terminal.open": {
+        agentId: "main",
+        confined: false,
+        cwd: "/tmp/checkout",
+        sessionId: "cold-open-terminal",
+        shell: "/bin/zsh",
+      },
+    },
+    workspace: "/tmp/checkout",
+    workspaceGit: true,
+  };
+}
+
+async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
+  await page.route("**/__openclaw__/assistant-media?*", (route) =>
+    route.fulfill({ body: ONE_PIXEL_PNG, contentType: "image/png" }),
+  );
+  const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
   await waitForControlUiGatewayReady(page);
   await gateway.waitForRequest("session.discussion.info");
+  await gateway.waitForRequest("sessions.companion.state");
   await gateway.waitForRequest("sessions.files.list");
   await page.getByRole("button", { name: "Side panel", exact: true }).first().click();
   const choices = page.locator(".side-panel-empty__type");
@@ -98,8 +240,42 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   return {
     outcome: genericEmptyState ? "generic-empty" : "content",
     emptyStateOffersAction:
-      genericEmptyState && (await emptyState.locator('[slot="action"]').count()) > 0,
+      genericEmptyState &&
+      (await activePanel.locator('[slot="action"], a[href], button:not([disabled])').count()) > 0,
   };
+}
+
+async function offeredLabels(page: Page, scenario: ControlUiMockGatewayScenario) {
+  const choices = await openColdSidebar(page, scenario);
+  return choices.locator(".side-panel-type-option__label").allTextContents();
+}
+
+async function readSlotColdOpenOutcome(
+  label: OfferedSlotLabel,
+  scenario: ControlUiMockGatewayScenario,
+  expectedOutcome?: ColdOpenOutcome["outcome"],
+): Promise<ColdOpenOutcome> {
+  const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+  try {
+    const page = await context.newPage();
+    const choices = await openColdSidebar(page, scenario);
+    await choices.filter({ hasText: label }).click();
+    if (expectedOutcome) {
+      await expect
+        .poll(() => readColdOpenOutcome(page), { message: `${label} cold-open outcome` })
+        .toMatchObject({ outcome: expectedOutcome });
+    } else {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+    }
+    return await readColdOpenOutcome(page);
+  } finally {
+    await suite.closeBrowserContext(context);
+  }
 }
 
 suite.define(() => {
@@ -126,28 +302,48 @@ suite.define(() => {
     await suite.closeBrowserContext(context);
   });
 
-  it("accounts for every offered slot when opened cold", async () => {
+  it("renders content for every offered slot with backing data", async () => {
     const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    const probePage = await probeContext.newPage();
-    const choices = await openColdSidebar(probePage);
-    const offered = await choices.locator(".side-panel-type-option__label").allTextContents();
-    await suite.closeBrowserContext(probeContext);
-
-    expect(offered).toEqual(Object.keys(expectedColdOpenOutcomes));
-
-    const outcomes: Record<string, ColdOpenOutcome> = {};
-    for (const label of offered) {
-      const context = await suite.newBrowserContext({ serviceWorkers: "block" });
-      const page = await context.newPage();
-      const coldChoices = await openColdSidebar(page);
-      await coldChoices.filter({ hasText: label }).click();
-      await expect
-        .poll(() => readColdOpenOutcome(page), { message: `${label} cold-open outcome` })
-        .toEqual(expectedColdOpenOutcomes[label]);
-      outcomes[label] = await readColdOpenOutcome(page);
-      await suite.closeBrowserContext(context);
+    try {
+      const offered = await offeredLabels(
+        await probeContext.newPage(),
+        populatedColdOpenScenario(),
+      );
+      expect(offered).toEqual(offeredSlotLabels);
+    } finally {
+      await suite.closeBrowserContext(probeContext);
     }
 
-    expect(outcomes).toEqual(expectedColdOpenOutcomes);
+    for (const label of offeredSlotLabels) {
+      expect(
+        await readSlotColdOpenOutcome(label, populatedColdOpenScenario(), "content"),
+        `${label} must render content when its backing capability has data`,
+      ).toEqual({ outcome: "content", emptyStateOffersAction: false });
+    }
+  });
+
+  it("keeps generic empty states actionable or explicitly allowlisted", async () => {
+    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const offered = await offeredLabels(await probeContext.newPage(), coldOpenScenario());
+      expect(offered).toEqual(offeredSlotLabels);
+    } finally {
+      await suite.closeBrowserContext(probeContext);
+    }
+
+    const observedActionlessEmptyStates: OfferedSlotLabel[] = [];
+    for (const label of offeredSlotLabels) {
+      const outcome = await readSlotColdOpenOutcome(label, coldOpenScenario());
+      if (outcome.outcome !== "generic-empty" || outcome.emptyStateOffersAction) {
+        continue;
+      }
+      expect(
+        actionlessEmptyStateAllowlist.has(label),
+        `${label} renders the generic empty state without an action`,
+      ).toBe(true);
+      observedActionlessEmptyStates.push(label);
+    }
+
+    expect(observedActionlessEmptyStates).toEqual([...actionlessEmptyStateAllowlist]);
   });
 });
