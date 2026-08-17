@@ -22,6 +22,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import {
   createContainerWorkspaceSandboxFsBridge,
   createHostSandboxFsBridge,
@@ -3155,28 +3156,11 @@ describe("image compression policy", () => {
   it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
     const provider = "prepared-image-provider";
     const model = "prepared-image-model";
-    const cfg = {
-      models: {
-        providers: {
-          [provider]: {
-            baseUrl: "https://prepared-image.example.test/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: model,
-                name: "Prepared image model",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 8_192,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const createSnapshot = (runtimeAugment: boolean) => {
+    const cfg = {} satisfies OpenClawConfig;
+    const createSnapshot = (
+      runtimeAugment: boolean,
+      imagePolicy: { maxBytes: number; tokenMode: "detail" | "provider" },
+    ) => {
       const plugin = {
         id: "prepared-image-plugin",
         enabledByDefault: true,
@@ -3191,11 +3175,18 @@ describe("image compression policy", () => {
         manifestPath: "/fake/prepared-image-plugin/openclaw.plugin.json",
         modelCatalog: {
           runtimeAugment,
+          discovery: { [provider]: "static" },
           providers: {
             [provider]: {
               baseUrl: "https://prepared-image.example.test/v1",
               api: "openai-completions",
-              models: [{ id: model, name: "Prepared image model" }],
+              models: [
+                {
+                  id: model,
+                  name: "Prepared image model",
+                  mediaInput: { image: imagePolicy },
+                },
+              ],
             },
           },
         },
@@ -3205,21 +3196,46 @@ describe("image compression policy", () => {
         manifestRegistry: { plugins: [plugin], diagnostics: [] },
       });
     };
-    const preparedSnapshot = createSnapshot(false);
-    const currentSnapshot = createSnapshot(true);
+    const preparedSnapshot = createSnapshot(true, {
+      maxBytes: 1_000_000,
+      tokenMode: "detail",
+    });
+    const currentSnapshot = createSnapshot(false, {
+      maxBytes: 2_000_000,
+      tokenMode: "provider",
+    });
+    const preparedModelRuntime = {
+      agentDir: "/fake/prepared-image-agent",
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config: cfg,
+      authModes: {},
+      metadataSnapshot: preparedSnapshot,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    } satisfies PreparedModelRuntimeSnapshot;
     const hookModes: Array<boolean | undefined> = [];
+    const forwardedPreparedRuntimes: Array<PreparedModelRuntimeSnapshot | undefined> = [];
     installImageUnderstandingProviderDeps([], {
       resolveModelAsync: async (resolvedProvider, resolvedModel, _agentDir, _cfg, options) => {
         hookModes.push(options?.skipProviderRuntimeHooks);
+        forwardedPreparedRuntimes.push(options?.preparedModelRuntime);
+        const usesPreparedGeneration = options?.preparedModelRuntime === preparedModelRuntime;
         return {
           model: {
             id: resolvedModel,
             provider: resolvedProvider,
             input: ["text", "image"],
             mediaInput: {
-              image: options?.skipProviderRuntimeHooks
-                ? { maxBytes: 1_000_000 }
-                : { maxSidePx: 4096 },
+              image: usesPreparedGeneration
+                ? options?.skipProviderRuntimeHooks
+                  ? { preferredSidePx: 1_280 }
+                  : { maxPixels: 2_000_000, maxSidePx: 1_536 }
+                : options?.skipProviderRuntimeHooks
+                  ? { preferredSidePx: 2_560 }
+                  : { maxPixels: 8_000_000, maxSidePx: 4_096 },
             },
           } as never,
           authStorage: {} as never,
@@ -3237,13 +3253,22 @@ describe("image compression policy", () => {
           cfg,
           imageModelConfig: { primary: `${provider}/${model}` },
           imageCount: 1,
-          metadataSnapshot: preparedSnapshot,
+          preparedModelRuntime,
         }),
       ).resolves.toEqual({
         imageCount: 1,
-        models: [{ maxBytes: 1_000_000 }],
+        models: [
+          {
+            maxBytes: 1_000_000,
+            maxPixels: 2_000_000,
+            maxSidePx: 1_536,
+            preferredSidePx: 1_280,
+            tokenMode: "detail",
+          },
+        ],
       });
-      expect(hookModes).toEqual([true]);
+      expect(hookModes).toEqual([true, false]);
+      expect(forwardedPreparedRuntimes).toEqual([preparedModelRuntime, preparedModelRuntime]);
     } finally {
       currentLease.release();
     }

@@ -32,8 +32,6 @@ import {
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
-import { isPluginMetadataSnapshotCompatible } from "../../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -475,6 +473,7 @@ function resolveBundledStaticCompressionModelPolicy(params: {
   provider: string;
   model: string;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): ImageCompressionModelPolicy {
   const model = imageToolProviderDeps.resolveBundledStaticCatalogModel({
     provider: params.provider,
@@ -482,6 +481,9 @@ function resolveBundledStaticCompressionModelPolicy(params: {
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     includeRuntimeDiscovery: true,
+    ...(params.preparedModelRuntime
+      ? { metadataSnapshot: params.preparedModelRuntime.metadataSnapshot }
+      : {}),
   });
   return model?.mediaInput?.image ?? {};
 }
@@ -490,26 +492,15 @@ function providerUsesRuntimeModelAugment(params: {
   cfg?: OpenClawConfig;
   provider: string;
   workspaceDir?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): boolean {
   const provider = normalizeMediaProviderId(params.provider);
   if (!provider) {
     return false;
   }
   const config = params.cfg ?? {};
-  const preparedSnapshot =
-    params.metadataSnapshot &&
-    params.metadataSnapshot.pluginIds === undefined &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: params.metadataSnapshot,
-      config,
-      env: process.env,
-      workspaceDir: params.workspaceDir,
-    })
-      ? params.metadataSnapshot
-      : undefined;
   const snapshot =
-    preparedSnapshot ??
+    params.preparedModelRuntime?.metadataSnapshot ??
     getCurrentPluginMetadataSnapshot({
       config,
       env: process.env,
@@ -556,6 +547,7 @@ async function resolveCompressionModelPolicyWithHooks(params: {
   model: string;
   agentDir?: string;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   skipProviderRuntimeHooks: boolean;
 }): Promise<ImageCompressionModelPolicy> {
   try {
@@ -569,6 +561,9 @@ async function resolveCompressionModelPolicyWithHooks(params: {
         skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
         skipAgentDiscovery: true,
         workspaceDir: params.workspaceDir,
+        ...(params.preparedModelRuntime
+          ? { preparedModelRuntime: params.preparedModelRuntime }
+          : {}),
       },
     );
     return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
@@ -583,7 +578,7 @@ async function resolveCompressionModelPolicy(params: {
   model: string;
   agentDir?: string;
   workspaceDir?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): Promise<ImageCompressionModelPolicy> {
   const configuredStaticPolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
@@ -599,7 +594,7 @@ async function resolveCompressionModelPolicy(params: {
       cfg: params.cfg,
       provider: params.provider,
       workspaceDir: params.workspaceDir,
-      metadataSnapshot: params.metadataSnapshot,
+      preparedModelRuntime: params.preparedModelRuntime,
     })
   ) {
     return staticPolicy;
@@ -618,7 +613,7 @@ async function resolveImageCompressionPolicy(params: {
   imageCount: number;
   agentDir?: string;
   workspaceDir?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): Promise<ImageCompressionPolicy> {
   const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
@@ -630,7 +625,7 @@ async function resolveImageCompressionPolicy(params: {
         model: candidate.model,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
-        metadataSnapshot: params.metadataSnapshot,
+        preparedModelRuntime: params.preparedModelRuntime,
       });
     }),
   );
@@ -1013,7 +1008,7 @@ export function createImageTool(options?: {
           imageCount: imageInputs.length,
           agentDir,
           workspaceDir: options?.workspaceDir,
-          metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
+          preparedModelRuntime: options?.preparedModelRuntime,
         });
         imageRoute = { kind: "fallback", imageModelConfig, imageCompression };
       }
