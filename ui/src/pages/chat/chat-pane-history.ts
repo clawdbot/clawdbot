@@ -28,7 +28,6 @@ import {
 } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
-  CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT,
   CHAT_HISTORY_INTENT_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
   CHAT_HISTORY_TOUCH_INTENT_PX,
@@ -66,7 +65,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.loadingOlder = false;
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
-    this.historyBootstrapPagesLoaded = 0;
     this.historyIntentConsumed = false;
     this.historyTouchY = null;
     if (this.historyIntentTimer !== null) {
@@ -114,10 +112,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     this.transcriptScrollTop ??= root.scrollTop;
     const threadIsScrollable = root.scrollHeight > root.clientHeight;
-    const bootstrap =
-      !this.historyObserverArmed &&
-      !threadIsScrollable &&
-      this.historyBootstrapPagesLoaded < CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT;
+    const bootstrap = !this.historyObserverArmed && !threadIsScrollable;
     if (this.historyAutoLoadBlocked) {
       this.clearHistoryObserver();
       return;
@@ -143,9 +138,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
           this.historyObserverArmed = false;
-          if (bootstrap) {
-            this.historyBootstrapPagesLoaded += 1;
-          }
           void this.loadOlderMessages();
         }
       },

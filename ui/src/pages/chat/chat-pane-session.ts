@@ -397,7 +397,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
       this.historyObserverArmed = false;
-      this.historyBootstrapPagesLoaded = 0;
       this.transcriptScrollTop = null;
       this.historyObserver?.disconnect();
       this.historyObserver = null;
