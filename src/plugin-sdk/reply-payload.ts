@@ -624,6 +624,10 @@ export async function deliverTextOrMediaReply(params: {
 export async function deliverFormattedTextWithAttachments(params: {
   payload: OutboundReplyPayload;
   send: (params: { text: string; replyToId?: string }) => Promise<void>;
+  /** Optional config used for outbound plan diagnostics (#41966). */
+  cfg?: unknown;
+  /** Optional surface tag for outbound plan diagnostics (#41966). */
+  surface?: string;
 }): Promise<boolean> {
   const text = formatTextWithAttachmentLinks(
     params.payload.text,
@@ -632,9 +636,17 @@ export async function deliverFormattedTextWithAttachments(params: {
   if (!text) {
     return false;
   }
+  // Shared direct-delivery owner for IRC/Nextcloud-family: warn once after an
+  // accepted formatted send when fenced MEDIA: stayed as text (#41966).
+  const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+    payload: params.payload,
+    cfg: params.cfg,
+    surface: params.surface,
+  });
   await params.send({
     text,
     replyToId: params.payload.replyToId,
   });
+  fencedMediaWarn.afterAcceptedVisibleText(text);
   return true;
 }

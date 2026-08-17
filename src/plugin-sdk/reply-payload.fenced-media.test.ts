@@ -14,6 +14,7 @@ vi.mock("./channel-outbound-fenced-media-runtime.js", async (importOriginal) => 
 });
 
 import {
+  deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
   sendPayloadWithChunkedTextAndMedia,
   sendTextMediaPayload,
@@ -99,6 +100,68 @@ describe("deliverTextOrMediaReply fenced MEDIA diagnostic (#41966)", () => {
 
     expect(sendMedia).toHaveBeenCalledTimes(2);
     expect(sendText).not.toHaveBeenCalled();
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverFormattedTextWithAttachments fenced MEDIA diagnostic (#41966)", () => {
+  it("warns once after accepted formatted direct send (IRC/Nextcloud owner) (#41966)", async () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const fenced = "```\nMEDIA:/tmp/demo.png\n```";
+    const send = vi.fn(async () => undefined);
+
+    await expect(
+      deliverFormattedTextWithAttachments({
+        payload: { text: fenced },
+        send,
+        surface: "irc",
+        cfg: {},
+      }),
+    ).resolves.toBe(true);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalledTimes(1);
+    const arg = warnFencedMediaSkipsForAcceptedOutboundDelivery.mock.calls[0]?.[0] as
+      | Array<{ fencedSkippedMediaDirectives?: string[] }>
+      | undefined;
+    expect(arg?.[0]?.fencedSkippedMediaDirectives).toEqual(["MEDIA:/tmp/demo.png"]);
+  });
+
+  it("does not warn when formatted direct send rejects (#41966)", async () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const fenced = "```\nMEDIA:/tmp/demo.png\n```";
+    const send = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+
+    await expect(
+      deliverFormattedTextWithAttachments({
+        payload: { text: fenced },
+        send,
+        surface: "nextcloud-talk",
+        cfg: {},
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
+  });
+
+  it("stays silent for unfenced MEDIA on formatted direct owner (#41966)", async () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const plain = "MEDIA:/tmp/demo.png";
+    const send = vi.fn(async () => undefined);
+
+    await expect(
+      deliverFormattedTextWithAttachments({
+        payload: { text: plain },
+        send,
+        surface: "irc",
+        cfg: {},
+      }),
+    ).resolves.toBe(true);
+
+    expect(send).toHaveBeenCalledTimes(1);
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
   });
 });
