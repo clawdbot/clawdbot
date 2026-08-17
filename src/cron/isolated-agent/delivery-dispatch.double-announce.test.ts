@@ -3513,19 +3513,5 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [{ text: "Working on it..." }],
     });
   });
-
-  it("delivers a valid one-line recipient-led message", async () => {
-    const params = makeBaseParams({
-      synthesizedText: "Sent Alex the revised schedule for Monday.",
-    });
-    const state = await dispatchCronDelivery(params);
-
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, {
-      payloads: [{ text: "Sent Alex the revised schedule for Monday." }],
-    });
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1766,12 +1766,15 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
         expect(prompt).toContain("Use the message tool");
         expect(prompt).toContain("will be delivered automatically");
         expect(prompt).toContain("write only the exact user-facing message to send");
+        expect(prompt).toContain(
+          'do not narrate the automatic delivery itself or say things like "Sent the user..."',
+        );
       } else {
         expect(prompt).not.toContain("Use the message tool");
         expect(prompt).toContain("Your response will be delivered automatically");
         expect(prompt).toContain("Write only the exact user-facing message to send");
         expect(prompt).toContain(
-          'do not describe the delivery action or say things like "Sent the user..."',
+          'do not narrate the automatic delivery itself or say things like "Sent the user..."',
         );
         expect(prompt).not.toContain("as plain text");
         if (hidesDestinationMetadata) {
