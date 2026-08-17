@@ -214,25 +214,140 @@ describe("update CLI shared helpers", () => {
     });
   });
 
-  it("keeps the existing empty-directory clone path in place", async () => {
+  it("keeps an existing empty checkout destination retryable after clone failure", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-existing-" }, async (base) => {
       const checkoutDir = path.join(base, "openclaw");
       await fs.mkdir(checkoutDir);
+      let attempt = 0;
+      runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
+        attempt += 1;
+        const stagingDir = cloneTarget(argv);
+        expect(stagingDir).not.toBe(checkoutDir);
+        await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+        if (attempt === 1) {
+          return { ...successfulCommandResult, code: 42, stderr: "clone interrupted" };
+        }
+        await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+        return successfulCommandResult;
+      });
+
+      await expect(
+        ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
+      ).resolves.toMatchObject({ exitCode: 42 });
+      await expect(fs.readdir(checkoutDir)).resolves.toEqual([]);
 
       await expect(
         ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
       ).resolves.toMatchObject({ exitCode: 0 });
-
-      expect(runCommandWithTimeout).toHaveBeenCalledWith(
-        [
-          "git",
-          "clone",
-          "--filter=blob:none",
-          "https://github.com/openclaw/openclaw.git",
-          checkoutDir,
-        ],
-        expect.objectContaining({ cwd: checkoutDir, env: process.env, timeoutMs: 1_000 }),
+      await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
+        "complete\n",
       );
+      expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a stable alias to an existing empty checkout destination",
+    async () => {
+      await withTestDir({ prefix: "openclaw-update-clone-alias-" }, async (base) => {
+        const targetDir = path.join(base, "checkout-target");
+        const checkoutDir = path.join(base, "openclaw");
+        await fs.mkdir(targetDir);
+        await fs.symlink(targetDir, checkoutDir, "dir");
+        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+          const stagingDir = cloneTarget(argv);
+          expect(path.dirname(stagingDir)).toBe(targetDir);
+          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+          await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+          return successfulCommandResult;
+        });
+
+        await expect(
+          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
+        ).resolves.toMatchObject({ exitCode: 0 });
+
+        expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
+        expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
+        await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
+          "complete\n",
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "publishes through the original target when an empty-directory alias is retargeted",
+    async () => {
+      await withTestDir({ prefix: "openclaw-update-clone-alias-race-" }, async (base) => {
+        const targetDir = path.join(base, "checkout-target");
+        const replacementDir = path.join(base, "replacement-target");
+        const checkoutDir = path.join(base, "openclaw");
+        await fs.mkdir(targetDir);
+        await fs.mkdir(replacementDir);
+        await fs.symlink(targetDir, checkoutDir, "dir");
+        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+          const stagingDir = cloneTarget(argv);
+          expect(path.dirname(stagingDir)).toBe(targetDir);
+          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+          await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+          await fs.unlink(checkoutDir);
+          await fs.symlink(replacementDir, checkoutDir, "dir");
+          return successfulCommandResult;
+        });
+
+        await expect(
+          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
+        ).resolves.toMatchObject({ exitCode: 0 });
+
+        await expect(fs.readFile(path.join(targetDir, "checkout.marker"), "utf8")).resolves.toBe(
+          "complete\n",
+        );
+        await expect(fs.readdir(replacementDir)).resolves.toEqual([]);
+      });
+    },
+  );
+
+  it("retains recovery files when publication and rollback both fail", async () => {
+    await withTestDir({ prefix: "openclaw-update-clone-rollback-" }, async (base) => {
+      const checkoutDir = path.join(base, "openclaw");
+      await fs.mkdir(checkoutDir);
+      runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+        const stagingDir = cloneTarget(argv);
+        await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+        await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+        return successfulCommandResult;
+      });
+
+      const realRename = fs.rename.bind(fs);
+      const rename = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+        const oldName = path.basename(oldPath.toString());
+        const oldParent = path.dirname(oldPath.toString());
+        const newParent = path.dirname(newPath.toString());
+        if (oldName === ".git" && newParent === checkoutDir) {
+          throw new Error("injected publication failure");
+        }
+        if (oldName === "checkout.marker" && oldParent === checkoutDir) {
+          throw new Error("injected rollback failure");
+        }
+        await realRename(oldPath, newPath);
+      });
+
+      try {
+        await expect(
+          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
+        ).rejects.toThrow("recovery files remain");
+      } finally {
+        rename.mockRestore();
+      }
+
+      await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
+        "complete\n",
+      );
+      const recoveryDirs = (await fs.readdir(checkoutDir)).filter((entry) =>
+        entry.startsWith(".openclaw-clone-"),
+      );
+      expect(recoveryDirs).toHaveLength(1);
+      await expect(fs.stat(path.join(checkoutDir, recoveryDirs[0], ".git"))).resolves.toBeDefined();
     });
   });
 });

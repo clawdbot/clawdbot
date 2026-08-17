@@ -1349,10 +1349,18 @@ clone_git_checkout_transactionally() {
   local repo_url="$1"
   local repo_dir="$2"
 
-  local parent_dir staging_dir clone_status=0
+  local parent_dir staging_dir clone_status=0 preserve_repo_dir=0
   parent_dir="$(dirname "$repo_dir")"
   mkdir -p "$parent_dir"
-  staging_dir="$(mktemp -d "${parent_dir}/.openclaw-clone.XXXXXX")"
+  parent_dir="$(cd "$parent_dir" && pwd -P)"
+  if [[ -d "$repo_dir" && -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
+    preserve_repo_dir=1
+    repo_dir="$(cd "$repo_dir" && pwd -P)"
+    staging_dir="$(mktemp -d "${repo_dir}/.openclaw-clone.XXXXXX")"
+  else
+    repo_dir="${parent_dir}/$(basename "$repo_dir")"
+    staging_dir="$(mktemp -d "${parent_dir}/.openclaw-clone.XXXXXX")"
+  fi
   TMPFILES+=("$staging_dir")
 
   git clone "$repo_url" "$staging_dir" || clone_status=$?
@@ -1360,17 +1368,58 @@ clone_git_checkout_transactionally() {
     return "$clone_status"
   fi
 
-  if [[ -e "$repo_dir" || -L "$repo_dir" ]]; then
-    fail "Git install dir appeared while cloning: ${repo_dir}. The existing path was left unchanged; move it or choose another --git-dir, then retry."
-  fi
-
-  if ! node - "$staging_dir" "$repo_dir" <<'NODE'
+  if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
 const fs = require("node:fs");
-const [source, target] = process.argv.slice(2);
-fs.renameSync(source, target);
+const [source, target, preserveTarget] = process.argv.slice(2);
+if (preserveTarget === "0") {
+  try {
+    fs.lstatSync(target);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    fs.renameSync(source, target);
+    process.exit(0);
+  }
+  throw new Error(`Git install dir appeared while cloning: ${target}`);
+}
+const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
+if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
+  throw new Error(`Git install dir appeared while cloning: ${target}`);
+}
+const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
+const moved = [];
+try {
+  for (const entry of entries) {
+    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
+    moved.push(entry);
+  }
+} catch (error) {
+  const rollbackErrors = [];
+  for (const entry of moved.reverse()) {
+    try {
+      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+  }
+  if (rollbackErrors.length > 0) {
+    let recovery = source;
+    try {
+      recovery = `${source}.recovery`;
+      fs.renameSync(source, recovery);
+    } catch (recoveryError) {
+      rollbackErrors.push(recoveryError);
+      recovery = source;
+    }
+    throw new AggregateError(
+      [error, ...rollbackErrors],
+      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
+    );
+  }
+  throw error;
+}
 NODE
   then
-    fail "Could not publish the cloned checkout: ${repo_dir}. The existing path, if any, was left unchanged; move it or choose another --git-dir, then retry."
+    fail "Could not publish the cloned checkout: ${repo_dir}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
   fi
 }
 
@@ -1408,7 +1457,7 @@ install_openclaw_from_git() {
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
       emit_json '{"event":"step","name":"git-clone","status":"start"}'
-      git clone "$repo_url" "$repo_dir"
+      clone_git_checkout_transactionally "$repo_url" "$repo_dir"
       emit_json '{"event":"step","name":"git-clone","status":"ok"}'
       fresh_checkout=1
     else

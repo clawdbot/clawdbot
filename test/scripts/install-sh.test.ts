@@ -404,6 +404,11 @@ NODE
           mkdir -p "$CONCURRENT_REPO"
           printf 'keep\\n' > "$CONCURRENT_REPO/user.marker"
         fi
+        if [[ "$CLONE_MODE" == "retarget-alias" ]]; then
+          [[ "$(dirname "$target")" == "$ALIAS_TARGET" ]]
+          rm "$ALIAS_PATH"
+          ln -s "$ALIAS_REPLACEMENT" "$ALIAS_PATH"
+        fi
       }
 
       CLONE_MODE=success
@@ -419,6 +424,16 @@ NODE
       set -e
       [[ "$failure_status" -eq 42 ]]
       [[ ! -e "$failed_repo" ]]
+
+      CLONE_MODE=retarget-alias
+      ALIAS_TARGET="$root/alias-target"
+      ALIAS_REPLACEMENT="$root/alias-replacement"
+      ALIAS_PATH="$root/alias"
+      mkdir -p "$ALIAS_TARGET" "$ALIAS_REPLACEMENT"
+      ln -s "$ALIAS_TARGET" "$ALIAS_PATH"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$ALIAS_PATH"
+      [[ -f "$ALIAS_TARGET/checkout.marker" ]]
+      [[ -z "$(ls -A "$ALIAS_REPLACEMENT")" ]]
 
       CLONE_MODE=concurrent
       CONCURRENT_REPO="$root/concurrent"
@@ -1079,6 +1094,7 @@ NODE
       set -euo pipefail
       source "${SCRIPT_PATH}"
       repo="$HOME/openclaw"
+      mkdir -p "$repo"
       check_git() { return 0; }
       ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }

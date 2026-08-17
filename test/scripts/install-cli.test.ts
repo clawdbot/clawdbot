@@ -222,6 +222,51 @@ describe("install-cli.sh", () => {
     expect(result.status).toBe(0);
   });
 
+  it("keeps a pre-existing empty Git install destination retryable after clone failure", () => {
+    const root = tempDirs.make("openclaw-install-cli-empty-retry-");
+    const repo = join(root, "openclaw");
+    mkdirSync(repo);
+    const runAttempt = (cloneMode: "failure" | "success") =>
+      runInstallCliShell(
+        `
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        ensure_git() { :; }
+        ensure_pnpm() { :; }
+        ensure_pnpm_binary_for_scripts() { :; }
+        resolve_git_openclaw_ref() { printf 'main\\n'; }
+        checkout_git_openclaw_ref() { :; }
+        cleanup_legacy_submodules() { :; }
+        ensure_pnpm_git_prepare_allowlist() { :; }
+        activate_repo_pnpm_version() { :; }
+        git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
+        run_pnpm() { :; }
+        git() {
+          if [[ "$1" == "clone" ]]; then
+            target="\${*: -1}"
+            mkdir -p "$target/.git"
+            if [[ "$CLONE_MODE" == "failure" ]]; then
+              return 42
+            fi
+            printf 'complete\\n' > "$target/checkout.marker"
+          fi
+          return 0
+        }
+        install_openclaw_from_git "$REPO"
+      `,
+        { CLONE_MODE: cloneMode, REPO: repo },
+      );
+
+    const failed = runAttempt("failure");
+    expect(failed.status, failed.stderr || failed.stdout).toBe(42);
+    expect(existsSync(repo)).toBe(true);
+    expect(readdirSync(repo)).toEqual([]);
+
+    const succeeded = runAttempt("success");
+    expect(succeeded.status, succeeded.stderr || succeeded.stdout).toBe(0);
+    expect(readFileSync(join(repo, "checkout.marker"), "utf8")).toBe("complete\n");
+  });
+
   it("publishes fresh Git clones only after success and cleans failed staging directories", () => {
     const root = tempDirs.make("openclaw-install-cli-transactional-clone-");
     const result = runInstallCliShell(
@@ -240,6 +285,11 @@ describe("install-cli.sh", () => {
           mkdir -p "$CONCURRENT_REPO"
           printf 'keep\\n' > "$CONCURRENT_REPO/user.marker"
         fi
+        if [[ "$CLONE_MODE" == "retarget-alias" ]]; then
+          [[ "$(dirname "$target")" == "$ALIAS_TARGET" ]]
+          rm "$ALIAS_PATH"
+          ln -s "$ALIAS_REPLACEMENT" "$ALIAS_PATH"
+        fi
       }
 
       CLONE_MODE=success
@@ -255,6 +305,16 @@ describe("install-cli.sh", () => {
       set -e
       [[ "$failure_status" -eq 42 ]]
       [[ ! -e "$failed_repo" ]]
+
+      CLONE_MODE=retarget-alias
+      ALIAS_TARGET="$root/alias-target"
+      ALIAS_REPLACEMENT="$root/alias-replacement"
+      ALIAS_PATH="$root/alias"
+      mkdir -p "$ALIAS_TARGET" "$ALIAS_REPLACEMENT"
+      ln -s "$ALIAS_TARGET" "$ALIAS_PATH"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$ALIAS_PATH"
+      [[ -f "$ALIAS_TARGET/checkout.marker" ]]
+      [[ -z "$(ls -A "$ALIAS_REPLACEMENT")" ]]
 
       CLONE_MODE=concurrent
       CONCURRENT_REPO="$root/concurrent"

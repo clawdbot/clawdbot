@@ -1478,31 +1478,89 @@ function Assert-GitCheckoutHasCommit {
     }
 }
 
-function New-TransactionalGitCheckout {
-    param(
-        [string]$RepoUrl,
-        [string]$RepoDir
-    )
+function Resolve-PhysicalDirectoryPath {
+    param([string]$Path)
+
+    $resolved = & node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' $Path
+    if ($LASTEXITCODE -ne 0 -or -not $resolved) {
+        throw "Could not resolve directory path: $Path"
+    }
+    return [string]$resolved
+}
+
+function Resolve-GitCheckoutPath {
+    param([string]$RepoDir)
 
     $parentDir = Split-Path -Parent $RepoDir
     if (-not $parentDir) {
         $parentDir = (Get-Location).Path
     }
     New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
-    $stagingDir = Join-Path $parentDir (".openclaw-clone-" + [guid]::NewGuid().ToString("N"))
+    $parentDir = Resolve-PhysicalDirectoryPath -Path $parentDir
+    $repoEntry = Get-Item -LiteralPath $RepoDir -Force -ErrorAction SilentlyContinue
+    if ($repoEntry -and $repoEntry.PSIsContainer) {
+        return (Resolve-PhysicalDirectoryPath -Path $RepoDir)
+    }
+    return (Join-Path $parentDir (Split-Path -Leaf $RepoDir))
+}
+
+function New-TransactionalGitCheckout {
+    param(
+        [string]$RepoUrl,
+        [string]$RepoDir
+    )
+
+    $RepoDir = Resolve-GitCheckoutPath -RepoDir $RepoDir
+    $parentDir = Split-Path -Parent $RepoDir
+    $preserveRepoDir = (Test-Path -LiteralPath $RepoDir -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $RepoDir -Force).Count -eq 0
+    $stagingParent = if ($preserveRepoDir) { $RepoDir } else { $parentDir }
+    $stagingDir = Join-Path $stagingParent (".openclaw-clone-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $stagingDir | Out-Null
+    $retainStaging = $false
 
     try {
         git clone $RepoUrl $stagingDir
         if ($LASTEXITCODE -ne 0) {
             throw "git clone failed with exit code $LASTEXITCODE"
         }
-        if (Test-Path -LiteralPath $RepoDir) {
+        $destinationEntry = Get-Item -LiteralPath $RepoDir -Force -ErrorAction SilentlyContinue
+        if (-not $preserveRepoDir -and $destinationEntry) {
             throw "Git install dir appeared while cloning: $RepoDir. The existing path was left unchanged; move it or choose another -GitDir, then retry."
         }
-        [System.IO.Directory]::Move($stagingDir, $RepoDir)
+        if (-not $preserveRepoDir) {
+            [System.IO.Directory]::Move($stagingDir, $RepoDir)
+        } else {
+            $destinationEntries = @(Get-ChildItem -LiteralPath $RepoDir -Force)
+            if ($destinationEntries.Count -ne 1 -or $destinationEntries[0].Name -ne (Split-Path -Leaf $stagingDir)) {
+                throw "Git install dir changed while cloning: $RepoDir. The existing path was left unchanged; move it or choose another -GitDir, then retry."
+            }
+            $entries = @(Get-ChildItem -LiteralPath $stagingDir -Force | Sort-Object { if ($_.Name -eq ".git") { 1 } else { 0 } })
+            $moved = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
+            try {
+                foreach ($entry in $entries) {
+                    Move-Item -LiteralPath $entry.FullName -Destination $RepoDir -ErrorAction Stop
+                    $moved.Add($entry)
+                }
+            } catch {
+                $publicationError = $_.Exception
+                $rollbackErrors = [System.Collections.Generic.List[System.Exception]]::new()
+                for ($i = $moved.Count - 1; $i -ge 0; $i--) {
+                    try {
+                        Move-Item -LiteralPath (Join-Path $RepoDir $moved[$i].Name) -Destination $stagingDir -ErrorAction Stop
+                    } catch {
+                        $rollbackErrors.Add($_.Exception)
+                    }
+                }
+                if ($rollbackErrors.Count -gt 0) {
+                    $retainStaging = $true
+                    throw "Could not publish or fully roll back the cloned checkout at $RepoDir; recovery files remain at $stagingDir. $($publicationError.Message)"
+                }
+                throw $publicationError
+            }
+        }
     } finally {
-        if (Test-Path -LiteralPath $stagingDir) {
+        if (-not $retainStaging -and (Test-Path -LiteralPath $stagingDir)) {
             Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -1517,11 +1575,12 @@ function Install-OpenClawFromGit {
         return $false
     }
 
+    $RepoDir = Resolve-GitCheckoutPath -RepoDir $RepoDir
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
 
     Assert-GitCheckoutHasCommit -RepoDir $RepoDir
-    if (-not (Test-Path $RepoDir)) {
+    if (-not (Test-Path $RepoDir) -or @(Get-ChildItem -LiteralPath $RepoDir -Force).Count -eq 0) {
         New-TransactionalGitCheckout -RepoUrl $repoUrl -RepoDir $RepoDir
     }
 

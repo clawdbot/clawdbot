@@ -254,7 +254,14 @@ async function cloneGitCheckoutTransactionally(params: {
 }): Promise<UpdateStepResult> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
-  const stagingDir = await fs.mkdtemp(path.join(parentDir, ".openclaw-clone-"));
+  const canonicalParentDir = await fs.realpath(parentDir);
+  const preserveDir = (await pathExists(params.dir)) && (await isEmptyDir(params.dir));
+  const targetDir = preserveDir
+    ? await fs.realpath(params.dir)
+    : path.join(canonicalParentDir, path.basename(params.dir));
+  const stagingParent = preserveDir ? targetDir : canonicalParentDir;
+  const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  let cleanupStaging = true;
 
   try {
     const result = await runUpdateStep({
@@ -268,21 +275,64 @@ async function cloneGitCheckoutTransactionally(params: {
       return result;
     }
 
-    try {
-      await fs.lstat(params.dir);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
+    if (!preserveDir) {
+      try {
+        await fs.lstat(targetDir);
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        await fs.rename(stagingDir, targetDir);
+        return result;
       }
-      await fs.rename(stagingDir, params.dir);
-      return result;
     }
 
-    throw new Error(
-      `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+    if (!preserveDir) {
+      throw new Error(
+        `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+      );
+    }
+
+    const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
+    const destinationEntries = await fs.readdir(targetDir);
+    if (destinationEntries.sort().join("\0") !== expectedEntries.sort().join("\0")) {
+      throw new Error(
+        `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+      );
+    }
+
+    const entries = (await fs.readdir(stagingDir)).sort((a, b) =>
+      a === ".git" ? 1 : b === ".git" ? -1 : 0,
     );
+    const moved: string[] = [];
+    try {
+      for (const entry of entries) {
+        await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
+        moved.push(entry);
+      }
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      for (const entry of moved.reverse()) {
+        try {
+          await fs.rename(path.join(targetDir, entry), path.join(stagingDir, entry));
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        cleanupStaging = false;
+        throw new AggregateError(
+          [error, ...rollbackErrors],
+          `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
+        );
+      }
+      throw error;
+    }
+    return result;
   } finally {
-    await fs.rm(stagingDir, { recursive: true, force: true });
+    if (cleanupStaging) {
+      await fs.rm(stagingDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -312,10 +362,8 @@ export async function ensureGitCheckout(params: {
       );
     }
 
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
-      cwd: params.dir,
+    return await cloneGitCheckoutTransactionally({
+      dir: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
