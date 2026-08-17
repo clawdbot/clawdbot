@@ -23,6 +23,7 @@ import {
   optionalPositiveIntegerSchema,
 } from "../schema/typebox.js";
 import {
+  describeSessionLinkRule,
   describeSessionsListTool,
   describeSessionVisibilityScope,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -113,6 +114,11 @@ const SessionsListOutputSchema = Type.Object(
   {
     count: Type.Number(),
     sessions: Type.Array(SessionListRowOutputSchema),
+    sessionLinkRule: Type.Optional(
+      Type.String({
+        description: "How to build Control UI URLs for sessionKey values in this result.",
+      }),
+    ),
     visibility: Type.Optional(
       Type.Object(
         {
@@ -529,6 +535,9 @@ export function createSessionsListTool(opts?: {
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(opts?.sessionLinkBase
+          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+          : {}),
         ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },

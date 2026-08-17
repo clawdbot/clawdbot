@@ -16,6 +16,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
+  describeSessionLinkRule,
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
@@ -66,6 +67,11 @@ const SessionsHistoryOutputSchema = Type.Union([
       contentTruncated: Type.Boolean(),
       contentRedacted: Type.Boolean(),
       bytes: Type.Number(),
+      sessionLinkRule: Type.Optional(
+        Type.String({
+          description: "How to build Control UI URLs for sessionKey values in this result.",
+        }),
+      ),
       offset: Type.Optional(Type.Number()),
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
@@ -550,6 +556,9 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes,
+        ...(opts?.sessionLinkBase
+          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+          : {}),
         ...pagination,
       });
     },

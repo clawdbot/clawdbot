@@ -57,7 +57,7 @@ export function describeSessionVisibilityScope(
 
 type SessionLinkDescriptionOptions = { sessionLinkBase?: string };
 
-function describeSessionLinkLine(base: string): string {
+export function describeSessionLinkRule(base: string): string {
   return `When pointing the user at a session, cite its Control UI URL: main session -> \`${base}/chat/<agentId>\`; any other display session key -> \`${base}/chat/\` + key without leading \`agent:\`, with \`:\` replaced by \`/\`.`;
 }
 
@@ -67,7 +67,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
     "List visible sessions; filter kind/label/agentId/search/activity/archive.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
-    ...(options?.sessionLinkBase ? [describeSessionLinkLine(options.sessionLinkBase)] : []),
+    ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
@@ -76,7 +76,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
-    ...(options?.sessionLinkBase ? [describeSessionLinkLine(options.sessionLinkBase)] : []),
+    ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
@@ -85,7 +85,7 @@ export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptio
   return [
     "Search your own past sessions for matching user and assistant text.",
     "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
-    ...(options?.sessionLinkBase ? [describeSessionLinkLine(options.sessionLinkBase)] : []),
+    ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 

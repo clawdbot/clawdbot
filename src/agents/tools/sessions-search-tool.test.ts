@@ -10,10 +10,13 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
+const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
+const SESSION_LINK_RULE = describeSessionLinkRule(SESSION_LINK_BASE);
 
 function hit(overrides: Record<string, unknown> = {}) {
   return {
@@ -35,6 +38,7 @@ function createTool(params: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   requests?: CallGatewayRequest[];
+  sessionLinkBase?: string;
   truncated?: boolean;
 }) {
   const config = params.config ?? { tools: { sessions: { visibility: "self" } } };
@@ -49,6 +53,7 @@ function createTool(params: {
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    sessionLinkBase: params.sessionLinkBase,
     callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
       params.requests?.push(request);
       const results = params.results ?? [];
@@ -126,6 +131,10 @@ describe("sessions_search tool", () => {
   it("declares exact success and error result contracts", async () => {
     const tool = createTool({ results: [hit()] });
     const success = await tool.execute("success-contract", { query: "text" });
+    const linkedSuccess = await createTool({
+      results: [hit()],
+      sessionLinkBase: SESSION_LINK_BASE,
+    }).execute("linked-success-contract", { query: "text" });
     const error = await tool.execute("error-contract", {
       query: "text",
       sessionKey: "01234567-89ab-4def-8123-456789abcdef",
@@ -133,10 +142,12 @@ describe("sessions_search tool", () => {
 
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, success.details)).toBe(true);
+    expect(success.details).not.toHaveProperty("sessionLinkRule");
+    expect(linkedSuccess.details).toHaveProperty("sessionLinkRule", SESSION_LINK_RULE);
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; truncated?: true } | { error: string; status: "error" | "forbidden" }',
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; sessionLinkRule?: string; truncated?: true } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
