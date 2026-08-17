@@ -1399,6 +1399,59 @@ describe("session pull request refresh", () => {
 });
 
 describe("queued message edit page actions", () => {
+  it("invalidates after an inline command edit is rejected", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate, afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+    state.sessionKey = "main";
+    const unsubscribe = subscribeChatOutboxProjection(state as never);
+
+    try {
+      expect(
+        admitQueuedMessageForSession(state as never, "main", {
+          id: "queued-1",
+          text: "/stop",
+          createdAt: 1_000,
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        }),
+      ).toBe(true);
+      expect(beginQueuedMessageEdit(state as never, "queued-1")).toBe("started");
+
+      invalidate.mockClear();
+      state.submitQueuedChatMessageEdit();
+
+      expect(state.chatError).toContain("Queued-row edits cannot run commands or stop aliases");
+      expect(invalidate).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(invalidate).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("surfaces a peer edit conflict and invalidates the render", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const invalidate = vi.fn();

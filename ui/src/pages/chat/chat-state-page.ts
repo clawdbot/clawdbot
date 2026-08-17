@@ -360,10 +360,15 @@ export function createPageState(
     if (!edit) {
       return;
     }
-    void state.handleSendChat(edit.draftText, {
-      attachmentsOverride: [...edit.attachments],
-      resumeQueuedMessageEditId: edit.id,
-    });
+    void state
+      .handleSendChat(edit.draftText, {
+        attachmentsOverride: [...edit.attachments],
+        resumeQueuedMessageEditId: edit.id,
+      })
+      .then(
+        () => renderLifecycle.invalidate(),
+        () => renderLifecycle.invalidate(),
+      );
   };
   state.cancelQueuedChatMessageEdit = () => {
     cancelQueuedMessageEdit(state);
