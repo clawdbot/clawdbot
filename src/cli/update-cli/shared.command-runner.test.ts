@@ -347,7 +347,9 @@ describe("update CLI shared helpers", () => {
         entry.startsWith(".openclaw-clone-"),
       );
       expect(recoveryDirs).toHaveLength(1);
-      await expect(fs.stat(path.join(checkoutDir, recoveryDirs[0], ".git"))).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.join(checkoutDir, recoveryDirs[0]!, ".git")),
+      ).resolves.toBeDefined();
     });
   });
 });
