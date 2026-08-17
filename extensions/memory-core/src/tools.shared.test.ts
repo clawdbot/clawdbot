@@ -1,9 +1,10 @@
+import type { MemoryCorpusSearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
-  type MemoryCorpusSearchResult,
-  type MemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
+
+type MemoryCorpusSupplement = Parameters<typeof registerMemoryCorpusSupplement>[1];
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { searchMemoryCorpusSupplements } from "./tools.shared.js";
 
@@ -84,7 +85,7 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
 
     await expect(
       searchMemoryCorpusSupplements({ query: "anything", corpus: "all" }),
-    ).rejects.toThrow(/all corpus supplement searches failed: .*"bad-1": e1.*"bad-2": e2/);
+    ).rejects.toThrow(/all 2 corpus supplement searches failed: .*"bad-1": e1.*"bad-2": e2/);
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -183,5 +184,56 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
       messages.some((m) => m.includes('"string-throw"') && m.includes("raw string failure")),
     ).toBe(true);
     expect(messages.some((m) => m.includes('"object-throw"') && m.includes("ESUPP"))).toBe(true);
+  });
+
+  it("preserves sibling results when a rejection is a cyclic null-prototype value", async () => {
+    // Hostile shape: JSON.stringify throws (cycle) and String() throws (no
+    // Object.prototype), so a naive formatter would abort the settle loop and
+    // discard the fulfilled sibling.
+    registerMemoryCorpusSupplement(
+      "good",
+      buildSupplement(async () => [buildResult({ path: "wiki/a.md" })]),
+    );
+    registerMemoryCorpusSupplement(
+      "hostile",
+      buildSupplement(async () => {
+        const hostile: Record<string, unknown> = Object.create(null);
+        hostile.self = hostile;
+        // oxlint-disable-next-line typescript/only-throw-error -- testing hostile non-Error rejection
+        throw hostile;
+      }),
+    );
+
+    const out = await searchMemoryCorpusSupplements({ query: "x", corpus: "all" });
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.path).toBe("wiki/a.md");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the all-failed diagnostic to a capped sample plus count", async () => {
+    for (let i = 0; i < 6; i += 1) {
+      registerMemoryCorpusSupplement(
+        `bad-${i}`,
+        buildSupplement(async () => {
+          throw new Error(`failure ${i}: ${"x".repeat(10_000)}`);
+        }),
+      );
+    }
+
+    const error: unknown = await searchMemoryCorpusSupplements({
+      query: "anything",
+      corpus: "all",
+    }).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("all 6 corpus supplement searches failed");
+    expect(message).toContain("+3 more");
+    // 3 capped entries plus prefix; anything near the raw 60k concat is a leak.
+    expect(message.length).toBeLessThan(1_000);
   });
 });
