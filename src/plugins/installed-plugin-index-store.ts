@@ -508,10 +508,15 @@ function hasPolicyRefreshTargets(
 }
 
 function hasUnindexedInstalledPlugins(persisted: InstalledPluginIndex): boolean {
-  const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
+  const installOwners = new Set(
+    persisted.plugins
+      .map((plugin) => resolveInstalledPluginIndexInstallOwner(plugin))
+      .filter((installOwner): installOwner is string => installOwner !== undefined),
+  );
   return Object.entries(persisted.installRecords).some(
-    ([pluginId, record]) =>
-      !pluginIds.has(pluginId) && (record.source === "path" || record.source === "npm"),
+    ([installOwner, record]) =>
+      !installOwners.has(installOwner) &&
+      Boolean(record.installPath?.trim() || record.sourcePath?.trim()),
   );
 }
 

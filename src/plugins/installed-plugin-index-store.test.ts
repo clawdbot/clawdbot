@@ -26,6 +26,7 @@ import {
   writePersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndexWithLeaseSync,
 } from "./installed-plugin-index-store.js";
+import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -932,27 +933,75 @@ describe("installed plugin index persistence", () => {
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
 
-  it("rebuilds policy state when an installed plugin is missing from the persisted registry", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-    const installRecords = {
-      demo: {
-        source: "path",
-        installPath: pluginDir,
-        sourcePath: pluginDir,
-      },
-    };
+  it.each(["path", "npm", "git"] as const)(
+    "rebuilds policy state when an installed %s plugin is missing from the persisted registry",
+    async (source) => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "plugins", "demo");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      const candidate = createCandidate(pluginDir);
+      const installRecords = {
+        demo: { source, installPath: pluginDir },
+      } satisfies InstalledPluginIndex["installRecords"];
 
-    await writePersistedInstalledPluginIndex(createIndex({ installRecords, plugins: [] }), {
-      stateDir,
-    });
+      await writePersistedInstalledPluginIndex(createIndex({ installRecords, plugins: [] }), {
+        stateDir,
+      });
+
+      const refreshed = await refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        candidates: [candidate],
+        installRecords,
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+          OPENCLAW_VERSION: "2026.4.25",
+          VITEST: "true",
+        },
+      });
+
+      expectPluginIds(refreshed, ["demo"]);
+    },
+  );
+
+  it("keeps multi-entry installed packages on the policy refresh fast path", async () => {
+    const stateDir = makeTempDir();
+    const packageDir = path.join(stateDir, "plugins", "pack");
+    fs.mkdirSync(packageDir, { recursive: true });
+    const createPackagePlugin = (pluginId: string) =>
+      recordInstalledPluginIndexInstallOwner(
+        {
+          pluginId,
+          manifestPath: path.join(packageDir, `${pluginId}.json`),
+          manifestHash: "manifest-hash",
+          rootDir: packageDir,
+          origin: "global" as const,
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+        },
+        "pack",
+      );
+    const installRecords = {
+      pack: { source: "git", installPath: packageDir },
+    } satisfies InstalledPluginIndex["installRecords"];
+
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords,
+        plugins: [createPackagePlugin("pack/one"), createPackagePlugin("pack/two")],
+      }),
+      { stateDir },
+    );
 
     const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
-      candidates: [candidate],
+      candidates: [],
       installRecords,
       env: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -961,7 +1010,7 @@ describe("installed plugin index persistence", () => {
       },
     });
 
-    expectPluginIds(refreshed, ["demo"]);
+    expectPluginIds(refreshed, ["pack/one", "pack/two"]);
   });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
