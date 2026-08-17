@@ -15,6 +15,7 @@ import {
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveUserPath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -507,17 +508,22 @@ function hasPolicyRefreshTargets(
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 
-function hasUnindexedInstalledPlugins(persisted: InstalledPluginIndex): boolean {
+function hasUnindexedInstalledPlugins(
+  persisted: InstalledPluginIndex,
+  env: NodeJS.ProcessEnv,
+): boolean {
   const installOwners = new Set(
     persisted.plugins
       .map((plugin) => resolveInstalledPluginIndexInstallOwner(plugin))
       .filter((installOwner): installOwner is string => installOwner !== undefined),
   );
-  return Object.entries(persisted.installRecords).some(
-    ([installOwner, record]) =>
-      !installOwners.has(installOwner) &&
-      Boolean(record.installPath?.trim() || record.sourcePath?.trim()),
-  );
+  return Object.entries(persisted.installRecords).some(([installOwner, record]) => {
+    if (installOwners.has(installOwner)) {
+      return false;
+    }
+    const rawPath = record.installPath?.trim() || record.sourcePath?.trim();
+    return rawPath ? existsSync(resolveUserPath(rawPath, env)) : false;
+  });
 }
 
 function canRefreshPersistedPolicyState(
@@ -551,7 +557,7 @@ function canRefreshPersistedPolicyState(
   ) {
     return false;
   }
-  if (hasUnindexedInstalledPlugins(persisted)) {
+  if (hasUnindexedInstalledPlugins(persisted, env)) {
     return false;
   }
   return hasPolicyRefreshTargets(persisted, params.policyPluginIds);

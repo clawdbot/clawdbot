@@ -79,4 +79,21 @@ describe("installed plugin index policy refresh", () => {
     });
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toEqual(["pack/one", "pack/two"]);
   });
+
+  it("keeps orphan install records on the policy refresh fast path", async () => {
+    const stateDir = makeTrackedTempDir("openclaw-installed-plugin-policy", tempDirs);
+    const orphanPath = path.join(stateDir, "plugins", "removed-orphan");
+    const installRecords = {
+      orphaned: { source: "path", sourcePath: orphanPath, installPath: orphanPath },
+    } satisfies InstalledPluginIndex["installRecords"];
+    await writePersistedInstalledPluginIndex(createIndex(installRecords), { stateDir });
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [],
+      installRecords,
+      env,
+    });
+    expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+  });
 });
