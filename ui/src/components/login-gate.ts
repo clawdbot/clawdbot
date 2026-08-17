@@ -1,10 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI component renders the login gate.
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { t } from "../i18n/index.ts";
 import {
   resolveAuthHintKind,
@@ -280,12 +281,10 @@ function resolveLoginFailureFeedback(
   });
 }
 
-function refreshLoginGatePage() {
-  // The login gate blocks before the composer mounts, so there is no draft to preserve.
-  window.location.reload();
-}
-
-function renderLoginFailure(feedback: LoginFailureFeedback) {
+function renderLoginFailure(
+  feedback: LoginFailureFeedback,
+  refresh: { pending: boolean; failed: boolean; run: () => void },
+) {
   return html`
     <div
       class="callout danger login-gate__failure"
@@ -300,9 +299,14 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
             <button
               type="button"
               class="btn primary login-gate__failure-refresh"
-              @click=${refreshLoginGatePage}
+              ?disabled=${refresh.pending}
+              @click=${refresh.run}
             >
-              ${feedback.refreshAction.label}
+              ${refresh.pending
+                ? t("common.refreshing")
+                : refresh.failed
+                  ? t("common.retry")
+                  : feedback.refreshAction.label}
             </button>
           `
         : nothing}
@@ -324,7 +328,10 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
   `;
 }
 
-function renderLoginGate(props: LoginGateProps) {
+function renderLoginGate(
+  props: LoginGateProps,
+  refresh: { pending: boolean; failed: boolean; run: () => void },
+) {
   const basePath = normalizeBasePath(props.basePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", basePath);
   const failure = resolveLoginFailureFeedback({
@@ -439,7 +446,7 @@ function renderLoginGate(props: LoginGateProps) {
             ${t("common.connect")}
           </button>
         </div>
-        ${failure ? renderLoginFailure(failure) : ""}
+        ${failure ? renderLoginFailure(failure, refresh) : ""}
         <details class="login-gate__help">
           <summary class="login-gate__help-title">${t("connection.help.title")}</summary>
           <ol class="login-gate__steps">
@@ -464,9 +471,29 @@ function renderLoginGate(props: LoginGateProps) {
 
 class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
+  @state() private refreshPending = false;
+  @state() private refreshFailed = false;
+
+  private readonly refreshPage = () => {
+    if (this.refreshPending) {
+      return;
+    }
+    this.refreshPending = true;
+    this.refreshFailed = false;
+    void retryStaleChunkReloadWhenReachable().then((reloaded) => {
+      this.refreshPending = false;
+      this.refreshFailed = !reloaded;
+    });
+  };
 
   override render() {
-    return this.props ? renderLoginGate(this.props) : nothing;
+    return this.props
+      ? renderLoginGate(this.props, {
+          pending: this.refreshPending,
+          failed: this.refreshFailed,
+          run: this.refreshPage,
+        })
+      : nothing;
   }
 }
 
