@@ -105,25 +105,19 @@ export function createSubagentRegistryListener(config: {
           endedAt,
         });
         const classification = classifyAgentRunTerminalOutcome(terminalOutcome);
-        if (classification === "cancellation") {
-          pendingLifecycle.clear(evt.runId);
-          await completeSubagentRunWithRecovery(
-            {
-              runId: evt.runId,
-              endedAt,
-              outcome: {
-                status: "error",
-                error: "subagent run terminated",
-              },
-              reason: SUBAGENT_ENDED_REASON_KILLED,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-              startedAt,
-              terminalReply,
-            },
-            "lifecycle-killed-event",
-          );
+        if (
+          classification === "cancellation" &&
+          evt.data?.aborted === true &&
+          evt.data.stopReason === undefined &&
+          evt.data.status === undefined &&
+          evt.data.timeoutPhase === undefined
+        ) {
+          pendingLifecycle.scheduleCancellation({
+            runId: evt.runId,
+            endedAt,
+            startedAt,
+            terminalReply,
+          });
           return;
         }
         if (classification === "timeout") {
@@ -135,7 +129,7 @@ export function createSubagentRegistryListener(config: {
           });
           return;
         }
-        if (phase === "error") {
+        if (phase === "error" && classification === "failure") {
           pendingLifecycle.scheduleError({
             runId: evt.runId,
             endedAt,
@@ -145,7 +139,8 @@ export function createSubagentRegistryListener(config: {
           });
           return;
         }
-        if (classification === "failure") {
+        if (classification !== "success") {
+          const cancelled = classification === "cancellation";
           pendingLifecycle.clear(evt.runId);
           await completeSubagentRunWithRecovery(
             {
@@ -153,16 +148,16 @@ export function createSubagentRegistryListener(config: {
               endedAt,
               outcome: {
                 status: "error" as const,
-                error: terminalOutcome.error,
+                error: cancelled ? "subagent run terminated" : terminalOutcome.error,
               },
-              reason: SUBAGENT_ENDED_REASON_ERROR,
+              reason: cancelled ? SUBAGENT_ENDED_REASON_KILLED : SUBAGENT_ENDED_REASON_ERROR,
               sendFarewell: true,
               accountId: entry.requesterOrigin?.accountId,
               triggerCleanup: true,
               startedAt,
               terminalReply,
             },
-            `lifecycle-${terminalOutcome.reason}-event`,
+            cancelled ? "lifecycle-killed-event" : `lifecycle-${terminalOutcome.reason}-event`,
           );
           return;
         }

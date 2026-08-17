@@ -513,12 +513,12 @@ export function buildAgentRunTerminalOutcome(
   const abandoned = isAbandonedLivenessState(livenessState);
   const error = hardTimeout
     ? rawError
-    : blocked
-      ? formatBlockedLivenessError(rawError)
-      : aborted && !rawError
-        ? AGENT_RUN_ABORTED_ERROR
-        : superseded || aborted || cancelled
-          ? rawError
+    : aborted && !rawError
+      ? AGENT_RUN_ABORTED_ERROR
+      : superseded || aborted || cancelled
+        ? rawError
+        : blocked
+          ? formatBlockedLivenessError(rawError)
           : abandoned
             ? formatAbandonedLivenessError(rawError)
             : rawError;
@@ -526,12 +526,12 @@ export function buildAgentRunTerminalOutcome(
     ? "hard_timeout"
     : superseded
       ? "superseded"
-      : blocked
-        ? "blocked"
-        : aborted
-          ? "aborted"
-          : cancelled
-            ? "cancelled"
+      : aborted
+        ? "aborted"
+        : cancelled
+          ? "cancelled"
+          : blocked
+            ? "blocked"
             : abandoned
               ? "abandoned"
               : input.status === "timeout"

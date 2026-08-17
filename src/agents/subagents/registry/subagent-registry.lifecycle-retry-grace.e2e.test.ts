@@ -843,7 +843,7 @@ describe("subagent registry lifecycle error grace", () => {
     expect(run.completion?.capturedAt).toBeTypeOf("number");
   });
 
-  it("records a bare aborted end event as cancellation without a completion announcement", async () => {
+  it("records a bare aborted end event as cancellation after retry grace", async () => {
     registerCompletionRun("run-aborted", "aborted", "aborted test");
     setAssistantOutput("agent:main:subagent:aborted", "Partial output before cancellation");
 
@@ -855,6 +855,15 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     expect(getAgentCalls()).toHaveLength(0);
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === "run-aborted")?.execution.status,
+    ).toBe("running");
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAsync();
+
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-aborted");
@@ -862,6 +871,7 @@ describe("subagent registry lifecycle error grace", () => {
       endedReason: "subagent-killed",
       execution: { outcome: { status: "error", error: "subagent run terminated" } },
     });
+    expect(getAgentCalls()).toHaveLength(0);
   });
 
   it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {
