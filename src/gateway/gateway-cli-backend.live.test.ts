@@ -539,7 +539,7 @@ describeLive("gateway live (cli backend)", () => {
       }
 
       const cfg: OpenClawConfig = {};
-      const nextCfg = {
+      const nextCfg: OpenClawConfig = {
         ...cfg,
         ...(schemaProbePluginPath || CLI_CACHE_PROBE
           ? {
