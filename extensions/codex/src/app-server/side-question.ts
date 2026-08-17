@@ -299,7 +299,7 @@ export async function runCodexAppServerSideQuestion(
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     sideRunParams,
     params.sandbox ?? undefined,
-    { sandboxExecServerEnabled },
+    { agentId: sideRunParams.agentId, sandboxExecServerEnabled },
   );
   const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
     sandbox: params.sandbox ?? undefined,
@@ -310,6 +310,7 @@ export async function runCodexAppServerSideQuestion(
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
     sessionId: sideRunParams.sessionId,
+    agentId: sideRunParams.agentId,
     sandbox: params.sandbox,
     sandboxEnvironmentSelected: sandboxEnvironmentRequired,
     surface: "/btw side-question mode",

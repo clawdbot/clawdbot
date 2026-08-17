@@ -1,6 +1,5 @@
 import {
   resolveAgentConfig,
-  resolveDefaultAgentId,
   tryResolveDefaultAgentId,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
@@ -55,17 +54,18 @@ export function resolveCodexNativeExecutionPolicy(params: {
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
   const agentId = resolvePolicyAgentId({ config, sessionKey, agentId: params.agentId });
   const canReadSessionEntry =
+    Boolean(agentId) &&
     params.readRuntimeSessionEntry &&
-    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId: params.agentId });
+    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId });
   const sessionEntry =
     params.sessionEntry ??
-    (canReadSessionEntry && sessionKey
+    (canReadSessionEntry && sessionKey && agentId
       ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
       : undefined);
   const sandboxAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? agentId;
   const sandboxAvailable =
     params.sandboxAvailable ??
-    (sessionKey
+    (sessionKey && sandboxAgentId
       ? resolveSandboxRuntimeStatus({
           cfg: config,
           sessionKey,
@@ -73,7 +73,7 @@ export function resolveCodexNativeExecutionPolicy(params: {
           classificationAgentId: sandboxAgentId,
         }).sandboxed
       : false);
-  const agentExec = resolvePolicyAgentExec({ config, agentId });
+  const agentExec = agentId ? resolvePolicyAgentExec({ config, agentId }) : undefined;
   const globalExec = config.tools?.exec;
   const requestedExecHost =
     normalizeExecTarget(params.execOverrides?.host) ??
@@ -122,7 +122,7 @@ function resolvePolicyAgentId(params: {
   config: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
-}): string {
+}): string | undefined {
   const explicitAgentId = normalizeAgentIdOrDefault(params.agentId);
   if (explicitAgentId) {
     return explicitAgentId;
@@ -131,7 +131,7 @@ function resolvePolicyAgentId(params: {
   if (sessionAgentId) {
     return sessionAgentId;
   }
-  return resolveDefaultAgentId(params.config);
+  return tryResolveDefaultAgentId(params.config);
 }
 
 function resolvePolicyAgentExec(params: {

@@ -192,6 +192,31 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     expect(sessionStoreMocks.getSessionEntry).not.toHaveBeenCalled();
   });
 
+  it("uses global policy when an explicit multi-agent roster has no selected agent", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: { entries: { alpha: {}, beta: {} } },
+        },
+        sessionKey: "node-session",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+    expect(sessionStoreMocks.getSessionEntry).not.toHaveBeenCalled();
+  });
+
   it("honors agent exec config before global exec config", () => {
     expect(
       resolveCodexNativeExecutionPolicy({

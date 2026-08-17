@@ -439,6 +439,7 @@ async function compactCodexNativeThread(
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     sessionId: params.sessionId,
+    agentId: params.agentId,
     sandbox,
     surface: "native compaction",
   });
