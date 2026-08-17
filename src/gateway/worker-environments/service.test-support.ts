@@ -19,7 +19,11 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerEnvironmentStore,
+  type WorkerEnvironmentStore,
+  type WorkerEnvironmentTransitionPatch,
+} from "./store.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -292,7 +296,10 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
   });
 }
 
-export function readyPatch(environmentId: string, receipt = BOOTSTRAP_RECEIPT) {
+export function readyPatch(
+  environmentId: string,
+  receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
+) {
   return {
     bootstrapReceipt: receipt,
     credential: {

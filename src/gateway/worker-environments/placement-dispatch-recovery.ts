@@ -1,10 +1,10 @@
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import {
+  isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchPlacement,
-  type WorkerDrainingDispatchPlacement,
   type WorkerFailedDispatchPlacement,
   type WorkerStartingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
@@ -13,33 +13,6 @@ import {
   type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
 import type { WorkerEnvironmentService } from "./service.js";
-
-function supportsCurrentWorkerLaunch(
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-): boolean {
-  // A persisted bundle hash can still match a worker with an older launch shape.
-  // Require the admitted receipt so restart recovery never revives that contract.
-  return supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt);
-}
-
-function sameActiveEnvironment(
-  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-): boolean {
-  return Boolean(
-    environment &&
-    environment.state === "attached" &&
-    placement.environmentId &&
-    environment.environmentId === placement.environmentId &&
-    placement.activeOwnerEpoch !== null &&
-    environment.ownerEpoch === placement.activeOwnerEpoch &&
-    placement.workerBundleHash &&
-    environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
-    supportsCurrentWorkerLaunch(environment) &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
-  );
-}
 
 function isStartingPlacement(
   placement: WorkerDispatchPlacement,
@@ -114,7 +87,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       );
       return;
     }
-    if (!environment || !sameActiveEnvironment(placement, environment)) {
+    if (!environment || !isCurrentActiveWorkerEnvironment(placement, environment)) {
       await failure.reclaimActive(
         placement,
         environment,
@@ -155,7 +128,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       environment &&
       expectedBundle &&
       environment.bootstrapReceipt?.bundleHash === expectedBundle &&
-      supportsCurrentWorkerLaunch(environment) &&
+      supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) &&
       hasSyncedWorkspace;
     if (!canResume) {
       const error = new Error("Interrupted worker dispatch cannot safely resume");
@@ -282,7 +255,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         );
         continue;
       }
-      if (!sameActiveEnvironment(placement, environment)) {
+      if (!isCurrentActiveWorkerEnvironment(placement, environment)) {
         await failure.reclaimActive(
           placement,
           environment,
