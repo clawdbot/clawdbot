@@ -2609,16 +2609,24 @@ describe("exec approval handlers", () => {
 
   function getRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): { id: string; request: Record<string, unknown> } {
+  ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     if (!requested) {
       throw new Error("exec approval requested broadcast missing");
     }
-    const payload = requested.payload as { id?: unknown; request?: Record<string, unknown> };
+    const payload = requested.payload as {
+      approvalKind?: unknown;
+      id?: unknown;
+      request?: Record<string, unknown>;
+    };
+    if (payload.approvalKind !== "exec") {
+      throw new Error("exec approval requested kind missing");
+    }
     if (typeof payload.id !== "string" || payload.id.length === 0) {
       throw new Error("exec approval requested id missing");
     }
     return {
+      approvalKind: payload.approvalKind,
       id: payload.id,
       request: payload.request ?? {},
     };
@@ -2626,7 +2634,7 @@ describe("exec approval handlers", () => {
 
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): Promise<{ id: string; request: Record<string, unknown> }> {
+  ): Promise<{ approvalKind: "exec"; id: string; request: Record<string, unknown> }> {
     await waitForFast(
       () => {
         expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
@@ -3055,7 +3063,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(listRespond)).toBe(true);
     const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
     const approval = approvals.find((entry) => entry.id === "approval-list-1");
-    expectRecordFields(approval, { id: "approval-list-1" });
+    expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
     expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
     expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
 

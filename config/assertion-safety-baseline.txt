@@ -3195,9 +3195,7 @@ src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-bootstrap.ts	1
 src/infra/approval-handler-runtime.ts	15
-src/infra/approval-native-runtime.ts	1
 src/infra/approval-presentation.ts	3
-src/infra/approval-view-model.ts	6
 src/infra/backup-archive-publication.ts	6
 src/infra/backup-create-stream.ts	3
 src/infra/backup-create.ts	3
@@ -3508,10 +3506,9 @@ src/plugin-sdk/allowlist-config-edit.ts	6
 src/plugin-sdk/api-baseline-declaration-print.ts	1
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
-src/plugin-sdk/approval-handler-runtime.ts	2
+src/plugin-sdk/approval-handler-runtime.ts	1
 src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
-src/plugin-sdk/approval-reaction-runtime.ts	1
 src/plugin-sdk/channel-config-helpers.ts	24
 src/plugin-sdk/channel-config-ui-hints.ts	1
 src/plugin-sdk/channel-entry-contract.ts	6

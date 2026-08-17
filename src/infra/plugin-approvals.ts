@@ -36,6 +36,8 @@ export type PluginApprovalRequestPayload = {
 
 /** Timed plugin approval request persisted while awaiting a decision. */
 export type PluginApprovalRequest = {
+  /** Descriptive wire metadata; readers derive it from the payload when absent. */
+  approvalKind?: "plugin";
   id: string;
   request: PluginApprovalRequestPayload;
   createdAtMs: number;
