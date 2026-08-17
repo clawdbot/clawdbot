@@ -229,6 +229,7 @@ async function applyEnforcedMaintenance(params: {
   const archived = archiveStaleDashboardEntries(
     params.operation.store,
     params.maintenance.archiveDashboardAfterMs,
+    { preserveKeys: params.preserveSessionKeys },
   );
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
     onPruned: ({ entry }) => {

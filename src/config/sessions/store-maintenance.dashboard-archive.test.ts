@@ -21,10 +21,11 @@ function artifacts() {
 }
 
 describe("archiveStaleDashboardEntries", () => {
-  it("uses the latest activity signal", () => {
+  it("uses the latest activity signal and preserves active keys", () => {
     const now = 40 * DAY_MS;
     const staleKey = "agent:main:dashboard:stale";
     const activeKey = "agent:main:dashboard:active";
+    const preservedKey = "agent:main:dashboard:preserved";
     const store = {
       [staleKey]: entry(now - 10 * DAY_MS, {
         lastActivityAt: now - 9 * DAY_MS,
@@ -32,11 +33,18 @@ describe("archiveStaleDashboardEntries", () => {
         sessionStartedAt: now - 20 * DAY_MS,
       }),
       [activeKey]: entry(now - 10 * DAY_MS, { lastInteractionAt: now - DAY_MS }),
+      [preservedKey]: entry(now - 10 * DAY_MS),
     };
 
-    expect(archiveStaleDashboardEntries(store, 7 * DAY_MS, { nowMs: now })).toBe(1);
+    expect(
+      archiveStaleDashboardEntries(store, 7 * DAY_MS, {
+        nowMs: now,
+        preserveKeys: new Set([preservedKey]),
+      }),
+    ).toBe(1);
     expect(store[staleKey]?.archivedAt).toBe(now);
     expect(store[activeKey]?.archivedAt).toBeUndefined();
+    expect(store[preservedKey]?.archivedAt).toBeUndefined();
   });
 
   it("leaves pinned, archived, and non-dashboard sessions untouched", () => {

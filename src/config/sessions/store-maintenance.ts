@@ -425,7 +425,7 @@ function getSessionMaintenanceActivityAt(entry: SessionEntry | undefined): numbe
   );
 }
 
-/** Archive inactive dashboard sessions before stale-entry pruning and capping. */
+/** Archive inactive dashboard sessions while retaining runtime-owned or explicitly active keys. */
 export function archiveStaleDashboardEntries(
   store: Record<string, SessionEntry>,
   archiveAfterMs: number | null,
@@ -433,6 +433,7 @@ export function archiveStaleDashboardEntries(
     log?: boolean;
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
   if (archiveAfterMs == null || archiveAfterMs <= 0) {
@@ -446,7 +447,8 @@ export function archiveStaleDashboardEntries(
     if (
       !parsed?.rest.startsWith("dashboard:") ||
       entry.pinnedAt !== undefined ||
-      entry.archivedAt !== undefined
+      entry.archivedAt !== undefined ||
+      opts.preserveKeys?.has(key) === true
     ) {
       continue;
     }

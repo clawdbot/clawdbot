@@ -431,6 +431,7 @@ async function previewStoreCleanup(params: {
       onArchived: ({ key }) => {
         archivedKeys.add(key);
       },
+      preserveKeys: preserveSessionKeys,
     },
   );
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {

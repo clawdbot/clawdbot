@@ -171,6 +171,7 @@ export function applySessionEntryMaintenance(
       (key, entry) =>
         archiveStaleDashboardEntries({ [key]: entry }, maintenance.archiveDashboardAfterMs, {
           log: false,
+          preserveKeys: preserveCandidateKeys,
         }) > 0,
     );
   const shouldMaintainStore =
@@ -238,6 +239,7 @@ export function applySessionEntryMaintenance(
     onArchived: ({ key, entry }) => {
       writeSessionEntry(database, key, entry);
     },
+    preserveKeys,
   });
   let pruned = 0;
   if (
