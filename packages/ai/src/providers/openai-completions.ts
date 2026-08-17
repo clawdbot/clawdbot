@@ -381,6 +381,16 @@ export const streamOpenAICompletions: StreamFunction<
         finishBlock(textBlock);
         textBlock = null;
       };
+      const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
+        if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
+          reasoningTagTextPartitioner.markStrict();
+        }
+        // Let following text finish syntax already owned by the Markdown
+        // parser; otherwise packet batching cannot erase a lane boundary.
+        if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
+          sealTextBeforeReasoning();
+        }
+      };
 
       const guardedOpenaiStream = withFirstStreamEventTimeout(hookedOpenAIStream, {
         provider: model.provider,
@@ -476,12 +486,7 @@ export const streamOpenAICompletions: StreamFunction<
             );
             const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
             if (foundReasoningField) {
-              reasoningTagTextPartitioner.markStrict();
-              // Let same-chunk text finish syntax already owned by the Markdown
-              // parser; otherwise packet batching cannot erase a lane boundary.
-              if (!hasSameChunkVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
-                sealTextBeforeReasoning();
-              }
+              beginReasoning(hasSameChunkVisibleText, true);
             }
             if (shouldEmitReasoning && foundReasoningField) {
               const delta = deltaFields[foundReasoningField];
@@ -493,11 +498,13 @@ export const streamOpenAICompletions: StreamFunction<
                 appendThinkingDelta(thinkingSignature, delta);
               }
             }
-            for (const contentDelta of contentDeltas) {
+            const lastVisibleTextIndex = contentDeltas.findLastIndex(
+              (delta) => delta.kind === "text",
+            );
+            for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
               if (contentDelta.kind === "thinking") {
-                if (reasoningTagTextPartitioner.hasPending()) {
-                  reasoningTagTextPartitioner.markStrict();
-                }
+                const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
+                beginReasoning(hasLaterVisibleText);
                 if (shouldEmitReasoning) {
                   appendThinkingDelta(contentDelta.signature, contentDelta.text);
                 }

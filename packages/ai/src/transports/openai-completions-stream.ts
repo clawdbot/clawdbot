@@ -337,6 +337,16 @@ export async function processCompletionsStream(
     }
     currentBlock = null;
   };
+  const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
+    if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
+      reasoningTagTextPartitioner.markStrict();
+    }
+    // Let following text finish syntax already owned by the Markdown
+    // parser; otherwise packet batching cannot erase a lane boundary.
+    if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
+      sealTextBeforeReasoning();
+    }
+  };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
     provider: model.provider,
@@ -400,9 +410,6 @@ export async function processCompletionsStream(
         compat.visibleReasoningDetailTypes,
       );
       const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
-      const hasDedicatedReasoning = reasoningDeltas.some(
-        (delta) => delta.kind === "thinking" && delta.signature !== "reasoning_details",
-      );
       // Share the content/refusal owner to avoid duplicate mirrored refusals.
       const contentDeltas = readOpenAICompletionsContentDeltas(
         choiceDelta.content,
@@ -411,17 +418,11 @@ export async function processCompletionsStream(
           .filter((reasoningDelta) => reasoningDelta.kind === "thinking")
           .map((reasoningDelta) => reasoningDelta.text),
       );
-      const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
+      const hasSameChunkVisibleText =
+        reasoningDeltas.some((delta) => delta.kind === "text") ||
+        contentDeltas.some((delta) => delta.kind === "text");
       if (hasMirroredReasoning) {
-        reasoningTagTextPartitioner.markStrict();
-        // Let same-chunk text finish syntax already owned by the Markdown
-        // parser; otherwise packet batching cannot erase a lane boundary.
-        if (
-          hasDedicatedReasoning &&
-          (!hasSameChunkVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax())
-        ) {
-          sealTextBeforeReasoning();
-        }
+        beginReasoning(hasSameChunkVisibleText, true);
       }
       const appendReasoningDeltas = () => {
         for (const reasoningDelta of reasoningDeltas) {
@@ -444,7 +445,8 @@ export async function processCompletionsStream(
       if (hasMirroredReasoning) {
         appendReasoningDeltas();
       }
-      for (const contentDelta of contentDeltas) {
+      const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
+      for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
           const routedDeltas = hasMirroredReasoning
             ? reasoningTagTextPartitioner.push(contentDelta.text)
@@ -453,9 +455,8 @@ export async function processCompletionsStream(
             appendPartitionedVisibleDelta(routedDelta);
           }
         } else {
-          if (reasoningTagTextPartitioner.hasPending()) {
-            reasoningTagTextPartitioner.markStrict();
-          }
+          const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
+          beginReasoning(hasLaterVisibleText);
           appendRoutedContentDelta(contentDelta);
         }
       }

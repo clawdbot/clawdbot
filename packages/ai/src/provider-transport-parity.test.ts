@@ -192,6 +192,14 @@ const openAiCoalescedReasoningChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiTypedReasoningChunks = [
+  makeOpenAiChunk({ content: { type: "reasoning", text: "First thought." } }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ content: { type: "reasoning", text: "Second thought." } }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({ reasoning_content: "First thought." }),
   makeOpenAiChunk({ content: "Answer." }),
@@ -468,6 +476,26 @@ describe("provider and transport observable parity fixtures", () => {
           },
         ]);
       }
+
+      const typedReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiTypedReasoningChunks,
+      );
+      expect(typedReasoningResult.terminal.content).toEqual([
+        { type: "thinking", thinking: "First thought." },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        { type: "thinking", thinking: "Second thought." },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
 
       const hiddenReasoningResult = await runOpenAi(
         implementation,
