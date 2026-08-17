@@ -20,6 +20,10 @@ scenario:
         allowFrom: ["*"]
     tools:
       alsoAllow: [message]
+    plugins:
+      entries:
+        memory-core:
+          enabled: false
     agents:
       entries:
         qa:
