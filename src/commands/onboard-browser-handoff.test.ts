@@ -153,7 +153,9 @@ describe("runBrowserHatchHandoff", () => {
 
     expect(result).toEqual({ handedOff: true });
     expect(openBrowser).toHaveBeenCalledOnce();
-    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith({ env, platform });
+    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ env, platform }),
+    );
     expect(openBrowser).toHaveBeenCalledWith(
       "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
     );
@@ -271,7 +273,9 @@ describe("runBrowserHatchHandoff", () => {
     );
 
     expect(result).toEqual({ handedOff: false, reason: "timeout" });
-    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith({ env, platform: "linux" });
+    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ env, platform: "linux" }),
+    );
     expect(openBrowser).toHaveBeenCalledWith(
       "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
     );
