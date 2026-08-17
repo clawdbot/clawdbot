@@ -275,8 +275,17 @@ sign_plain_item() {
   codesign_with_timestamp_retry --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
 }
 
+codesign_metadata_value() {
+  local target="$1" key="$2" metadata
+  metadata="$(codesign -dv --verbose=4 "$target" 2>&1)" || {
+    local rc=$?
+    return "$rc"
+  }
+  awk -F= -v key="$key" '$1 == key && !found { print $2; found = 1 }' <<<"$metadata"
+}
+
 team_id_for() {
-  codesign -dv --verbose=4 "$1" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}'
+  codesign_metadata_value "$1" TeamIdentifier
 }
 
 verify_team_ids() {
@@ -320,6 +329,9 @@ verify_team_ids() {
   fi
 }
 
+# Sign-time twin of verify_elevation_app in mac-elevation-host.sh, which asserts the same identity
+# invariants but requires an already notarized and stapled bundle. Dropping this check defers every
+# elevation identity failure until after an Apple notarization submission has been spent.
 verify_elevation_signature() {
   [[ "$SIGNING_VARIANT" == "elevation-host" ]] || return 0
 
@@ -331,7 +343,7 @@ verify_elevation_signature() {
   fi
 
   local authority
-  authority="$(codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')"
+  authority="$(codesign_metadata_value "$APP_BUNDLE" Authority)"
   if [[ "$authority" != "$ELEVATION_IDENTITY" ]]; then
     echo "ERROR: Elevation host requires '$ELEVATION_IDENTITY', got '${authority:-not set}'." >&2
     exit 1

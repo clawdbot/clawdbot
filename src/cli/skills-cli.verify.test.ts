@@ -66,6 +66,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
   fetchClawHubSkillCard: (...args: unknown[]) => mocks.fetchClawHubSkillCardMock(...args),
@@ -265,7 +266,11 @@ describe("skills verify CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: 'Skill "html" is not tracked from skills-sh:owner-b/repo-b/html.',
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: 'Skill "html" is not tracked from skills-sh:owner-b/repo-b/html.',
+      },
     });
     expect(mocks.runtimeErrors).toStrictEqual([]);
     expect(mocks.fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
@@ -284,7 +289,11 @@ describe("skills verify CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Error: ClawHub verification unavailable",
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "ClawHub verification unavailable",
+      },
     });
     expect(mocks.runtimeErrors).toStrictEqual([]);
   });

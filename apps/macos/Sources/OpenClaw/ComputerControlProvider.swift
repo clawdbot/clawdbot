@@ -1,8 +1,54 @@
 import Foundation
+import OpenClawProtocol
 
 enum ComputerControlProvider: String, CaseIterable, Sendable {
     case peekaboo
     case cua
+
+    static var peekabooComputerUseDescriptor: OpenClawProtocol.AnyCodable {
+        OpenClawProtocol.AnyCodable([
+            "contractVersion": 2,
+            "provider": [
+                "id": "peekaboo",
+                "label": "Peekaboo",
+                "generation": "peekaboo-v2:\(UUID().uuidString.lowercased())",
+            ],
+            "actions": [
+                "screenshot",
+                "left_click",
+                "right_click",
+                "middle_click",
+                "double_click",
+                "triple_click",
+                "mouse_move",
+                "left_click_drag",
+                "left_mouse_down",
+                "left_mouse_up",
+                "scroll",
+                "type",
+                "key",
+                "hold_key",
+                "list_apps",
+                "list_windows",
+                "get_accessibility_tree",
+                "get_cursor_position",
+                "get_window_state",
+                "launch_app",
+                "kill_app",
+                "bring_to_front",
+                "set_value",
+                "invoke_menu",
+            ],
+            "targets": ["screen", "window", "element"],
+            "deliveryModes": ["background", "foreground"],
+            "observations": ["image", "accessibility"],
+            "features": [
+                "recording": false,
+                "agentCursor": false,
+                "multiDisplay": true,
+            ],
+        ] as [String: Any])
+    }
 
     static func current(
         defaults: UserDefaults = AppDefaults.standard,
@@ -23,14 +69,19 @@ enum ComputerControlProvider: String, CaseIterable, Sendable {
     }
 }
 
-struct CuaDriverWorkerEndpoint: Equatable, Sendable {
+struct CuaDriverWorkerEndpoint: Encodable, Equatable, Sendable {
+    private let v = 1
     let socketPath: String
     let binaryPath: String
+
+    func environmentValue() throws -> String {
+        try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
+    }
 }
 
 enum CuaDriverWorkerEnvironment {
-    static let socketPath = "OPENCLAW_CUA_DRIVER_SOCKET_PATH"
-    static let binaryPath = "OPENCLAW_CUA_DRIVER_BINARY_PATH"
+    static let endpoint = "OPENCLAW_CUA_DRIVER_ENDPOINT"
+    static let inheritedFamilyPrefixes = [String(endpoint.dropLast("ENDPOINT".count)), "CUA_DRIVER_"]
 }
 
 enum CuaDriverArtifact {

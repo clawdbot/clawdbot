@@ -200,6 +200,17 @@ function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): Te
           class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
         >
           ${detailError}
+          <!-- The render-driven load skips errored tasks to avoid a per-paint
+               retry loop, so without this the panel dead-ends whenever the task
+               row that could re-open it is not on screen. -->
+          <button
+            class="chat-tasks-rail__task-inspector-retry"
+            type="button"
+            ?disabled=${detailLoading}
+            @click=${() => props.onLoadDetail?.(task)}
+          >
+            ${t("chat.backgroundTasks.detailRetry")}
+          </button>
         </div>`
       : nothing}
     <div class="chat-tasks-rail__detail-blocks">

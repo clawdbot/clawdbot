@@ -217,6 +217,38 @@ struct CuaDriverHostCoordinatorTests {
         await coordinator.setEnabled(false)
     }
 
+    @Test func `launch without an authoritative pid record never becomes ready`() async throws {
+        let root = self.shortTemporaryDirectory("launch-pidfile-failure")
+        let executable = try self.expectedExecutable(in: root, target: "/bin/sleep")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { executable },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                let socketIndex = try #require(launch.arguments.firstIndex(of: "--socket"))
+                let socketPath = try #require(launch.arguments.indices.contains(socketIndex + 1)
+                    ? launch.arguments[socketIndex + 1]
+                    : nil)
+                let pidFile = URL(fileURLWithPath: socketPath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("cua.pid")
+                try Data("incomplete".utf8).write(to: pidFile)
+                return launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true })
+
+        await coordinator.setEnabled(true)
+
+        #expect(coordinator.workerEndpoint == nil)
+        #expect(launcher.processes.count == 1)
+        #expect(launcher.processes.allSatisfy { !$0.isRunning })
+        await coordinator.setEnabled(false)
+        let cuaRoot = root.appendingPathComponent("OpenClaw/cua", isDirectory: true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cuaRoot.path).isEmpty)
+    }
+
     @Test func `startup refuses to signal a pid owned by another executable`() async throws {
         let root = self.shortTemporaryDirectory("startup-pid-reuse")
         let expectedExecutable = try self.expectedExecutable(in: root, target: "/bin/cat")
@@ -418,11 +450,13 @@ struct CuaDriverHostCoordinatorTests {
 
         await coordinator.setEnabled(true)
         let originalEndpoint = try #require(coordinator.workerEndpoint)
+        let originalEnvironmentValue = try originalEndpoint.environmentValue()
         permissions.value[.accessibility] = .granted
         notifications.post(name: .openclawPermissionsChanged, object: nil)
         #expect(await self.waitForReadyLaunch(2, launcher: launcher, coordinator: coordinator))
         let replacementEndpoint = try #require(coordinator.workerEndpoint)
         #expect(replacementEndpoint.socketPath != originalEndpoint.socketPath)
+        #expect(try replacementEndpoint.environmentValue() != originalEnvironmentValue)
         #expect(!launcher.processes[0].isRunning)
         await coordinator.setEnabled(false)
     }

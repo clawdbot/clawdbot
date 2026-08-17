@@ -18,7 +18,6 @@ type NodeWorkerCapacityOptions = {
   capacity?: number;
   capacityWaitMs?: number;
   onAvailabilityChanged?: (available: boolean) => void;
-  onTerminal?: () => void;
 };
 
 function capacityAbortReason(signal: AbortSignal): Error {
@@ -41,7 +40,6 @@ export class NodeWorkerCapacity {
   private readonly capacity: number;
   private readonly waitMs: number;
   private readonly onAvailabilityChanged?: (available: boolean) => void;
-  private readonly onTerminal?: () => void;
   private readonly waiters = new Set<() => void>();
   private readonly closeAbort = new AbortController();
   private availability?: boolean;
@@ -53,7 +51,6 @@ export class NodeWorkerCapacity {
     this.capacity = options.capacity ?? DEFAULT_WORKER_CAPACITY;
     this.waitMs = options.capacityWaitMs ?? DEFAULT_CAPACITY_WAIT_MS;
     this.onAvailabilityChanged = options.onAvailabilityChanged;
-    this.onTerminal = options.onTerminal;
     if (!Number.isSafeInteger(this.capacity) || this.capacity < 1) {
       throw new Error("node worker capacity must be a positive safe integer");
     }
@@ -117,7 +114,6 @@ export class NodeWorkerCapacity {
     const receipt = this.store.finish(params);
     if (notify && receipt.state !== "pending" && receipt.state !== "running") {
       this.changed();
-      this.onTerminal?.();
     }
     return receipt;
   }
@@ -128,7 +124,6 @@ export class NodeWorkerCapacity {
     const receipt = this.store.finishCancelled(params);
     if (receipt && receipt.state !== "pending" && receipt.state !== "running") {
       this.changed();
-      this.onTerminal?.();
     }
     return receipt;
   }

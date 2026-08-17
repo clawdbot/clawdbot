@@ -326,7 +326,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 key: target.canonicalKey,
                 compacted: trimResult.compacted,
                 ...(trimResult.compacted
-                  ? { archived: trimResult.archived, kept: trimResult.kept }
+                  ? { kept: trimResult.kept }
                   : "kept" in trimResult
                     ? { kept: trimResult.kept }
                     : { reason: "no transcript" }),

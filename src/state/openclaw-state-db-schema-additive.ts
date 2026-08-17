@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import {
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -105,6 +108,37 @@ export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
   `);
 }
 
+/**
+ * Same-version additive table, registered in LAZY_ADDITIVE_STATE_TABLES so
+ * existing v6 databases stay valid without it. Mirrors the canonical schema;
+ * a downgraded reader simply loses setup-completion reconciliation.
+ */
+export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+      setup_id TEXT NOT NULL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      device_name TEXT,
+      access TEXT NOT NULL,
+      completed_at_ms INTEGER NOT NULL,
+      delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+      retain_until_ms INTEGER NOT NULL
+    ) STRICT
+  `);
+}
+
+/** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
+export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
+  ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
+}
+
+/** Installs environment-owned node binding columns at first cloud enrollment use. */
+export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSync): void {
+  ensureDevicePairSetupCompletionSchema(database);
+  ensureColumn(database, "worker_environments", "node_setup_id TEXT");
+  ensureColumn(database, "worker_environments", "node_device_id TEXT");
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
@@ -186,9 +220,34 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
   `);
 }
 
+/**
+ * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
+ *
+ * These columns normally stay absent until their owning feature first writes
+ * them, and the persistent schema contract accepts that shape. The STRICT
+ * table rebuild is the one caller that cannot: it recreates each table from
+ * canonical SQL, which already declares these columns, so a database missing
+ * them fails the canonical column check and rolls the entire repair back.
+ * Ensuring them immediately before that rebuild matches the shape the rebuild
+ * produces anyway, and stays scoped to databases old enough to need it.
+ */
+export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
+}
+
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureWorkerSessionToolStateSchema(db);
-  for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
@@ -228,6 +287,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
+  ensureColumn(db, "node_host_config", "gateway_cloudflare_access_json TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");

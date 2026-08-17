@@ -149,8 +149,9 @@ describe("AppSidebar interleaved zone", () => {
     // Pinning is not a status, so it must not claim the row's one leading slot.
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
     const plain = sidebar.querySelector('[data-session-key="agent:main:plain"]');
-    expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
-    expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(row?.querySelector(".sidebar-session-indicator")?.innerHTML).toBe(
+      plain?.querySelector(".sidebar-session-indicator")?.innerHTML,
+    );
     expect(row?.querySelector(".nav-item__state")).toBeNull();
     expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
   });

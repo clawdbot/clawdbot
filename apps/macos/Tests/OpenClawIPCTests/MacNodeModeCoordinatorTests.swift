@@ -213,6 +213,21 @@ struct MacNodeModeCoordinatorTests {
         await coordinator.stopAndWait()
     }
 
+    @Test @MainActor func `ordinary gateway reconnect preserves the startup scoped worker`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        coordinator.enqueueRouteInvalidationForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        #expect(await worker.stops() == 0)
+        await coordinator.stopAndWait()
+    }
+
     @Test @MainActor func `terminal stop owns cleanup after coordinator release`() async {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
@@ -285,6 +300,27 @@ struct MacNodeModeCoordinatorTests {
 
         sleeper.release()
         await coordinator.waitForNodeHostWorkerRetryForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `queued failure from replaced worker does not penalize replacement`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+
+        // Generation zero belongs to the replaced process. Handle it only after
+        // the successor input is installed so the ordering is deterministic.
+        coordinator.handleNodeHostWorkerFailureForTesting(configurationGeneration: .zero)
+
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
         await coordinator.stopAndWait()
     }

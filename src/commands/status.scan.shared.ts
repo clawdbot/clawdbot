@@ -367,13 +367,11 @@ export async function resolveGatewayProbeSnapshot(params: {
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
-  serviceName?: string | null;
   controlUiBasePath?: string;
 }): string | null {
   const host = resolveTailscalePublishedHost({
     tailscaleMode: params.tailscaleMode,
     tailnetHost: params.tailscaleDns,
-    serviceName: params.serviceName,
   });
   return params.tailscaleMode !== "off" && host
     ? `https://${host}${normalizeControlUiBasePath(params.controlUiBasePath)}`
@@ -396,7 +394,12 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!memoryPlugin.enabled || !memoryPlugin.slot) {
     return null;
   }
-  const agentId = agentStatus.defaultId ?? "main";
+  const agentId = agentStatus.defaultId;
+  if (!agentId) {
+    // Memory is agent-scoped. An explicit fleet has no default owner, so status must not
+    // inspect an arbitrary first agent's database merely to populate a read-only summary.
+    return null;
+  }
 
   if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
     // Non-default memory slots are plugin-owned; ask the manager directly instead of checking built-in files.

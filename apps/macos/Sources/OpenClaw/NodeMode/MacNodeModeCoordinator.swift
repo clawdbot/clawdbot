@@ -130,8 +130,8 @@ final class MacNodeModeCoordinator: NSObject {
 
     override private convenience init() {
         let session = GatewayNodeSession()
-        let nodeHostWorker = MacNodeHostWorker(session: session) {
-            NotificationCenter.default.post(name: .openclawNodeHostWorkerFailed, object: nil)
+        let nodeHostWorker = MacNodeHostWorker(session: session) { generation in
+            NotificationCenter.default.post(name: .openclawNodeHostWorkerFailed, object: NSNumber(value: generation))
         }
         self.init(
             session: session,
@@ -259,7 +259,6 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     func prepareForCuaDaemonStop() async {
-        self.resetNodeHostWorkerRetryState()
         await self.enqueueRouteInvalidation(mode: .workerRestart).value
     }
 
@@ -279,7 +278,6 @@ final class MacNodeModeCoordinator: NSObject {
         self.endpointRefreshTask = nil
         self.reconnectProbeTask?.cancel()
         self.reconnectProbeTask = nil
-        self.resetNodeHostWorkerRetryState()
     }
 
     func setPreferredGatewayStableID(
@@ -380,6 +378,15 @@ final class MacNodeModeCoordinator: NSObject {
     private func enqueueRouteInvalidation(
         mode: RouteInvalidationMode) -> Task<Void, Never>
     {
+        // Worker replacement advances synchronously so a queued exit from the
+        // old process cannot revoke or consume retry budget from its successor.
+        switch mode {
+        case .workerRestart, .terminalStop:
+            self.nodeHostWorkerConfigurationGeneration &+= 1
+            self.resetNodeHostWorkerRetryState()
+        case .ordinaryDisconnect, .reconnectRefresh:
+            break
+        }
         self.revokeRouteAuthority()
         let invalidationGeneration = self.endpointAttemptGeneration
         let invalidatedRouteAuthorityGeneration = self.routeAuthorityGeneration
@@ -836,14 +843,16 @@ final class MacNodeModeCoordinator: NSObject {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
         let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(command: command),
-            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+            launch: MacNodeHostWorkerLaunch(
+                command: command,
+                configurationGeneration: self.nodeHostWorkerConfigurationGeneration))
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
     }
 
-    func handleNodeHostWorkerFailureForTesting() {
-        self.handleNodeHostWorkerFailure()
+    func handleNodeHostWorkerFailureForTesting(configurationGeneration: UInt64? = nil) {
+        self.handleNodeHostWorkerFailure(
+            configurationGeneration: configurationGeneration ?? self.nodeHostWorkerConfigurationGeneration)
     }
 
     func waitForNodeHostWorkerRetryForTesting() async {
@@ -866,9 +875,10 @@ final class MacNodeModeCoordinator: NSObject {
         }
     }
 
-    @objc private nonisolated func nodeHostWorkerFailed(_: Notification) {
+    @objc private nonisolated func nodeHostWorkerFailed(_ notification: Notification) {
+        guard let generation = (notification.object as? NSNumber)?.uint64Value else { return }
         Task { @MainActor [weak self] in
-            self?.handleNodeHostWorkerFailure()
+            self?.handleNodeHostWorkerFailure(configurationGeneration: generation)
         }
     }
 
@@ -880,11 +890,9 @@ final class MacNodeModeCoordinator: NSObject {
 
     @discardableResult
     private func handleNodeHostConfigurationChange() -> Task<Void, Never> {
-        self.nodeHostWorkerConfigurationGeneration &+= 1
-        self.resetNodeHostWorkerRetryState()
         // Worker code, plugin availability, and its manifest are startup-scoped.
         // Replace the process before reconnecting so updates cannot leave a stale route.
-        return self.enqueueRouteInvalidation(mode: .workerRestart)
+        self.enqueueRouteInvalidation(mode: .workerRestart)
     }
 }
 
@@ -928,6 +936,12 @@ extension MacNodeModeCoordinator {
         guard self.nodeHostWorkerRetryTask == nil else {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
+        if let activeInput = self.activeNodeHostWorkerInput {
+            // Worker launch metadata is startup-scoped. Route retries reuse it instead of
+            // repeating CLI and runtime discovery until an explicit restart resets state.
+            try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
+            return try await nodeHostWorker.start(launch: activeInput.launch)
+        }
         let launch: MacNodeHostWorkerLaunch
         do {
             if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
@@ -946,22 +960,21 @@ extension MacNodeModeCoordinator {
         }
         var workerEnvironment: [String: String] = [:]
         if provider == .cua, let endpoint = CuaDriverHostCoordinator.shared.workerEndpoint {
-            workerEnvironment[CuaDriverWorkerEnvironment.socketPath] = endpoint.socketPath
-            workerEnvironment[CuaDriverWorkerEnvironment.binaryPath] = endpoint.binaryPath
+            workerEnvironment[CuaDriverWorkerEnvironment.endpoint] = try endpoint.environmentValue()
         }
         let effectiveLaunch = MacNodeHostWorkerLaunch(
             command: launch.command,
             currentDirectoryURL: launch.currentDirectoryURL,
-            environment: workerEnvironment)
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: effectiveLaunch,
+            environment: workerEnvironment,
             configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+        let input = MacNodeHostWorkerRetryPolicy.Input(launch: effectiveLaunch)
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
         return try await nodeHostWorker.start(launch: effectiveLaunch)
     }
 
-    private func handleNodeHostWorkerFailure() {
+    private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {
+        guard configurationGeneration == self.nodeHostWorkerConfigurationGeneration else { return }
         guard let input = self.activeNodeHostWorkerInput else {
             self.logger.error("node-host worker exited without an active startup input")
             self.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
@@ -1256,11 +1269,13 @@ extension MacNodeModeCoordinator {
         commands: [String],
         workerManifest: MacNodeHostManifest?) -> OpenClawProtocol.AnyCodable?
     {
-        guard provider == .cua,
-              commands.contains(MacNodeScreenCommand.snapshot.rawValue),
+        guard commands.contains(MacNodeScreenCommand.snapshot.rawValue),
               commands.contains(OpenClawComputerCommand.act.rawValue)
         else { return nil }
-        return workerManifest?.computerUse
+        return switch provider {
+        case .peekaboo: ComputerControlProvider.peekabooComputerUseDescriptor
+        case .cua: workerManifest?.computerUse
+        }
     }
 
     nonisolated static func mergingUnique(_ primary: [String], _ additional: [String]) -> [String] {

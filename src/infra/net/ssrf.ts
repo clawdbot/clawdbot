@@ -1,6 +1,6 @@
 // SSRF policy helpers validate hostnames/IP literals, build pinned DNS lookups,
 // and create dispatcher policies for guarded network fetches.
-import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
+import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
   extractEmbeddedIpv4FromIpv6,
@@ -487,15 +487,6 @@ export function createPinnedLookup(params: {
     throw new Error(`Pinned lookup requires at least one address for ${params.hostname}`);
   }
   const fallback = params.fallback ?? dnsLookupCb;
-  const fallbackLookup = fallback as unknown as (
-    hostname: string,
-    callback: LookupCallback,
-  ) => void;
-  const fallbackWithOptions = fallback as unknown as (
-    hostname: string,
-    options: unknown,
-    callback: LookupCallback,
-  ) => void;
   const records = params.addresses.map((address) => ({
     address,
     family: address.includes(":") ? 6 : 4,
@@ -513,9 +504,12 @@ export function createPinnedLookup(params: {
     const normalized = normalizeHostname(host);
     if (!normalized || normalized !== normalizedHost) {
       if (typeof options === "function" || options === undefined) {
-        return fallbackLookup(host, cb);
+        return fallback(host, cb);
       }
-      return fallbackWithOptions(host, options, cb);
+      if (typeof options === "number") {
+        return fallback(host, options, cb);
+      }
+      return fallback(host, options as LookupOptions, cb);
     }
 
     const opts =

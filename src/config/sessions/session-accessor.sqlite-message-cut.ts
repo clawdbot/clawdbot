@@ -49,6 +49,7 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type MessageCut = {
+  status: "cut";
   editorText?: string;
   editorAttachments?: Array<{ mimeType: string; data: string }>;
   editorMediaRefs?: Array<{ path: string; contentType: string }>;
@@ -290,7 +291,7 @@ function mutateSqliteSessionAtMessageInTransaction(
   }
   const events = loadTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
-  if (cut && "status" in cut) {
+  if (cut && cut.status !== "cut") {
     return cut;
   }
   if (params.mode === "switch") {
@@ -311,7 +312,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     sessionId: nextSessionId,
   });
   const nextEvents =
-    params.mode === "fork" && cut && !("status" in cut)
+    params.mode === "fork" && cut?.status === "cut"
       ? [header, ...cut.prefix]
       : [
           header,
@@ -354,11 +355,11 @@ function mutateSqliteSessionAtMessageInTransaction(
     status: "created",
     key: params.targetKey,
     entry: nextEntry,
-    ...(cut && !("status" in cut) && cut.editorText ? { editorText: cut.editorText } : {}),
-    ...(cut && !("status" in cut) && cut.editorAttachments
+    ...(cut?.status === "cut" && cut.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut?.status === "cut" && cut.editorAttachments
       ? { editorAttachments: cut.editorAttachments }
       : {}),
-    ...(cut && !("status" in cut) && cut.editorMediaRefs
+    ...(cut?.status === "cut" && cut.editorMediaRefs
       ? { editorMediaRefs: cut.editorMediaRefs }
       : {}),
   };
@@ -482,6 +483,7 @@ function resolveMessageCut(
   const editorAttachments = extractEditorAttachments(message.content);
   const editorMediaRefs = extractEditorMediaRefs(message);
   return {
+    status: "cut",
     editorText: extractEditorText(message.content),
     ...(editorAttachments ? { editorAttachments } : {}),
     ...(editorMediaRefs ? { editorMediaRefs } : {}),

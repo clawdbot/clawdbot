@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -45,6 +46,8 @@ export type PluginCliCommandGroupEntry = {
   names: readonly string[];
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
 };
+
+const log = createSubsystemLogger("plugins/cli-registry-loader");
 
 /** Creates the default plugin CLI logger shared with runtime loading. */
 export function createPluginCliLogger(): PluginLogger {
@@ -236,7 +239,11 @@ export async function loadPluginCliDescriptors(
         .filter((entry) => (entry.parentPath ?? []).length === 0)
         .map((entry) => entry.descriptors),
     );
-  } catch {
+  } catch (error) {
+    // Callers pass a muted per-plugin logger for descriptor scans; a total
+    // load failure still removes every plugin command from help/dispatch and
+    // must not vanish with it.
+    log.warn(`plugin CLI descriptor load failed: ${String(error)}`);
     return [];
   }
 }

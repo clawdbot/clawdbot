@@ -160,6 +160,15 @@ test("webchat session mutations follow operator scope policy", async () => {
       missingScope: "operator.admin",
     },
     {
+      method: "sessions.move",
+      params: {
+        key: "agent:main:main",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      missingScope: "operator.admin",
+    },
+    {
       method: "sessions.pluginPatch",
       params: {
         key: "agent:main:main",

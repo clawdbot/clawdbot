@@ -1,0 +1,32 @@
+title: Paired-device worker lifecycle wire
+
+scenario:
+  id: paired-node-worker-lifecycle-wire
+  surface: gateway
+  category: gateway.nodes-and-remote-capabilities
+  coverage:
+    secondary:
+      - gateway.node-inventory
+      - gateway.session-apis-session-status
+  objective: Prove paired-device worker faults stay retryable and isolated from Gateway-local work across the real signed node and worker-child wire.
+  successCriteria:
+    - A signed paired node handles private worker invocations through the real bundle installer, supervisor, workspace runtime, and worker child while a Gateway-local session remains usable.
+    - Bundle retention and status capability v1 expose only installed version or missing status through node.list and environments.list, then reinstall an exactly deleted proof bundle after same-identity reconnect.
+    - A pre-turn node disconnect produces a visible runner-offline recovery message, preserves the active placement for same-identity retry, and does not terminalize local work.
+    - Two held real worker children exhaust supervisor capacity 2; a third turn records a bounded capacity failure across RPC, history, and placement, then succeeds after one slot releases.
+    - Node-role removal reconciles the owned environment and placement before returning, fences the old node connection, and leaves Gateway-local execution available.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/gateway/cloud-workers.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/worker-environments/node-workspace-retain-coordinator.ts
+    - src/gateway/worker-environments/node-launch-adapter.ts
+    - src/gateway/device-worker-revocation.ts
+    - src/node-host/node-worker-bundle-installer.ts
+    - src/node-host/node-worker-supervisor.ts
+    - test/e2e/qa-lab/runtime/paired-node-worker-lifecycle-wire.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/paired-node-worker-lifecycle-wire.e2e.test.ts
+    summary: Start a real isolated Gateway, pair a signed node host, then prove bundle repair, offline retry, physical capacity recovery, role-removal fencing, and local-session isolation over the real worker wire.

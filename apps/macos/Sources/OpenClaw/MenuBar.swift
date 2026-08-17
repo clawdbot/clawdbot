@@ -9,7 +9,31 @@ import OSLog
 import Security
 import SwiftUI
 
+/// Routes private maintenance commands before SwiftUI constructs or activates the application.
 @main
+enum OpenClawProcessMain {
+    static func main() {
+        if let status = OpenClawProcessEntrypoint.run(arguments: CommandLine.arguments, launchApplication: {
+            OpenClawApp.main()
+        }) {
+            Darwin.exit(status)
+        }
+    }
+}
+
+enum OpenClawProcessEntrypoint {
+    static func run(arguments: [String], launchApplication: () -> Void) -> Int32? {
+        if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
+            return status
+        }
+        if let status = ElevationFilesystemSync.runIfRequested(arguments: arguments) {
+            return status
+        }
+        launchApplication()
+        return nil
+    }
+}
+
 struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.openWindow) private var openWindow
@@ -406,11 +430,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
+        // CUA shutdown drains the worker before closing the daemon socket; run it
+        // first so other cleanup cannot consume the app termination deadline.
+        await CuaDriverHostCoordinator.shared.shutdown()
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
-        // The worker owns the MCP proxy. Stop it before closing the app-owned
-        // daemon socket so an in-flight completion cannot be mistaken for retryable.
-        await CuaDriverHostCoordinator.shared.shutdown()
     }
 
     var peekabooBridgeTerminationCleanup: @MainActor () async -> Void = {

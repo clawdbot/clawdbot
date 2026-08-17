@@ -62,6 +62,61 @@ function cliAgentCatalog(startTerminal: boolean) {
 }
 
 suite.define(() => {
+  it("waits for the current roster before loading the CLI catalog", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "roboclaw",
+      assistantName: "Roboclaw",
+      cliAgentsEnabled: true,
+      defaultAgentId: "roboclaw",
+      deferredMethods: ["agents.list"],
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS],
+      methodResponses: {
+        "sessions.catalog.list": { catalogs: [cliAgentCatalog(false)] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("agents.list");
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+      expect(
+        (await gateway.getRequests("sessions.catalog.list"))
+          .filter((request) => requestHasParam(request, "limitPerHost", 1))
+          .map((request) => request.params),
+      ).toEqual([]);
+
+      await gateway.resolveDeferred("agents.list");
+
+      await page.getByRole("heading", { name: "Roboclaw" }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).filter((request) =>
+            requestHasParam(request, "limitPerHost", 1),
+          ),
+        )
+        .toHaveLength(1);
+      const catalogRequest = (await gateway.getRequests("sessions.catalog.list")).find((request) =>
+        requestHasParam(request, "limitPerHost", 1),
+      );
+      expect(catalogRequest?.params).toEqual({
+        agentId: "roboclaw",
+        limitPerHost: 1,
+      });
+
+      await page.locator('[data-chat-model-select="true"]').click();
+      const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
+      await expect.poll(() => cliGroup.isVisible()).toBe(true);
+      await pollLocatorText(cliGroup).toContain("Claude Code");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
     if (captureCliAgentsProof) {
       await mkdir(cliAgentsProofDir, { recursive: true });

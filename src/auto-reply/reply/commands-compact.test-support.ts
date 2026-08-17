@@ -17,7 +17,6 @@ vi.mock("./commands-compact.runtime.js", () => ({
   isCurrentSessionEntry: vi.fn(() => true),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
-  resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 

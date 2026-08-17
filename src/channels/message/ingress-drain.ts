@@ -26,8 +26,6 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
-export { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
-export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -41,6 +39,8 @@ import {
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
+export { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
+export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 
 /** Default claim→adoption stall before dead-lettering with handler-timeout. */
 export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;

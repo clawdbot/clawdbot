@@ -92,7 +92,6 @@ export const en = {
       remotePasswordMode: "How do you want to provide this gateway password?",
       remoteTokenMode: "How do you want to provide this gateway token?",
       tailscaleExposure: "Tailscale exposure",
-      tailscaleReset: "Reset Tailscale serve/funnel on exit?",
       tokenPlaceholder: "Needed for multi-machine or non-loopback access",
       tokenPrompt: "Gateway token",
       tokenPromptGenerate: "Gateway token (blank to generate)",
@@ -114,6 +113,8 @@ export const en = {
       cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
       enable: "Enable {shell} shell completion for {cli}?",
       installed: "Shell completion installed. {reloadHint}",
+      profileNotWritable:
+        "Shell completion was not changed: {profile} is not writable. Run `{command}` against a writable profile file.",
       reloadPowerShell: "Restart your shell or run: {command}",
       reloadShell: "Restart your shell or run: source {profile}",
       title: "Shell completion",
@@ -930,6 +931,13 @@ export const en = {
       outgoingWebhookPathKeep: "Outgoing webhook path set ({value}). Keep it?",
       outgoingWebhookPathPrompt: "Outgoing webhook path (optional)",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "Use the exact externally reachable HTTPS outgoing-webhook callback URL configured in Synology Chat.",
+      publicWebhookUrlKeep: "Public attachment webhook URL already configured. Keep it?",
+      publicWebhookUrlPrompt: "Public attachment webhook URL (optional)",
+      publicWebhookUrlScope:
+        "Expose only this webhook route; OpenClaw uses it for short-lived attachment downloads.",
+      publicWebhookUrlTitle: "Synology Chat public attachment route",
       setupTitle: "Synology Chat webhook setup",
       tokenEnvPrompt: "SYNOLOGY_CHAT_TOKEN detected. Use env var?",
       tokenInput: "Enter Synology Chat outgoing webhook token",
@@ -1140,6 +1148,10 @@ export const en = {
       healthCheckHelp: "Health check help",
       installGateway: "Install Gateway service (recommended)",
       laterTitle: "Later",
+      managedGatewaySetupFailed:
+        "The managed {service} setup failed: {error}\nInspect service state and logs: {statusCommand}\nRetry the managed service installation: {recoveryCommand}",
+      managedGatewayUnreachable:
+        "The managed {service} did not become reachable after setup.\nInspect service state and logs: {statusCommand}\nRetry the managed service: {recoveryCommand}",
       managedWebSearchSkipped: "Managed web search provider was skipped.",
       noBackgroundGatewayExpected:
         "Setup was run without Gateway service install, so no background gateway is expected.",

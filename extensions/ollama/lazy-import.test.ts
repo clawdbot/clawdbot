@@ -1,5 +1,5 @@
+import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type {
   AnyAgentTool,
   OpenClawPluginNodeHostCommand,
@@ -138,7 +138,7 @@ describe("ollama lazy imports", () => {
     });
 
     const { default: ollamaPlugin } = await import("./index.js");
-    let embeddingAdapter: MemoryEmbeddingProviderAdapter | undefined;
+    let embeddingAdapter: EmbeddingProviderAdapter | undefined;
     let mediaProvider: MediaUnderstandingProvider | undefined;
     const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
     const providers: ProviderPlugin[] = [];
@@ -151,7 +151,7 @@ describe("ollama lazy imports", () => {
         source: "test",
         config: {},
         runtime: createPluginRuntimeMock(),
-        registerMemoryEmbeddingProvider: (adapter) => {
+        registerEmbeddingProvider: (adapter) => {
           embeddingAdapter = adapter;
         },
         registerMediaUnderstandingProvider: (provider) => {

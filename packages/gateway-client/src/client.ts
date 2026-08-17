@@ -21,9 +21,13 @@ import {
 import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
-  normalizeFingerprint,
+  normalizeTlsFingerprint,
   normalizeGatewayErrorText,
 } from "./client-address-utils.js";
+import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "./cloudflare-access.js";
 import {
   buildGatewayConnectAuth,
   type GatewayConnectAuthSelection,
@@ -116,7 +120,7 @@ const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
   logDebug: () => {},
   logError: () => {},
   redactForLog: (message) => message,
-  normalizeTlsFingerprint: normalizeFingerprint,
+  normalizeTlsFingerprint,
 };
 
 function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayClientHostDeps> {
@@ -237,6 +241,8 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   origin?: string;
+  /** Closed Cloudflare Access service-token pair for this configured Gateway origin. */
+  cloudflareAccess?: CloudflareAccessCredentials;
   connectChallengeTimeoutMs?: number;
   /**
    * Server-side pre-auth handshake budget. Config-derived local clients use
@@ -258,6 +264,7 @@ export type GatewayClientOptions = {
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
+  clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
   mode?: GatewayClientMode;
@@ -266,6 +273,7 @@ export type GatewayClientOptions = {
   caps?: string[];
   commands?: string[];
   computerUse?: ConnectParams["computerUse"];
+  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
   workerRuns?: ConnectParams["workerRuns"];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
@@ -279,6 +287,8 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+  /** Report retryable startup closes for clients that present connection progress. */
+  notifyOnStartupRetry?: boolean;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -464,6 +474,7 @@ export class GatewayClient {
     caps: string[];
     commands: string[];
     computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
     workerRuns?: ConnectParams["workerRuns"];
   }): void {
     this.opts = {
@@ -490,6 +501,11 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
+    if (this.opts.cloudflareAccess && new URL(url).protocol !== "wss:") {
+      throw new GatewayWebSocketTransportConfigurationError(
+        "Cloudflare Access credentials require a wss:// Gateway URL",
+      );
+    }
     // Block plaintext before device-token lookup. Credentials may be loaded from
     // host storage later in sendConnect(), and chat payloads are sensitive too.
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
@@ -507,6 +523,12 @@ export class GatewayClient {
         maxPayload: 25 * 1024 * 1024,
         handshakeTimeout: handshakeTimeoutMs,
         ...(this.opts.origin ? { origin: this.opts.origin } : {}),
+        ...(this.opts.cloudflareAccess
+          ? {
+              followRedirects: false,
+              headers: buildCloudflareAccessHeaders(this.opts.cloudflareAccess),
+            }
+          : {}),
       },
     });
     this.deps.beforeConnect();
@@ -760,6 +782,7 @@ export class GatewayClient {
           id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
+          buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
           mode: clientMode,
@@ -1056,7 +1079,7 @@ export class GatewayClient {
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,
-        notify: false,
+        notify: this.opts.notifyOnStartupRetry === true,
         reconnectDelayMs: context.connectFailure.reconnectDelayMs,
       };
     }

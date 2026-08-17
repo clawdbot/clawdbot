@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -201,5 +202,44 @@ describe("applyClawAddPlan agent adoption", () => {
 
     expect(installPackages).not.toHaveBeenCalled();
     expect(readClawInstallRecord("worker", { env })).toEqual(resumeRecord);
+  });
+
+  it("keeps the adopted agent's own creation provenance", async () => {
+    const { root, plan, config } = await fixture();
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    recordAgentProvenance("worker", { createdVia: "operator" }, { env, nowMs: 1 });
+
+    const result = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      commitConfig: async (transform) => {
+        expect(transform(config)).toBe(config);
+      },
+    });
+
+    expect(result).toMatchObject({ status: "complete" });
+    expect(readAgentProvenance("worker", { env })).toMatchObject({
+      agentId: "worker",
+      createdVia: "operator",
+      createdAtMs: 1,
+    });
+  });
+
+  it("leaves an adopted agent without provenance unrecorded", async () => {
+    const { root, plan, config } = await fixture();
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+
+    const result = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      commitConfig: async (transform) => {
+        expect(transform(config)).toBe(config);
+      },
+    });
+
+    expect(result).toMatchObject({ status: "complete" });
+    expect(readAgentProvenance("worker", { env })).toBeUndefined();
   });
 });

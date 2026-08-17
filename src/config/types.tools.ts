@@ -532,7 +532,7 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
-  /** Structured update_plan checklist tool; enabled by default. Set false to opt out. */
+  /** Unified progress_card status tool; enabled by default. Set false to opt out. */
   updatePlan?: boolean;
 };
 

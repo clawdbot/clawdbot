@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
@@ -923,6 +924,12 @@ describe("applyClawAddPlan", () => {
     });
     expect(config.agents?.entries?.worker).toBeDefined();
     expect(readInstallRow("worker", root)?.status).toBe("complete");
+    expect(readAgentProvenance("worker", { env: stateEnv(root) })).toMatchObject({
+      agentId: "worker",
+      createdVia: "claw",
+      creatorAgentId: null,
+      createdAtMs: expect.any(Number),
+    });
   });
 
   it("recreates a missing workspace for a matching workspace-ready record", async () => {

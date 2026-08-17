@@ -45,7 +45,7 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null } },
+    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
     navigate,
     replace,
     agentSelection: {

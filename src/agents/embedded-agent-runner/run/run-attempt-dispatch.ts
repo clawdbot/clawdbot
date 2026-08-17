@@ -8,6 +8,8 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
+import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -33,6 +35,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 };
 
 type AttemptRuntime = {
+  contextEngineAgentId?: string;
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
@@ -43,6 +46,7 @@ type AttemptRuntime = {
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
+  authoredContextTokenCap?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
   prompt: string;
   provider: string;
@@ -202,6 +206,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         });
         return await prepareEmbeddedAttemptPromptExecution({
           attempt: { ...params, model: runtime.model },
+          mediaOwnerAgentId: workspace.sessionAgentId,
           effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
           effectiveWorkspace: workspace.effectiveWorkspace,
           prompt: "",
@@ -222,17 +227,31 @@ export async function dispatchEmbeddedRunAttempt(input: {
         })
       : undefined;
   const pluginSandbox = control.pluginHarnessOwnsTransport
-    ? await resolveSandboxContext({
+    ? ((await resolveSessionPlacementSandbox({
+        agentId: runtime.agentId,
+        config: params.config,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })) ??
+      (await resolveSandboxContext({
         config: params.config,
         sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
         workspaceDir: runtime.workspaceDir,
-      })
+      })))
     : undefined;
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
+  const execOverrides = params.permissionMode
+    ? {
+        ...params.execOverrides,
+        mode: resolveSessionPermissionExecMode({ mode: params.permissionMode }),
+      }
+    : params.execOverrides;
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -280,6 +299,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
@@ -288,10 +309,15 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextEngine
       ? {
           contextEngine: runtime.contextEngine,
-          contextTokenBudget: runtime.contextTokenBudget,
           contextWindowInfo: runtime.contextWindowInfo,
         }
       : {}),
+    ...(runtime.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(runtime.authoredContextTokenCap === undefined
+      ? {}
+      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
     skillsSnapshot: params.skillsSnapshot,
     prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
     transcriptPrompt:
@@ -374,7 +400,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     reasoningLevel: params.reasoningLevel,
     toolResultFormat: runtime.toolResultFormat,
     toolProgressDetail: params.toolProgressDetail,
-    execOverrides: params.execOverrides,
+    execOverrides,
     bashElevated: params.bashElevated,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
@@ -472,6 +498,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     sessionKey: runtime.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceLocal:
+      !params.messageChannel &&
+      !params.messageProvider &&
+      params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
+        ? true
+        : undefined,
     turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
     turnSourceAccountId: params.agentAccountId,
     turnSourceThreadId: params.currentThreadTs,

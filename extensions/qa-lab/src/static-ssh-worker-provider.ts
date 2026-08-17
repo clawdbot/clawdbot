@@ -70,6 +70,7 @@ function parseStaticSshWorkerSettings(profile: WorkerProfile): WorkerSshEndpoint
 export function createStaticSshWorkerProvider(): WorkerProvider {
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     async provision(profile, opId) {
       if (!opId.trim()) {
         throw new Error("static-ssh provision operation id must be non-empty");

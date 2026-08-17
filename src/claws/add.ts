@@ -11,11 +11,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { resolveUserPath } from "../utils.js";
 import {
   CLAW_ADD_RESULT_SCHEMA_VERSION,
   type ClawAddApplyOptions,
   type ClawAddResult,
+  partialResult,
 } from "./add-contract.js";
 import {
   hasUnsupportedMutationActions,
@@ -101,43 +103,6 @@ function assertWorkspacePathUnchanged(workspace: string): void {
       `Workspace ancestry changed after planning: expected ${JSON.stringify(workspace)}, resolved ${JSON.stringify(canonicalWorkspace)}.`,
     );
   }
-}
-
-function partialResult(params: {
-  plan: ClawAddPlan;
-  installRecord: PersistedClawInstall;
-  workspaceCreated: boolean;
-  configCommitted: boolean;
-  workspaceFiles?: PersistedClawWorkspaceFile[];
-  packages?: PersistedClawPackageRef[];
-  installStatus?: ClawInstallStatus;
-  mcpServers?: PersistedClawMcpServerRef[];
-  cronJobs?: PersistedClawCronRef[];
-  error: ClawAddResult["error"];
-  nowMs?: number;
-}): ClawAddResult {
-  return {
-    schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    dryRun: false,
-    mutationAllowed: true,
-    planIntegrity: params.plan.planIntegrity,
-    status: "partial",
-    claw: params.plan.claw,
-    agent: params.plan.agent,
-    workspaceCreated: params.workspaceCreated,
-    configCommitted: params.configCommitted,
-    workspaceFiles: params.workspaceFiles ?? [],
-    packages: params.packages ?? [],
-    mcpServers: params.mcpServers ?? [],
-    cronJobs: params.cronJobs ?? [],
-    installRecord: {
-      ...params.installRecord,
-      status: params.installStatus ?? "partial",
-      updatedAtMs: params.nowMs ?? Date.now(),
-    },
-    error: params.error,
-  };
 }
 
 export async function applyClawAddPlan(
@@ -569,6 +534,16 @@ export async function applyClawAddPlan(
       configCommitted = true;
       return nextConfig;
     });
+    // Creation provenance belongs to whoever created the agent. Adoption claims an agent the
+    // operator already made, so recording "claw" here would rewrite that origin and make a later
+    // remove treat pre-existing config as Claw-created.
+    if (!agentAdoption) {
+      try {
+        recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
+      } catch (error) {
+        throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
+      }
+    }
     if (options.resumePlan && installRecord.schemaVersion === "openclaw.clawInstallRecord.v1") {
       installRecord = persistRecord(plan, {
         ...options,

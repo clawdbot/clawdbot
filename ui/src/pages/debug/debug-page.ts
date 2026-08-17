@@ -8,6 +8,7 @@ import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -62,7 +63,7 @@ class DebugPage extends OpenClawLightDomElement {
     },
     onError: (error) => {
       this.diagnosticsTaskActiveClient = null;
-      this.debugDiagnosticsError = String(error);
+      this.debugDiagnosticsError = formatUiError(error);
     },
   });
   private readonly gateway = new GatewayPageController(this, {
@@ -173,7 +174,7 @@ class DebugPage extends OpenClawLightDomElement {
       }
     } catch (err) {
       if (isCurrent()) {
-        this.debugCallError = String(err);
+        this.debugCallError = formatUiError(err);
       }
     }
   }

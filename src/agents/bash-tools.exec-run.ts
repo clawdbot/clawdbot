@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
@@ -13,7 +14,10 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import {
+  rejectUnsafeExecControlShellCommand,
+  rejectUnsafeExecLiveStateSqliteShellCommand,
+} from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -65,6 +69,8 @@ import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
+
+type GatewayApprovalRevalidator = () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
@@ -201,6 +207,7 @@ export function createExecTool(
       }
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
+      let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       const foregroundFallbackWarning =
@@ -388,6 +395,12 @@ export function createExecTool(
       } else {
         workdir = workdirResolution.remoteCwd;
       }
+      if (host === "gateway" && workdir) {
+        await rejectUnsafeExecLiveStateSqliteShellCommand(params.command, {
+          stateDir: resolveStateDir(),
+          workdir,
+        });
+      }
       let run: ExecProcessHandle;
       let backgroundTask: BackgroundExecTaskHandle | null = null;
       let settledOutcome: ExecProcessOutcome | null = null;
@@ -525,10 +538,10 @@ export function createExecTool(
             return gatewayResult.deniedResult;
           }
           signal?.throwIfAborted();
-          execCommandOverride = gatewayResult.execCommandOverride;
-          if (gatewayResult.allowWithoutEnforcedCommand) {
-            execCommandOverride = undefined;
-          }
+          revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
+          execCommandOverride = gatewayResult.allowWithoutEnforcedCommand
+            ? undefined
+            : gatewayResult.execCommandOverride;
         }
 
         // Pending approvals have not started the command. Add fallback warnings only
@@ -550,6 +563,10 @@ export function createExecTool(
           });
         }
 
+        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
+        if (gatewayApprovalDenied) {
+          return gatewayApprovalDenied;
+        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,

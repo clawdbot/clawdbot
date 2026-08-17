@@ -17,7 +17,6 @@ vi.mock("./commands-compact.runtime.js", () => ({
   isCurrentSessionEntry: vi.fn(() => true),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
-  resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
@@ -120,53 +119,6 @@ describe("handleCompactCommand context budget", () => {
 
     expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(258_000);
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
-  });
-
-  it.each([
-    { globalCap: undefined, agentCap: undefined, expectedBudget: 1_000_000 },
-    { globalCap: 372_000, agentCap: 120_000, expectedBudget: 120_000 },
-    { globalCap: 120_000, agentCap: 372_000, expectedBudget: 372_000 },
-  ])("respects the target agent context cap (#117470)", async (testCase) => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "compacted",
-        firstKeptEntryId: "first-kept",
-        tokensBefore: 134_930,
-        tokensAfter: 56_000,
-      },
-    });
-
-    await handleCompactCommand(
-      {
-        ...buildCompactParams({
-          agents: {
-            ...(testCase.globalCap === undefined
-              ? {}
-              : { defaults: { contextTokens: testCase.globalCap } }),
-            ...(testCase.agentCap === undefined
-              ? {}
-              : { list: [{ id: "main", contextTokens: testCase.agentCap }] }),
-          },
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        provider: "claude-cli",
-        model: "claude-fable-5",
-        contextTokens: testCase.globalCap ?? 0,
-        sessionEntry: {
-          sessionId: "fable-session",
-          updatedAt: Date.now(),
-          contextTokens: 1_000_000,
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(
-      testCase.expectedBudget,
-    );
   });
 
   it("retains persisted context when an unknown custom model uses a legacy alias", async () => {

@@ -90,8 +90,13 @@ export function buildCodexAttemptResult(
   // A terminal timeout must not publish exact usage, but the timeout watcher
   // can still recover a completed assistant. Keep the snapshot masked until
   // recovery clears the abort instead of destroying it in markTimedOut().
-  const completedUsage = input.responseCompletions.usage ?? input.tokenUsage;
-  const projectedUsage = input.aborted ? input.tokenUsage : completedUsage;
+  const unavailableThreadUsage = input.tokenUsage
+    ? { ...input.tokenUsage, contextUsage: { state: "unavailable" } as const }
+    : undefined;
+  const completedUsage =
+    input.responseCompletions.usage ??
+    (input.responseCompletions.modelIterations > 0 ? unavailableThreadUsage : input.tokenUsage);
+  const projectedUsage = input.aborted ? unavailableThreadUsage : completedUsage;
   const hasAssistantItemText = input.assistantProjection.hasAssistantItemTextForSynthesis();
   const legacyFailClosed =
     !input.completedTurn || input.completedTurn.status !== "completed" || hasAssistantItemText;

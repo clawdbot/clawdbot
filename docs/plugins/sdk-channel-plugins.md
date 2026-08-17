@@ -296,6 +296,9 @@ the shared outbound loader. Hosted media capacity defaults to
 `overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
 issued URLs must remain valid until expiry, and configure both backing keyed
 stores with `"reject-new"` so independent writers cannot evict live rows.
+Use `validateBeforePersist` to inspect the guarded loader's exact bytes and
+metadata when a transport must reject a payload class. Treat its buffer as
+read-only and throw to reject before capability creation or any store write.
 Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
 so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
 
@@ -918,6 +921,14 @@ unrelated inbound runtime helpers.
     `principalId` is absent and an undefined result is reported as unverified.
     Diagnostics never invent a peer ID. Keep both callbacks pure and
     import-safe because read-only diagnostics run without channel runtime.
+
+    Channel-specific security diagnostics can use `security.collectWarnings`.
+    Legacy string results are warning severity. Return the structured
+    `SecurityAuditFinding` shape (`checkId`, `severity`, `title`, `detail`, and
+    optional `remediation`) when the producer must declare informational or
+    critical severity; the same finding is used by Doctor and the main security
+    audit. Use `collectAuditFindings` only for diagnostics that should appear in
+    the full security audit but not Doctor.
 
     <Accordion title="What createChatChannelPlugin does for you">
       Instead of implementing low-level adapter interfaces manually, you pass

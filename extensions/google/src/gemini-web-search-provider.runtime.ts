@@ -384,6 +384,7 @@ export async function executeGeminiSearch(
   searchConfig?: SearchConfigRecord,
   context?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  context?.signal?.throwIfAborted();
   const unsupportedResponse = buildUnsupportedSearchFilterResponse(
     {
       country: args.country,
@@ -458,6 +459,7 @@ export async function executeGeminiSearch(
     timeRangeFilter: timeRange.timeRangeFilter,
     headers,
   });
+  context?.signal?.throwIfAborted();
   const payload = {
     query,
     provider: "gemini",

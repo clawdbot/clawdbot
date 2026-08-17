@@ -36,4 +36,34 @@ describe("formatGatewayAuthFailureMessage", () => {
     );
     expect(truncateCloseReason(message)).toBe(message);
   });
+
+  it("tells rejected node hosts how to diagnose identity-header auth", () => {
+    expect(
+      formatGatewayAuthFailureMessage({
+        authMode: "trusted-proxy",
+        authProvided: "none",
+        reason: "trusted_proxy_missing_header_cf-access-jwt-assertion",
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+      }),
+    ).toBe(
+      "gateway rejected this node: trusted-proxy identity-header authentication is required and no usable machine credential was accepted; run `openclaw doctor` on the Gateway",
+    );
+  });
+
+  it("does not describe other trusted-proxy rejection causes as missing identity headers", () => {
+    expect(
+      formatGatewayAuthFailureMessage({
+        authMode: "trusted-proxy",
+        authProvided: "none",
+        reason: "trusted_proxy_local_interface_check_failed",
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+      }),
+    ).toBe("unauthorized");
+  });
 });

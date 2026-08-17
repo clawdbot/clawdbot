@@ -13,12 +13,7 @@ import {
 import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
-import {
-  getWorkboardState,
-  invalidateWorkboardLoads,
-  waitForWorkboardLifecycleWrites,
-  type WorkboardHost,
-} from "./runtime.ts";
+import { getWorkboardState, invalidateWorkboardLoads, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardStatus } from "./types.ts";
 
 const SESSION_CAPTURE_HISTORY_LIMIT = 40;
@@ -174,7 +169,6 @@ export async function captureSessionToWorkboard(params: {
   let captureStarted = false;
   try {
     if (!state.loaded) {
-      await waitForWorkboardLifecycleWrites(params.host);
       await loadWorkboard({
         host: params.host,
         client: params.client,

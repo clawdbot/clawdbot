@@ -1665,7 +1665,8 @@ describe("registerSlackInteractionEvents", () => {
           blocks: [
             {
               type: "section",
-              text: { type: "mrkdwn", text: "*Exec approval required*\nA command needs approval." },
+              block_id: "openclaw_approval_header",
+              text: { type: "mrkdwn", text: "Approval copy can change independently." },
             },
             { type: "section", text: { type: "mrkdwn", text: "Command preview" } },
             {

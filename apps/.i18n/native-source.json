@@ -6728,7 +6728,7 @@
       "surface": "android",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "conditional-branch",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
@@ -6741,6 +6741,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageActions.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.e5ad8016516600bb",
+      "source": "Fork from last completed message",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
     },
@@ -7937,6 +7948,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.dd92bd45c788a5ff",
+      "source": "Install",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt"
         }
       ]
     },
@@ -9444,6 +9466,10 @@
       "sites": [
         {
           "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
+        },
+        {
+          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
         }
       ]
@@ -9900,6 +9926,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
         }
       ]
     },
@@ -10431,6 +10461,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.241a4d3e017a094d",
+      "source": "Not scanned by ClawHub",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt"
         }
       ]
     },
@@ -14828,6 +14869,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
         }
       ]
     },
@@ -19025,17 +19070,6 @@
       ]
     },
     {
-      "id": "native.android.38f9916ba74e0c02",
-      "source": "assistant",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.37c430fb826c446f",
       "source": "audio",
       "surface": "android",
@@ -19330,17 +19364,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.348fed982b19bc08",
-      "source": "user",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt"
         }
       ]
     },
@@ -20542,6 +20565,17 @@
       ]
     },
     {
+      "id": "native.apple.1f848d6b8b8c9a5b",
+      "source": "Accessibility",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.dad3a39ff4502cb0",
       "source": "Accessibility access is required to attach text from \\(appName).",
       "surface": "apple",
@@ -20549,17 +20583,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/QuickChatFocusedTextCapture.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.c8aea204934bc72d",
-      "source": "Accessibility grant may be stale",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ComputerActionService.swift"
         }
       ]
     },
@@ -22692,6 +22715,10 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/ChannelsSettings+View.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         }
       ]
     },
@@ -23160,6 +23187,17 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.1b206a7a4565f60b",
+      "source": "CUA daemon",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         }
       ]
     },
@@ -24632,17 +24670,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/AgentAutomationDetailScreen.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.173d1e07a2d80eb6",
-      "source": "Computer Control access",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "ui-named-argument",
-          "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
         }
       ]
     },
@@ -26316,6 +26343,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.d52e4a1639df3cbd",
+      "source": "Could not install skill",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
         }
       ]
     },
@@ -29750,7 +29788,7 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/CommandCenterSupport.swift"
         },
         {
@@ -29775,6 +29813,29 @@
         {
           "kind": "ui-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.d6c01cfe9e53e179",
+      "source": "Fork from last completed message",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/CommandCenterSupport.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift"
         }
       ]
     },
@@ -30842,13 +30903,35 @@
       ]
     },
     {
+      "id": "native.apple.a32c9e42458c9b1c",
+      "source": "Grant OpenClaw in System Settings → Privacy & Security → Accessibility, then reopen it.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call-multiline",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.cdb8cc9716727acf",
+      "source": "Grant OpenClaw in System Settings → Privacy & Security → Screen Recording, then reopen it.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call-multiline",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.a2b0395080861914",
       "source": "Granted",
       "surface": "apple",
       "sites": [
         {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ComputerActionService.swift"
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         },
         {
           "kind": "ui-call",
@@ -31504,6 +31587,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        },
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift"
         }
       ]
     },
@@ -31644,10 +31731,6 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
-        },
-        {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift"
         },
         {
           "kind": "conditional-branch",
@@ -31937,6 +32020,17 @@
         {
           "kind": "conditional-branch",
           "path": "apps/ios/Sources/Design/SettingsProTabSections.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.cff202e57912738d",
+      "source": "Keep OpenClaw open while it checks the embedded CUA daemon.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         }
       ]
     },
@@ -33859,17 +33953,6 @@
       ]
     },
     {
-      "id": "native.apple.2f563e685fcd2e50",
-      "source": "Missing permission",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ComputerActionService.swift"
-        }
-      ]
-    },
-    {
       "id": "native.apple.b8b79ae74c5aa5ca",
       "source": "Missing: %@",
       "surface": "apple",
@@ -35714,6 +35797,17 @@
       ]
     },
     {
+      "id": "native.apple.e0a495b711628049",
+      "source": "Not granted",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.6141dea69ca38164",
       "source": "Not listening",
       "surface": "apple",
@@ -35762,6 +35856,36 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/RootSidebar.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.b4f3bc6fe500677b",
+      "source": "Not ready",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.76fcfd4a6613a4ee",
+      "source": "Not scanned by ClawHub",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift"
         }
       ]
     },
@@ -40748,6 +40872,17 @@
       ]
     },
     {
+      "id": "native.apple.bb3054116d83e716",
+      "source": "Reopen OpenClaw to retry the embedded CUA daemon.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.d103d60717e1d702",
       "source": "Repairing the OpenClaw Gateway update…",
       "surface": "apple",
@@ -41488,6 +41623,10 @@
         },
         {
           "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        },
+        {
+          "kind": "ui-localized-call",
           "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift"
         },
         {
@@ -41984,6 +42123,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         },
         {
           "kind": "conditional-branch",
@@ -42520,6 +42663,17 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.9c4ba1b5e037c818",
+      "source": "Screen Recording",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         }
       ]
     },
@@ -47797,6 +47951,10 @@
           "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift"
         },
         {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        },
+        {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
         },
@@ -47833,6 +47991,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         },
         {
           "kind": "conditional-branch",
@@ -48238,6 +48400,17 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.9fdb78560dae9056",
+      "source": "Use a packaged OpenClaw build that includes the CUA driver.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         }
       ]
     },

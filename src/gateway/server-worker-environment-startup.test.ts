@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -21,6 +23,35 @@ afterEach(() => {
 });
 
 describe("gateway worker environment startup", () => {
+  it("cleans transfer scratch before serving and removes it on shutdown", async () => {
+    const stateDir = tempDirs.make("openclaw-worker-transfer-startup-");
+    const transferRoot = path.join(stateDir, "tmp", "node-workspace-transfer");
+    const staleRoot = path.join(transferRoot, "context-stale");
+    await fs.mkdir(staleRoot, { recursive: true });
+    await fs.writeFile(path.join(staleRoot, "base.pack"), "stale");
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const startup = await loadGatewayWorkerEnvironmentStartupState();
+      const runtime = await createGatewayWorkerEnvironmentRuntime({
+        getPluginRegistry: () => ({ workerProviders: new Map() }),
+        resolveWorkerGateway: () => undefined,
+        desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+        startup,
+        log: { child: () => ({ warn: () => {} }) },
+      });
+      const service = runtime.workerEnvironmentService;
+      if (!service) {
+        throw new Error("worker environment service was not created");
+      }
+      try {
+        await expect(fs.readdir(transferRoot)).resolves.toEqual([]);
+      } finally {
+        await service.stop();
+      }
+      await expect(fs.stat(transferRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("binds device revocation to the persisted profile settings", async () => {
     const stateDir = tempDirs.make("openclaw-worker-startup-");
     try {
@@ -44,13 +75,14 @@ describe("gateway worker environment startup", () => {
           to: "ready",
           patch: {
             leaseId: "device-lease",
+            nodeDeviceId: DEVICE_ID,
             sshEndpoint: null,
             sharedHost: true,
             bootstrapReceipt: {
               bundleHash: "a".repeat(64),
               openclawVersion: "2026.8.14",
               protocolFeatures: ["worker-heartbeat-v1"],
-              installKind: "local",
+              installKind: "bundle",
             },
             credential: {
               credentialHash: hashWorkerCredential("device-credential"),

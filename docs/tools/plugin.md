@@ -146,13 +146,28 @@ and fail when incompatible.
 
 Configure `security.installPolicy` to run a trusted local policy command
 before a plugin install or update proceeds. The policy receives metadata plus
-the staged source path and can allow or block the install. It covers both CLI
-and Gateway-backed install/update paths. Plugin `before_install` hooks run
-later, and only in OpenClaw processes where plugin hooks are loaded, so use
-`security.installPolicy` for operator-owned install decisions instead. The
-deprecated `--dangerously-force-unsafe-install` flag is accepted for
-compatibility but is a no-op: it does not bypass install policy or
-`before_install` hook blocks.
+the staged source path and can allow, warn, or block the install. It covers both CLI
+and Gateway-backed install/update paths. CLI plugin and skill commands can
+acknowledge a warning interactively by typing the target name with the same
+copy as suspicious ClawHub releases; policy is then re-evaluated. Reviewed
+non-interactive direct CLI commands can use `--acknowledge-install-policy-warning`.
+That flag approves every warning for the command invocation; each warning is
+still re-evaluated before the install continues.
+The Control UI shows the structured warning and offers **Install anyway**. That
+action resends the same plugin request with `acknowledgeInstallPolicyWarning:
+true`, approving every warning encountered during that install invocation;
+each warning is still re-evaluated before installation continues. Other
+Gateway-backed and automatic installs remain blocked when they have no
+operator-confirmation flow. When an equivalent direct plugin or skill command
+exists, use that command to review and approve the warning. Otherwise, change
+`security.installPolicy` to return `allow` for the reviewed request, then retry
+the managed flow. Neither `--force` nor the deprecated plugin
+install/update flag `--dangerously-force-unsafe-install` approves a policy
+warning. Plugin
+`before_install` hooks run later, and only in OpenClaw processes where plugin
+hooks are loaded, so use `security.installPolicy` for operator-owned install
+decisions instead. The flag does not override a block or policy failure.
+It also does not bypass `before_install` hook blocks.
 
 See [Skills config](/tools/skills-config#operator-install-policy-security-installpolicy)
 for the shared `security.installPolicy` exec schema used by both skills and

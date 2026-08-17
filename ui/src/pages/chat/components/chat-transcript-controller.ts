@@ -1,6 +1,10 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { defaultRangeExtractor, observeElementRect } from "@tanstack/virtual-core";
+import {
+  defaultRangeExtractor,
+  measureElement as measureVirtualElement,
+  observeElementRect,
+} from "@tanstack/virtual-core";
 import {
   html,
   nothing,
@@ -43,6 +47,11 @@ export type ChatTranscriptSession = {
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
+};
+
+type TranscriptRowHeightCache = {
+  read: (sessionKey: string, rowKey: string) => number | undefined;
+  write: (sessionKey: string, rowKey: string, height: number) => void;
 };
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
@@ -101,8 +110,36 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   // re-invoke them for every visible row and re-measure each row every render.
   // Lit tracks the last element per callback, so each row needs its own.
   private readonly scrollElementRef = (element?: Element) => {
-    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
+    const next = element instanceof HTMLDivElement ? element : null;
+    if (next === this.threadInnerElement) {
+      return;
+    }
+    this.threadInnerElement = next;
+    this.queueScrollElementAttach();
   };
+  // The transcript template can be stamped by a host other than the pane that
+  // drives this controller: sidebar panels receive it as a property and render
+  // it in their own, later update cycle. The virtualizer re-resolves its
+  // scroll element only inside _willUpdate, which runs on the pane's update —
+  // after a foreign-host re-stamp (chat<->dashboard face switch docking chat
+  // into the sidebar) no pane update follows, so the virtualizer stays
+  // detached and paints zero rows until an unrelated re-render. Attachment
+  // must follow the DOM identity this ref records, not the pane render cycle.
+  private scrollElementAttachQueued = false;
+  private queueScrollElementAttach(): void {
+    if (this.scrollElementAttachQueued) {
+      return;
+    }
+    this.scrollElementAttachQueued = true;
+    queueMicrotask(() => {
+      this.scrollElementAttachQueued = false;
+      const instance = this.virtualizerController.getVirtualizer();
+      if (this.connected && instance.scrollElement !== this.scrollElement) {
+        this.virtualizerController.hostUpdated();
+        this.host.requestUpdate();
+      }
+    });
+  }
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
@@ -112,10 +149,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const instance = this.virtualizerController.getVirtualizer();
     for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-virtual-row") ??
       []) {
-      instance.resizeItem(
-        instance.indexFromElement(row),
-        row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"],
-      );
+      const index = instance.indexFromElement(row);
+      const size = row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"];
+      this.recordRowHeight(index, size);
+      instance.resizeItem(index, size);
     }
   }
   private queueConnectedRowMeasure(): void {
@@ -180,13 +217,20 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
 
   constructor(
     private readonly host: ReactiveControllerHost,
+    private readonly sessionKey: string,
+    private readonly rowHeightCache?: TranscriptRowHeightCache,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
   ) {
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
       getScrollElement: () => this.scrollElement,
-      estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
+      estimateSize: (index) => {
+        const rowKey = this.rowKeys[index];
+        return rowKey
+          ? (this.rowHeightCache?.read(this.sessionKey, rowKey) ?? CHAT_TRANSCRIPT_ESTIMATED_ROW_PX)
+          : CHAT_TRANSCRIPT_ESTIMATED_ROW_PX;
+      },
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
@@ -195,6 +239,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
         observeElementRect(instance, (rect) => {
+          // A zero rect is a hide/teardown transition (pane cache display:none
+          // or a face switch unmounting the transcript), not a real resize.
+          // Reacting to it wipes every measured row height via measure() and
+          // records garbage as the last width/height; keep the last real rect
+          // so a remount with unchanged geometry restores rows instantly.
+          if (rect.width === 0 || rect.height === 0) {
+            return;
+          }
           const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
@@ -213,14 +265,19 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
             instance.scrollToEnd({ behavior: "auto" });
           }
           if (widthChanged) {
-            // Cached offscreen sizes belong to the old wrapping width. Reset
-            // them, seed current rows, then repeat after any same-commit
-            // re-stamp has attached and completed layout.
-            instance.measure();
+            // Keep stale offscreen sizes as estimates — a full measure() wipe
+            // has no scroll compensation and teleports the reader. resizeItem
+            // re-seeds connected rows with fold-based compensation, so the
+            // anchor row holds still; offscreen rows correct as they connect.
             this.measureConnectedRows();
             this.queueConnectedRowMeasure();
           }
         }),
+      measureElement: (element, entry, instance) => {
+        const size = measureVirtualElement(element, entry, instance);
+        this.recordRowHeight(instance.indexFromElement(element), size);
+        return size;
+      },
       rangeExtractor: (range) => {
         const indexes = defaultRangeExtractor(range);
         const focused =
@@ -478,6 +535,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     return row.dataset.virtualRowKey || null;
   }
 
+  private recordRowHeight(index: number, height: number): void {
+    const rowKey = this.rowKeys[index];
+    if (rowKey && Number.isFinite(height) && height > 0) {
+      this.rowHeightCache?.write(this.sessionKey, rowKey, height);
+    }
+  }
+
   private syncAnnouncement(announcement: TranscriptAnnouncement | null, announce: boolean): void {
     if (!this.announcementInitialized || !announce) {
       this.announcementInitialized = true;
@@ -604,7 +668,10 @@ export class ChatTranscriptController implements ReactiveController {
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   private connected = false;
 
-  constructor(private readonly host: ReactiveControllerHost) {
+  constructor(
+    private readonly host: ReactiveControllerHost,
+    private readonly rowHeightCache?: TranscriptRowHeightCache,
+  ) {
     host.addController(this);
   }
 
@@ -628,6 +695,8 @@ export class ChatTranscriptController implements ReactiveController {
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
         this.host,
+        sessionKey,
+        this.rowHeightCache,
         initialOffset,
         initialOffset === null
           ? undefined

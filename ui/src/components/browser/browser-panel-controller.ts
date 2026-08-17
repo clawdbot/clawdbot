@@ -1,6 +1,7 @@
 import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
 import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
 import {
@@ -81,17 +82,19 @@ export class BrowserPanelController implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  synchronizeHostProperties(changed: Map<string, unknown>): void {
+  synchronizeHostProperties(changed: Map<string, unknown>): boolean {
     if (!changed.has("client") && !changed.has("available")) {
-      return;
+      return false;
     }
     if (this.host.client !== this.activeClient) {
       this.activeClient = this.host.client;
       this.resetBrowserState();
       if (this.host.browserPanelIsOpen() && this.host.available && this.host.client) {
         void this.refreshAll();
+        return true;
       }
     }
+    return false;
   }
 
   private invalidateViewOperations(): void {
@@ -123,7 +126,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   reportError(error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatUiError(error);
     this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
@@ -310,7 +313,15 @@ export class BrowserPanelController implements ReactiveController {
       MAX_VIEWPORT_DIMENSION,
       Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.height)),
     );
-    const metrics = this.view?.targetId === targetId ? this.view.metrics : null;
+    const currentView = this.view?.targetId === targetId ? this.view : null;
+    // A failed or still-pending capture has not established the surface that
+    // owns pointer coordinates. Wait for a successful view before syncing its
+    // viewport, otherwise error-state layout changes can create a resize and
+    // recapture loop.
+    if (!currentView) {
+      return;
+    }
+    const metrics = currentView.metrics;
     if (
       metrics &&
       Math.abs(metrics.cssWidth - width) <= 1 &&

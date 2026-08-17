@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { expandShippedCoreToolPolicyNames } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /**
@@ -22,12 +23,12 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-/** Decides whether update_plan should be included in the assembled OpenClaw tool set. */
-export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
+/** Decides whether progress_card should be included in the assembled OpenClaw tool set. */
+export function shouldIncludeProgressCardToolForOpenClawTools(params: {
   config?: OpenClawConfig;
   pluginToolDenylist?: string[];
 }): boolean {
-  // Default-on with an explicit kill switch: only `false` opts out.
+  // `tools.updatePlan` is the shipped kill switch for the replacement progress_card tool.
   if (params.config?.tools?.updatePlan === false) {
     return false;
   }
@@ -35,7 +36,9 @@ export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
     ...(params.config?.tools?.deny ?? []),
     ...(params.pluginToolDenylist ?? []),
   ]);
-  return isToolAllowedByPolicyName("update_plan", { deny });
+  return isToolAllowedByPolicyName("progress_card", {
+    deny: expandShippedCoreToolPolicyNames(deny),
+  });
 }
 
 /** Includes ask_user only on a primary session and when normal deny policy permits it. */

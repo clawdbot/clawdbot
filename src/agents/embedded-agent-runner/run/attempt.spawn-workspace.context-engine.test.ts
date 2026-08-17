@@ -2903,7 +2903,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
         const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
         session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
         const baseStreamFn = session.agent.streamFn;
-        session.agent.streamFn = async (...args: unknown[]) => {
+        session.agent.streamFn = async (...args) => {
           const context = args[1] as { messages?: AgentMessage[] } | undefined;
           submittedMessages =
             ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ?? [];

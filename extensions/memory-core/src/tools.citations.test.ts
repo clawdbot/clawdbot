@@ -236,6 +236,35 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it("revokes retained memory tools when live config disables memory", async () => {
+    const startupConfig = asOpenClawConfig({
+      agents: { list: [{ id: "main", default: true }] },
+    });
+    let liveConfig = startupConfig;
+    const getConfig = () => liveConfig;
+    const searchTool = createMemorySearchTool({ config: startupConfig, getConfig });
+    const getTool = createMemoryGetTool({ config: startupConfig, getConfig });
+    if (!searchTool || !getTool) {
+      throw new Error("memory tools missing");
+    }
+
+    liveConfig = asOpenClawConfig({
+      agents: {
+        list: [{ id: "main", default: true, memory: { search: { enabled: false } } }],
+      },
+    });
+    const disabledMessage =
+      "Memory is disabled for this agent. Enable memory search for this agent, then retry.";
+    await expect(
+      searchTool.execute("revoked-search", { query: "private preference" }),
+    ).rejects.toThrow(disabledMessage);
+    await expect(getTool.execute("revoked-get", { path: "MEMORY.md" })).rejects.toThrow(
+      disabledMessage,
+    );
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+    expect(getReadAgentMemoryFileMockCalls()).toBe(0);
+  });
+
   it("rejects fractional memory_get ranges before reading files", async () => {
     const tool = createMemoryGetToolOrThrow();
 

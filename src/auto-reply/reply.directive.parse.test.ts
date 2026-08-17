@@ -7,8 +7,9 @@ import {
   extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
+  extractFastDirective,
+  extractStatusDirective,
 } from "./reply/directives.js";
-import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
 import { extractReplyToTag } from "./reply/reply-tags.js";
@@ -181,6 +182,17 @@ describe("directive parsing", () => {
     expect(res.execAsk).toBe("on-miss");
     expect(res.execNode).toBe("mac-mini");
     expect(res.cleaned).toBe("please now");
+  });
+
+  it("parses identical exec directives deterministically", () => {
+    const input = "/exec host=node security=allowlist ask=always node=worker-1";
+    const first = extractExecDirective(input);
+
+    expect(Array.from({ length: 3 }, () => extractExecDirective(input))).toEqual([
+      first,
+      first,
+      first,
+    ]);
   });
 
   it("captures invalid exec host values", () => {

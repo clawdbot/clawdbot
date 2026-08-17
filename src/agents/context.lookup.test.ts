@@ -587,27 +587,6 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("claude-sonnet")).toBe(654_321);
   });
 
-  it("uses projected source config for a cloned runtime config", async () => {
-    const runtimeConfig = createContextOverrideConfig(
-      "anthropic-vertex",
-      "claude-sonnet-4-6",
-      200_000,
-    );
-    contextTestState.runtimeConfigSnapshot = runtimeConfig;
-    contextTestState.runtimeConfigSourceSnapshot = {};
-    const clonedConfig = structuredClone(runtimeConfig);
-
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
-    expect(
-      resolveContextTokensForModel({
-        cfg: clonedConfig,
-        provider: "anthropic-vertex",
-        model: "claude-sonnet-4-6",
-        allowAsyncLoad: false,
-      }),
-    ).toBe(1_000_000);
-  });
-
   it("resolveContextTokensForModel handles self-prefixed provider-owned discovery ids", async () => {
     mockDiscoveryDeps([
       {
@@ -650,6 +629,33 @@ describe("lookupContextTokens", () => {
       model: "gemini-3.1-pro-preview",
     });
     expect(result).toBe(200_000);
+  });
+
+  it("bounds a per-model cap by the Anthropic fixed contract", async () => {
+    mockDiscoveryDeps([]);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                models: [
+                  {
+                    id: "claude-sonnet-4-6",
+                    contextWindow: 2_000_000,
+                    contextTokens: 1_200_000,
+                  },
+                ],
+              },
+            },
+          },
+        } as never,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      }),
+    ).toBe(1_000_000);
   });
 
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {
@@ -715,7 +721,6 @@ describe("lookupContextTokens", () => {
     const openrouterResult = resolveContextTokensForModel({
       provider: "openrouter",
       model: "google/gemini-2.5-pro",
-      contextTokensOverride: 2_000_000,
     });
     expect(openrouterResult).toBe(999_000);
 
@@ -723,9 +728,23 @@ describe("lookupContextTokens", () => {
     const googleUnconfiguredResult = resolveContextTokensForModel({
       provider: "google",
       model: "gemini-2.5-pro",
-      contextTokensOverride: 2_000_000,
     });
-    expect(googleUnconfiguredResult).toBe(2_000_000);
+    expect(googleUnconfiguredResult).toBeUndefined();
+  });
+
+  it("resolveContextTokensForModel follows modelProvider aliases to per-model config", async () => {
+    mockDiscoveryDeps([]);
+    const cfg = createContextOverrideConfig("anthropic", "claude-custom", 180_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: cfg as never,
+        provider: "fixture-cli",
+        modelProvider: "anthropic",
+        model: "anthropic/claude-custom",
+      }),
+    ).toBe(180_000);
   });
 
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {

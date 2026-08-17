@@ -309,6 +309,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
+    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);

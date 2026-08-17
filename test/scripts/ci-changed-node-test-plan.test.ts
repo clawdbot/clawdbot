@@ -2,17 +2,57 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
+  hasCoreExtensionImpact,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  listExtensionTestFilesForRoots,
+  resolveExtensionTestConfig,
+} from "../../scripts/lib/extension-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+
+const CODEX_TEST_PROCESS_FILE_LIMIT = 40;
+
+function expectBoundedCodexFallback(
+  shards: ReturnType<typeof createChangedExtensionFallbackShards>,
+) {
+  const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+
+  expect(shards.length).toBeGreaterThan(1);
+  expect(
+    shards.every(
+      (shard) =>
+        shard.configs[0] === "test/vitest/vitest.extension-codex.config.ts" &&
+        (shard.includePatterns?.length ?? 0) > 0 &&
+        (shard.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT,
+    ),
+  ).toBe(true);
+  expect(targets).toEqual(listExtensionTestFilesForRoots(["extensions/codex"]));
+  expect(new Set(targets).size).toBe(targets.length);
+}
+
+function expectAllExtensionConfigs(
+  shards: ReturnType<typeof createChangedExtensionFallbackShards>,
+) {
+  const configs = new Set(shards.flatMap((shard) => shard.configs));
+  const expectedConfigs = new Set(
+    listAvailableExtensionIds().map((extensionId) =>
+      resolveExtensionTestConfig(`extensions/${extensionId}`),
+    ),
+  );
+
+  expect(configs).toEqual(expectedConfigs);
+  expect(configs).toContain("test/vitest/vitest.extension-codex.config.ts");
+}
 
 describe("CI changed Node test plan", () => {
   it("routes Control UI style changes through source-scanning policy tests", () => {
@@ -94,12 +134,16 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["qa/scenarios/index.yaml"])).toBe(false);
     expect(hasBuildArtifactAffectingChange(["ui/src/app.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["extensions/qa-lab/src/ci-smoke-plan.ts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(true);
-    // Inside the packaged CLI's import graph -> the smoke scenarios can see it.
-    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["qa/scenarios/index.yaml"])).toBe(true);
     // Smoke drives matrix + telegram; other channel plugins are invisible to it.
     expect(hasQaSmokeAffectingChange(["extensions/telegram/src/index.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
+    // Broad runtime changes ride the main-push smoke run instead of taxing
+    // every PR with the six-part matrix; only QA-owned surfaces select it.
+    expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["packages/llm-core/src/index.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["pnpm-lock.yaml"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(false);
     // The QA lane's own orchestration must not be able to skip the lane.
@@ -107,8 +151,6 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
-    // Deleted source files cannot be graphed; fail safe to running QA smoke.
-    expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });
 
   it("classifies prompt-snapshot impact by surface and generator import graph", () => {
@@ -272,15 +314,54 @@ describe("CI changed Node test plan", () => {
     ];
 
     expect(createChangedNodeTestShards(changedPaths)).toBeNull();
-    expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([
+    expectBoundedCodexFallback(createChangedExtensionFallbackShards(changedPaths));
+  });
+
+  it("covers every extension config when core changes can impact extension consumers", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "src/gateway/tool-resolution.ts",
+      "src/agents/openclaw-tools.ts",
+      "extensions/discord/src/channel.ts",
+    ]);
+
+    expectAllExtensionConfigs(shards);
+  });
+
+  it("covers every extension config when the fallback planner itself changes", () => {
+    expectAllExtensionConfigs(
+      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
+    );
+  });
+
+  it("covers every extension config when the extension inventory changes", () => {
+    expectAllExtensionConfigs(
+      createChangedExtensionFallbackShards(["scripts/lib/changed-extensions.mts"]),
+    );
+  });
+
+  it("classifies core and fallback-gate extension impact", () => {
+    expect(hasCoreExtensionImpact(["src/agents/openclaw-tools.ts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/changed-extensions.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/extension-test-plan.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["extensions/discord/src/channel.ts"])).toBe(false);
+    expect(hasCoreExtensionImpact(["docs/ci.md"])).toBe(false);
+  });
+
+  it("keeps extension-only fallbacks scoped to the changed extension config", () => {
+    expect(createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"])).toEqual([
       {
         checkName: "checks-node-changed-extensions-config",
-        configs: ["test/vitest/vitest.extension-codex.config.ts"],
+        configs: ["test/vitest/vitest.extension-discord.config.ts"],
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
       },
     ]);
+  });
+
+  it("does not create extension fallback shards for docs-only diffs", () => {
+    expect(createChangedExtensionFallbackShards(["docs/ci.md"])).toEqual([]);
   });
 
   it.each([
@@ -337,31 +418,18 @@ describe("CI changed Node test plan", () => {
     expect(new Set(targets).size).toBe(targets.length);
   });
 
-  it("skips extension fallback when no extension paths changed", () => {
-    expect(
-      createChangedExtensionFallbackShards([
-        "packages/gateway-protocol/src/frame-guards.ts",
-        "src/agents/live-model-filter.ts",
-      ]),
-    ).toEqual([]);
+  it("skips extension fallback when the core-impact predicate does not fire", () => {
+    expect(createChangedExtensionFallbackShards(["src/agents/live-model-filter.ts"])).toEqual([]);
   });
 
-  it("falls back to the affected extension config for deleted sources", () => {
+  it("falls back to bounded Codex config shards for deleted sources", () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-extension-fallback-"));
     try {
-      expect(
+      expectBoundedCodexFallback(
         createChangedExtensionFallbackShards(["extensions/codex/src/deleted-session-runtime.ts"], {
           cwd,
         }),
-      ).toEqual([
-        {
-          checkName: "checks-node-changed-extensions-config",
-          configs: ["test/vitest/vitest.extension-codex.config.ts"],
-          requiresDist: false,
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          shardName: "changed-extensions-config",
-        },
-      ]);
+      );
       expect(
         createChangedExtensionFallbackShards(
           ["extensions/codex/src/deleted-session-runtime.test.ts"],

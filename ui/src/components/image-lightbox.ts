@@ -146,10 +146,10 @@ class OpenClawImageLightbox extends OpenClawLitElement {
 
     .image {
       display: block;
-      max-width: 100%;
-      max-height: 100%;
-      width: auto;
-      height: auto;
+      min-width: 0;
+      min-height: 0;
+      width: 100%;
+      height: 100%;
       border-radius: var(--radius-md);
       background: rgba(255, 255, 255, 0.04);
       object-fit: contain;

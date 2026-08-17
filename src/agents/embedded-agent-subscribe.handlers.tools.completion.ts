@@ -57,7 +57,7 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readUpdatePlanResult,
+  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -168,6 +168,7 @@ export async function handleToolExecutionEnd(
     startArgs,
     initialCallSummary?.meta,
     initialCallSummary?.instanceReplaySafe === true,
+    initialCallSummary?.ownerKey,
     structuredReplaySafe,
   );
   // A racing observer can consume the active wrapper boundary. Settled and
@@ -214,6 +215,11 @@ export async function handleToolExecutionEnd(
     ...(meta ? { meta } : {}),
     executionStarted,
     outcome: isToolError ? "failure" : "success",
+    ...(callSummary.ownerKey
+      ? {
+          ownerMutation: { ownerKey: callSummary.ownerKey },
+        }
+      : {}),
     ...(isToolError
       ? {
           failure: {
@@ -228,6 +234,7 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
+  ctx.state.lastToolRecovery = terminal.lastToolRecovery;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -360,7 +367,7 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,

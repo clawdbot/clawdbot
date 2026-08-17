@@ -105,12 +105,8 @@ describe("OpenClaw shell dock suppression", () => {
           approvalErrors: new Map(),
           approvalNowMs: 0,
           devicePairSetupOpen: false,
-          devicePairSetupLoading: false,
-          devicePairSetupError: null,
-          devicePairSetup: null,
-          devicePairSetupAccess: "full",
+          devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,
-          deviceAuthMigration: { error: null },
         },
         runUpdate: vi.fn(),
       },
@@ -123,10 +119,12 @@ describe("OpenClaw shell dock suppression", () => {
     const container = document.createElement("div");
     const desktopAvailable = () =>
       (
-        container.querySelector("openclaw-desktop-panel") as HTMLElement & {
-          available: boolean;
-        }
-      ).available;
+        container.querySelector("openclaw-desktop-panel") as
+          | (HTMLElement & {
+              available: boolean;
+            })
+          | null
+      )?.available ?? false;
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
@@ -167,11 +165,12 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
+          sessionBottomOnly: boolean;
         }
-      ).suppressed,
-    ).toBe(false);
-    expect(desktopAvailable()).toBe(true);
+      ).sessionBottomOnly,
+    ).toBe(true);
+    expect(container.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 
     shell.routeState = {
       routeId: "new-session",

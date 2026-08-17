@@ -631,16 +631,21 @@ extension MacNodeRuntime {
                         + "under System Settings → Privacy & Security → Accessibility")
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
-                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld:
+                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld,
+                 .invalidRequest, .staleObservation, .unsupportedAction:
                 return Self.errorResponse(
                     req,
                     code: .invalidRequest,
-                    message: "INVALID_REQUEST: \(error.localizedDescription)")
-            case .eventCreationFailed, .lifecycleChanged:
+                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                        ? error.localizedDescription
+                        : "INVALID_REQUEST: \(error.localizedDescription)")
+            case .eventCreationFailed, .lifecycleChanged, .refused:
                 return Self.errorResponse(
                     req,
                     code: .unavailable,
-                    message: "UNAVAILABLE: \(error.localizedDescription)")
+                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                        ? error.localizedDescription
+                        : "UNAVAILABLE: \(error.localizedDescription)")
             }
         }
     }

@@ -1,36 +1,17 @@
 // OpenAI ChatGPT Responses provider handles ChatGPT-authenticated response streams.
 import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  resolveTimerTimeoutMs,
+  clampTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   Tool as OpenAITool,
   ResponseCreateParamsStreaming,
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-
-type DynamicImport = (specifier: string) => Promise<unknown>;
-
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
-
-type ProcessWithOsBuiltinModule = typeof process & {
-  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-    return null;
-  }
-  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const os = loadNodeOs();
-
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import {
-  resolveTimerTimeoutMs,
-  clampTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
@@ -46,6 +27,7 @@ import { responsesPromptObserver } from "../transports/openai-responses-contract
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
+  commitResponsesEncryptedContentAttempt,
   isInvalidEncryptedContentError,
   resolveNextResponsesEncryptedContentAttempt,
   type ResponsesEncryptedContentAttempt,
@@ -95,6 +77,24 @@ import {
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
+
+type DynamicImport = (specifier: string) => Promise<unknown>;
+
+const dynamicImport: DynamicImport = (specifier) => import(specifier);
+
+type ProcessWithOsBuiltinModule = typeof process & {
+  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
+};
+
+function loadNodeOs(): typeof NodeOs | null {
+  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
+    return null;
+  }
+  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
+}
+
+// NEVER convert to top-level runtime imports - breaks browser/Vite builds
+const os = loadNodeOs();
 
 // ============================================================================
 // Configuration
@@ -313,6 +313,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         kind: "initial",
         request: await buildBody("checkpoint"),
       };
+      const commitSemanticAttempt = (attempt: ResponsesEncryptedContentAttempt<RequestBody>) =>
+        commitResponsesEncryptedContentAttempt(attempt, (checkpoint) =>
+          suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
+        );
       const observePromptEgress = createResponsesPromptEgressObserver(
         options,
         context.systemPrompt,
@@ -356,14 +360,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               stream,
               model,
               () => {
-                if (activeAttempt.kind === "compaction-stripped") {
-                  suppressOpenAIResponsesCompaction(
-                    output,
-                    model,
-                    options,
-                    activeAttempt.rejectedCompaction,
-                  );
-                }
+                commitSemanticAttempt(activeAttempt);
                 websocketStarted = true;
               },
               requestOptions,
@@ -561,14 +558,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           if (activeSignal?.aborted) {
             throw transportAbortError(activeSignal);
           }
-          if (activeAttempt.kind === "compaction-stripped") {
-            suppressOpenAIResponsesCompaction(
-              output,
-              model,
-              options,
-              activeAttempt.rejectedCompaction,
-            );
-          }
+          commitSemanticAttempt(activeAttempt);
           break;
         }
 
