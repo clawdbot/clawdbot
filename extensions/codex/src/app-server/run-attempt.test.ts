@@ -5337,6 +5337,101 @@ describe("runCodexAppServerAttempt", () => {
       },
     ]);
   });
+  it("keeps context usage fresh across two turns of one Codex thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const turnIds = ["turn-1", "turn-2"] as const;
+    let nextTurnIndex = 0;
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        const turnId = turnIds[nextTurnIndex++];
+        if (!turnId) {
+          throw new Error("unexpected extra turn/start");
+        }
+        return turnStartResult(turnId);
+      }
+      return {};
+    });
+
+    const runTurn = async (index: number) => {
+      const turnId = turnIds[index]!;
+      const expectedTurnStarts = index + 1;
+      const run = runCodexAppServerAttempt(
+        createParams(sessionFile, workspaceDir, {
+          prompt: `turn ${index + 1}`,
+          runId: `run-${index + 1}`,
+        }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedTurnStarts),
+        fastWait,
+      );
+      const inputTokens = 15_000 + index * 1_000;
+      const outputTokens = 100;
+      if (index === 0) {
+        await harness.notify({
+          method: "rawResponse/completed",
+          params: {
+            threadId: "thread-1",
+            turnId,
+            responseId: "response-1",
+            usage: {
+              totalTokens: inputTokens + outputTokens,
+              inputTokens,
+              cachedInputTokens: 0,
+              outputTokens,
+              reasoningOutputTokens: 0,
+            },
+          },
+        });
+      }
+      await harness.notify({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          tokenUsage: {
+            last: {
+              totalTokens: inputTokens + outputTokens,
+              inputTokens,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              outputTokens,
+              reasoningOutputTokens: 0,
+            },
+          },
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId });
+      return run;
+    };
+
+    const first = await runTurn(0);
+    const second = await runTurn(1);
+
+    expect(first.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 15_000,
+      totalTokens: 15_100,
+    });
+    expect(second.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 16_000,
+      totalTokens: 16_100,
+    });
+    expect(
+      harness.requests
+        .filter((request) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["thread/start", "turn/start", "turn/start"]);
+  });
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
