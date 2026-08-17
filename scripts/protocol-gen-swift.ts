@@ -315,11 +315,12 @@ function emitStruct(name: string, schema: JsonSchema): string {
           required: req,
         })}`;
       });
+    const initializerDeclaration =
+      initializerParams.length > 0
+        ? `\n    public init(\n${initializerParams.join(",\n")}\n    )\n    {\n`
+        : "\n    public init()\n    {\n";
     lines.push(
-      "\n    public init(\n" +
-        (initializerParams.length > 0 ? initializerParams.join(",\n") : "        ") +
-        "\n    )\n" +
-        "    {\n" +
+      initializerDeclaration +
         Object.entries(props)
           .map(([key]) => {
             const propName = safeName(key);

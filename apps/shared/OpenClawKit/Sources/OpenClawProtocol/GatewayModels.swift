@@ -7645,9 +7645,7 @@ public struct SessionMoveExpectedSource: Codable, Sendable {
 public struct SessionMoveGatewayTarget: Codable, Sendable {
     public let kind: String
 
-    public init(
-        
-    )
+    public init()
     {
         self.kind = "gateway"
     }
