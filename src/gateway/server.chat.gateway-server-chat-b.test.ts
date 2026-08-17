@@ -40,6 +40,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -1123,7 +1124,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.startup returns chat history with the initial agents list", async () => {
+  test("chat.startup returns chat history with the initial agents list and provenance", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
         agents: {
@@ -1135,7 +1136,7 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: { default: true }, research: {} },
         },
         models: {
           providers: {
@@ -1146,6 +1147,11 @@ describe("gateway server chat", () => {
           },
         },
       });
+      recordAgentProvenance(
+        "research",
+        { createdVia: "agent", creatorAgentId: "main" },
+        { nowMs: 42 },
+      );
       await connectOk(ws);
       await createSessionDir();
       const updatedAt = Date.now();
@@ -1160,7 +1166,12 @@ describe("gateway server chat", () => {
 
       const startup = await rpcReq<{
         agentsList?: {
-          agents?: Array<{ id?: string }>;
+          agents?: Array<{
+            id?: string;
+            createdVia?: string;
+            creatorAgentId?: string | null;
+            createdAt?: number;
+          }>;
           defaultId?: string | null;
           mainKey?: string | null;
         };
@@ -1176,6 +1187,13 @@ describe("gateway server chat", () => {
       expect(startup.payload?.agentsList?.defaultId).toBe("main");
       expect(startup.payload?.agentsList?.mainKey).toBe("main");
       expect(startup.payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(
+        startup.payload?.agentsList?.agents?.find((agent) => agent.id === "research"),
+      ).toMatchObject({
+        createdVia: "agent",
+        creatorAgentId: "main",
+        createdAt: 42,
+      });
       expect(startup.payload?.sessionInfo).toMatchObject({
         key: "agent:main:main",
         sessionId: "sess-main",

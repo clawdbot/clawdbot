@@ -93,7 +93,6 @@ import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
 } from "../../state/agent-deletion-journal.js";
-import { listAgentProvenance } from "../../state/agent-provenance.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -899,27 +898,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const modelCatalog = await readPreparedServerMethodModelCatalog(context);
-    const result = listAgentsForGateway(cfg, modelCatalog, {
-      includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
-    });
-    const provenanceById = new Map(
-      listAgentProvenance().map((record) => [record.agentId, record] as const),
-    );
     respond(
       true,
-      {
-        ...result,
-        agents: result.agents.map((agent) => {
-          const provenance = provenanceById.get(agent.id);
-          return provenance
-            ? Object.assign({}, agent, {
-                createdVia: provenance.createdVia,
-                creatorAgentId: provenance.creatorAgentId,
-                createdAt: provenance.createdAtMs,
-              })
-            : agent;
-        }),
-      },
+      listAgentsForGateway(cfg, modelCatalog, {
+        includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+      }),
       undefined,
     );
   },
