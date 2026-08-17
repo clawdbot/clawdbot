@@ -427,7 +427,7 @@ openclaw-chat-sidebar-region,
   align-items: center;
   justify-content: flex-start;
   gap: 7px;
-  padding: 0 0 0 8px;
+  padding-inline: 8px 0;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
