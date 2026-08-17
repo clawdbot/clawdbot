@@ -311,6 +311,8 @@ suite.define(() => {
         const leadingBounds = leadingGlyph.getBoundingClientRect();
         const trailingBounds = trailingGlyph.getBoundingClientRect();
         const rtl = dir === "rtl";
+        const tabStyle = getComputedStyle(tabBase);
+        const closeStyle = getComputedStyle(close);
         return {
           leading: rtl
             ? tabBounds.right - leadingBounds.right
@@ -318,9 +320,19 @@ suite.define(() => {
           trailing: rtl
             ? trailingBounds.left - closeBounds.left
             : closeBounds.right - trailingBounds.right,
+          tabOuterRadius: rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
+          tabJoinRadius: rtl ? tabStyle.borderTopLeftRadius : tabStyle.borderTopRightRadius,
+          closeJoinRadius: rtl ? closeStyle.borderTopRightRadius : closeStyle.borderTopLeftRadius,
+          closeOuterRadius: rtl ? closeStyle.borderTopLeftRadius : closeStyle.borderTopRightRadius,
         };
       }, direction);
       expect(tabPadding.trailing, `${direction} glyph insets`).toBeCloseTo(tabPadding.leading, 0);
+      expect(parseFloat(tabPadding.tabJoinRadius), `${direction} tab join`).toBe(0);
+      expect(parseFloat(tabPadding.closeJoinRadius), `${direction} close join`).toBe(0);
+      expect(parseFloat(tabPadding.tabOuterRadius), `${direction} tab outer`).toBeGreaterThan(0);
+      expect(parseFloat(tabPadding.closeOuterRadius), `${direction} close outer`).toBeGreaterThan(
+        0,
+      );
     }
     await tab.evaluate((node) => {
       const panel = node.closest(".side-panel");

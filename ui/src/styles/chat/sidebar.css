@@ -440,14 +440,21 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
+.side-panel__header .tabstrip-tab[active]::part(base) {
+  border-start-start-radius: var(--radius-md);
+  border-end-start-radius: var(--radius-md);
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.side-panel__header
   .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
 
 .side-panel__header .tabstrip-tab[active]::part(base) {
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
 }
@@ -516,7 +523,10 @@ openclaw-chat-sidebar-region,
   flex: 0 0 28px;
   align-self: center;
   margin: 0;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: var(--radius-md);
+  border-end-end-radius: var(--radius-md);
   opacity: 0;
   transition:
     background-color 120ms ease,
