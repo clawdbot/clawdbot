@@ -50,11 +50,11 @@ describe("gateway ingress attribution", () => {
   });
 
   it.each([
-    ["Serve identity", { login: "alice@example.com" }],
-    ["Funnel marker", { funnel: true }],
+    ["Serve identity", { login: "alice@example.com" }, {}],
+    ["Funnel marker", { funnel: true }, { externalTailscaleExposure: "funnel" }],
   ])(
     "attributes externally managed Tailscale %s as an ordinary trusted proxy",
-    async (_name, headers) => {
+    async (_name, headers, expected) => {
       const attribution = prepareGatewayIngressAttribution({
         req: request({ forwardedFor: "203.0.113.10", ...headers }),
         trustedProxies: ["127.0.0.1"],
@@ -64,6 +64,7 @@ describe("gateway ingress attribution", () => {
         kind: "trusted-proxy",
         clientIp: "203.0.113.10",
         rateLimit: { subject: { key: "203.0.113.10" } },
+        ...expected,
       });
     },
   );

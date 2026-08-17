@@ -45,7 +45,11 @@ type AttributedGatewayIngress = {
 export type GatewayIngressAttribution =
   | (AttributedGatewayIngress & { kind: "direct-local" })
   | (AttributedGatewayIngress & { kind: "direct-remote" })
-  | (AttributedGatewayIngress & { kind: "trusted-proxy" })
+  | (AttributedGatewayIngress & {
+      kind: "trusted-proxy";
+      /** Deny-only observation; this never grants managed Tailscale provenance. */
+      externalTailscaleExposure?: "funnel";
+    })
   | (AttributedGatewayIngress & {
       kind: "tailscale-serve";
       verifyIdentity: () => Promise<VerifiedTailscaleIngressIdentity | undefined>;
@@ -230,7 +234,12 @@ function resolveGatewayIngressAttribution(params: {
     if (!clientIp || isLoopbackAddress(clientIp)) {
       return unattributableProxy(remoteAddress);
     }
-    return attributed("trusted-proxy", clientIp);
+    return {
+      ...attributed("trusted-proxy", clientIp),
+      ...(headerValue(req.headers?.["tailscale-funnel-request"]) === "?1"
+        ? { externalTailscaleExposure: "funnel" as const }
+        : {}),
+    };
   }
   // Tailscale-owned headers grant managed semantics only on the dedicated listener.
   // An explicitly trusted ordinary proxy remains generic; every other source fails closed.
