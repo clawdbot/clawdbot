@@ -86,22 +86,22 @@
   outline-offset: 2px;
 }
 
-.chat-text :where(p, ul, ol, pre, blockquote, table, details) {
+.chat-text :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin: 0;
 }
 
 /* Keep every adjacent top-level Markdown block on the same rhythm, including
    special blocks that otherwise read as part of the preceding block. */
 .chat-text
-  > :where(p, ul, ol, pre, blockquote, table, details)
-  + :where(p, ul, ol, pre, blockquote, table, details) {
+  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
+  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin-top: 1em;
 }
 
 .chat-text
   :where(blockquote, details, li)
-  > :where(p, ul, ol, pre, blockquote, table, details)
-  + :where(p, ul, ol, pre, blockquote, table, details) {
+  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
+  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin-top: 0.5em;
 }
 
@@ -120,6 +120,124 @@
   font-size: 13px;
   display: block;
   overflow-x: auto;
+}
+
+.markdown-table {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 0.75em;
+  padding-top: 40px;
+}
+
+.markdown-table :where(table) {
+  margin-top: 0;
+  max-width: none;
+  overflow: visible;
+}
+
+.markdown-table :where(th, td) {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.markdown-table__viewport {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.markdown-table--can-scroll-right .markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+
+.markdown-table--can-scroll-left .markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(to right, transparent, black 28px);
+  mask-image: linear-gradient(to right, transparent, black 28px);
+}
+
+.markdown-table--can-scroll-left.markdown-table--can-scroll-right .markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 28px,
+    black calc(100% - 28px),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 28px,
+    black calc(100% - 28px),
+    transparent
+  );
+}
+
+.markdown-table__actions {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  display: flex;
+}
+
+.markdown-table__actions button,
+.markdown-table-dialog__close {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  place-items: center;
+}
+
+.markdown-table__actions button:hover,
+.markdown-table-dialog__close:hover {
+  color: var(--text);
+}
+
+.markdown-table__actions button:focus-visible,
+.markdown-table-dialog__close:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.markdown-table__actions svg,
+.markdown-table-dialog__close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.markdown-table-dialog {
+  width: min-content;
+  max-width: 100vw;
+  max-height: 100dvh;
+  padding: 48px 28px 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  overflow: auto;
+}
+
+.markdown-table-dialog::backdrop {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+}
+
+.markdown-table-dialog > table {
+  margin: 0;
+  max-width: none;
+  overflow: visible;
+}
+
+.markdown-table-dialog__close {
+  position: fixed;
+  top: 8px;
+  right: 8px;
 }
 
 .chat-text :where(th, td) {
