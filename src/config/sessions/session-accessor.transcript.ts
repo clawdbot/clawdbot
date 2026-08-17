@@ -116,7 +116,7 @@ export async function trimSessionTranscriptForManualCompact(
     return declined;
   }
 
-  return { archived: trimmed.archivedPath, compacted: true, kept: trimmed.kept };
+  return { compacted: true, kept: trimmed.kept };
 }
 
 function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
