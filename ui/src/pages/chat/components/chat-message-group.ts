@@ -112,27 +112,6 @@ type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 // this bounds auto-retries to 3 before the manual retry affordance takes over.
 const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
-function toggleTouchMessageMeta(event: PointerEvent): void {
-  if (event.pointerType !== "touch" || !(event.currentTarget instanceof HTMLElement)) {
-    return;
-  }
-  const target = event.target instanceof Element ? event.target : null;
-  if (target?.closest("a, button, details, input, label, select, textarea, [contenteditable]")) {
-    return;
-  }
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed) {
-    return;
-  }
-  const group = event.currentTarget;
-  const reveal = !group.classList.contains("chat-group--meta-revealed");
-  const root = group.getRootNode() as ParentNode;
-  for (const revealed of root.querySelectorAll(".chat-group--meta-revealed")) {
-    revealed.classList.remove("chat-group--meta-revealed");
-  }
-  group.classList.toggle("chat-group--meta-revealed", reveal);
-}
-
 function buildGroupedMessageRenderOptions(
   group: MessageGroup,
   item: MessageGroup["messages"][number],
@@ -279,7 +258,6 @@ export function renderActivityGroup(
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
-      @pointerup=${toggleTouchMessageMeta}
     >
       ${showAvatarGutter &&
       (normalizeRoleForGrouping(firstGroup.role) !== "assistant" ||
@@ -457,7 +435,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
-      @pointerup=${toggleTouchMessageMeta}
     >
       ${showAvatarGutter && (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
