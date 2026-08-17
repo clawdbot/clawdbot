@@ -605,7 +605,7 @@ node_release_version_is_supported() {
   minor="${BASH_REMATCH[2]}"
   patch="${BASH_REMATCH[3]}"
   for part in "$major" "$minor" "$patch"; do
-    if ((${#part} > 16)) || ((${#part} == 16)) && [[ "$part" > "9007199254740991" ]]; then
+    if ((${#part} > 16)) || ((${#part} == 16 && 10#$part > 9007199254740991)); then
       return 1
     fi
   done
