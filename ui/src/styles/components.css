@@ -2437,17 +2437,6 @@ openclaw-chat-session-rail {
   background: transparent;
 }
 
-.code-block-wrapper::after {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  inset-block: 36px 12px;
-  inset-inline-end: 0;
-  width: 36px;
-  background: linear-gradient(to right, transparent, var(--bg));
-  pointer-events: none;
-}
-
 .code-block-wrapper pre {
   margin: 0 6px 6px;
   padding: 4px 8px 8px;
@@ -2455,6 +2444,7 @@ openclaw-chat-session-rail {
   border-radius: 0;
   background: transparent;
   overflow-x: auto;
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent 100%);
 }
 
 .code-block-wrapper :where(pre code.markdown-block-art) {
