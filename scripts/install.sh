@@ -1725,9 +1725,9 @@ persist_shell_path_prepend() {
     local shell_name="${SHELL:-}"
     shell_name="${shell_name##*/}"
     local bash_login_rc="$HOME/.profile"
-    if [[ -e "$HOME/.bash_profile" || -L "$HOME/.bash_profile" ]]; then
+    if [[ -r "$HOME/.bash_profile" ]]; then
         bash_login_rc="$HOME/.bash_profile"
-    elif [[ -e "$HOME/.bash_login" || -L "$HOME/.bash_login" ]]; then
+    elif [[ -r "$HOME/.bash_login" ]]; then
         bash_login_rc="$HOME/.bash_login"
     fi
 

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  chownSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -1926,10 +1927,14 @@ NODE
         `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
         { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" },
       );
-      const interactive = spawnSync("bash", ["-ic", "command -v openclaw"], {
-        encoding: "utf8",
-        env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
-      });
+      const interactive = spawnSync(
+        "bash",
+        ["-ic", "printf 'openclaw-path=%s\\n' \"$(command -v openclaw)\""],
+        {
+          encoding: "utf8",
+          env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
+        },
+      );
       const login = spawnSync("bash", ["--login", "-c", "command -v openclaw"], {
         encoding: "utf8",
         env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
@@ -1937,7 +1942,9 @@ NODE
 
       expect(persist.status).toBe(0);
       expect(interactive.status).toBe(0);
-      expect(interactive.stdout.trim()).toBe(join(bin, "openclaw"));
+      expect(interactive.stdout.match(/^openclaw-path=.*$/gm)).toEqual([
+        `openclaw-path=${join(bin, "openclaw")}`,
+      ]);
       expect(login.status).toBe(0);
       expect(login.stdout.trim()).toBe(join(bin, "openclaw"));
       for (const rc of [".bashrc", ".profile"]) {
@@ -2049,6 +2056,80 @@ NODE
       expect(readFileSync(join(home, ".bash_login"), "utf8")).toBe("# .bash_login\n");
       expect(readFileSync(join(home, ".profile"), "utf8")).toBe("# .profile\n");
     } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("skips a dangling Bash login profile in favor of the readable fallback", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-bash-dangling-profile-"));
+    const home = join(tmp, "home");
+    mkdirSync(home, { recursive: true });
+    symlinkSync("missing-profile", join(home, ".bash_profile"));
+    writeFileSync(join(home, ".bash_login"), "# readable fallback\n");
+
+    try {
+      const result = runInstallShell(`source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`, {
+        HOME: home,
+        PATH: "/usr/bin:/bin",
+        SHELL: "/bin/bash",
+      });
+
+      expect(result.status).toBe(0);
+      expect(lstatSync(join(home, ".bash_profile")).isSymbolicLink()).toBe(true);
+      expect(existsSync(join(home, "missing-profile"))).toBe(false);
+      expect(readFileSync(join(home, ".bash_login"), "utf8")).toContain(".local/bin");
+      expect(existsSync(join(home, ".profile"))).toBe(false);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it.runIf(
+    process.getuid?.() !== 0 ||
+      spawnSync("setpriv", ["--version"], { encoding: "utf8" }).status === 0,
+  )("skips an unreadable Bash login profile in favor of the readable fallback", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-bash-unreadable-profile-"));
+    const home = join(tmp, "home");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, ".bash_profile"), "# unreadable\n");
+    writeFileSync(join(home, ".bash_login"), "# readable fallback\n");
+    chmodSync(join(home, ".bash_profile"), 0o000);
+
+    try {
+      const script = `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path`;
+      let result: ReturnType<typeof spawnSync>;
+      if (process.getuid?.() === 0) {
+        chmodSync(tmp, 0o755);
+        chownSync(home, 65534, 65534);
+        chownSync(join(home, ".bash_profile"), 65534, 65534);
+        chownSync(join(home, ".bash_login"), 65534, 65534);
+        result = spawnSync(
+          "setpriv",
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              HOME: home,
+              PATH: "/usr/bin:/bin",
+              SHELL: "/bin/bash",
+              BASH_ENV: "",
+              ENV: "",
+              OPENCLAW_INSTALL_SH_NO_RUN: "1",
+            },
+          },
+        );
+      } else {
+        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" });
+      }
+
+      expect(result.status).toBe(0);
+      chmodSync(join(home, ".bash_profile"), 0o600);
+      expect(readFileSync(join(home, ".bash_profile"), "utf8")).toBe("# unreadable\n");
+      expect(readFileSync(join(home, ".bash_login"), "utf8")).toContain(".local/bin");
+      expect(existsSync(join(home, ".profile"))).toBe(false);
+    } finally {
+      chmodSync(join(home, ".bash_profile"), 0o600);
       rmSync(tmp, { force: true, recursive: true });
     }
   });
