@@ -207,7 +207,13 @@ export type EmbeddedAgentSubscribeState = {
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
-    "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
+    | "mediaUrls"
+    | "audioAsVoice"
+    | "replyToId"
+    | "replyToTag"
+    | "replyToCurrent"
+    | "mediaTokenSkippedInFence"
+    | "fencedSkippedMediaDirectives"
   >;
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;

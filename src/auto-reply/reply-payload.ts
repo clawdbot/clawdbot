@@ -65,6 +65,13 @@ export type ReplyPayload = {
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
   replyToCurrent?: boolean;
+  /**
+   * Plan-time #41966 signal from upstream parse/pending directives: a fenced
+   * MEDIA token was skipped. Outbound delivery warns after accepted send.
+   */
+  mediaTokenSkippedInFence?: boolean;
+  /** Skipped fenced MEDIA identities for operator diagnostics. */
+  fencedSkippedMediaDirectives?: string[];
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   /** Send video media as a round video note when the channel supports it. */

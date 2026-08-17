@@ -274,11 +274,18 @@ function createOutboundPayloadPlanEntry(
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
     // Prefer the first parse (pre-strip); stripped re-parse is only for citation markers.
+    // Also honor upstream payload-carried plan facts (embedded pending directives)
+    // so fence-flattening channels still warn after accepted send (#41966).
     mediaTokenSkippedInFence:
-      parsed.mediaTokenSkippedInFence || strippedParsed.mediaTokenSkippedInFence,
+      Boolean(payload.mediaTokenSkippedInFence) ||
+      parsed.mediaTokenSkippedInFence ||
+      strippedParsed.mediaTokenSkippedInFence,
     fencedSkippedMediaDirectives: mergeFencedSkippedMediaDirectives(
-      parsed.fencedSkippedMediaDirectives,
-      strippedParsed.fencedSkippedMediaDirectives,
+      payload.fencedSkippedMediaDirectives,
+      mergeFencedSkippedMediaDirectives(
+        parsed.fencedSkippedMediaDirectives,
+        strippedParsed.fencedSkippedMediaDirectives,
+      ),
     ),
   };
 }
