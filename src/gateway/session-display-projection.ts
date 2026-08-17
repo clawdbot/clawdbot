@@ -6,7 +6,7 @@ import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 const SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS = 240;
 
-export type SessionDisplayProjection = {
+type SessionDisplayProjection = {
   role: "user" | "assistant";
   text: string;
 };
