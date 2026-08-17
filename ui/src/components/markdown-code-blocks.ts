@@ -23,6 +23,22 @@ const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
+function updateCodeBlockOverflow(pre: HTMLElement): void {
+  const wrapper = pre.closest<HTMLElement>(".code-block-wrapper");
+  if (!wrapper) {
+    return;
+  }
+  const maxScroll = pre.scrollWidth - pre.clientWidth;
+  wrapper.classList.toggle("has-scroll-left", pre.scrollLeft > 1);
+  wrapper.classList.toggle("has-scroll-right", pre.scrollLeft < maxScroll - 1);
+}
+
+export function initializeMarkdownCodeBlockOverflow(root: ParentNode): void {
+  for (const pre of root.querySelectorAll<HTMLElement>(".code-block-wrapper pre")) {
+    updateCodeBlockOverflow(pre);
+  }
+}
+
 export function updateMarkdownCodeBlockOverflow(event: Event): void {
   const target = event.target;
   if (!(target instanceof Element)) {
@@ -31,13 +47,10 @@ export function updateMarkdownCodeBlockOverflow(event: Event): void {
   const pre = target.matches(".code-block-wrapper pre")
     ? target
     : target.closest<HTMLElement>(".code-block-wrapper")?.querySelector("pre");
-  const wrapper = pre?.closest<HTMLElement>(".code-block-wrapper");
-  if (!(pre instanceof HTMLElement) || !wrapper) {
+  if (!(pre instanceof HTMLElement)) {
     return;
   }
-  const maxScroll = pre.scrollWidth - pre.clientWidth;
-  wrapper.classList.toggle("has-scroll-left", pre.scrollLeft > 1);
-  wrapper.classList.toggle("has-scroll-right", pre.scrollLeft < maxScroll - 1);
+  updateCodeBlockOverflow(pre);
 }
 
 for (const [language, definition] of Object.entries({

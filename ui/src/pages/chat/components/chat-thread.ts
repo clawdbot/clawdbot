@@ -1,8 +1,10 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import {
   handleMarkdownCodeBlockCopy,
+  initializeMarkdownCodeBlockOverflow,
   updateMarkdownCodeBlockOverflow,
 } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -118,6 +120,11 @@ function renderTranscriptShell(
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
+      ${ref((element) => {
+        if (element instanceof HTMLElement) {
+          requestAnimationFrame(() => initializeMarkdownCodeBlockOverflow(element));
+        }
+      })}
       role="log"
       aria-live="off"
       aria-relevant="additions"
