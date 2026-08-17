@@ -476,6 +476,7 @@ describe("memory session chunk-delta sync", () => {
       .get() as { hash: string };
     expect(recordAfter.hash).toBe(recordBefore.hash);
     expect(manager.status().dirty).toBe(true);
+    expect(Reflect.get(manager, "sessionsDirtyFiles")).toEqual(new Set([sessionFile]));
 
     ops.planSessionChunkDelta = originalPlan;
     await manager.sync({ reason: "test" });
@@ -488,6 +489,8 @@ describe("memory session chunk-delta sync", () => {
       .prepare(`SELECT hash FROM memory_index_sources WHERE source = 'sessions'`)
       .get() as { hash: string };
     expect(recordConverged.hash).not.toBe(recordBefore.hash);
+    expect(Reflect.get(manager, "sessionsDirtyFiles")).toEqual(new Set());
+    expect(manager.status().dirty).toBe(false);
     const ftsCount = readFtsRowCount(manager);
     if (ftsCount !== null) {
       expect(ftsCount).toBe(converged.length);
