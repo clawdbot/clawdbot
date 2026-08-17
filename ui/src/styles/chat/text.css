@@ -180,7 +180,7 @@
 }
 
 .chat-text :where(li > ul, li > ol) {
-  margin-top: 0.4em;
+  margin-top: 0.2em;
 }
 
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
