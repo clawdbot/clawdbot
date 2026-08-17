@@ -14,7 +14,7 @@ import {
 } from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
-import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexTurnStartResponse } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -165,13 +165,16 @@ export async function activateCodexAttemptTurn(
     }
   }
   if (!state.completed && isTerminalTurnStatus(turn.turn.status)) {
+    if (!isJsonObject(turn.turn)) {
+      throw new Error("Codex turn completion payload is not a JSON object");
+    }
     await enqueueNotification(
       {
         method: "turn/completed",
         params: {
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
-          turn: turn.turn as unknown as JsonObject,
+          turn: turn.turn,
         },
       },
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },

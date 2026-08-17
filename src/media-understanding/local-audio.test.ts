@@ -43,6 +43,47 @@ describe("local audio selection", () => {
     });
   });
 
+  it("discovers installed whisper models and prefers non-tiny over the tiny fixture", async () => {
+    const tempDir = tempDirs.make("openclaw-local-audio-");
+    const commandPath = path.join(tempDir, "whisper-cli");
+    await fs.writeFile(commandPath, "#!/bin/sh\n");
+    await fs.chmod(commandPath, 0o755);
+
+    const selection = await inspectLocalAudioSelection({
+      env: { PATH: tempDir },
+      platform: process.platform,
+      arch: process.arch,
+      inspectLinkedLibraries: async () => null,
+      listDirectory: async (dirPath) =>
+        dirPath === "/opt/homebrew/share/whisper-cpp"
+          ? ["for-tests-ggml-tiny.bin", "ggml-tiny.bin", "ggml-base.en.bin", "notes.txt"]
+          : [],
+    });
+
+    const whisper = selection.candidates.find((candidate) => candidate.id === "whisper-cli");
+    expect(whisper?.ready).toBe(true);
+    expect(whisper?.entry?.args).toContain("/opt/homebrew/share/whisper-cpp/ggml-base.en.bin");
+  });
+
+  it("reports whisper as not ready when no ggml model is installed", async () => {
+    const tempDir = tempDirs.make("openclaw-local-audio-");
+    const commandPath = path.join(tempDir, "whisper-cli");
+    await fs.writeFile(commandPath, "#!/bin/sh\n");
+    await fs.chmod(commandPath, 0o755);
+
+    const selection = await inspectLocalAudioSelection({
+      env: { PATH: tempDir },
+      platform: process.platform,
+      arch: process.arch,
+      inspectLinkedLibraries: async () => null,
+      listDirectory: async () => [],
+    });
+
+    const whisper = selection.candidates.find((candidate) => candidate.id === "whisper-cli");
+    expect(whisper?.ready).toBe(false);
+    expect(whisper?.reason).toBe("model file not found");
+  });
+
   it("does not resolve auto-detected commands from empty PATH entries", async () => {
     const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");

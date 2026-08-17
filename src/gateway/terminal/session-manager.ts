@@ -21,8 +21,6 @@ import {
   DEFAULT_MAX_SESSIONS,
   DEFAULT_SCROLLBACK_CHARS,
 } from "./session-limits.js";
-import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
-export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 import type {
   TerminalEventSink,
   TerminalExitReason,
@@ -33,6 +31,8 @@ import type {
   TerminalSessionManagerOptions,
   TerminalOwner,
 } from "./session-manager.types.js";
+import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
+export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
 const log = createSubsystemLogger("gateway/terminal");
 

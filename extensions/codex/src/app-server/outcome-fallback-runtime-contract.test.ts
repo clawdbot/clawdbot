@@ -420,7 +420,12 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
           {
             name: "cron",
             description: "Cron",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              properties: { action: { type: "string" } },
+              required: ["action"],
+              additionalProperties: false,
+            },
             execute: vi.fn(async () => toolResult),
           } as never,
         ],

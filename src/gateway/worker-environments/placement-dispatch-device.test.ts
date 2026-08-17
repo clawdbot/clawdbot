@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -30,7 +31,7 @@ describe("device worker placement dispatch", () => {
 
   it("provisions, syncs, and activates a local-install device environment", async () => {
     const harness = createHarness(placementStore);
-    bindDeviceWorkerAvailability(harness.environments, async () => true);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({ available: true }));
     vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
@@ -42,7 +43,7 @@ describe("device worker placement dispatch", () => {
         bundleHash: "a".repeat(64),
         openclawVersion: "2026.8.12",
         protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
-        installKind: "local",
+        installKind: "bundle",
       },
       sharedHost: true,
       tunnelStatus: "stopped",
@@ -66,6 +67,7 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
       { profileId: request.profileId, ...request.inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
+      undefined,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
@@ -82,7 +84,10 @@ describe("device worker placement dispatch", () => {
 
   it("records an unavailable device dispatch as a durable failed placement", async () => {
     const harness = createHarness(placementStore);
-    bindDeviceWorkerAvailability(harness.environments, async () => false);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: false,
+      issue: NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+    }));
     const states: string[] = [];
     const request = {
       ...REQUEST,
@@ -99,15 +104,17 @@ describe("device worker placement dispatch", () => {
 
     await expect(
       harness.service.dispatch(request, (placement) => states.push(placement.state)),
-    ).rejects.toThrow("device worker requires a connected current node host");
+    ).rejects.toThrow(
+      "device worker node offline-device requires an update before it can host sessions; run openclaw update, then reconnect it (for a headless node, run openclaw node restart)",
+    );
 
     expect(states).toEqual(["requested", "failed"]);
     expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
     expect(createWorkerSessionPlacementStore({ database }).get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       environmentId: null,
-      recoveryError: expect.stringContaining("connected current node host"),
-      terminalReason: expect.stringContaining("connected current node host"),
+      recoveryError: expect.stringContaining("run openclaw update"),
+      terminalReason: expect.stringContaining("run openclaw node restart"),
       terminalAtMs: 1_000,
     });
   });

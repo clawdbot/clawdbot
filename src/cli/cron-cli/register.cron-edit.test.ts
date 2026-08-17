@@ -58,6 +58,17 @@ describe("cron edit command", () => {
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
+  it("accepts --json as the explicit machine-output spelling", async () => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--enable", "--json"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { enabled: true },
+    });
+  });
+
   it("updates the human-readable display name without changing the job name", async () => {
     await createCronProgram().parseAsync(["edit", "job-1", "--display-name", "Daily summary"], {
       from: "user",

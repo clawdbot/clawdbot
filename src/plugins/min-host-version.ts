@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Checks plugin minimum host version compatibility.
 import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 
@@ -13,8 +14,6 @@ type MinHostVersionRequirement = {
   raw: string;
   minimumLabel: string;
 };
-
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Result of checking a plugin minHostVersion against the current host. */
 type MinHostVersionCheckResult =

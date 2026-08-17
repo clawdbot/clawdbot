@@ -226,6 +226,28 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
   });
 
+  it("does not publish config when the existing agent workspace cannot be provisioned", async () => {
+    mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
+
+    await expect(
+      runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          authChoice: "skip",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+        },
+        runtime,
+        baseConfig: { agents: { entries: { ops: { default: true } } } },
+      }),
+    ).rejects.toThrow("workspace is unwritable");
+
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+  });
+
   it("provisions and reports the keyed default agent while preserving the global workspace", async () => {
     const baseConfig = {
       agents: {

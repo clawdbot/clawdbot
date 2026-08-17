@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
@@ -90,14 +90,14 @@ function countResolve(metadataSnapshot: PluginMetadataSnapshot): {
 }
 
 beforeEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   vi.stubEnv("OPENCLAW_HOME", path.join(tempRoot, "home"));
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
 });
 
 afterEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 afterAll(() => {
@@ -123,7 +123,7 @@ it("only reuses a snapshot that answers for the whole config", () => {
   const env = process.env;
   const withoutSnapshot = resolveEffectivePluginIds({ config, env });
   const full = countResolve(loadPluginMetadataSnapshot({ config, env }));
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   // `recordPluginInstallSource` asks for one plugin's effective state, which scopes the
   // snapshot to that plugin and truncates its manifest set to that plugin alone.
   const scopedSnapshot = loadPluginMetadataSnapshot({
@@ -131,7 +131,7 @@ it("only reuses a snapshot that answers for the whole config", () => {
     env,
     pluginIds: ["other-plugin"],
   });
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   const scoped = countResolve(scopedSnapshot);
 
   expect({ full: full.ids, scoped: scoped.ids }).toEqual({

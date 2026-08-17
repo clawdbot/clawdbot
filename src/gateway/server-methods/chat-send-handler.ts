@@ -73,15 +73,24 @@ async function handleChatSendWithOptions(
   if (!preparedAttachments.ok) {
     return;
   }
+  // Prepared inbound media has no transcript reference until the user turn
+  // persists; every pre-ACK abandonment exit funnels through
+  // cleanupAdmittedRun, which fires this armed discard. The hasPersisted gate
+  // protects the restart-safe path, which persists durably before its abort
+  // and routing exits; dispatch owns persistence after the ACK disarms this.
+  let preparedMediaRecorder: { hasPersisted: () => boolean } | undefined;
+  admitted.value.setDiscardAbandonedPreparedMedia(() => {
+    if (!preparedMediaRecorder?.hasPersisted()) {
+      void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
+    }
+  });
   if (activeRunAbort.controller.signal.aborted) {
-    void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
     finishAbortedChatSend();
     return;
   }
   // Attachment preparation can suspend. Recheck immediately before the
   // synchronous ACK path so aborts and hot routing reloads cannot cross it.
   if (sessionRoutingChanged(context.getRuntimeConfig())) {
-    void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
     admitted.value.rejectSessionRoutingChanged();
     return;
   }
@@ -129,6 +138,7 @@ async function handleChatSendWithOptions(
       recorder: userTurnRecorder,
       replyContextFieldsPromise,
     } = userTurn;
+    preparedMediaRecorder = userTurnRecorder;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
       // A matching idempotency row and lifecycle claim commit atomically, so
@@ -212,7 +222,6 @@ async function handleChatSendWithOptions(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
-
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -252,6 +261,10 @@ async function handleChatSendWithOptions(
       },
       { config: cfg },
     );
+    // After the ACK, dispatch owns the turn: its error lifecycle persists the
+    // user transcript (which references the media) on every path, so a
+    // post-ACK cleanupAdmittedRun must not race that persist with a discard.
+    admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({

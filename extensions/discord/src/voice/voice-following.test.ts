@@ -529,7 +529,7 @@ defineDiscordVoiceTests(
         if (channelId === "1002") {
           backupFetches += 1;
           if (backupFetches > 1) {
-            return null;
+            throw new Error("followed channel unavailable");
           }
         }
         return {

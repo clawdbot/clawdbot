@@ -8,7 +8,6 @@ const EMPTY_INTERACTIVE_REPLY_TEXT =
 describe("buildEmptyInteractiveReplyPayload", () => {
   const baseParams = {
     isInteractive: true,
-    isMessageToolOnly: false,
     hasPendingContinuation: false,
     hasExplicitSilentReply: false,
     hasCommittedDelivery: false,

@@ -26,6 +26,7 @@ type GatewayToolCallerIdentity = {
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
+  turnSourceLocal?: true;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
@@ -49,6 +50,7 @@ type AdmittedGatewayToolCallerParams = {
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
+  turnSourceLocal?: true;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
@@ -69,6 +71,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
     turnSourceChannel: params.turnSourceChannel,
+    turnSourceLocal: params.turnSourceLocal,
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
@@ -111,6 +114,7 @@ export async function withGatewayToolCallerIdentity<T>(
   const cronCreatorAuthorityGrant =
     identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant;
   const turnSourceChannel = inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
+  const turnSourceLocal = inheritedOwner?.turnSourceLocal ?? identity.turnSourceLocal;
   const turnSourceTo = inheritedOwner?.turnSourceTo ?? identity.turnSourceTo?.trim();
   const turnSourceAccountId =
     inheritedOwner?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
@@ -131,6 +135,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
+      ...(turnSourceLocal === true ? { turnSourceLocal: true } : {}),
       ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),

@@ -35,6 +35,7 @@ type PluginActivationPlannerHintReason =
 
 type PluginActivationPlannerManifestReason =
   | "manifest-channel-owner"
+  | "manifest-cli-command-owner"
   | "manifest-command-alias"
   | "manifest-hook-owner"
   | "manifest-provider-owner"
@@ -194,6 +195,13 @@ function listCommandTriggerReasons(
   return dedupeReasons([
     listHasNormalizedValue(plugin.activation?.onCommands, command, normalizeCommandId)
       ? "activation-command-hint"
+      : null,
+    listHasNormalizedValue(
+      plugin.cliCommands?.map((descriptor) => descriptor.name),
+      command,
+      normalizeCommandId,
+    )
+      ? "manifest-cli-command-owner"
       : null,
     listHasNormalizedValue(
       (plugin.commandAliases ?? []).flatMap((alias) => alias.cliCommand ?? alias.name),

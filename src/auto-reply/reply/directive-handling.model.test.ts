@@ -1712,14 +1712,7 @@ describe("/model chat UX", () => {
           contextTokens: 272_000,
         },
       ],
-      cfg: {
-        ...baseConfig(),
-        agents: {
-          defaults: {
-            contextTokens: 1_000_000,
-          },
-        },
-      } as OpenClawConfig,
+      cfg: baseConfig() as OpenClawConfig,
     });
 
     expect(persisted.contextTokens).toBe(272_000);

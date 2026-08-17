@@ -37,7 +37,8 @@ describe("trusted in-process Gateway session creation", () => {
   it("surfaces creation provenance only on in-process dispatch", async () => {
     const creation = {
       via: "spawn" as const,
-      actor: { type: "agent" as const, id: "agent:main:main" },
+      actor: { type: "agent" as const, id: "main" },
+      requesterSessionKey: "agent:main:main",
     };
     await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation);
 
@@ -84,7 +85,8 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
       {
         via: "spawn",
-        actor: { type: "agent", id: "agent:main:main" },
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
       },
@@ -113,10 +115,15 @@ describe("request-shaped in-process Gateway dispatch", () => {
   it("uses the local router with least privilege and transport-equivalent request options", async () => {
     const controller = new AbortController();
     const onAccepted = vi.fn();
+    const agentToolCaller = {
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:colin",
+    };
 
     await callAgentToolGatewayRequest({
       method: "agent",
       params: { sessionKey: "agent:main:worker", message: "run" },
+      agentToolCaller,
       expectFinal: true,
       onAccepted,
       signal: controller.signal,
@@ -127,6 +134,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
       { sessionKey: "agent:main:worker", message: "run" },
       {
         forceSyntheticClient: true,
+        agentToolCaller,
         syntheticScopes: ["operator.write"],
         expectFinal: true,
         onAccepted,
@@ -189,11 +197,19 @@ describe("request-shaped in-process Gateway dispatch", () => {
       method: "sessions.list",
       params: { limit: 5 },
       timeoutMs: 2_000,
+      agentToolCaller: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:direct:colin",
+      },
     } as const;
 
     await callAgentToolGatewayRequest(request);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(request);
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: { limit: 5 },
+      timeoutMs: 2_000,
+    });
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 });

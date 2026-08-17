@@ -1,3 +1,4 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -237,9 +238,14 @@ export function toXaiRealtimeWsUrl(
 export function hasXaiRealtimeApiKeyInput(
   configApiKey: string | undefined,
   cfg: OpenClawConfig | undefined,
+  agentId?: string,
 ): boolean {
   if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
     return true;
   }
-  return isProviderAuthProfileConfigured({ provider: "xai", cfg });
+  return isProviderAuthProfileConfigured({
+    provider: "xai",
+    cfg,
+    ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+  });
 }

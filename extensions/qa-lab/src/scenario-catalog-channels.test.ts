@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(144);
+    expect(moduleFlows).toHaveLength(146);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 
@@ -230,10 +230,10 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it("keeps the shared channel canary eligible for QA Channel and Telegram", () => {
+  it("keeps the shared channel canary eligible for its supported channels", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
 
-    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram", "buzz", "msteams"]);
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {

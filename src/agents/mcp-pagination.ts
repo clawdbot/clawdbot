@@ -19,7 +19,7 @@ type McpPaginationRequest = {
   signal: AbortSignal;
 };
 
-type CollectMcpPaginatedItemsParams<TInput, TOutput = TInput> = {
+type CollectMcpPaginatedItemsBaseParams<TInput> = {
   label: string;
   itemLabel: string;
   timeoutMs: number;
@@ -28,8 +28,13 @@ type CollectMcpPaginatedItemsParams<TInput, TOutput = TInput> = {
   maxBytes: number;
   signal?: AbortSignal;
   loadPage: (request: McpPaginationRequest) => Promise<McpPaginationPage<TInput>>;
-  mapItem?: (item: TInput) => TOutput | undefined;
 };
+
+type CollectMcpPaginatedItemsParams<TInput, TOutput> =
+  | (CollectMcpPaginatedItemsBaseParams<TInput> & {
+      mapItem: (item: TInput) => TOutput | undefined;
+    })
+  | (CollectMcpPaginatedItemsBaseParams<TInput> & { mapItem?: undefined });
 
 function positiveInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -43,9 +48,17 @@ function abortError(signal: AbortSignal, label: string): Error {
 }
 
 /** Collects one complete MCP list under a single bounded lifecycle. */
-export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
+export function collectMcpPaginatedItems<TInput>(
+  params: CollectMcpPaginatedItemsBaseParams<TInput> & { mapItem?: undefined },
+): Promise<TInput[]>;
+export function collectMcpPaginatedItems<TInput, TOutput>(
+  params: CollectMcpPaginatedItemsBaseParams<TInput> & {
+    mapItem: (item: TInput) => TOutput | undefined;
+  },
+): Promise<TOutput[]>;
+export async function collectMcpPaginatedItems<TInput, TOutput>(
   params: CollectMcpPaginatedItemsParams<TInput, TOutput>,
-): Promise<TOutput[]> {
+): Promise<Array<TInput | TOutput>> {
   const timeoutMs = clampPositiveTimerTimeoutMs(params.timeoutMs);
   if (timeoutMs === undefined) {
     throw new Error(`${params.label} requires a positive timeout`);
@@ -81,7 +94,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
     signal.addEventListener("abort", onAbort, { once: true });
   });
 
-  const items: TOutput[] = [];
+  const items: Array<TInput | TOutput> = [];
   const seenCursors = new Set<string>();
   let collectedBytes = 0;
   let cursor: string | undefined;
@@ -104,7 +117,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
       collectedBytes += measured.bytes;
 
       for (const item of page.items) {
-        const mapped = params.mapItem ? params.mapItem(item) : (item as unknown as TOutput);
+        const mapped = params.mapItem ? params.mapItem(item) : item;
         if (mapped === undefined) {
           continue;
         }

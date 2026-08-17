@@ -79,12 +79,14 @@ export function buildWorkspaceSkillCommandSpecs(
     entries?: SkillEntry[];
     agentId?: string;
     skillFilter?: string[];
+    includeAllowlistHidden?: boolean;
     eligibility?: SkillEligibilityContext;
     reservedNames?: Set<string>;
   },
 ): SkillCommandSpec[] {
-  const effectiveSkillFilter =
-    opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId);
+  const effectiveSkillFilter = opts?.includeAllowlistHidden
+    ? undefined
+    : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId));
   const eligible = opts?.entries
     ? filterWorkspaceSkills(opts.entries, {
         config: opts?.config,
@@ -170,6 +172,7 @@ export function buildWorkspaceSkillCommandSpecs(
 
     specs.push({
       name: unique,
+      displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
       skillName: rawName,
       description,

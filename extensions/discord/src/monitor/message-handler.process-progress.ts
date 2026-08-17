@@ -1,6 +1,6 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 // Discord plugin module owns progress-window state and agent-event rendering.
-import { createChannelProgressReceiptTracker } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -45,10 +45,7 @@ export function createDiscordMessageProgressRuntime(params: {
   const { cfg, route, abortSignal } = ctx;
   // Reasoning delivery follows the session /reasoning level, not streaming config.
   const reasoningLevel = ((): "on" | "stream" | "off" => {
-    const normalizedAgentId = (route.agentId ?? "").trim().toLowerCase() || "main";
-    const agentEntryDefault = cfg.agents?.list?.find(
-      (entry) => ((entry?.id ?? "").trim().toLowerCase() || "main") === normalizedAgentId,
-    )?.reasoningDefault;
+    const agentEntryDefault = resolveAgentConfig(cfg, route.agentId ?? "main")?.reasoningDefault;
     const cfgDefault = agentEntryDefault ?? cfg.agents?.defaults?.reasoningDefault;
     const configDefault: "on" | "stream" | "off" =
       cfgDefault === "on" || cfgDefault === "stream" ? cfgDefault : "off";
@@ -75,17 +72,11 @@ export function createDiscordMessageProgressRuntime(params: {
   // The durable verbose lane mirrors commentary, not tool lifecycle rows.
   // Yield only the draft content that has a durable counterpart.
   let shouldYieldDraftCommentary: () => boolean = () => false;
-  const progressReceipt = createChannelProgressReceiptTracker();
-  const resetTurnState = () => {
-    progressReceipt.reset();
-  };
   const handleAssistantMessageBoundary = () => {
     if (draftPreview.handleAssistantMessageBoundary()) {
-      resetTurnState();
       params.onTurnReset();
     }
   };
-  const buildProgressSummaryLine = () => `-# ${progressReceipt.buildSummaryLine()}`;
 
   const replyOptions: Partial<ReplyOptions> = {
     onAssistantMessageStart: draftPreview.draftStream
@@ -96,7 +87,6 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     onReasoningEnd: draftPreview.draftStream
       ? () => {
-          progressReceipt.closeReasoning();
           handleAssistantMessageBoundary();
           return false;
         }
@@ -104,7 +94,6 @@ export function createDiscordMessageProgressRuntime(params: {
     onQueuedFollowupAdmitted: draftPreview.draftStream
       ? () => {
           if (draftPreview.handleQueuedFollowupAdmitted()) {
-            resetTurnState();
             params.onTurnReset();
           }
         }
@@ -152,9 +141,6 @@ export function createDiscordMessageProgressRuntime(params: {
       if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
         return false;
       }
-      if (payload?.text) {
-        progressReceipt.noteReasoning();
-      }
       await params.reactions.controller.setThinking();
       return await draftPreview.pushReasoningProgress(payload?.text, {
         snapshot: payload?.isReasoningSnapshot === true,
@@ -167,9 +153,6 @@ export function createDiscordMessageProgressRuntime(params: {
       }
       await params.reactions.maybeBindToToolReaction(payload);
       await params.reactions.controller.setTool(payload.name);
-      if (payload.phase === "start") {
-        progressReceipt.noteToolCall(payload.name);
-      }
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
@@ -180,9 +163,7 @@ export function createDiscordMessageProgressRuntime(params: {
         if (shouldYieldDraftCommentary()) {
           return undefined;
         }
-        return await draftPreview.pushPreambleItemEvent(payload, (itemId, text) => {
-          progressReceipt.noteCommentary(itemId, text);
-        });
+        return await draftPreview.pushPreambleItemEvent(payload);
       }
       return await draftPreview.pushItemEvent(payload);
     },
@@ -221,8 +202,5 @@ export function createDiscordMessageProgressRuntime(params: {
     },
   };
 
-  return {
-    replyOptions,
-    buildProgressSummaryLine,
-  };
+  return { replyOptions };
 }

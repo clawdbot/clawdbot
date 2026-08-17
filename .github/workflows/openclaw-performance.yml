@@ -72,8 +72,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.29
-  OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf
+  OCM_VERSION: v0.2.32
+  OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070
   KOVA_REPOSITORY: openclaw/Kova
   KOVA_CANONICAL_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
   KOVA_LEGACY_LIST_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
@@ -387,29 +387,6 @@ jobs:
           EOF
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Configure OCM local workspace dependencies
-        if: steps.lane.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mts"
-          npm_adapter="${RUNNER_TEMP}/openclaw-ocm-npm"
-          workspace_dependency_dirs=""
-          if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then
-            workspace_dependency_dirs="${GITHUB_WORKSPACE}/packages/ai"
-          fi
-          cat > "$npm_adapter" <<'EOF'
-          #!/usr/bin/env bash
-          exec node --import tsx "$OPENCLAW_OCM_NPM_WRAPPER" "$@"
-          EOF
-          chmod 0755 "$npm_adapter"
-          {
-            echo "OCM_INTERNAL_NPM_BIN=$npm_adapter"
-            echo "OPENCLAW_OCM_NPM_WRAPPER=$npm_wrapper"
-            echo "OPENCLAW_OCM_REAL_NPM_BIN=$(command -v npm)"
-            echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
-          } >> "$GITHUB_ENV"
 
       - name: Kova version and plan sanity
         if: steps.lane.outputs.run == 'true'

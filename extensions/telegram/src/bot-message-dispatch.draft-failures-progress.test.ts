@@ -1,6 +1,10 @@
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
+  expectWindowRetiredAfterFinal,
+  expectWindowRetiredWithoutSummary,
+} from "./bot-message-dispatch.progress-window.test-helpers.js";
+import {
   describeTelegramDispatch,
   createContext,
   createDirectSessionPayload,
@@ -15,7 +19,6 @@ import {
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectRecordFields,
-  expectWindowCollapsedTo,
   mockCallArg,
   requireInvocationOrder,
   setupDraftStreams,
@@ -585,23 +588,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    // The window collapses IN PLACE into the one-line activity summary (edit,
-    // not delete + repost — Discord parity), so clear() is never called on it.
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    // A tool-only window retires by repositioning in place (not delete + repost
+    // — Discord parity), so clear() is never called on it.
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expectDeliverRepliesParams({ replyToMode: "off" });
-    // The final answer is SENT before the window collapses into the bar: sending
-    // first keeps the final at the bottom of the anchored viewport, so shrinking
-    // the tall window above it never drops the final off screen.
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.finalizeToPreview,
-        0,
-        "first answer draft finalization",
-      ),
-    );
+    // The final answer is SENT before the window retires: sending first keeps
+    // the final at the bottom of the anchored viewport, so retiring the tall
+    // window above it never drops the final off screen.
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
@@ -649,14 +646,8 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect.objectContaining({ text: expect.stringContaining("Exec") }),
     );
     expectDeliveredReply(0, { text: "Terminal block after tool" });
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.finalizeToPreview,
-        0,
-        "first answer draft finalization",
-      ),
-    );
+    expectWindowRetiredWithoutSummary(answerDraftStream);
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
   function allDeliveredReplyTexts(): string[] {
@@ -667,7 +658,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     );
   }
 
-  it("sends the final answer before collapsing the window into the bar", async () => {
+  it("sends the final answer before retiring the progress window", async () => {
     // Edit-shrink anchor loss: shrinking the tall window to a one-line bar BEFORE
     // the final is sent breaks the client's at-bottom follow and drops the final
     // off screen. The final must be sent FIRST, then the window edited down.
@@ -686,21 +677,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // Final delivered, then the window edited into the bar — final send precedes
-    // the collapse edit.
+    // Final delivered first, then the window retires behind it.
     expectDeliveredReply(0, { text: "All done" });
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.finalizeToPreview,
-        0,
-        "first answer draft finalization",
-      ),
-    );
-    // The bar counters are snapshotted before the final send, so the count is
-    // stable (one tool call — the final's own delivery does not perturb it).
-    expect(answerDraftStream.finalizeToPreview).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expectWindowRetiredWithoutSummary(answerDraftStream);
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
   it("still collapses the window when the final answer send is skipped", async () => {
@@ -723,7 +703,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     });
 
     // The bar still edits the window in place even though the final send failed.
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
   });
 
   it("tallies reasoning bursts and tool calls into the collapse summary", async () => {
@@ -750,7 +730,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expectWindowCollapsedTo(answerDraftStream, "🧠 3 thoughts · 🛠️ 2 tool calls · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Done" });
   });
 

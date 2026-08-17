@@ -54,8 +54,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant;
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
-  // Tool-use expects a post-tool continuation, while length means the output
-  // budget ended. Partial visible text completes neither. (#76477)
+  // Tool-use expects a post-tool continuation, so partial visible text completes
+  // nothing. A length stop that did produce visible text is a partial answer and
+  // is delivered with a truncation notice instead. (#76477)
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     hasTerminalOutput,
@@ -182,6 +183,7 @@ interface YieldContinuationAttempt {
   didSendDeterministicApprovalPrompt?: boolean;
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
+  runtimeContinuationStarted?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -201,6 +203,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
       messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
     }) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    attempt.runtimeContinuationStarted === true ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0
   );
@@ -208,6 +211,9 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
 
 export const YIELD_DIAGNOSTIC_TEXT =
   "⚠️ Turn yielded without a continuation source. Send a message to resume.";
+
+export const TRUNCATED_REPLY_NOTICE_TEXT =
+  "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
 
 function isToolResultRole(role: string): boolean {
   return role === "toolresult" || role === "tool_result" || role === "tool";

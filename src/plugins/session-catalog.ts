@@ -6,12 +6,14 @@ import type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type SessionCatalogListProviderParams = {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local scans must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
   /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
@@ -27,6 +29,8 @@ export type SessionCatalogListProviderParams = {
   onHost?: (host: SessionCatalogHost) => void;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local reads must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };
@@ -34,6 +38,8 @@ export type SessionCatalogContinueProviderParams = Omit<
   SessionsCatalogContinueParams,
   "catalogId"
 > & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local continuation must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
   /** Caller's gateway scopes so providers can gate high-authority continues up front. */
@@ -43,6 +49,8 @@ export type SessionCatalogArchiveProviderParams = Omit<
   SessionsCatalogArchiveParams,
   "catalogId"
 > & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local archive must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };
@@ -182,6 +190,8 @@ export type SessionCatalogProvider = {
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
   openTerminal?: (request: {
     allowProcessHomeFallback?: boolean;
+    /** Gateway always supplies this; optional only for pre-existing external provider types. */
+    agentId?: string;
     hostId: string;
     threadId: string;
   }) => Promise<SessionCatalogTerminalPlan>;
@@ -194,21 +204,35 @@ type SessionCatalogAdoptedSource = { hostId: string; threadId: string };
 type SessionCatalogEntry = SessionCatalogEntrySummary["entry"];
 
 export function listSessionCatalogEntries(params: {
+  agentId?: string;
   config: OpenClawConfig;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): SessionCatalogAgentEntry[] {
+  const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
+  const requestedAgentId =
+    params.agentId || requiresExplicitOwner
+      ? resolveSessionAgentIds({
+          config: params.config,
+          agentId: params.agentId,
+        }).sessionAgentId
+      : undefined;
   const requestEntries = params.sessionEntries?.entriesForCatalog?.();
   if (requestEntries) {
     // Keep the shipped SDK helper as the compatibility entry point while the
     // Gateway snapshot owns the one request-wide flatten.
-    return requestEntries;
+    return requiresExplicitOwner && requestedAgentId
+      ? requestEntries.filter((entry) => entry.agentId === requestedAgentId)
+      : requestEntries;
   }
-  const defaultAgentId = resolveDefaultAgentId(params.config);
-  const agentIds = [
-    defaultAgentId,
-    ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
-  ];
+  const defaultAgentId =
+    requestedAgentId ?? resolveSessionAgentIds({ config: params.config }).defaultAgentId;
+  const agentIds = requiresExplicitOwner
+    ? [defaultAgentId]
+    : [
+        defaultAgentId,
+        ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
+      ];
   return agentIds.flatMap((agentId) => {
     const entries = params.sessionEntries
       ? params.sessionEntries.entriesForAgent(agentId)
@@ -226,6 +250,7 @@ export function sessionCatalogAdoptedSessionKey(prefix: string, source: string):
 }
 
 export function listAdoptedSessionCatalogSessions(params: {
+  agentId?: string;
   config: OpenClawConfig;
   pluginId: string;
   runtime: PluginRuntime;
@@ -250,7 +275,7 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
   const operations = new Map<string, Promise<TResult>>();
   return async (params: {
     sourceKey: string;
-    findExisting: () => string | undefined;
+    findExisting: () => string | undefined | Promise<string | undefined>;
     create: () => Promise<{ sessionKey: string }>;
     complete: (continued: { sessionKey: string }) => Promise<TResult>;
   }): Promise<TResult> => {
@@ -259,14 +284,14 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
       return await pending;
     }
     const operation = (async () => {
-      const existing = params.findExisting();
+      const existing = await params.findExisting();
       if (existing) {
         // The gateway's same-source link upsert preserves its active marker. Re-running
         // completion only supplies a new baseline after that link was removed.
         return await params.complete({ sessionKey: existing });
       }
-      const continued = await params.create().catch((error: unknown) => {
-        const raced = params.findExisting();
+      const continued = await params.create().catch(async (error: unknown) => {
+        const raced = await params.findExisting();
         if (raced) {
           return { sessionKey: raced };
         }

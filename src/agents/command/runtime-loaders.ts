@@ -12,6 +12,7 @@ type AcpSessionIdentifiersRuntime = typeof import("@openclaw/acp-core/runtime/se
 type DeliveryRuntime = typeof import("./delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./session-store.runtime.js");
 type CliCompactionRuntime = typeof import("./cli-compaction.js");
+type AgentRunnerMemoryRuntime = typeof import("../../auto-reply/reply/agent-runner-memory.js");
 type TranscriptResolveRuntime =
   typeof import("../../config/sessions/transcript-resolve.runtime.js");
 type TranscriptAppendRuntime = typeof import("../../config/sessions/transcript.runtime.js");
@@ -45,6 +46,9 @@ const sessionStoreRuntimeLoader = createLazyImportLoader<SessionStoreRuntime>(
 );
 const cliCompactionRuntimeLoader = createLazyImportLoader<CliCompactionRuntime>(
   () => import("./cli-compaction.js"),
+);
+const agentRunnerMemoryRuntimeLoader = createLazyImportLoader<AgentRunnerMemoryRuntime>(
+  () => import("../../auto-reply/reply/agent-runner-memory.js"),
 );
 const transcriptResolveRuntimeLoader = createLazyImportLoader<TranscriptResolveRuntime>(
   () => import("../../config/sessions/transcript-resolve.runtime.js"),
@@ -99,6 +103,10 @@ export function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
 
 export function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
   return cliCompactionRuntimeLoader.load();
+}
+
+export function loadAgentRunnerMemoryRuntime(): Promise<AgentRunnerMemoryRuntime> {
+  return agentRunnerMemoryRuntimeLoader.load();
 }
 
 export function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {

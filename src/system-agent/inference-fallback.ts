@@ -142,8 +142,8 @@ export async function verifySystemAgentInferenceWithFallback(params: {
   return (
     lastFailure ?? {
       ok: false,
-      status: "unavailable",
-      error: "No configured authenticated inference provider is available.",
+      status: "unknown",
+      error: "OpenClaw could not verify a usable inference route. Check model setup and try again.",
     }
   );
 }

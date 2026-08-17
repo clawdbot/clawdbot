@@ -153,7 +153,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         order.push(options.method);
 
         if (options.method === "openclaw.setup.detect") {
-          expect(options.timeoutMs).toBe(20_000);
+          expect(options.timeoutMs).toBe(40_000);
           return detectResult();
         }
         if (options.method === "openclaw.setup.activate") {

@@ -3,12 +3,10 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Raft plugin setup owns only the Raft CLI profile, never Raft credentials.
 import {
   createPatchedAccountSetupAdapter,
-  type ChannelSetupInput,
-} from "openclaw/plugin-sdk/setup";
-import {
   createDetectedBinaryStatus,
   formatDocsLink,
   setSetupChannelEnabled,
+  type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

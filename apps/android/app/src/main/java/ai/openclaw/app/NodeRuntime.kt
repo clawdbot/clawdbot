@@ -11,7 +11,7 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatPlanSnapshot
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -2634,9 +2634,18 @@ class NodeRuntime private constructor(
     scope.launch { searchClawHubSkillsFromGateway(query) }
   }
 
+  /**
+   * Routes a row to the only action its source supports. Install-only results skip review and
+   * install the exact reference search returned, so the picked source is the installed source.
+   */
   fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
     if (skill.slug.isBlank()) return
-    scope.launch { reviewClawHubSkillInstallFromGateway(skill.copy(slug = skill.slug.trim())) }
+    val normalized = skill.copy(slug = skill.slug.trim())
+    if (!normalized.canReadDetails) {
+      installClawHubSkill(normalized.reference)
+      return
+    }
+    scope.launch { reviewClawHubSkillInstallFromGateway(normalized) }
   }
 
   fun dismissClawHubSkillInstallReview() {
@@ -2983,7 +2992,7 @@ class NodeRuntime private constructor(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> = chat.subagentActivities
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
-  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
+  val chatPlanSnapshot: StateFlow<ChatPlanSnapshot> = chat.planSnapshot
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = chat.swarmGroups
   val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
@@ -6650,9 +6659,12 @@ class NodeRuntime private constructor(
     slug: String,
     version: String?,
   ): Boolean {
-    val exactVersion = version ?: return false
     if (!refreshSkillsFromGateway() || !isGatewayDataScopeCurrent(gatewayScope)) return false
-    return isClawHubSkillInstalled(_skillsSummary.value.skills, slug, exactVersion)
+    val skills = _skillsSummary.value.skills
+    // Only an install-only source installs without a version. Its reference is not a `@owner/slug`
+    // spelling, so the slug comparison never matches it; the Gateway records the exact reference.
+    return version?.let { isClawHubSkillInstalled(skills, slug, it) }
+      ?: isClawHubSkillInstalledByReference(skills, slug)
   }
 
   private suspend fun releaseClawHubInstallClaim(
@@ -7973,6 +7985,12 @@ class NodeRuntime private constructor(
               ?.trim()
               ?.takeIf(String::isNotEmpty),
           clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubRequestedReference =
+            clawHub
+              ?.get("requestedReference")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
           clawHubOwnerHandle =
             clawHub
               ?.get("ownerHandle")
@@ -8825,6 +8843,8 @@ data class GatewaySkillSummary(
   val installCount: Int,
   val clawHubSlug: String? = null,
   val clawHubValid: Boolean = false,
+  /** Exact reference this skill was installed from; an install-only source keeps its identity. */
+  val clawHubRequestedReference: String? = null,
   val clawHubOwnerHandle: String? = null,
   val clawHubInstalledVersion: String? = null,
 )

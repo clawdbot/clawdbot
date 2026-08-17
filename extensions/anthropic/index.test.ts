@@ -446,15 +446,14 @@ describe("anthropic provider replay hooks", () => {
           defaults: {
             models: {},
           },
-          list: [
-            {
+          entries: {
+            main: {
               default: true,
-              id: "main",
               model: { primary: "anthropic/opus-4.7" },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
             },
-          ],
+          },
         },
       },
     } as never);
@@ -484,16 +483,15 @@ describe("anthropic provider replay hooks", () => {
               "anthropic/opus-4.7": { params: { maxTokens: 1200 } },
             },
           },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               models: {
                 "anthropic/sonnet-4.6": { alias: "Sonnet shorthand" },
               },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
             },
-          ],
+          },
         },
       },
     } as never);

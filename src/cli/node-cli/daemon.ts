@@ -21,6 +21,7 @@ import {
   readSystemdUserLingerStatus,
   resolveSystemdUserServiceAccount,
 } from "../../daemon/systemd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -115,7 +116,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(opts, config);
+  let gatewayOptions;
+  try {
+    gatewayOptions = resolveNodeGatewayOptions(opts, config);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -126,6 +134,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
   if (opts.tls === false && opts.tlsFingerprint !== undefined) {
     fail("--no-tls cannot be combined with --tls-fingerprint");
+    return;
+  }
+  if (cloudflareAccess && tls !== true) {
+    fail("Cloudflare Access credentials require --tls for the node Gateway connection");
     return;
   }
 
@@ -147,7 +159,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
+    fail(`Node service check failed: ${formatErrorMessage(err)}`);
     return;
   }
   if (loaded && !opts.force) {
@@ -259,20 +271,22 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (error) {
-    const message = `Node service check failed: ${String(error)}`;
+    const message = `Node service check failed: ${formatErrorMessage(error)}`;
     if (json) {
-      defaultRuntime.writeJson({ error: message });
-    } else {
-      defaultRuntime.error(message);
+      throw new Error(message, { cause: error });
     }
+    defaultRuntime.error(message);
     defaultRuntime.exit(1);
     return;
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service
-      .readRuntime(process.env)
-      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.readRuntime(process.env).catch(
+      (err: unknown): GatewayServiceRuntime => ({
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      }),
+    ),
   ]);
 
   const payload = {

@@ -1207,6 +1207,56 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("includes plugin tools declared for the active built-in profile", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([
+        {
+          name: "profiled_plugin_tool",
+          label: "Profiled plugin tool",
+          description: "Profiled plugin tool test fixture",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          execute: async () => ({
+            content: [{ type: "text" as const, text: "ok" }],
+            details: {},
+          }),
+        },
+      ]);
+    const preparedModelRuntime = {
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "profiled-plugin",
+            contracts: { tools: ["profiled_plugin_tool"] },
+            toolMetadata: { profiled_plugin_tool: { profiles: ["coding"] } },
+          },
+        ],
+      },
+    } as never;
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: { tools: { profile: "coding" } },
+        includeCoreTools: false,
+        preparedModelRuntime,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(tools.map((tool) => tool.name)).toEqual(["profiled_plugin_tool"]);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.pluginToolAllowlist).toContain(
+        "profiled_plugin_tool",
+      );
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
   it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
     let observedIdentity: unknown;
     const resolvePluginToolsSpy = vi
@@ -1247,6 +1297,7 @@ describe("createOpenClawCodingTools", () => {
           mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "creator",
+          ownerOrigin: { kind: "external", channel: "discord" },
         },
         messageThreadId: "42",
         includeCoreTools: false,
@@ -1331,12 +1382,40 @@ describe("createOpenClawCodingTools", () => {
         mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "creator",
+        ownerOrigin: { kind: "external", channel: "discord" },
       },
     });
 
     expect(latestCreateOpenClawToolsOptions()).toMatchObject({
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "discord",
+      gatewayCallerScheduled: true,
+    });
+  });
+
+  it("keeps explicit local scheduled authority distinct from live delivery routing", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      agentAccountId: "delivery",
+      messageChannel: "discord",
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:main",
+        ownerAccountId: "creator",
+        ownerOrigin: { kind: "local" },
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      gatewayCallerScheduled: true,
     });
   });
 

@@ -18,14 +18,12 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
-import { persistRunSessionUsage } from "./session-run-accounting.js";
-import { incrementRunCompactionCount } from "./session-run-accounting.js";
+import { persistRunSessionUsage, incrementRunCompactionCount } from "./session-run-accounting.js";
 
 type AgentTurnAccountingContext = Pick<
   FinalizeReplyAgentRunInput,
   | "activeSessionEntry"
   | "activeSessionStore"
-  | "agentCfgContextTokens"
   | "blockReplyPipeline"
   | "cfg"
   | "defaultModel"
@@ -46,7 +44,6 @@ type AgentTurnAccountingContext = Pick<
 export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const {
     activeSessionStore,
-    agentCfgContextTokens,
     blockReplyPipeline,
     cfg,
     defaultModel,
@@ -249,7 +246,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       cfg,
       provider: providerUsed,
       model: modelUsed,
-      contextTokensOverride: agentCfgContextTokens,
       fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
       allowAsyncLoad: false,
     }) ??
@@ -335,7 +331,6 @@ export async function accountFollowupTurn(params: {
   const accounting = await accountAgentTurn({
     activeSessionEntry: turn.session.current(),
     activeSessionStore: turn.sessionStore,
-    agentCfgContextTokens: defaults.agentCfgContextTokens,
     blockReplyPipeline: null,
     cfg: turn.config,
     defaultModel: defaults.defaultModel,

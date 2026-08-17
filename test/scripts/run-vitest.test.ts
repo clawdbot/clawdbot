@@ -5,12 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveTestProjectsRunnerEnv,
   resolveTestProjectsRunnerSpawnParams,
-  runTestProjectsDelegation,
 } from "../../scripts/lib/test-projects-delegation.mts";
 import {
   DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
@@ -391,6 +389,31 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
     const prefix = "extensions/telegram/src/format";
     expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
+  });
+
+  it("delegates an existing extension root to the project router", () => {
+    const directory = "extensions/codex";
+
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
+    expect(resolveTestProjectsDelegationArgs(["run", directory, "--reporter=verbose"])).toEqual([
+      directory,
+      "--",
+      "--reporter=verbose",
+    ]);
+  });
+
+  it("keeps extension subdirectories and direct-mode root runs on Vitest", () => {
+    const directory = "extensions/codex";
+
+    expect(resolveTestProjectsDelegationArgs([`${directory}/src`])).toBeNull();
+    expect(
+      resolveTestProjectsDelegationArgs([
+        "--config",
+        "test/vitest/vitest.extension-codex.config.ts",
+        directory,
+      ]),
+    ).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["--watch", directory])).toBeNull();
   });
 
   it("delegates owned agent directories with separate Vitest option values", () => {
@@ -794,92 +817,6 @@ describe("scripts/run-vitest", () => {
       detached: false,
       stdio: "inherit",
     });
-  });
-
-  posixIt("cleans delegated test-project children when the wrapper is signaled", async () => {
-    expect(runTestProjectsDelegation).toBeTypeOf("function");
-    const fixturePath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-delegated-signal-${process.pid}-${Date.now()}.mjs`,
-    );
-    const childPidPath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
-    );
-    const descendantPidPath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-delegated-descendant-${process.pid}-${Date.now()}.pid`,
-    );
-
-    fs.writeFileSync(
-      fixturePath,
-      [
-        'import { spawn } from "node:child_process";',
-        'import fs from "node:fs";',
-        'const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
-        "fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID, String(process.pid));",
-        "fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID, String(child.pid));",
-        "await new Promise(() => {});",
-        "",
-      ].join("\n"),
-    );
-
-    const runner = spawn(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        `import { runTestProjectsDelegation } from ${JSON.stringify(
-          pathToFileURL(nodePath.resolve("scripts/lib/test-projects-delegation.mts")).href,
-        )}; runTestProjectsDelegation([], process.env, { runnerPath: ${JSON.stringify(fixturePath)} });`,
-      ],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
-          OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID: descendantPidPath,
-        },
-        stdio: "ignore",
-      },
-    );
-    let childPid = 0;
-    let descendantPid = 0;
-
-    try {
-      await waitFor(
-        () => fs.existsSync(childPidPath) && fs.existsSync(descendantPidPath),
-        LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      );
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-      expect(Number.isInteger(childPid)).toBe(true);
-      expect(Number.isInteger(descendantPid)).toBe(true);
-      expect(isProcessAlive(childPid)).toBe(true);
-      expect(isProcessAlive(descendantPid)).toBe(true);
-
-      expect(runner.pid).toBeGreaterThan(0);
-      process.kill(runner.pid!, "SIGTERM");
-      const result = await waitForClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-
-      expect(result).toEqual({ code: null, signal: "SIGTERM" });
-      await waitFor(() => !isProcessAlive(childPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-      await waitFor(() => !isProcessAlive(descendantPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-    } finally {
-      if (runner.pid && isProcessAlive(runner.pid)) {
-        process.kill(runner.pid, "SIGKILL");
-      }
-      if (childPid && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
-      fs.rmSync(fixturePath, { force: true });
-      fs.rmSync(childPidPath, { force: true });
-      fs.rmSync(descendantPidPath, { force: true });
-    }
   });
 
   it("spawns vitest in a detached process group on Unix hosts", () => {

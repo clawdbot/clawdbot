@@ -101,7 +101,7 @@ async function buildDirectDmContext(
     },
     reply: {
       to: params.recipientAddress,
-      originatingTo: params.originatingTo ?? params.recipientAddress,
+      originatingTo: params.originatingTo ?? params.senderAddress,
     },
     message: {
       body,
@@ -232,7 +232,7 @@ export async function dispatchInboundDirectDmWithRuntime(
     CommandAuthorized: params.commandAuthorized,
     ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
     OriginatingChannel: params.originatingChannel ?? params.channel,
-    OriginatingTo: params.originatingTo ?? params.recipientAddress,
+    OriginatingTo: params.originatingTo ?? params.senderAddress,
     NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });

@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
+import { WorkerIdentifierSchema } from "./worker-protocol-primitives.js";
 
 export {
   isCloudWorkerPlacementState,
@@ -175,6 +176,12 @@ export const SessionPlacementSchema = Type.Union([
   FailedSessionPlacementSchema,
 ]);
 
+const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
+const WorkerMachineClassSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
+});
+
 /** Requests one-way dispatch of an existing local session to exactly one worker target. */
 export const SessionsDispatchParamsSchema = Type.Object(
   {
@@ -182,12 +189,16 @@ export const SessionsDispatchParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     profileId: Type.Optional(NonEmptyString),
     deviceId: Type.Optional(NonEmptyString),
+    machineClass: Type.Optional(WorkerMachineClassSchema),
   },
   {
     additionalProperties: false,
     oneOf: [
       { required: ["profileId"], not: { required: ["deviceId"] } },
-      { required: ["deviceId"], not: { required: ["profileId"] } },
+      {
+        required: ["deviceId"],
+        not: { anyOf: [{ required: ["profileId"] }, { required: ["machineClass"] }] },
+      },
     ],
   },
 );
@@ -209,16 +220,88 @@ export const SessionsReclaimParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Result returned once worker ownership has been destroyed and reclaimed. */
+/** Terminal placement returned after a worker reclaim operation. */
+export const SessionsReclaimResultPlacementSchema = Type.Union([
+  LocalSessionPlacementSchema,
+  ReclaimedSessionPlacementSchema,
+]);
+
+/** Result returned once worker ownership is reclaimed or a failed placement is cleared. */
 export const SessionsReclaimResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
     key: NonEmptyString,
     sessionId: NonEmptyString,
-    placement: ReclaimedSessionPlacementSchema,
+    placement: SessionsReclaimResultPlacementSchema,
   },
   { additionalProperties: false },
 );
+
+/** Exact active source observed before a session placement move. */
+export const SessionMoveExpectedSourceSchema = closedObject({
+  generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  environmentId: WorkerIdentifierSchema,
+  ownerEpoch: SessionPlacementOwnerEpochSchema,
+});
+
+/** Moves the session back to the Gateway without redispatching it. */
+export const SessionMoveGatewayTargetSchema = closedObject({
+  kind: Type.Literal("gateway"),
+});
+
+/** Moves the session to one configured cloud worker profile. */
+export const SessionMoveProfileTargetSchema = closedObject({
+  kind: Type.Literal("profile"),
+  profileId: WorkerIdentifierSchema,
+});
+
+/** Moves the session to one paired device worker. */
+export const SessionMoveDeviceTargetSchema = closedObject({
+  kind: Type.Literal("device"),
+  deviceId: WorkerIdentifierSchema,
+});
+
+/** Closed destination union for session placement moves. */
+export const SessionMoveTargetSchema = Type.Union([
+  SessionMoveGatewayTargetSchema,
+  SessionMoveProfileTargetSchema,
+  SessionMoveDeviceTargetSchema,
+]);
+
+/** Durable operator-visible progress for one placement move intent. */
+export const SessionPlacementMoveSchema = closedObject({
+  target: SessionMoveTargetSchema,
+  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+});
+
+/** Requests one exact-source placement move without replaying active work. */
+export const SessionsMoveParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  expected: SessionMoveExpectedSourceSchema,
+  target: SessionMoveTargetSchema,
+});
+
+/** Successful terminal states returned by sessions.move. */
+export const SessionMovePlacementStateSchema = Type.Union([
+  Type.Literal("local"),
+  Type.Literal("active"),
+]);
+
+/** Bounded placement state returned by sessions.move. */
+export const SessionMovePlacementSchema = closedObject({
+  state: SessionMovePlacementStateSchema,
+  generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
+
+/** Result returned after the requested placement move reaches its destination. */
+export const SessionsMoveResultSchema = closedObject({
+  ok: Type.Literal(true),
+  key: NonEmptyString,
+  sessionId: NonEmptyString,
+  placement: SessionMovePlacementSchema,
+});
 
 export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
@@ -237,7 +320,18 @@ export const SessionPlacementProtocolSchemas = {
   SessionsDispatchParams: SessionsDispatchParamsSchema,
   SessionsDispatchResult: SessionsDispatchResultSchema,
   SessionsReclaimParams: SessionsReclaimParamsSchema,
+  SessionsReclaimResultPlacement: SessionsReclaimResultPlacementSchema,
   SessionsReclaimResult: SessionsReclaimResultSchema,
+  SessionMoveExpectedSource: SessionMoveExpectedSourceSchema,
+  SessionMoveGatewayTarget: SessionMoveGatewayTargetSchema,
+  SessionMoveProfileTarget: SessionMoveProfileTargetSchema,
+  SessionMoveDeviceTarget: SessionMoveDeviceTargetSchema,
+  SessionMoveTarget: SessionMoveTargetSchema,
+  SessionPlacementMove: SessionPlacementMoveSchema,
+  SessionsMoveParams: SessionsMoveParamsSchema,
+  SessionMovePlacementState: SessionMovePlacementStateSchema,
+  SessionMovePlacement: SessionMovePlacementSchema,
+  SessionsMoveResult: SessionsMoveResultSchema,
 } as const;
 
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
@@ -245,4 +339,12 @@ export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceS
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;
+export type SessionsReclaimResultPlacement = Static<typeof SessionsReclaimResultPlacementSchema>;
 export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;
+export type SessionMoveExpectedSource = Static<typeof SessionMoveExpectedSourceSchema>;
+export type SessionMoveTarget = Static<typeof SessionMoveTargetSchema>;
+export type SessionPlacementMove = Static<typeof SessionPlacementMoveSchema>;
+export type SessionsMoveParams = Static<typeof SessionsMoveParamsSchema>;
+export type SessionMovePlacementState = Static<typeof SessionMovePlacementStateSchema>;
+export type SessionMovePlacement = Static<typeof SessionMovePlacementSchema>;
+export type SessionsMoveResult = Static<typeof SessionsMoveResultSchema>;

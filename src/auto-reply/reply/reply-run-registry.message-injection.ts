@@ -186,6 +186,11 @@ export function beginReplyMessageInjectionTarget(
       outcome: Promise.resolve(immediateRejection),
     };
   }
+  const targetRunId = normalizeOptionalString(resolved.backend.runId);
+  const userTurnTranscriptRecorder = queueOptions?.userTurnTranscriptRecorder;
+  // The backend selected at the final admission check owns steering identity.
+  // Durable provenance is confirmed only after this exact queue operation proves
+  // transcript commitment; acceptance alone is insufficient.
   // Injection is user input, not run evidence: stamping activity here would let
   // sub-10-minute user messages re-arm a wedged run's staleness window forever.
   // Invoke before the first await. The capability owns the final synchronous
@@ -218,14 +223,21 @@ export function beginReplyMessageInjectionTarget(
       errorMessage: String(error),
     };
     return {
-      targetRunId: target.runId,
+      targetRunId,
       acceptance: acceptance.promise,
       outcome: Promise.resolve(immediateRejection),
     };
   }
   const outcome = queued.then(
-    (result): ReplyMessageInjectionOutcome => {
+    async (result): Promise<ReplyMessageInjectionOutcome> => {
       settleAcceptance(true);
+      if (
+        targetRunId &&
+        queueOptions?.waitForTranscriptCommit === true &&
+        result?.transcriptCommit !== "unconfirmed"
+      ) {
+        await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+      }
       return result ? { status: "accepted", result } : { status: "accepted" };
     },
     (error: unknown): ReplyMessageInjectionOutcome => {
@@ -238,7 +250,7 @@ export function beginReplyMessageInjectionTarget(
     },
   );
   return {
-    targetRunId: target.runId,
+    targetRunId,
     acceptance: acceptance.promise,
     outcome,
   };

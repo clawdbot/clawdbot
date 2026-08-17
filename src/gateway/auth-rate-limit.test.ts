@@ -8,6 +8,7 @@ import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   buildRateLimitIdentityKey,
   createAuthRateLimiter,
+  isAuthRateLimitClientExempt,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 
@@ -415,6 +416,18 @@ describe("auth rate limiter", () => {
     });
     limiter.recordFailure("127.0.0.1");
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
+  });
+
+  it("reports the authoritative exemption policy for fallback serialization", () => {
+    limiter = createAuthRateLimiter();
+    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(true);
+    expect(isAuthRateLimitClientExempt(limiter, buildRateLimitIdentityKey("node", "node-1"))).toBe(
+      false,
+    );
+    limiter.dispose();
+
+    limiter = createAuthRateLimiter({ exemptLoopback: false });
+    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(false);
   });
 
   it("does not exempt opaque identity keys", () => {

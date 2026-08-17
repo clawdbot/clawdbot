@@ -18,8 +18,9 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
@@ -86,6 +87,7 @@ type CreateAgentParams = {
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
+  provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
 class DuplicateAgentError extends Error {}
@@ -99,11 +101,6 @@ function createError(
   return { status: "error", reason, message, ...(agentId ? { agentId } : {}) };
 }
 
-/** True when raw user input contains a character that can survive agent-id normalization. */
-function hasValidRawAgentIdCharacters(value: string): boolean {
-  return /[a-z0-9]/iu.test(value);
-}
-
 export function validateAgentIdInput(
   rawId: string,
   options: { displayName?: string } = {},
@@ -111,14 +108,15 @@ export function validateAgentIdInput(
   | { ok: true; agentId: string }
   | { ok: false; reason: "invalid-name" | "reserved-id"; message: string; agentId?: string } {
   const displayName = options.displayName ?? rawId;
-  if (!hasValidRawAgentIdCharacters(rawId)) {
+  const normalized = normalizeAgentIdStrict(rawId);
+  if (!normalized.ok) {
     return {
       ok: false,
       reason: "invalid-name",
-      message: `agent name "${displayName}" has no valid id characters`,
+      message: `Agent name "${displayName}" has no valid id characters. Use at least one letter a-z or digit.`,
     };
   }
-  const agentId = normalizeAgentId(rawId);
+  const agentId = normalized.value;
   if (isReservedSystemAgentId(agentId)) {
     return { ok: false, reason: "reserved-id", message: `"${agentId}" is reserved`, agentId };
   }
@@ -294,7 +292,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             context.previousHash !== params.expectedConfigHash
           ) {
             throw new ConfigMutationConflictError("config changed before first-agent creation", {
-              currentHash: context.previousHash,
               retryable: false,
             });
           }
@@ -464,6 +461,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
       const result = committed.result!;
+      if (result.status === "created") {
+        recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+      }
       return typeof committed.persistedHash === "string"
         ? { ...result, configHash: committed.persistedHash }
         : result;

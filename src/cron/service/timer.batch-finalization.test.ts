@@ -770,7 +770,7 @@ describe("cron batch outcome finalization", () => {
     const store = fixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.875Z");
     const first = createDueIsolatedJob({
-      id: "startup-failed-write-before-recovery",
+      id: "startup-failed-write-before-stop",
       nowMs: dueAt,
       nextRunAtMs: dueAt,
     });
@@ -788,6 +788,7 @@ describe("cron batch outcome finalization", () => {
         const persistedState = JSON.parse(stateJson) as CronJob["state"];
         if (!rejectedTerminalWrite && persistedState.lastRunStatus === "ok") {
           rejectedTerminalWrite = true;
+          stop(state);
           throw new Error("startup terminal write failed");
         }
       }
@@ -800,10 +801,10 @@ describe("cron batch outcome finalization", () => {
         SELECT reject_startup_terminal(NEW.job_id, NEW.state_json);
       END;
     `);
-    const runIsolatedAgentJob = vi.fn(async () => {
-      state.restartRecoveryPending = true;
-      return { status: "ok" as const, summary: "completed before restart recovery" };
-    });
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "completed before service stop",
+    }));
     const state = createBatchState({
       storePath: store.storePath,
       nowMs: dueAt,

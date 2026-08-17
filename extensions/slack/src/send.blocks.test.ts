@@ -95,50 +95,16 @@ function slackDnsRequestError(): Error {
   });
 }
 
-describe("sendMessageSlack NO_REPLY guard", () => {
-  it("suppresses NO_REPLY text before any Slack API call", async () => {
+describe("sendMessageSlack NO_REPLY literal", () => {
+  // Silent-reply stripping is owned by core auto-reply normalization before
+  // payloads reach outbound; a literal NO_REPLY sent through the message tool
+  // must deliver on Slack exactly like every sibling channel.
+  it("delivers a literal NO_REPLY text like sibling channels", async () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
-    });
-
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("suppressed");
-    expect(result.receipt.platformMessageIds).toStrictEqual([]);
-  });
-
-  it("suppresses NO_REPLY with surrounding whitespace", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "  NO_REPLY  ", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("suppressed");
-  });
-
-  it("does not suppress substantive text containing NO_REPLY", async () => {
-    const client = createSlackSendTestClient();
-    await sendMessageSlack("channel:C123", "This is not a NO_REPLY situation", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalled();
-  });
-
-  it("does not suppress NO_REPLY when blocks are attached", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: "content" } }],
     });
 
     expect(client.chat.postMessage).toHaveBeenCalled();
