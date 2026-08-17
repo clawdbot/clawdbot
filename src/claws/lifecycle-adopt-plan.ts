@@ -81,6 +81,7 @@ export async function planWorkspaceAdoption(params: {
   workspace: string;
   requested: boolean;
   configuredWorkspaceConflict: boolean;
+  configuredWorkspaceConflictCode?: "workspace_collision" | "agent_workspace_conflict";
   resumableWorkspace?: string;
 }): Promise<{
   adopted: boolean;
@@ -126,7 +127,7 @@ export async function planWorkspaceAdoption(params: {
   if (blocked) {
     blockers.push({
       level: "error",
-      code: "workspace_collision",
+      code: params.configuredWorkspaceConflictCode ?? "workspace_collision",
       phase: "plan",
       path: "$.workspace",
       message:

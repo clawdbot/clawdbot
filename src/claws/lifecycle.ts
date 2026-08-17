@@ -8,13 +8,15 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
+import { digestClawAddPlanIntegrity } from "./add-plan-integrity.js";
 import { findClawExtensionPackageCollisions, planClawExtensions } from "./application-plan.js";
 import {
   planWorkspaceAdoption,
   planWorkspaceAdoptionTargets,
   workspaceAdoptionCapabilityChange,
 } from "./lifecycle-adopt-plan.js";
-import { planClawAgent } from "./lifecycle-agent-plan.js";
+import { planClawAgent, type ExistingClawAgent } from "./lifecycle-agent-plan.js";
+import { inspectAgentWorkspaceOwnership } from "./lifecycle-agent-workspace.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -51,7 +53,10 @@ export type ClawAddPlanContext = {
   workspace?: string;
   resumableWorkspace?: string;
   adoptExistingWorkspace?: boolean;
+  adoptExistingAgent?: boolean;
+  existingAgents?: Iterable<ExistingClawAgent>;
   existingAgentIds?: Iterable<string>;
+  managedAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
   existingMcpServers?: Record<string, Record<string, unknown>>;
@@ -236,7 +241,10 @@ export async function buildClawAddPlan(params: {
     manifestAgent: params.manifest.agent,
     openClawProfile: params.openClawProfile,
     reconstructLegacyDynamicToolProfilePlan: params.reconstructLegacyDynamicToolProfilePlan,
+    existingAgents: context.existingAgents,
     existingAgentIds: context.existingAgentIds,
+    managedAgentIds: context.managedAgentIds,
+    adoptExistingAgent: context.adoptExistingAgent,
   });
   const agentConfig = agentPlan.config;
   blockers.push(...agentPlan.blockers);
@@ -245,18 +253,24 @@ export async function buildClawAddPlan(params: {
     capabilityChanges.push(capabilityChange(agentPlan.capabilityChange));
   }
 
-  const configuredWorkspacePaths = new Set(
-    [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
-  );
-  const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
+  const { configuredWorkspaceConflict } = inspectAgentWorkspaceOwnership({
+    existingAgents: context.existingAgents,
+    existingWorkspacePaths: context.existingWorkspacePaths,
+    finalId,
+    workspace,
+    adopting: context.adoptExistingAgent === true,
+    canonicalize: canonicalWorkspacePath,
+  });
   const resumableWorkspace = context.resumableWorkspace
     ? canonicalWorkspacePath(context.resumableWorkspace)
     : undefined;
   const workspacePlan = await planWorkspaceAdoption({
     agentId: finalId,
     workspace,
-    requested: context.adoptExistingWorkspace === true,
+    requested: context.adoptExistingWorkspace === true || context.adoptExistingAgent === true,
     configuredWorkspaceConflict,
+    configuredWorkspaceConflictCode:
+      context.adoptExistingAgent === true ? "agent_workspace_conflict" : undefined,
     resumableWorkspace,
   });
   const workspaceAdoption = workspacePlan.adopted;
@@ -627,20 +641,20 @@ export async function buildClawAddPlan(params: {
     `${left.kind}:${left.id}:${left.path}`.localeCompare(`${right.kind}:${right.id}:${right.path}`),
   );
 
-  const planIntegrity = `sha256:${createHash("sha256")
-    .update(
-      stableStringify({
-        manifestSchemaVersion: params.manifest.schemaVersion,
-        clawIntegrity: source.integrity,
-        finalId,
-        workspace,
-        actions,
-        capabilityChanges,
-        blockers,
-        extensions,
-      }),
-    )
-    .digest("hex")}`;
+  const planIntegrity = digestClawAddPlanIntegrity({
+    manifestSchemaVersion: params.manifest.schemaVersion,
+    claw: planSource,
+    agent: {
+      requestedId: params.manifest.agent.id,
+      finalId,
+      workspace,
+      config: agentConfig,
+    },
+    actions,
+    capabilityChanges,
+    blockers,
+    extensions,
+  });
 
   return {
     schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,

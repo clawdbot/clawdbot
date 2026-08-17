@@ -78,7 +78,9 @@ export async function deleteAgentConfigEntry(params: {
       if (!configured && !params.allowMissing) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
       }
-      const agent = listAgentEntries(draft).find((candidate) => candidate.id === params.agentId);
+      const entries = listAgentEntries(draft);
+      const agentIndex = findAgentEntryIndex(entries, params.agentId);
+      const agent = agentIndex >= 0 ? entries[agentIndex] : undefined;
       if (agent) {
         params.validate?.(agent);
       }

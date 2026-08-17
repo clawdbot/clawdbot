@@ -8,6 +8,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { ClawAddPlan } from "./types.js";
 import { sameCommittedAgent } from "./add-plan-helpers.js";
+import { exactExistingAgentIsAuthorized } from "./agent-adoption-apply.js";
 import { replaceLegacyCommittedAgent } from "./legacy-resume.js";
 
 export type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
@@ -68,6 +69,8 @@ export async function commitClawAgentConfig(params: {
   commitConfig?: ConfigCommit;
   resumePlan?: ClawAddPlan;
   resumeRecord?: PersistedClawInstall;
+  agentAdoption?: boolean;
+  persistedStatus: PersistedClawInstall["status"];
 }): Promise<ClawAddConfigCommitResult> {
   let committed = false;
   let reservedConfig = false;
@@ -87,7 +90,26 @@ export async function commitClawAgentConfig(params: {
       (agent) => normalizeAgentId(agent.id) === normalizedAgentId,
     );
     if (existingAgent) {
-      if (sameCommittedAgent(existingAgent, params.plan)) {
+      if (
+        sameCommittedAgent(existingAgent, params.plan) &&
+        exactExistingAgentIsAuthorized({
+          adoption: params.agentAdoption ?? false,
+          resume: params.resumeRecord !== undefined,
+          persistedStatus: params.persistedStatus,
+        })
+      ) {
+        if (
+          findOverlappingWorkspaceAgentIds(
+            preserved.config,
+            params.plan.agent.finalId,
+            params.workspace,
+          ).length > 0
+        ) {
+          throw new ClawAddConfigCommitError(
+            "agent_workspace_conflict",
+            "Workspace " + JSON.stringify(params.workspace) + " is assigned to another agent.",
+          );
+        }
         committed = true;
         return config;
       }
@@ -106,8 +128,16 @@ export async function commitClawAgentConfig(params: {
         return nextConfig;
       }
       throw new ClawAddConfigCommitError(
-        "agent_id_collision",
-        "Agent " + JSON.stringify(params.plan.agent.finalId) + " was created after planning.",
+        params.agentAdoption ? "agent_config_conflict" : "agent_id_collision",
+        params.agentAdoption
+          ? `Agent ${JSON.stringify(params.plan.agent.finalId)} changed after adoption planning.`
+          : "Agent " + JSON.stringify(params.plan.agent.finalId) + " was created after planning.",
+      );
+    }
+    if (params.agentAdoption) {
+      throw new ClawAddConfigCommitError(
+        "agent_config_conflict",
+        `Agent ${JSON.stringify(params.plan.agent.finalId)} disappeared after adoption planning.`,
       );
     }
     if (

@@ -5,10 +5,13 @@ import { dirname, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  CLAW_ADD_RESULT_SCHEMA_VERSION,
+  type ClawAddApplyOptions,
+  type ClawAddResult,
+} from "./add-contract.js";
 import {
   hasUnsupportedMutationActions,
   planWithPackageActions,
@@ -18,15 +21,17 @@ import {
   ClawAddConfigCommitError,
   commitClawAgentConfig,
   rollbackClawAgentConfigReservation,
-  type ConfigCommit,
 } from "./add-config.js";
 import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
   installClawCronJobs,
-  type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
+import {
+  assertAgentAdoptionDigest,
+  planAdoptsAgent,
+} from "./agent-adoption-apply.js";
 import {
   ClawMcpInstallError,
   installClawMcpServers,
@@ -49,25 +54,8 @@ import {
   type PersistedClawWorkspaceFile,
 } from "./workspace.js";
 
-export const CLAW_ADD_RESULT_SCHEMA_VERSION = "openclaw.clawAddResult.v1" as const;
+export { CLAW_ADD_RESULT_SCHEMA_VERSION } from "./add-contract.js";
 
-type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
-  consentPlanIntegrity?: string;
-  resumeRecord?: PersistedClawInstall;
-  resumePlan?: ClawAddPlan;
-  commitConfig?: ConfigCommit;
-  persistRecord?: typeof persistClawInstallRecord;
-  deleteRecord?: typeof deleteClawInstallRecord;
-  updateRecord?: typeof updateClawInstallRecordStatus;
-  createWorkspaceFiles?: typeof createClawWorkspaceFiles;
-  runtime?: RuntimeEnv;
-  installPackages?: typeof installClawPackages;
-  installMcpServers?: typeof installClawMcpServers;
-  installCronJobs?: typeof installClawCronJobs;
-  seedPackageBootstrap?: typeof seedClawPackageBootstrap;
-  cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
-  nowMs?: number;
-};
 export class ClawAddMutationError extends Error {
   constructor(
     readonly code: string,
@@ -77,29 +65,6 @@ export class ClawAddMutationError extends Error {
     this.name = "ClawAddMutationError";
   }
 }
-
-type ClawAddResult = {
-  schemaVersion: typeof CLAW_ADD_RESULT_SCHEMA_VERSION;
-  stability: typeof CLAW_OUTPUT_STABILITY;
-  dryRun: false;
-  mutationAllowed: true;
-  planIntegrity: string;
-  status: "complete" | "partial";
-  claw: ClawAddPlan["claw"];
-  agent: ClawAddPlan["agent"];
-  workspaceCreated: boolean;
-  configCommitted: boolean;
-  workspaceFiles: PersistedClawWorkspaceFile[];
-  packages: PersistedClawPackageRef[];
-  mcpServers: PersistedClawMcpServerRef[];
-  cronJobs: PersistedClawCronRef[];
-  installRecord?: PersistedClawInstall;
-  error?: {
-    code: string;
-    message: string;
-    diagnostics?: ClawWorkspaceWriteError["diagnostics"];
-  };
-};
 
 function markInstallStatus(
   agentId: string,
@@ -207,6 +172,25 @@ export async function applyClawAddPlan(
     });
   } catch (error) {
     throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+  }
+
+  const agentAdoption = planAdoptsAgent(plan);
+  if (agentAdoption) {
+    try {
+      await assertAgentAdoptionDigest({
+        plan,
+        install: installRecord,
+        readConfig: options.readConfig,
+      });
+    } catch (error) {
+      if (!options.resumeRecord) {
+        clearUnownedInstallRecord(plan.agent.finalId, ["pending"], options);
+      }
+      throw new ClawAddMutationError(
+        "agent_config_conflict",
+        `Could not verify agent ${JSON.stringify(plan.agent.finalId)} before adoption: ${coerceErrorMessage(error)}`,
+      );
+    }
   }
 
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
@@ -458,13 +442,17 @@ export async function applyClawAddPlan(
       commitConfig: options.commitConfig,
       resumePlan: options.resumePlan,
       resumeRecord: options.resumeRecord,
+      agentAdoption,
+      persistedStatus: installRecord.status,
     });
     configCommitted = configCommit.committed;
     reservedAgentConfig = configCommit.reservedConfig;
-    try {
-      recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
-    } catch (error) {
-      throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
+    if (!agentAdoption) {
+      try {
+        recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
+      } catch (error) {
+        throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
+      }
     }
     if (options.resumePlan && installRecord.schemaVersion === "openclaw.clawInstallRecord.v1") {
       installRecord = persistRecord(plan, {
