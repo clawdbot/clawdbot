@@ -89,9 +89,11 @@ async function runSessionSweep(params: {
     readSessions,
     ...(now === undefined ? {} : { now: () => now }),
   });
-  service.start({ logger: { warn: vi.fn() } } as never);
+  await service.start({ logger: { warn: vi.fn() } } as never);
   await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   await service.stop?.({ logger: { warn: vi.fn() } } as never);
 }
 
@@ -391,7 +393,7 @@ describe("Workboard gateway lifecycle sync", () => {
         complete: true,
       });
     const service = createWorkboardLifecycleService({ store, readSessions });
-    service.start({ logger: { warn: vi.fn() } } as never);
+    await service.start({ logger: { warn: vi.fn() } } as never);
     await vi.waitFor(async () => {
       expect((await store.get(card.id))?.status).toBe("running");
     });
@@ -400,7 +402,7 @@ describe("Workboard gateway lifecycle sync", () => {
     await vi.waitFor(async () => {
       expect((await store.get(card.id))?.status).toBe("review");
     });
-    service.stop?.({ logger: { warn: vi.fn() } } as never);
+    await service.stop?.({ logger: { warn: vi.fn() } } as never);
 
     expect(readSessions).toHaveBeenCalledTimes(2);
   });
