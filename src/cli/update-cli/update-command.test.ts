@@ -260,14 +260,12 @@ describe("resolvePostInstallDoctorEnv", () => {
       invocationCwd: "/srv/openclaw",
       baseEnv: {
         PATH: "/bin",
-        OPENCLAW_HOME: "/wrong/home",
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
         OPENCLAW_SYSTEMD_UNIT: "wrong.service",
       },
       serviceEnv: {
-        OPENCLAW_HOME: "daemon-home",
         OPENCLAW_STATE_DIR: "daemon-state",
         OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
         OPENCLAW_PROFILE: "work",
@@ -277,7 +275,6 @@ describe("resolvePostInstallDoctorEnv", () => {
 
     expect(env.PATH).toBe("/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-    expect(env.OPENCLAW_HOME).toBe(path.join("/srv/openclaw", "daemon-home"));
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
@@ -332,7 +329,6 @@ describe("resolveUpdatedInstallCommandEnv", () => {
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
         OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
         OPENCLAW_GATEWAY_PORT: "19111",
-        OPENCLAW_SYSTEMD_UNIT: "personal.service",
       },
       serviceEnv: {
         HOME: "/home/operator",
@@ -341,7 +337,6 @@ describe("resolveUpdatedInstallCommandEnv", () => {
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
         OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
         OPENCLAW_GATEWAY_PORT: "19111",
-        OPENCLAW_SYSTEMD_UNIT: "personal.service",
       },
       serviceDefinitionEnv: {},
     });
@@ -352,7 +347,6 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
     expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
-    expect(env.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
   });
 });
 
