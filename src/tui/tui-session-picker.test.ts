@@ -6,7 +6,6 @@ describe("buildSessionChoices", () => {
     const [choice] = buildSessionChoices([
       {
         key: "agent:main:quoted-directive",
-        kind: "direct",
         lastMessagePreview: "Use `[[reply_to_current]]` literally.",
       },
     ]);

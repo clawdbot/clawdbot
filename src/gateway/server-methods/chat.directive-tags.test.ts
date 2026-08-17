@@ -4665,9 +4665,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         typeof update.message === "object" &&
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant" &&
-        JSON.stringify(update.message).includes("[[reply_to_current]]"),
+        (update.message as { openclawDelivery?: { replyToCurrent?: boolean } }).openclawDelivery
+          ?.replyToCurrent === true,
     );
     expect(transcriptUpdate).toBeTruthy();
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("[[reply_to_current]]");
   });
 
   it("broadcasts sensitive pairing QR display without persisting QR content", async () => {
@@ -4776,7 +4778,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+    expect(transcriptUpdate?.message).toMatchObject({
+      openclawDelivery: { replyToCurrent: true },
+    });
+    expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
   });
 
   it("keeps slash-command block text when the final payload only carries a reply directive", async () => {
@@ -4805,7 +4810,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+    expect(transcriptUpdate?.message).toMatchObject({
+      openclawDelivery: { replyToCurrent: true },
+    });
+    expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
     expect(JSON.stringify(transcriptUpdate?.message)).toContain(
       "Trajectory exports can include prompts.",
     );
@@ -4894,7 +4902,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             update.message !== null &&
             (update.message as { role?: unknown }).role === "assistant",
         );
-        expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+        expect(transcriptUpdate?.message).toMatchObject({
+          openclawDelivery: { replyToCurrent: true },
+        });
+        expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
         expect(JSON.stringify(transcriptUpdate?.message)).toContain("done");
       },
     },
@@ -5200,7 +5211,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("");
   });
 
-  it("preserves inline reply directives in transcript text while stripping them from display", async () => {
+  it("persists inline reply directives as typed facts while stripping them from text", async () => {
     await createTranscriptFixture("openclaw-chat-send-inline-reply-transcript-");
     mockState.finalText = "see[[reply_to_current]]now  with  spacing";
     const { send } = createChatRequestFixture();
@@ -5216,8 +5227,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
-    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now  with  spacing");
+    expect(transcriptUpdate?.message).toMatchObject({
+      openclawDelivery: { replyToCurrent: true },
+    });
+    expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now with spacing");
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {
@@ -6320,7 +6334,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
+  it("persists typed reply facts for media replies without leaking tags", async () => {
     await expectImageOnlyFinal({
       transcriptPrefix: "openclaw-chat-send-media-reply-tags-",
       idempotencyKey: "idem-media-reply-tags",
@@ -6332,17 +6346,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant" &&
         Array.isArray((update.message as { content?: unknown }).content) &&
-        ((update.message as { content: Array<{ type?: string; text?: string }> }).content.some(
-          (block) => block?.type === "text" && block?.text?.includes("[[reply_to_current]]"),
-        ) ??
-          false),
+        (update.message as { openclawDelivery?: { replyToCurrent?: boolean } }).openclawDelivery
+          ?.replyToCurrent === true,
     );
     const transcriptMessage = transcriptUpdate?.message as Record<string, any> | undefined;
     expect(transcriptMessage?.role).toBe("assistant");
     expect(transcriptMessage?.content?.[0]).toEqual({
       type: "text",
-      text: "[[reply_to_current]]Image reply",
+      text: "Image reply",
     });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("[[reply_to_current]]");
     expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
   });
 
@@ -6402,7 +6415,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(JSON.stringify(transcriptUpdate)).toContain("[[reply_to:abcaudio_as_voice]]");
+    expect(transcriptUpdate?.message).toMatchObject({
+      openclawDelivery: { replyToId: "abcaudio_as_voice" },
+    });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("[[reply_to:");
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
@@ -6425,7 +6441,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(JSON.stringify(transcriptUpdate)).toContain("[[reply_to:inline-id]]");
+    expect(transcriptUpdate?.message).toMatchObject({
+      openclawDelivery: { replyToId: "inline-id" },
+    });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("[[reply_to:");
   });
 
   it("routes text-only image offloads into media-understanding fields", async () => {

@@ -12,6 +12,7 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
@@ -479,11 +480,12 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!mergedContent) {
     return null;
   }
+  const rewrittenMessage = applyAssistantDeliveryDirectives({
+    ...target.message,
+    content: mergedContent,
+  });
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
-    message: {
-      ...target.message,
-      content: mergedContent,
-    },
+    message: rewrittenMessage,
   });
   const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
     allowInitialGenerationMaterialization: initialGenerationMaterialized,
