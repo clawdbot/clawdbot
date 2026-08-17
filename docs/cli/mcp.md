@@ -445,7 +445,7 @@ Notes:
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `tools` updates per-server tool filters. Include/exclude entries accept raw MCP tool names and exact names printed by `mcp probe`; simple `*` globs match raw MCP tool names only.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.

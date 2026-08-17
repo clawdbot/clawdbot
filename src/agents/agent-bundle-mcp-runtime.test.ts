@@ -547,6 +547,96 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("lets a probe-projected model tool outrank an app-only raw-name collision", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-app-collision-");
+    const serverPath = path.join(tempDir, "projected-app-collision.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "docs__read",
+          inputSchema: { type: "object", properties: {} },
+          _meta: { ui: { visibility: ["app"] } },
+        },
+        { name: "read", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-app-collision",
+      sessionKey: "agent:test:session-projected-app-collision",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__read"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual(["docs__read", "read"]);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__read"]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("retains a projected utility suffix after filtering its listed collision", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-utility-collision-");
+    const serverPath = path.join(tempDir, "projected-utility-collision.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [
+        {
+          name: "resources_list",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-utility-collision",
+      sessionKey: "agent:test:session-projected-utility-collision",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__resources_list-2"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.servers.docs?.projectedUtilityToolNames?.resources_list).toBe(
+        "docs__resources_list-2",
+      );
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__resources_list-2"]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("advertises the stable MCP Apps client extension only when enabled", () => {
     expect(testing.buildMcpClientCapabilities(false)).toEqual({});
     expect(testing.buildMcpClientCapabilities(true)).toEqual({

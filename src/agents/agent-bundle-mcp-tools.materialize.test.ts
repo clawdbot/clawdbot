@@ -570,6 +570,115 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["knowledge__resources_list"]);
   });
 
+  it("accepts an exact probe-projected utility name", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          knowledge: {
+            serverName: "knowledge",
+            safeServerName: "knowledge",
+            launchSummary: "knowledge",
+            toolCount: 0,
+            resources: { listChanged: false },
+            toolFilter: { include: ["knowledge__resources_list"] },
+          },
+        },
+        tools: [],
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["knowledge__resources_list"]);
+  });
+
+  it("keeps a listed raw tool ahead of the same projected utility name", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          knowledge: {
+            serverName: "knowledge",
+            safeServerName: "knowledge",
+            launchSummary: "knowledge",
+            toolCount: 1,
+            resources: { listChanged: false },
+            toolFilter: { include: ["knowledge__resources_list"] },
+          },
+        },
+        tools: [
+          {
+            serverName: "knowledge",
+            safeServerName: "knowledge",
+            toolName: "knowledge__resources_list",
+            inputSchema: { type: "object" },
+            fallbackDescription: "raw tool",
+          },
+        ],
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["knowledge__knowledge__resources_list"]);
+  });
+
+  it("keeps a pre-filter projected utility suffix after its listed collision is removed", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          knowledge: {
+            serverName: "knowledge",
+            safeServerName: "knowledge",
+            launchSummary: "knowledge",
+            toolCount: 0,
+            resources: { listChanged: false },
+            toolFilter: { include: ["knowledge__resources_list-2"] },
+            projectedUtilityToolNames: {
+              resources_list: "knowledge__resources_list-2",
+            },
+            modelVisibleRawToolNames: ["resources_list"],
+          },
+        },
+        tools: [],
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["knowledge__resources_list-2"]);
+  });
+
+  it("does not reuse a filtered projected alias during external-name reallocation", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      reservedToolNames: ["docs__read-page"],
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          docs: {
+            serverName: "docs",
+            safeServerName: "docs",
+            launchSummary: "docs",
+            toolCount: 1,
+            reservedProjectedToolNames: ["docs__read-page", "docs__read-page-2"],
+          },
+        },
+        tools: [
+          {
+            serverName: "docs",
+            safeServerName: "docs",
+            toolName: "read-page",
+            projectedToolName: "docs__read-page",
+            inputSchema: { type: "object" },
+            fallbackDescription: "surviving tool",
+          },
+        ],
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["docs__read-page-3"]);
+  });
+
   it("projects resource and prompt utility tools for inventory-only catalogs", async () => {
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: {

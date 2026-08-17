@@ -23,6 +23,12 @@ export type BundleMcpToolRuntime = {
 };
 
 /** Catalog metadata for one configured MCP server. */
+export type McpUtilityToolOperation =
+  | "resources_list"
+  | "resources_read"
+  | "prompts_list"
+  | "prompts_get";
+
 export type McpServerCatalog = {
   serverName: string;
   safeServerName?: string;
@@ -41,6 +47,12 @@ export type McpServerCatalog = {
   requestTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
   toolFilter?: McpServerToolFilterConfig;
+  /** Filter aliases computed before listed tools are removed from the catalog. */
+  projectedUtilityToolNames?: Partial<Record<McpUtilityToolOperation, string>>;
+  /** Full pre-filter raw-name precedence set used by exact projected aliases. */
+  modelVisibleRawToolNames?: string[];
+  /** Complete pre-filter projected namespace, including filtered-out tools. */
+  reservedProjectedToolNames?: string[];
   deniedToolNames?: string[];
   codexApprovalMode?: McpCodexToolApprovalMode;
 };
@@ -50,6 +62,8 @@ export type McpCatalogTool = {
   serverName: string;
   safeServerName: string;
   toolName: string;
+  /** Stable pre-filter model-facing name printed by `mcp probe`. */
+  projectedToolName?: string;
   title?: string;
   description?: string;
   inputSchema: TSchema;

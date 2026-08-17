@@ -57,8 +57,24 @@ export function normalizeMcpToolFilter(raw: unknown): McpServerToolFilterConfig 
 export function isMcpToolAllowed(
   toolFilter: McpServerToolFilterConfig | undefined,
   toolName: string,
+  options?: {
+    projectedToolName?: string;
+    modelVisibleRawToolNames?: ReadonlySet<string>;
+  },
 ): boolean {
-  const matches = (pattern: string) => matchesMcpToolFilterPattern(pattern, toolName);
+  const matches = (pattern: string) => {
+    const trimmed = pattern.trim();
+    if (matchesMcpToolFilterPattern(trimmed, toolName)) {
+      return true;
+    }
+    // Probe output is an exact copy/paste contract. Wildcards remain scoped to
+    // raw MCP names, and a model-visible raw name wins over the same alias.
+    return (
+      !trimmed.includes("*") &&
+      trimmed === options?.projectedToolName &&
+      !options?.modelVisibleRawToolNames?.has(trimmed)
+    );
+  };
   return (
     (!toolFilter?.include?.length || toolFilter.include.some(matches)) &&
     !toolFilter?.exclude?.some(matches)
