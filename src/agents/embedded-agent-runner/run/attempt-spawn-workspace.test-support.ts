@@ -207,6 +207,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   }));
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
@@ -1078,6 +1079,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   });
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);

@@ -22,6 +22,8 @@ import {
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -398,6 +400,7 @@ describe("prepareCliRunContext", () => {
     resetContextWindowCacheForTest();
     clearMemoryPluginState();
     setActivePluginRegistry(createTestRegistry());
+    setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     fixture.cleanup();
   });
@@ -4515,6 +4518,43 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPromptReport.skills.entries).toEqual([
       { name: "gog", blockChars: expect.any(Number) },
     ]);
+  });
+
+  it("lazily rebuilds an unsafe modern skills snapshot for a non-sandbox CLI run", async () => {
+    const { dir } = fixture.session;
+    for (const name of ["cold-skill", "healthy-skill"]) {
+      const skillDir = path.join(dir, "skills", name);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\n`,
+        "utf-8",
+      );
+    }
+    const snapshot = buildSkillSnapshot(dir, {
+      bundledSkillsDir: path.join(dir, "missing-bundled-skills"),
+      managedSkillsDir: path.join(dir, "missing-managed-skills"),
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    const context = await fixture.prepare({
+      skillsSnapshot: {
+        ...snapshot,
+        prompt: `${snapshot.prompt}\n<available_skills></available_skills>`,
+      },
+    });
+
+    expect(context.systemPrompt).not.toContain("cold-skill/SKILL.md");
+    expect(context.systemPrompt).toContain("healthy-skill/SKILL.md");
   });
 
   it.each([
