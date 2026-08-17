@@ -43,9 +43,9 @@ describe("stripFormattedReasoningMessage", () => {
     expect(stripFormattedReasoningMessage(input)).toBe(input);
   });
 
-  it("preserves trailing blank lines in the substantive body", () => {
+  it("strips trailing blank lines while preserving leading whitespace in the body", () => {
     const input = ["Thinking...", "_summary_", "", "body", ""].join("\n");
 
-    expect(stripFormattedReasoningMessage(input)).toBe("body\n");
+    expect(stripFormattedReasoningMessage(input)).toBe("body");
   });
 });
