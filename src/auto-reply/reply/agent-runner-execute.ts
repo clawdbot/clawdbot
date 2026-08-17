@@ -65,6 +65,7 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   | "typingMode"
 > & {
   activeSessionStore: Record<string, SessionEntry> | undefined;
+  persistUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["persistUserTurn"];
   admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   beginBeforeAgentReply: ReturnType<
@@ -104,6 +105,7 @@ export async function executePreparedReplyAgentRun(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
+    persistUserTurn,
     admitUserTurn: admitUserTurnWithRecovery,
     applyReplyToMode,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
@@ -244,6 +246,7 @@ export async function executePreparedReplyAgentRun(
       !replyOperation.abortSignal.aborted &&
       isLikelyContextOverflowError(String(err));
     if (!canRotateAfterPreflightFailure) {
+      await persistUserTurn(followupRun.userTurnTranscriptRecorder);
       throw err;
     }
     logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
@@ -490,6 +493,7 @@ export function createReplyAgentRestartRecoveryController(
       }).sameChannelThreadRequired
     : undefined;
   const {
+    persistUserTurn,
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
@@ -558,6 +562,7 @@ export function createReplyAgentRestartRecoveryController(
     ...(storePath ? { storePath } : {}),
   });
   return {
+    persistUserTurn,
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,

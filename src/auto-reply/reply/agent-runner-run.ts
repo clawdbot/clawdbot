@@ -491,6 +491,7 @@ export async function runReplyAgent(
     return value;
   };
   const {
+    persistUserTurn,
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
@@ -553,6 +554,7 @@ export async function runReplyAgent(
   try {
     return await executePreparedReplyAgentRun({
       activeSessionStore,
+      persistUserTurn,
       admitUserTurn,
       applyReplyToMode,
       beginBeforeAgentReply,

@@ -430,10 +430,16 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
+  const { skipUserTurn, userInput, ...transcript } = params;
   return await persistTextTurnTranscript({
-    ...params,
-    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
+    ...transcript,
+    body: skipUserTurn ? "" : transcript.body,
+    transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
+    ...(!skipUserTurn && userInput
+      ? { userMessage: buildPersistedUserTurnMessage(userInput) }
+      : {}),
     assistant: {
       api: "openai-responses",
       provider: "openclaw",

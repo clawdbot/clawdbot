@@ -2,8 +2,12 @@
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -619,6 +623,63 @@ describe("runReplyAgent runtime config", () => {
     expect(result.text).toContain("/new");
     const metadata = getReplyPayloadMetadata(result);
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("persists the user turn before returning a preflight compaction failure", async () => {
+    await withTestDir({ prefix: "openclaw-preflight-admission-" }, async (tempDir) => {
+      const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+        shouldFollowup: false,
+        isActive: false,
+      });
+      const sessionKey = "agent:main:telegram:default:direct:test";
+      const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+      const sessionStore = { [sessionKey]: sessionEntry };
+      const storePath = join(tempDir, "sessions.json");
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      replyParams.sessionKey = sessionKey;
+      replyParams.storePath = storePath;
+      replyParams.sessionEntry = sessionEntry;
+      replyParams.sessionStore = sessionStore;
+      followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        input: { text: "hello", idempotencyKey: "msg-1", timestamp: 123 },
+        target: {
+          sessionId: "session-1",
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          agentId: "main",
+          cwd: tempDir,
+        },
+      });
+      runPreflightCompactionIfNeededMock.mockRejectedValue(
+        new Error("Preflight compaction required but failed: auth profile mismatch"),
+      );
+      runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry, outcome: "skipped" });
+
+      const result = await runReplyAgent(replyParams);
+
+      expect(result).toMatchObject({ text: expect.stringContaining("Context is too large") });
+      expect(executeAgentTurnMock).not.toHaveBeenCalled();
+      const messages = (
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey,
+          storePath,
+        })
+      ).flatMap((event) =>
+        typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+      );
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello",
+          idempotencyKey: "msg-1",
+          timestamp: 123,
+        }),
+      ]);
+    });
   });
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {

@@ -8,7 +8,6 @@ import {
   ModelSelectionLockedError,
   isModelSelectionLocked,
 } from "../../sessions/model-overrides.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -27,7 +26,6 @@ import {
   type EmbeddedAgentRunEntryTerminal,
 } from "../embedded-agent-runner/run-entry.js";
 import { resolveFastModeState } from "../fast-mode.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { findModelInCatalog, modelSupportsInput } from "../model-catalog-lookup.js";
@@ -61,6 +59,7 @@ import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-
 import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
+import { prepareAgentCommandUserTurnRecorder } from "./user-turn-recorder.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
@@ -161,25 +160,10 @@ export async function runEmbeddedAgentAttempt(params: {
     lifecycleEnded: false,
   };
   const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
-  const transcriptMedia = params.opts.transcriptMedia ?? [];
-  const hasTranscriptMedia = transcriptMedia.length > 0;
-  const suppressUserTurnPersistence =
-    params.opts.suppressPromptPersistence === true ||
-    (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
-  const recorderTranscriptText = transcriptBody || undefined;
-  const userTurnTranscriptRecorder =
-    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
-    createUserTurnTranscriptRecorder({
-      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
-        ? {
-            input: {
-              text: recorderTranscriptText,
-              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
-              senderIsOwner: params.opts.senderIsOwner,
-              ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
-            },
-          }
-        : {}),
+  const { recorder: userTurnTranscriptRecorder, suppressUserTurnPersistence } =
+    prepareAgentCommandUserTurnRecorder({
+      errorContext: "agent command user turn transcript",
+      opts: params.opts,
       target: {
         sessionId: internalSessionTarget?.sessionId ?? sessionId,
         agentId: internalSessionTarget?.agentId ?? sessionAgentId,
@@ -190,12 +174,9 @@ export async function runEmbeddedAgentAttempt(params: {
         cwd: cwd ?? workspaceDir,
         config: cfg,
       },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      errorContext: "agent command user turn transcript",
+      transcriptBody,
+      useProvidedRecorder: internalSessionTarget === undefined,
     });
-  if (suppressUserTurnPersistence) {
-    userTurnTranscriptRecorder.markBlocked();
-  }
   const lifecycle = createAgentCommandLifecycle({
     runId,
     lifecycleGeneration: () => lifecycleGeneration,

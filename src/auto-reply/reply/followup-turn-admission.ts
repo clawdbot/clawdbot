@@ -440,6 +440,33 @@ export async function admitFollowupTurn(params: {
       if (error instanceof FollowupSessionGenerationInvalidatedError) {
         throw error;
       }
+      const recorder = turn.queued.userTurnTranscriptRecorder;
+      if (recorder && !recorder.hasPersisted()) {
+        const currentEntry = session.current();
+        const result = await recorder.persistApproved({
+          ...(currentEntry && replySessionKey
+            ? {
+                target: {
+                  sessionId: operation.sessionId,
+                  sessionKey: replySessionKey,
+                  sessionEntry: currentEntry,
+                  sessionStore,
+                  ...(params.defaults.storePath ? { storePath: params.defaults.storePath } : {}),
+                  agentId: turn.queued.run.agentId,
+                  cwd: turn.queued.run.workspaceDir,
+                  config,
+                },
+              }
+            : {}),
+          expectedSessionId: operation.sessionId,
+        });
+        if (result?.sessionEntry) {
+          session.adopt(result.sessionEntry);
+        }
+        if (!result && !recorder.hasPersisted()) {
+          throw new Error("session changed before durable user-turn admission", { cause: error });
+        }
+      }
       operation.fail("run_failed", error);
       const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {

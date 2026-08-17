@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { FollowupRun } from "./queue.js";
 
 const state = vi.hoisted(() => ({
@@ -105,6 +106,30 @@ function createDefaults(overrides: Record<string, unknown> = {}) {
     sessionKey: "main",
     ...overrides,
   };
+}
+
+function createPersistingRecorder() {
+  let persisted = false;
+  const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>(async () => {
+    persisted = true;
+    return undefined;
+  });
+  const recorder = {
+    message: { role: "user", content: "queued prompt", timestamp: 1 },
+    resolveMessage: async () => undefined,
+    getAdmissionReceipt: () => undefined,
+    markRuntimePersistencePending: () => {},
+    markRuntimePersisted: () => {},
+    markBlocked: () => {},
+    hasPersisted: () => persisted,
+    isBlocked: () => false,
+    hasRuntimePersistencePending: () => false,
+    waitForRuntimePersistence: async () => {},
+    persistApproved,
+    persistBlocked: async () => undefined,
+    persistFallback: async () => undefined,
+  } satisfies UserTurnTranscriptRecorder;
+  return { persistApproved, recorder };
 }
 
 beforeEach(() => {
@@ -978,6 +1003,42 @@ describe("admitFollowupTurn", () => {
       turn: { preflightFailurePayload: { text: "preflight failed" } },
     });
     expect(operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
+  });
+
+  it("persists a queued user turn before returning its preflight failure", async () => {
+    const operation = createOperation("admitted-session");
+    const admittedEntry: SessionEntry = { sessionId: "admitted-session", updatedAt: 1 };
+    const sessionStore = { main: admittedEntry };
+    const { persistApproved, recorder } = createPersistingRecorder();
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: admittedEntry });
+    state.loadEntry.mockReturnValue(admittedEntry);
+    state.preflight.mockRejectedValue(new Error("preflight failed"));
+    const queued = createRun();
+    queued.userTurnTranscriptRecorder = recorder;
+
+    const result = await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({
+        sessionEntry: admittedEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "admitted",
+      turn: { preflightFailurePayload: { text: "preflight failed" } },
+    });
+    expect(persistApproved).toHaveBeenCalledWith({
+      expectedSessionId: "admitted-session",
+      target: expect.objectContaining({
+        sessionId: "admitted-session",
+        sessionKey: "main",
+        sessionEntry: admittedEntry,
+        sessionStore: expect.any(Object),
+        storePath: "/tmp/sessions.json",
+      }),
+    });
   });
 
   it("refreshes send policy before returning a preflight failure", async () => {

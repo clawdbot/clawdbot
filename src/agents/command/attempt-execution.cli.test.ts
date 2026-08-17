@@ -2101,58 +2101,75 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
-    const sessionKey = "agent:main:direct:cli-recorder-owned-user";
-    const sessionFile = path.join(tmpDir, "session-cli-recorder-owned-user.jsonl");
-    const sessionEntry = makeSessionEntry("session-cli-recorder-owned-user", { sessionFile });
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
-      {
-        message: {
-          role: "user",
-          content: "canonical current ask",
-          timestamp: Date.now(),
+  it.each(["CLI", "ACP"] as const)(
+    "mirrors only the %s reply when the shared recorder already persisted the user turn",
+    async (runtime) => {
+      const runtimeId = runtime.toLowerCase();
+      const sessionKey = `agent:main:direct:${runtimeId}-recorder-owned-user`;
+      const sessionFile = path.join(tmpDir, `session-${runtimeId}-recorder-owned-user.jsonl`);
+      const sessionEntry = makeSessionEntry(`session-${runtimeId}-recorder-owned-user`, {
+        sessionFile,
+      });
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+        {
+          message: {
+            role: "user",
+            content: "canonical current ask",
+            timestamp: Date.now(),
+          },
+          cwd: tmpDir,
         },
-        cwd: tmpDir,
-      },
-    );
+      );
 
-    await persistCliTurnTranscript({
-      body: "canonical current ask",
-      result: makeCliResult("hello from cli"),
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      userMessage: {
-        role: "user",
-        content: "duplicate custom ask",
-        timestamp: Date.now(),
-      },
-      skipUserTurn: true,
-    });
-
-    const messages = await readSessionMessages(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
+      const transcript = {
+        body: "canonical current ask",
+        finalText: `hello from ${runtimeId}`,
         sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
         storePath,
-      }),
-    );
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(messages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "hello from cli" }],
-      }),
-    );
-  });
+        sessionAgentId: "main",
+        sessionCwd: tmpDir,
+        config: {},
+        skipUserTurn: true,
+      };
+      if (runtime === "CLI") {
+        await persistCliTurnTranscript({
+          ...transcript,
+          result: makeCliResult(transcript.finalText),
+          userMessage: {
+            role: "user",
+            content: "duplicate custom ask",
+            timestamp: Date.now(),
+          },
+        });
+      } else {
+        await persistAcpTurnTranscript({
+          ...transcript,
+          userInput: { text: "duplicate custom ask" },
+        });
+      }
+
+      const messages = await readSessionMessages(
+        formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: sessionEntry.sessionId,
+          storePath,
+        }),
+      );
+      expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: transcript.finalText }],
+        }),
+      );
+    },
+  );
 
   it("does not append a CLI assistant already owned by the runtime", async () => {
     const sessionKey = "agent:main:direct:runtime-owned-assistant";

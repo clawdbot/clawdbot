@@ -23,6 +23,7 @@ import {
 } from "./runtime-loaders.js";
 import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { AgentCommandOpts } from "./types.js";
+import { prepareAgentCommandUserTurnRecorder } from "./user-turn-recorder.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -73,9 +74,30 @@ export async function runAcpAgentCommand(params: {
   });
 
   const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
+  const userTurnTranscriptRecorder =
+    !params.suppressVisibleSessionEffects &&
+    (params.opts.userTurnTranscriptRecorder || params.storePath)
+      ? prepareAgentCommandUserTurnRecorder({
+          errorContext: "ACP user turn transcript",
+          opts: params.opts,
+          target: {
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionEntry: params.sessionEntry,
+            sessionStore: params.sessionStore,
+            storePath: params.storePath,
+            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+            cwd: params.workspaceDir,
+            config: params.cfg,
+          },
+          transcriptBody: params.transcriptBody,
+          useProvidedRecorder: true,
+        }).recorder
+      : undefined;
   let stopReason: string | undefined;
   let resultStatus: "completed" | "cancelled" | undefined;
   let terminalOutcome: "blocked" | undefined;
+  let sessionEntry = params.sessionEntry;
   try {
     const {
       resolveAcpAgentPolicyError,
@@ -102,6 +124,24 @@ export async function runAcpAgentCommand(params: {
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
     const admittedRunContext = await params.preparedRunAdmission.admit("acp");
+    if (userTurnTranscriptRecorder) {
+      const persisted = await userTurnTranscriptRecorder.persistApproved({
+        cwd: params.workspaceDir,
+      });
+      if (
+        !persisted &&
+        !userTurnTranscriptRecorder.hasPersisted() &&
+        (await userTurnTranscriptRecorder.resolveMessage())
+      ) {
+        // A before_message_write rejection is terminal for this user row. Do not
+        // let the success mirror restore the unapproved prompt after execution.
+        userTurnTranscriptRecorder.markBlocked();
+      }
+      if (persisted?.sessionEntry) {
+        sessionEntry = persisted.sessionEntry;
+      }
+    }
+    assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
     await params.acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -181,7 +221,6 @@ export async function runAcpAgentCommand(params: {
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
   const finalText = visibleTextAccumulator.finalize();
   const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
-  let sessionEntry = params.sessionEntry;
   try {
     const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
     const internalSource = params.suppressVisibleSessionEffects
@@ -223,6 +262,10 @@ export async function runAcpAgentCommand(params: {
       threadId: params.opts.threadId,
       sessionCwd: resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir,
       config: params.cfg,
+      ...(userTurnTranscriptRecorder?.hasPersisted() === true ||
+      userTurnTranscriptRecorder?.isBlocked() === true
+        ? { skipUserTurn: true }
+        : {}),
     });
     if (!internalTarget) {
       sessionEntry = transcriptResult.sessionEntry;

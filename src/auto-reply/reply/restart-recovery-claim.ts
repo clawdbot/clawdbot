@@ -21,6 +21,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 type ReplyRestartRecoveryClaimController = {
+  persistUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
   ) => Promise<"admitted" | "duplicate-source">;
@@ -172,23 +173,33 @@ export function createReplyRestartRecoveryClaimController(params: {
     return persisted;
   };
 
-  const persistUserTurnOnly = async (
+  const persistUserTurn = async (
     recorder: UserTurnTranscriptRecorder | undefined,
-    sessionId: string,
   ): Promise<void> => {
     if (!recorder || recorder.hasPersisted()) {
       return;
     }
-    const entry = params.getEntry();
-    const target =
-      entry && params.sessionKey && params.storePath
-        ? params.resolveUserTurnTarget?.({
-            entry,
-            sessionId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          })
-        : undefined;
+    if (!params.sessionKey || !params.storePath) {
+      await recorder.persistApproved();
+      return;
+    }
+    const sessionId = params.getSessionId();
+    const entry =
+      loadSessionEntry({
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        clone: false,
+        hydrateSkillPromptRefs: false,
+      }) ?? params.getEntry();
+    if (!entry || entry.sessionId !== sessionId) {
+      throw new Error("session changed before durable user-turn admission");
+    }
+    const target = params.resolveUserTurnTarget?.({
+      entry,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
     const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
     if (!result) {
       throw new Error("session changed before durable user-turn admission");
@@ -200,7 +211,7 @@ export function createReplyRestartRecoveryClaimController(params: {
 
   const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
     if (!params.sessionKey || !params.storePath) {
-      await recorder?.persistApproved();
+      await persistUserTurn(recorder);
       return "admitted";
     }
     const sessionId = params.getSessionId();
@@ -283,7 +294,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (!recoverableDeliveryContext && !activeClaimRunId) {
       // Source-less scheduled/ambient runs may execute, but cannot own a
       // channel recovery claim that would be impossible to correlate after restart.
-      await persistUserTurnOnly(recorder, sessionId);
+      await persistUserTurn(recorder);
       return "admitted";
     }
     const updatedAt = Date.now();
@@ -507,6 +518,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   };
 
   return {
+    persistUserTurn,
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,

@@ -818,6 +818,52 @@ function setupAcpSession(): void {
   });
 }
 
+function createAcpUserTurnRecorder(options?: { persistError?: Error }) {
+  let persisted = false;
+  const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>(async () => {
+    if (options?.persistError) {
+      throw options.persistError;
+    }
+    persisted = true;
+    return {
+      admission: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+        generation: "test-generation",
+        entryId: "user-turn-1",
+        rawSeq: 1,
+        effectiveParentId: null,
+        activeMessagePosition: 0,
+        logicalTurnId: "user-turn-1:turn",
+        role: "user",
+      },
+      appended: true,
+      message: { role: "user", content: "hello", timestamp: 1 },
+      messageId: "user-turn-1",
+      sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+      sessionFile: "agent:main:main",
+    };
+  });
+  const recorder = {
+    message: { role: "user", content: "hello", timestamp: 1 },
+    resolveMessage: async () => ({ role: "user", content: "hello", timestamp: 1 }) as const,
+    getAdmissionReceipt: () => undefined,
+    markRuntimePersistencePending: () => {},
+    markRuntimePersisted: () => {},
+    markBlocked: () => {},
+    hasPersisted: () => persisted,
+    isBlocked: () => false,
+    hasRuntimePersistencePending: () => false,
+    waitForRuntimePersistence: async () => {},
+    persistApproved,
+    persistBlocked: async () => undefined,
+    persistFallback: async () => undefined,
+  } satisfies UserTurnTranscriptRecorder;
+  return { persistApproved, recorder };
+}
+
 const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
@@ -973,7 +1019,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       const parent = parentChannel ? entries[parentChannel] : undefined;
       return parent ? { channel, model: parent, matchKey: parentChannel } : null;
     });
-    state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
+    state.acpRunTurnMock.mockReset().mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
       onEvent?.({ type: "done", stopReason: "end_turn" });
@@ -4759,6 +4805,61 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start direct ACP when durable user-turn admission fails", async () => {
+    setupAcpSession();
+    const persistenceError = new Error("user turn persistence failed");
+    const { persistApproved, recorder } = createAcpUserTurnRecorder({
+      persistError: persistenceError,
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        sessionKey: "agent:main:main",
+        userTurnTranscriptRecorder: recorder,
+      }),
+    ).rejects.toThrow("user turn persistence failed");
+
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the direct ACP user turn admitted when runtime execution fails", async () => {
+    setupAcpSession();
+    const { persistApproved, recorder } = createAcpUserTurnRecorder();
+    state.acpRunTurnMock.mockRejectedValueOnce(new Error("ACP runtime failed"));
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        sessionKey: "agent:main:main",
+        userTurnTranscriptRecorder: recorder,
+      }),
+    ).rejects.toThrow("ACP runtime failed");
+
+    expect(persistApproved).toHaveBeenCalledOnce();
+    expect(persistApproved.mock.invocationCallOrder[0]).toBeLessThan(
+      state.acpRunTurnMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("mirrors only the assistant after direct ACP admits the user turn", async () => {
+    setupAcpSession();
+    const { recorder } = createAcpUserTurnRecorder();
+
+    await agentCommand({
+      message: "hello",
+      sessionKey: "agent:main:main",
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ skipUserTurn: true }),
+    );
   });
 
   it("keeps session provenance for internal ACP turns", async () => {
