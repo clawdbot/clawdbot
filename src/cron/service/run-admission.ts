@@ -62,10 +62,41 @@ function dispatchWaiters(state: CronServiceState): void {
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
-      return;
+      break;
     }
     waiter(acquireCronRunSlot(state));
   }
+  if (admission.active < maxConcurrentRuns && admission.waiters.length === 0) {
+    const listener = admission.capacityListener;
+    admission.capacityListener = null;
+    if (listener) {
+      queueMicrotask(listener);
+    }
+  }
+}
+
+/**
+ * Acquire only the slots currently available to scheduled work. Unlike the
+ * waiter-based path used by direct runs, this never retains a timer batch while
+ * the pool is saturated.
+ */
+export function tryAcquireCronRunSlots(
+  state: CronServiceState,
+  requested: number,
+): Array<() => void> {
+  if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
+    return [];
+  }
+  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+  return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
+}
+
+/** Keep the first wake-up until capacity release consumes or cancellation clears it. */
+export function setCronRunCapacityListener(state: CronServiceState, listener: () => void): void {
+  if (state.runAdmission.capacityListener) {
+    return;
+  }
+  state.runAdmission.capacityListener = listener;
 }
 
 async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
@@ -83,6 +114,7 @@ async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => 
 
 /** Wake queued work on stop so each caller can release its durable reservation. */
 export function cancelCronRunAdmissionWaiters(state: CronServiceState): void {
+  state.runAdmission.capacityListener = null;
   const waiters = state.runAdmission.waiters.splice(0);
   for (const waiter of waiters) {
     waiter(null);
@@ -530,11 +562,24 @@ export async function runWithCronAdmission<T>(
   }
 }
 
+async function runWithAcquiredCronAdmission<T>(
+  release: () => void,
+  execute: () => Promise<T>,
+): Promise<{ kind: "admitted"; value: T }> {
+  try {
+    return { kind: "admitted", value: await execute() };
+  } finally {
+    release();
+  }
+}
+
 export async function executeQueuedCronRun(params: {
   state: CronServiceState;
   jobId: string;
   reservedAtMs: number;
   reservationIdentity: object;
+  /** A scheduled dispatcher may reserve capacity before durable ownership. */
+  admissionRelease?: () => void;
   runnableOptions?: Omit<Parameters<typeof isRunnableJob>[0], "state" | "job" | "nowMs">;
   isUnavailable?: () => boolean;
   onUnavailable?: () => void;
@@ -550,7 +595,7 @@ export async function executeQueuedCronRun(params: {
 > {
   const { state } = params;
   let activated = false;
-  const admission = await runWithCronAdmission(state, async () => {
+  const executeAdmitted = async () => {
     const started = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       if (params.isUnavailable?.() || state.stopped) {
@@ -675,7 +720,12 @@ export async function executeQueuedCronRun(params: {
       };
     }
     return { outcome, handled: (await params.onCompleted?.(outcome)) === true };
-  }).catch(async (error: unknown) => {
+  };
+  const admission = await (
+    params.admissionRelease
+      ? runWithAcquiredCronAdmission(params.admissionRelease, executeAdmitted)
+      : runWithCronAdmission(state, executeAdmitted)
+  ).catch(async (error: unknown) => {
     if (activated) {
       await cleanupQueuedCronRunReservations({
         state,

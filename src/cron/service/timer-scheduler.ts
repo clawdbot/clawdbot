@@ -21,6 +21,8 @@ import {
   releaseQueuedCronRun,
   reserveQueuedCronRun,
   resolveRunConcurrency,
+  setCronRunCapacityListener,
+  tryAcquireCronRunSlots,
 } from "./run-admission.js";
 import {
   recomputeUnownedCronSchedules,
@@ -30,6 +32,7 @@ import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-st
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import { createCronCapacityRecheckTracker } from "./timer-capacity-recheck.js";
 import {
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
@@ -119,6 +122,20 @@ function setCronTimer(state: CronServiceState, delayMs: number): void {
   }, delayMs);
 }
 
+/** Consume a released slot without routing overdue work through the refire floor. */
+function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | undefined {
+  if (state.stopped || state.schedulingPaused || !state.deps.cronEnabled) {
+    return;
+  }
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  return onTimer(state).catch((err: unknown) => {
+    state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
+  });
+}
+
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
   let admission;
@@ -144,24 +161,14 @@ async function onAdmittedTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused) {
     return;
   }
-  if (state.running) {
-    // Re-arm the timer so the scheduler keeps ticking even when a job is
-    // still executing.  Without this, a long-running job (e.g. an agentTurn
-    // exceeding MAX_CRON_TIMER_DELAY_MS) causes the clamped 60 s timer to fire
-    // while `running` is true.  The early return then leaves no timer set,
-    // silently killing the scheduler until the next gateway restart.
-    //
-    // We use MAX_CRON_TIMER_DELAY_MS as a fixed re-check interval to avoid a
-    // zero-delay hot-loop when past-due jobs are waiting for the current
-    // execution to finish.
-    // See: https://github.com/openclaw/openclaw/issues/12025
-    armRunningRecheckTimer(state);
-    return;
-  }
   state.running = true;
+  state.activeTimerTicks += 1;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
+  const capacityRechecks = createCronCapacityRecheckTracker(() =>
+    requestImmediateCronRecheck(state),
+  );
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -194,41 +201,87 @@ async function onAdmittedTimer(state: CronServiceState) {
         return [];
       }
 
+      const admissionReleases = tryAcquireCronRunSlots(state, due.length);
+      const admittedDue = due.slice(0, admissionReleases.length);
+      if (admittedDue.length < due.length) {
+        // Keep unreserved work durable and wake it as soon as shared capacity
+        // becomes available. A partial batch gates that wake until its own
+        // receipt-backed reservations have either activated or been fenced.
+        setCronRunCapacityListener(
+          state,
+          admittedDue.length > 0
+            ? capacityRechecks.request
+            : () => void requestImmediateCronRecheck(state),
+        );
+      }
+      if (admittedDue.length === 0) {
+        return [];
+      }
+
       const now = state.deps.nowMs();
-      const reservedJobs = await persistQueuedCronRunReservations({
-        state,
-        candidates: due,
-        reservedAtMs: now,
-      });
-      const reservedDue = reservedJobs.map(({ job, runReceipt }) => ({
-        id: job.id,
-        job,
-        reservedAtMs: now,
-        reservationIdentity: reserveQueuedCronRun(state, job.id, now, { runReceipt }),
-      }));
-      return reservedDue;
+      try {
+        const reservedJobs = await persistQueuedCronRunReservations({
+          state,
+          candidates: admittedDue,
+          reservedAtMs: now,
+        });
+        const reservedDue = reservedJobs.map(({ job, runReceipt }, index) => ({
+          id: job.id,
+          job,
+          reservedAtMs: now,
+          reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
+            runReceipt,
+          }),
+          releaseAdmission: admissionReleases[index]!,
+        }));
+        for (const releaseAdmission of admissionReleases.slice(reservedDue.length)) {
+          releaseAdmission();
+        }
+        return reservedDue;
+      } catch (error) {
+        for (const releaseAdmission of admissionReleases) {
+          releaseAdmission();
+        }
+        throw error;
+      }
     });
 
+    // Future unclaimed work must stay armed while this batch executes. When
+    // overdue work is capacity-blocked, the release listener is the fast path
+    // and this minute timer is only a bounded safety recheck.
+    if (state.runAdmission.capacityListener) {
+      armRunningRecheckTimer(state);
+    } else {
+      armTimer(state);
+    }
+
     const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
+    capacityRechecks.initializeActivations(dueJobs.length);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
     let stopAdmittingDueJobs = false;
     const releaseUnclaimedDueJobReservationsWithRetry = async () => {
-      const reservations = dueJobs
-        .filter((_, index) => !claimedIndexes.has(index))
-        .map((due) => ({
-          jobId: due.id,
-          reservationIdentity: due.reservationIdentity,
-        }));
-      await cleanupQueuedCronRunReservations({
-        state,
-        reservations,
-        recompute: "maintenance",
-      });
+      const unclaimed = dueJobs.filter((_, index) => !claimedIndexes.has(index));
+      const reservations = unclaimed.map((due) => ({
+        jobId: due.id,
+        reservationIdentity: due.reservationIdentity,
+      }));
+      try {
+        await cleanupQueuedCronRunReservations({
+          state,
+          reservations,
+          recompute: "maintenance",
+        });
+      } finally {
+        for (const due of unclaimed) {
+          due.releaseAdmission();
+        }
+      }
     };
     if (state.stopped) {
+      capacityRechecks.abort();
       await releaseUnclaimedDueJobReservationsWithRetry();
       return;
     }
@@ -240,8 +293,17 @@ async function onAdmittedTimer(state: CronServiceState) {
       completedResults = await pMap(
         dueJobs,
         async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
+          let initialActivationSettled = false;
+          const settleThisInitialActivation = (allowRecheck: boolean) => {
+            if (initialActivationSettled) {
+              return;
+            }
+            initialActivationSettled = true;
+            capacityRechecks.settleActivation(allowRecheck);
+          };
           if (stopAdmittingDueJobs || state.stopped) {
             stopAdmittingDueJobs = true;
+            settleThisInitialActivation(false);
             return pMapSkip;
           }
           try {
@@ -250,11 +312,15 @@ async function onAdmittedTimer(state: CronServiceState) {
               jobId: due.id,
               reservedAtMs: due.reservedAtMs,
               reservationIdentity: due.reservationIdentity,
+              admissionRelease: due.releaseAdmission,
               isUnavailable: () => stopAdmittingDueJobs,
               onUnavailable: () => {
                 stopAdmittingDueJobs = true;
               },
-              onActivated: () => claimedIndexes.add(index),
+              onActivated: () => {
+                claimedIndexes.add(index);
+                settleThisInitialActivation(true);
+              },
               onNotRunnable: async () => {
                 const committedJob = commitCronRuntimeRows({
                   state,
@@ -346,6 +412,8 @@ async function onAdmittedTimer(state: CronServiceState) {
             stopAdmittingDueJobs = true;
             batchExecutionError ??= error;
             return pMapSkip;
+          } finally {
+            settleThisInitialActivation(false);
           }
         },
         // Let already-admitted mappers drain so their outcomes can be persisted
@@ -408,6 +476,8 @@ async function onAdmittedTimer(state: CronServiceState) {
         : new Error(formatErrorMessage(batchExecutionError));
     }
   } finally {
+    capacityRechecks.abort();
+    await capacityRechecks.drain();
     try {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.
@@ -480,8 +550,11 @@ async function onAdmittedTimer(state: CronServiceState) {
     } catch (err) {
       state.deps.log.warn({ err: String(err) }, "cron: session reaper preparation failed");
     } finally {
-      state.running = false;
-      armTimer(state);
+      state.activeTimerTicks = Math.max(0, state.activeTimerTicks - 1);
+      state.running = state.activeTimerTicks > 0;
+      if (!state.running) {
+        armTimer(state);
+      }
     }
   }
 }
