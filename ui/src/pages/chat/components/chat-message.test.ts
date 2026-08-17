@@ -79,6 +79,12 @@ function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
 
+function touchPointerUp(element: Element) {
+  const event = new Event("pointerup", { bubbles: true });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
+  element.dispatchEvent(event);
+}
+
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
@@ -774,6 +780,30 @@ describe("grouped chat rendering", () => {
     const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
     expect(userBubble.classList.contains("has-copy")).toBe(false);
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
+  it("reveals only the touched message metadata without intercepting actions", () => {
+    const container = document.createElement("div");
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    container.append(first, second);
+    renderAssistantMessage(first, createAssistantMessage("First reply", { timestamp: 1000 }));
+    renderAssistantMessage(second, createAssistantMessage("Second reply", { timestamp: 1001 }));
+
+    const firstGroup = expectElement(first, ".chat-group", HTMLElement);
+    const secondGroup = expectElement(second, ".chat-group", HTMLElement);
+    firstGroup.dispatchEvent(new Event("pointerup", { bubbles: true }));
+    expect(firstGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+
+    touchPointerUp(expectElement(first, ".chat-bubble", HTMLElement));
+    expect(firstGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(expectElement(second, ".chat-bubble", HTMLElement));
+    expect(firstGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(expectElement(second, ".chat-copy-btn", HTMLButtonElement));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
   });
 
   it("adds Reply to the inline message actions and forwards persisted reply context", () => {
