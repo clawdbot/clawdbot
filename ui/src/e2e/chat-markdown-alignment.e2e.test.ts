@@ -285,8 +285,8 @@ suite.define(() => {
         expect(
           Math.max(...geometry.textStarts) - Math.min(...geometry.textStarts),
         ).toBeLessThanOrEqual(1);
-        expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(32);
-        expect(Number.parseFloat(geometry.orderedPaddingInlineStart)).toBe(32);
+        expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(24);
+        expect(Number.parseFloat(geometry.orderedPaddingInlineStart)).toBe(24);
         expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
         expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
         expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);
