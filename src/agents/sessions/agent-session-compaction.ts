@@ -66,7 +66,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
-    this.compactionAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.compactionAbortController = abortController;
     this.emit({ type: "compaction_start", reason: "manual" });
 
     try {
@@ -78,11 +79,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           mode: "manual",
           summaryOutputPolicy,
           settings,
-          signal: this.compactionAbortController.signal,
+          signal: abortController.signal,
         });
       } catch (error) {
         const message = compactionErrorMessage(error, "Compaction failed");
-        const aborted = error instanceof Error && error.name === "AbortError";
+        const aborted =
+          abortController.signal.aborted || (error instanceof Error && error.name === "AbortError");
         this.emit({
           type: "compaction_end",
           reason: "manual",
@@ -113,7 +115,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
       return outcome.result;
     } finally {
-      this.compactionAbortController = undefined;
+      if (this.compactionAbortController === abortController) {
+        this.compactionAbortController = undefined;
+      }
       this.reconnectToAgent();
     }
   }

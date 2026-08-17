@@ -177,6 +177,64 @@ describe("AgentSession compaction", () => {
     subscription.unsubscribe();
   });
 
+  it("projects a rejected manual cancellation as aborted without recording compaction", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+      timestamp: 2,
+    });
+    const handlers = createCompactionHandlers();
+    const syntheticError = new Error("synthetic manual cancellation rejection");
+    const abortActiveCompaction = () => session.abortCompaction();
+    handlers.set("session_before_compact", [
+      async () => {
+        abortActiveCompaction();
+        throw syntheticError;
+      },
+    ]);
+    streamMocks.streamSimple.mockImplementation(
+      (_activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
+        if (options?.signal?.aborted) {
+          throw syntheticError;
+        }
+        return createAssistantResultStream(
+          createAssistant(testModel, [{ type: "text", text: "unexpected compaction" }]),
+        );
+      },
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-rejected-manual-cancellation",
+      onAgentEvent,
+    });
+
+    await expect(session.compact()).rejects.toBe(syntheticError);
+
+    const compactionEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "compaction");
+    expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents.at(-1)).toEqual({
+      stream: "compaction",
+      data: {
+        phase: "end",
+        outcome: "aborted",
+        completed: false,
+        willRetry: false,
+      },
+    });
+    expect(subscription.getCompactionCount()).toBe(0);
+    expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
+    expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    subscription.unsubscribe();
+  });
+
   it("caps extension summaries before persistence and manual return", async () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
