@@ -7,6 +7,7 @@ import type {
   ToolCall,
   Usage,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
@@ -115,7 +116,10 @@ export function readOpenAICompletionsReasoningBatch(
   let usedReasoningThinkingDetails = false;
   if (Array.isArray(reasoningDetails)) {
     for (const item of reasoningDetails) {
-      const detail = item as { type?: unknown; text?: unknown };
+      if (!isRecord(item)) {
+        continue;
+      }
+      const detail = item;
       if (typeof detail.text !== "string" || !detail.text) {
         continue;
       }
