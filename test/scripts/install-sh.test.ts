@@ -1935,10 +1935,14 @@ NODE
           env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
         },
       );
-      const login = spawnSync("bash", ["--login", "-c", "command -v openclaw"], {
-        encoding: "utf8",
-        env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
-      });
+      const login = spawnSync(
+        "bash",
+        ["--noprofile", "--norc", "-c", '. "$HOME/.profile"; command -v openclaw'],
+        {
+          encoding: "utf8",
+          env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
+        },
+      );
 
       expect(persist.status).toBe(0);
       expect(interactive.status).toBe(0);
