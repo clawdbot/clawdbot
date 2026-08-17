@@ -1715,7 +1715,6 @@ internal fun ChatBubble(
   val isUser = normalizedRole == "user"
   val speaker =
     when {
-      live -> nativeString("OpenClaw")
       isUser -> nativeString("You")
       normalizedRole == "system" -> nativeString("System")
       else -> nativeString("OpenClaw")
