@@ -140,6 +140,6 @@ describe("chat pane sidebar layout", () => {
       paneWidth: 1_000,
     });
     expect(layout.columns).toHaveLength(1);
-    expect(layout.columns[0]?.width).toBe(360);
+    expect(layout.columns[0]?.width).toBe(480);
   });
 });
