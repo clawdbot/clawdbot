@@ -637,6 +637,21 @@
   overflow: auto;
 }
 
+.chat-text :where(.code-block-wrapper pre) {
+  border: 0;
+  background: transparent;
+}
+
+.chat-group.user .chat-text :where(.code-block-wrapper) {
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.chat-group.user .chat-text :where(.code-block-wrapper pre) {
+  border: 0;
+  background: transparent;
+}
+
 .chat-text :where(pre code) {
   background: none;
   padding: 0;

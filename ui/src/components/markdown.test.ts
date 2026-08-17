@@ -10,15 +10,6 @@ function htmlFragment(html: string): HTMLElement {
   return container;
 }
 
-function escapedCodeBlockCopyAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
   const testWindow = window as Window & typeof globalThis & { [key: string]: unknown };
   Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
@@ -353,16 +344,23 @@ describe("toSanitizedMarkdownHtml", () => {
     it("renders indented code blocks", () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");
-      expect(html).toBe(
-        `<p>text</p>\n<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("indented code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>indented code\n</code></pre></div>`,
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector("p")?.textContent).toBe("text");
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("code");
+      expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe(
+        "indented code",
       );
     });
 
     it("includes copy button", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
-      expect(html).toBe(
-        `<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>`,
-      );
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("code");
+      expect(fragment.querySelector(".code-block-copy svg")).toBeInstanceOf(SVGElement);
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
     });
 
     it("omits copy chrome when rendering user-preserved code blocks", () => {
@@ -383,7 +381,7 @@ PY
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-copy")).toBeNull();
-      expect(fragment.textContent).toBe(source);
+      expect(fragment.querySelector("pre code")?.textContent).toBe(source);
     });
 
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {

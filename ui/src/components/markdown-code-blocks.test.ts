@@ -26,7 +26,7 @@ function renderCodeCopyButton(): HTMLButtonElement {
 }
 
 describe("Markdown code-block clipboard feedback", () => {
-  it("visibly reports both denied clipboard paths and restores the idle labels", async () => {
+  it("visibly reports both denied clipboard paths and restores the idle state", async () => {
     vi.useFakeTimers();
     const writeText = vi.fn(async () => {
       throw new DOMException("Clipboard access denied", "NotAllowedError");
@@ -44,13 +44,13 @@ describe("Markdown code-block clipboard feedback", () => {
 
     expect(writeText).toHaveBeenCalledWith("const answer = 42;");
     expect(execCommand).toHaveBeenCalledWith("copy");
-    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.classList.contains("copy-failed")).toBe(true);
     expect(button.getAttribute("aria-label")).toBe("Copy failed");
     expect(button.classList.contains("copied")).toBe(false);
 
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
+    expect(button.classList.contains("copy-failed")).toBe(false);
     expect(button.getAttribute("aria-label")).toBe("Copy code");
   });
 
@@ -99,7 +99,7 @@ describe("Markdown code-block clipboard feedback", () => {
     resolveFirstWrite();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.classList.contains("copy-failed")).toBe(true);
     expect(button.getAttribute("aria-label")).toBe("Copy failed");
     expect(button.classList.contains("copied")).toBe(false);
 
@@ -131,12 +131,12 @@ describe("Markdown code-block clipboard feedback", () => {
     button.click();
     await vi.advanceTimersByTimeAsync(scenario.firstResetAtMs - 1_000);
 
-    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy failed");
+    expect(button.classList.contains("copy-failed")).toBe(true);
     expect(button.getAttribute("aria-label")).toBe("Copy failed");
 
     await vi.advanceTimersByTimeAsync(3_000 - scenario.firstResetAtMs);
 
-    expect(button.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
+    expect(button.classList.contains("copy-failed")).toBe(false);
     expect(button.getAttribute("aria-label")).toBe("Copy code");
   });
 
