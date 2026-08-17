@@ -65,6 +65,7 @@ import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import ai.openclaw.app.ui.sessionPresentationTitle
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -3035,8 +3036,8 @@ private fun currentSessionTitle(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
 ): String {
-  val entry = sessions.firstOrNull { it.key == sessionKey }
-  val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return nativeString("New chat")
+  val entry = sessions.firstOrNull { it.key == sessionKey } ?: return nativeString("New chat")
+  val name = sessionPresentationTitle(entry) { nativeString("New chat") }
   return friendlySessionName(name)
 }
 
