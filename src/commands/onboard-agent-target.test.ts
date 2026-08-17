@@ -7,6 +7,7 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  applyOnboardingPrimaryModel,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
@@ -14,6 +15,25 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("onboarding agent target", () => {
+  it("preserves an uppercase authored entry key when applying the primary model", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          MAIN: { model: "openai/old" },
+        },
+      },
+    };
+    const target = resolveOnboardingAgentTarget(config, "main");
+
+    expect(applyOnboardingPrimaryModel(config, target, "openai/new").agents?.entries).toEqual({
+      MAIN: {
+        model: { primary: "openai/new" },
+        models: { "openai/new": {} },
+      },
+    });
+  });
+
   it("uses the retained compatibility owner after the marker is removed", () => {
     const config = retainLegacyDefaultAgentId(
       { agents: { entries: { main: {}, ops: { workspace: "/srv/ops" } } } },
