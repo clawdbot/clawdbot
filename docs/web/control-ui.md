@@ -228,7 +228,7 @@ The sidebar organizes everything around the agent. The identity row at the top i
 
 ### Session placement
 
-A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Open it and choose **Move session…** to continue on the Gateway, an eligible paired device, or another configured cloud profile. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently. **Stop cloud worker…** remains the destructive action for returning the session to a reclaimed state without immediately selecting another runner.
+A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Open it and choose **Move session…** to continue on the Gateway, an eligible paired device, or a configured cloud profile. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently. **Stop cloud worker…** remains the destructive action for returning the session to a reclaimed state without immediately selecting another runner.
 
 ### Session icons
 

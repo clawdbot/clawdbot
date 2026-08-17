@@ -576,7 +576,7 @@ Periodic heartbeat runs.
 
 ### `agents.defaults.systemAgent`
 
-Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults:
+Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults. It is also the fallback owner when `models.list`, `models.authStatus`, `skills.status`, or `doctor.memory.status` omits `agentId`:
 
 ```json5
 {
@@ -588,7 +588,7 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, a sole configured agent resolves implicitly; ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins. Other agent-scoped methods do not use this setting as a general default. Delegated consults with a requesting agent keep that requester as their owner. When `systemAgent.agentId` is absent, a sole configured agent resolves implicitly; the four reads above and ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
 
 ### `agents.defaults.compaction`
 

@@ -1854,6 +1854,7 @@ describe("memory plugin e2e", () => {
     }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const add = vi.fn(async () => undefined);
+    const deleteRows = vi.fn(async () => ({ numDeletedRows: 1 }));
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
@@ -1864,7 +1865,7 @@ describe("memory plugin e2e", () => {
           ),
           countRows: vi.fn(async () => 0),
           add,
-          delete: vi.fn(async () => undefined),
+          delete: deleteRows,
         })),
       })),
     }));
@@ -1925,14 +1926,13 @@ describe("memory plugin e2e", () => {
           }),
         ),
       ).toEqual([null, null, null]);
-      expect(
-        registeredToolFactories.map(({ toolOrFactory }) =>
-          materializeRegisteredTool(toolOrFactory, {
-            agentId: "main",
-            getRuntimeConfig: () => configFile,
-          }),
-        ),
-      ).toMatchObject([
+      const enabledTools = registeredToolFactories.map(({ toolOrFactory }) =>
+        materializeRegisteredTool(toolOrFactory, {
+          agentId: "main",
+          getRuntimeConfig: () => configFile,
+        }),
+      );
+      expect(enabledTools).toMatchObject([
         { name: "memory_recall" },
         { name: "memory_store" },
         { name: "memory_forget" },
@@ -1985,6 +1985,29 @@ describe("memory plugin e2e", () => {
 
         agents: { defaults: {} },
       };
+      const [recallTool, storeTool, forgetTool] = enabledTools;
+      embeddingsCreate.mockClear();
+      loadLanceDbModule.mockClear();
+      add.mockClear();
+      deleteRows.mockClear();
+      const disabledMessage =
+        "Memory is disabled for this agent. Enable memory search for this agent, then retry.";
+      await expect(
+        recallTool.execute("revoked-recall", { query: "private preference" }),
+      ).rejects.toThrow(disabledMessage);
+      await expect(
+        storeTool.execute("revoked-store", { text: "The user prefers Helix." }),
+      ).rejects.toThrow(disabledMessage);
+      await expect(
+        forgetTool.execute("revoked-forget", {
+          memoryId: "11111111-1111-4111-8111-111111111111",
+        }),
+      ).rejects.toThrow(disabledMessage);
+      expect(embeddingsCreate).not.toHaveBeenCalled();
+      expect(loadLanceDbModule).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+      expect(deleteRows).not.toHaveBeenCalled();
+
       const recallDefaultDisabled = await beforePromptBuild?.(recallEvent, {
         agentId: "unlisted",
       });
