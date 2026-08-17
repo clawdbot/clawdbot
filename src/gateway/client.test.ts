@@ -2317,7 +2317,7 @@ describe("GatewayClient connect auth payload", () => {
   it("never logs a registered Cloudflare Access credential from connection errors", async () => {
     const clientSecret = ["cf", "redaction", "secret"].join("-");
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "wss://gateway.example",
       cloudflareAccess: { clientId: "cf-redaction-id", clientSecret },
       deviceIdentity: null,
     });
