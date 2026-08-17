@@ -2,6 +2,10 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "../../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -124,9 +128,14 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     sessionKey: attempt.sessionKey,
     sessionId: attempt.sessionId,
   });
-  effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
-    wrapEmbeddedAttemptToolWithActivity(tool, attempt.runId),
-  );
+  effectiveTools = toolSearchSchemaProjection.tools.map((tool) => {
+    // Bundle tools materialize after core hook wrapping. Guard the final surface so
+    // direct MCP/LSP calls stay auditable without double-running hooks on core tools.
+    const hookedTool = isToolWrappedWithBeforeToolCallHook(tool)
+      ? tool
+      : wrapToolWithBeforeToolCallHook(tool, catalogToolHookContext);
+    return wrapEmbeddedAttemptToolWithActivity(hookedTool, attempt.runId);
+  });
   if (toolSearch.compacted && !toolSearch.catalogReused) {
     input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
     log.info(
