@@ -344,6 +344,10 @@ function createCloseMock() {
   return vi.fn<GatewayCloseFn>(async (_opts) => {});
 }
 
+function createGatewayServer(close: GatewayCloseFn, startupSettled = Promise.resolve()) {
+  return { close, startupSettled } satisfies GatewayServer;
+}
+
 function expectRestartCloseCall(
   close: ReturnType<typeof createCloseMock>,
   maxDrainTimeoutMs: number,
@@ -360,14 +364,14 @@ function expectRestartCloseCall(
   expect(closeArgs?.drainTimeoutMs).toBeGreaterThanOrEqual(0);
 }
 
-function createSignaledStart(close: GatewayCloseFn) {
+function createSignaledStart(close: GatewayCloseFn, startupSettled = Promise.resolve()) {
   let resolveStarted: (() => void) | null = null;
   const started = new Promise<void>((resolve) => {
     resolveStarted = resolve;
   });
   const start = vi.fn(async () => {
     resolveStarted?.();
-    return { close };
+    return createGatewayServer(close, startupSettled);
   });
   return { start, started };
 }
@@ -452,6 +456,100 @@ beforeEach(async () => {
 });
 
 describe("runGatewayLoop", () => {
+  it("routes deferred startup failure through first-boot failure handling", async () => {
+    await withIsolatedSignals(async () => {
+      const startupError = new Error("deferred startup failed");
+      const close = createCloseMock();
+      let rejectStartup: (error: Error) => void = () => {};
+      const startupSettled = new Promise<void>((_resolve, reject) => {
+        rejectStartup = reject;
+      });
+      let markStarted: () => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const { runtime } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const start = vi.fn(async () => {
+        markStarted();
+        return createGatewayServer(close, startupSettled);
+      });
+      const loop = runGatewayLoop({
+        start,
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        completeBoot,
+      });
+
+      await started;
+      rejectStartup(startupError);
+
+      await expect(loop).rejects.toBe(startupError);
+      expect(close).toHaveBeenCalledWith({ reason: "gateway startup failed" });
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "startup_failed",
+        reason: startupError.message,
+      });
+    });
+  });
+
+  it("keeps running when deferred startup fails after a SIGUSR1 replacement", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const unresolvedFirstStartup = new Promise<void>(() => {});
+      const replacementError = new Error("replacement deferred startup failed");
+      const cleanupError = new Error("replacement cleanup failed");
+      const closeFirst = createCloseMock();
+      const closeSecond = vi.fn<GatewayCloseFn>(async () => {
+        throw cleanupError;
+      });
+      const closeThird = createCloseMock();
+      let markThirdStarted: (() => void) | undefined;
+      const thirdStarted = new Promise<void>((resolve) => {
+        markThirdStarted = resolve;
+      });
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce(createGatewayServer(closeFirst, unresolvedFirstStartup))
+        .mockImplementationOnce(async () =>
+          createGatewayServer(closeSecond, Promise.reject(replacementError)),
+        )
+        .mockImplementationOnce(async () => {
+          markThirdStarted?.();
+          return createGatewayServer(closeThird);
+        });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 1,
+        "expected first deferred startup server",
+      );
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () =>
+          gatewayLog.error.mock.calls.some(([message]) =>
+            String(message).includes(replacementError.message),
+          ),
+        "expected replacement deferred startup failure",
+      );
+      expect(closeSecond).toHaveBeenCalledWith({ reason: "gateway startup failed" });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(expect.stringContaining(cleanupError.message));
+
+      sigusr1();
+      await thirdStarted;
+      expect(start).toHaveBeenCalledTimes(3);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
   it("keeps truncated startup failure reasons free of lone surrogates", async () => {
     await withIsolatedSignals(async () => {
       const failure = `${"a".repeat(499)}😀tail`;
@@ -547,6 +645,27 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.error).toHaveBeenCalledWith(
         "shutdown step failed (gateway server close): close owner failed",
       );
+    });
+  });
+
+  it("completes SIGTERM shutdown while sidecar startup remains unresolved", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const unresolvedSidecarStartup = new Promise<void>(() => {});
+      const close = vi.fn<GatewayCloseFn>(async () => {});
+      const { start, started } = createSignaledStart(close, unresolvedSidecarStartup);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+
+      captureSignal("SIGTERM")();
+
+      await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
     });
   });
 
@@ -727,10 +846,10 @@ describe("runGatewayLoop", () => {
       });
       const start = vi
         .fn()
-        .mockResolvedValueOnce({ close: closeFirst })
+        .mockResolvedValueOnce(createGatewayServer(closeFirst))
         .mockImplementationOnce(async () => {
           resolveSecond?.();
-          return { close: closeSecond };
+          return createGatewayServer(closeSecond);
         });
       const { runGatewayLoop } = await import("./run-loop.js");
       void runGatewayLoop({
@@ -1077,7 +1196,7 @@ describe("runGatewayLoop", () => {
       });
       start.mockImplementationOnce(async () => {
         resolveFirst?.();
-        return { close: closeFirst };
+        return createGatewayServer(closeFirst);
       });
 
       let resolveSecond: (() => void) | null = null;
@@ -1087,7 +1206,7 @@ describe("runGatewayLoop", () => {
       start.mockImplementationOnce(async () => {
         expect(lifecycleSlot.size).toBe(0);
         resolveSecond?.();
-        return { close: closeSecond };
+        return createGatewayServer(closeSecond);
       });
 
       let resolveThird: (() => void) | null = null;
@@ -1097,7 +1216,7 @@ describe("runGatewayLoop", () => {
       start.mockImplementationOnce(async () => {
         expect(lifecycleSlot.size).toBe(0);
         resolveThird?.();
-        return { close: closeThird };
+        return createGatewayServer(closeThird);
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
@@ -1269,11 +1388,11 @@ describe("runGatewayLoop", () => {
           () => gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed(),
           "expected queued startup restart to mark gateway draining before startup returned",
         );
-        return { close: closeFirst };
+        return createGatewayServer(closeFirst);
       });
       start.mockImplementationOnce(async () => {
         resolveSecondStart?.();
-        return { close: closeSecond };
+        return createGatewayServer(closeSecond);
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
@@ -1321,7 +1440,7 @@ describe("runGatewayLoop", () => {
         const completeBoot = vi.fn();
         const start = vi.fn(async () => {
           await startupNeverReturns;
-          return { close };
+          return createGatewayServer(close);
         });
 
         const { runGatewayLoop } = await import("./run-loop.js");
@@ -1368,7 +1487,7 @@ describe("runGatewayLoop", () => {
       const { runtime, exited } = createRuntimeWithExitSignal();
       const start = vi.fn(async () => {
         await startupNeverReturns;
-        return { close };
+        return createGatewayServer(close);
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
@@ -1400,7 +1519,7 @@ describe("runGatewayLoop", () => {
       const { runtime, exited } = createRuntimeWithExitSignal();
       const start = vi.fn(async () => {
         await startupNeverReturns;
-        return { close };
+        return createGatewayServer(close);
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
@@ -1451,7 +1570,7 @@ describe("runGatewayLoop", () => {
         resolveThirdStart = resolve;
       });
       const start = vi.fn();
-      start.mockResolvedValueOnce({ close: closeFirst });
+      start.mockResolvedValueOnce(createGatewayServer(closeFirst));
       start.mockImplementationOnce(async () => {
         sigusr1?.();
         await waitForLoopCondition(
@@ -1462,7 +1581,7 @@ describe("runGatewayLoop", () => {
       });
       start.mockImplementationOnce(async () => {
         resolveThirdStart?.();
-        return { close: closeThird };
+        return createGatewayServer(closeThird);
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
@@ -1518,11 +1637,11 @@ describe("runGatewayLoop", () => {
         resolveThirdStart = resolve;
       });
       const start = vi.fn();
-      start.mockResolvedValueOnce({ close: closeFirst });
+      start.mockResolvedValueOnce(createGatewayServer(closeFirst));
       start.mockRejectedValueOnce(new Error("restart startup failed"));
       start.mockImplementationOnce(async () => {
         resolveThirdStart?.();
-        return { close: closeThird };
+        return createGatewayServer(closeThird);
       });
 
       const { runGatewayLoop } = await import("./run-loop.js");
@@ -1597,10 +1716,10 @@ describe("runGatewayLoop", () => {
         });
         const start = vi
           .fn()
-          .mockResolvedValueOnce({ close: closeFirst })
+          .mockResolvedValueOnce(createGatewayServer(closeFirst))
           .mockImplementationOnce(async () => {
             resolveSecondStart?.();
-            return { close: closeSecond };
+            return createGatewayServer(closeSecond);
           });
 
         const { runGatewayLoop } = await import("./run-loop.js");
@@ -2067,9 +2186,9 @@ describe("runGatewayLoop", () => {
 
       const start = vi
         .fn()
-        .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond })
-        .mockResolvedValueOnce({ close: closeThird });
+        .mockResolvedValueOnce(createGatewayServer(closeFirst))
+        .mockResolvedValueOnce(createGatewayServer(closeSecond))
+        .mockResolvedValueOnce(createGatewayServer(closeThird));
       const { runGatewayLoop } = await import("./run-loop.js");
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
@@ -2419,8 +2538,8 @@ describe("runGatewayLoop", () => {
       const { runtime, exited } = createRuntimeWithExitSignal();
       const start = vi
         .fn()
-        .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond });
+        .mockResolvedValueOnce(createGatewayServer(closeFirst))
+        .mockResolvedValueOnce(createGatewayServer(closeSecond));
 
       await runLoopWithStart({ start, runtime, lockPort: 18789, waitForHealthyChild });
       await new Promise<void>((resolve) => {

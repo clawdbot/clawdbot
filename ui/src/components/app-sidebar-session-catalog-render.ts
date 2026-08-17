@@ -485,22 +485,28 @@ function renderCatalogSessionRow(
         <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+          <span class="sidebar-recent-session__details">
+            <span class="sidebar-recent-session__details-endcap">
+              ${renderSessionRowBadges({
+                hasAutomation: false,
+                pullRequest: session.pullRequest,
+              })}
+              ${running
+                ? html`<span class="session-row-aside">
+                    <span
+                      class="session-row-state"
+                      id=${stateId}
+                      role="img"
+                      aria-label=${stateDescription}
+                      >${renderSessionRunSpinner(false)}</span
+                    >
+                  </span>`
+                : nothing}
+            </span>
+          </span>
         </span>
-        ${renderSessionRowBadges({
-          hasAutomation: false,
-          pullRequest: session.pullRequest,
-        })}
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        ${running
-          ? html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${stateDescription}
-              >${renderSessionRunSpinner(false)}</span
-            >`
-          : nothing}
         <span class="session-row-actions">
           <button
             class="session-action"

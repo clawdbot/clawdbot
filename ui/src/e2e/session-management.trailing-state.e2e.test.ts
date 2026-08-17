@@ -44,6 +44,7 @@ suite.define(() => {
       await actionOnlyRow.waitFor({ state: "visible", timeout: 10_000 });
       const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
       const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
+      const actionOnlyDetails = actionOnlyRow.locator(".sidebar-recent-session__details");
       const actionOnlyPin = actionOnlyRow.getByRole("button", { name: "Pin session" });
       await expect
         .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
@@ -53,7 +54,7 @@ suite.define(() => {
       await actionOnlyRow.hover();
       await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
       await expect
-        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => actionOnlyDetails.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
       const hoveredTextBounds = await actionOnlyText.boundingBox();
 
@@ -61,14 +62,14 @@ suite.define(() => {
       await actionOnlyPin.focus();
       await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
       await expect
-        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => actionOnlyDetails.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
       const focusedTextBounds = await actionOnlyText.boundingBox();
       if (!restingTextBounds || !hoveredTextBounds || !focusedTextBounds) {
         throw new Error("Expected visible action-only text geometry");
       }
-      expect(restingTextBounds.width).toBeGreaterThanOrEqual(hoveredTextBounds.width);
-      expect(restingTextBounds.width).toBeGreaterThanOrEqual(focusedTextBounds.width);
+      expect(hoveredTextBounds.width).toBeCloseTo(restingTextBounds.width, 1);
+      expect(focusedTextBounds.width).toBeCloseTo(restingTextBounds.width, 1);
 
       const row = page.locator('[data-session-key="agent:main:hover-active"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
@@ -91,7 +92,7 @@ suite.define(() => {
       if (!nameBounds || !pinBounds || !menuBounds) {
         throw new Error("Expected visible hovered action geometry");
       }
-      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
 
       await page.mouse.move(0, 0);
@@ -108,7 +109,9 @@ suite.define(() => {
       if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
         throw new Error("Expected visible focused action geometry");
       }
-      expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeLessThan(
+        focusedPinBounds.y + focusedPinBounds.height / 2,
+      );
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();
@@ -161,7 +164,9 @@ suite.define(() => {
       if (!nameBounds || !stateBounds || !pinBounds || !menuBounds) {
         throw new Error("Expected visible non-running touch state geometry");
       }
-      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(stateBounds.x);
+      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(
+        stateBounds.y + stateBounds.height / 2,
+      );
       expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
     } finally {
@@ -297,11 +302,12 @@ suite.define(() => {
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
       const link = row.locator(".sidebar-recent-session__link");
+      const details = row.locator(".sidebar-recent-session__details");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("68px");
+        .toBe("4px");
 
       const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([
@@ -314,30 +320,35 @@ suite.define(() => {
         throw new Error("Expected visible resting session state geometry");
       }
       const actionSurfaceWidth = restingMenuBounds.x + restingMenuBounds.width - restingPinBounds.x;
-      expect(restingTextBounds.x + restingTextBounds.width).toBeLessThanOrEqual(
-        restingStateBounds.x,
-      );
       expect(restingTextBounds.x + restingTextBounds.width).toBeGreaterThan(
         restingStateBounds.x - actionSurfaceWidth,
+      );
+      const restingNameBounds = await row.locator(".sidebar-recent-session__name").boundingBox();
+      if (!restingNameBounds) {
+        throw new Error("Expected visible resting session title geometry");
+      }
+      expect(restingNameBounds.y + restingNameBounds.height / 2).toBeLessThan(
+        restingStateBounds.y + restingStateBounds.height / 2,
       );
       await row.hover();
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
-        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("68px");
+        .poll(() => details.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("52px");
 
-      const [textBounds, pinBounds, menuBounds] = await Promise.all([
+      const [textBounds, nameBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__text").boundingBox(),
+        row.locator(".sidebar-recent-session__name").boundingBox(),
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!textBounds || !pinBounds || !menuBounds) {
+      if (!textBounds || !nameBounds || !pinBounds || !menuBounds) {
         throw new Error("Expected visible combined session action geometry");
       }
-      expect(restingTextBounds.width).toBeGreaterThanOrEqual(textBounds.width);
-      expect(textBounds.x + textBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(textBounds.width).toBeCloseTo(restingTextBounds.width, 1);
+      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
       await page.mouse.move(0, 0);
       await pin.focus();
@@ -345,19 +356,23 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
-        .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("68px");
+        .poll(() => details.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("52px");
 
-      const [focusedTextBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
-        row.locator(".sidebar-recent-session__text").boundingBox(),
-        pin.boundingBox(),
-        menu.boundingBox(),
-      ]);
-      if (!focusedTextBounds || !focusedPinBounds || !focusedMenuBounds) {
+      const [focusedTextBounds, focusedNameBounds, focusedPinBounds, focusedMenuBounds] =
+        await Promise.all([
+          row.locator(".sidebar-recent-session__text").boundingBox(),
+          row.locator(".sidebar-recent-session__name").boundingBox(),
+          pin.boundingBox(),
+          menu.boundingBox(),
+        ]);
+      if (!focusedTextBounds || !focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
         throw new Error("Expected visible focused session action geometry");
       }
-      expect(restingTextBounds.width).toBeGreaterThanOrEqual(focusedTextBounds.width);
-      expect(focusedTextBounds.x + focusedTextBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      expect(focusedTextBounds.width).toBeCloseTo(restingTextBounds.width, 1);
+      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeLessThan(
+        focusedPinBounds.y + focusedPinBounds.height / 2,
+      );
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();

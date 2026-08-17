@@ -564,7 +564,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       progressDraft.mergeReasoningProgress(normalized, { snapshot: true });
       return visible;
     }
-    progressReceipt.noteReasoning();
     return await progressDraft.pushReasoningProgress(payload.text, {
       snapshot: payload.isReasoningSnapshot === true,
     });

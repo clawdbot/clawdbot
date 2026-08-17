@@ -3043,6 +3043,14 @@ describe("message tool schema scoping", () => {
         .map((variant) => variant.required);
 
       expect(properties).toHaveProperty("presentation");
+      expect(properties).toMatchObject({
+        voiceText: { type: "string" },
+        voiceProvider: { type: "string" },
+        voiceId: { type: "string" },
+      });
+      expect(JSON.stringify(properties.voiceText)).not.toContain("anyOf");
+      expect(JSON.stringify(properties.voiceProvider)).not.toContain("anyOf");
+      expect(JSON.stringify(properties.voiceId)).not.toContain("anyOf");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
       expect(presentationSchemaJson).toContain('"const":"url"');

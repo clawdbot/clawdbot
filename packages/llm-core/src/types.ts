@@ -333,6 +333,15 @@ export interface UserMessage {
 }
 
 /** Assistant turn, including provider identity and final stop state. */
+export type AssistantDeliveryTtsFacts = {
+  tagged: true;
+  text?: string;
+  directives?: Array<{
+    provider?: string;
+    values: Record<string, string>;
+  }>;
+};
+
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
@@ -340,6 +349,8 @@ export interface AssistantMessage {
     audioAsVoice?: true;
     replyToCurrent?: true;
     replyToId?: string;
+    /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
+    tts?: AssistantDeliveryTtsFacts;
   };
   api: Api;
   provider: Provider;

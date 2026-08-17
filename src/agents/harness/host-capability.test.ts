@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -191,6 +194,29 @@ describe("agent harness host capability", () => {
         }),
       }),
     );
+  });
+
+  it("closes prepared mutable-file approval revalidators with the admitted run", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-host-binding-"));
+    try {
+      fs.writeFileSync(path.join(cwd, "script.sh"), "#!/bin/sh\necho approved\n");
+      const { attempt } = await admittedAttempt("run-file-binding", { cwd });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const prepared = await host.capabilities.prepareMutableFileApproval?.({
+        command: "sh script.sh",
+        cwd,
+      });
+      expect(prepared?.ok).toBe(true);
+      if (!prepared?.ok) {
+        throw new Error("expected mutable file approval binding");
+      }
+
+      host.close();
+
+      await expect(prepared.revalidate()).rejects.toThrow("no longer active");
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("binds hooks to the native harness cwd instead of the agent workspace", async () => {

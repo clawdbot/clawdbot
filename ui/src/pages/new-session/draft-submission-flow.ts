@@ -425,6 +425,7 @@ export class DraftSubmissionFlow {
           : this.pendingCloud.stageCreate({
               agentId: submissionAgentId,
               profileId: cloudProfileId,
+              machineClass: this.place.machineClass,
               message,
               attachments: apiAttachments,
               gatewayUrl: submissionGatewayUrl,
@@ -705,6 +706,7 @@ export class DraftSubmissionFlow {
     this.place.applyPendingCloud({
       agentId: recovery.agentId,
       profileId: recovery.profileId,
+      machineClass: recovery.machineClass,
       cwd: recovery.createParams?.cwd,
     });
     this.visibilityValue = recovery.createParams?.incognito === true ? "incognito" : "normal";

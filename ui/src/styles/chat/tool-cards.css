@@ -725,17 +725,23 @@
   word-break: normal;
 }
 
-/* ── Canvas/document preview (frames embedded content, so it keeps a border) ── */
+/* ── Canvas/document preview ── */
 .chat-tool-card__preview,
 .chat-tool-card__raw {
   margin-top: 8px;
 }
 
 .chat-tool-card__preview {
+  position: relative;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  background: var(--card);
   overflow: hidden;
+}
+
+.chat-tool-card__preview[data-has-widget-actions] {
+  margin-top: 40px;
+  overflow: visible;
 }
 
 /* MCP Apps are responsive documents, so give them the assistant column instead
@@ -745,33 +751,19 @@
   width: 100%;
 }
 
-.chat-tool-card__preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  background: color-mix(in srgb, var(--card) 82%, transparent);
-}
-
-.chat-tool-card__preview-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 .chat-tool-card__preview-actions {
+  position: absolute;
+  z-index: 2;
+  top: -34px;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 4px;
-  flex-shrink: 0;
+}
+
+.chat-tool-card__preview-panel {
+  overflow: hidden;
+  border-radius: inherit;
 }
 
 .chat-tool-card__widget-actions {
@@ -790,10 +782,14 @@
 
 .chat-tool-card__widget-actions-trigger,
 .chat-tool-card__widget-action {
-  width: 26px;
-  height: 26px;
-  min-height: 26px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
   padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--shadow-sm);
   color: var(--muted);
 }
 
@@ -812,7 +808,7 @@
 }
 
 [data-widget-actions] {
-  opacity: 0;
+  opacity: 0.45;
   transition: opacity 120ms ease-out;
 }
 
@@ -828,16 +824,6 @@
 .chat-tool-card__widget-action:disabled {
   cursor: default;
   opacity: 1;
-}
-
-.chat-tool-card__preview-panel {
-  padding: var(--widget-frame-inset);
-}
-
-/* Full-bleed and frameless pins render edge-to-edge here too, so the same
-   authored document meets identical geometry in chat and on the board. */
-.chat-tool-card__preview-panel[data-bleed] {
-  padding: 0;
 }
 
 .chat-tool-card__preview-image-button {
@@ -859,8 +845,7 @@
   display: block;
   width: 100%;
   min-height: 420px;
-  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-  border-radius: var(--radius-md);
+  border: 0;
   /* Widget documents keep a transparent body; the host provides the themed
      backdrop so transparent regions match the active theme instead of
      flashing white in dark mode. Documents from the pre-token wrapper assumed

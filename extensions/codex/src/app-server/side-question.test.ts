@@ -2261,7 +2261,30 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
-  it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
+  it("bridges prepared restricted-profile tools into side threads", async () => {
+    const preparedModelRuntime = {
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "profiled-plugin",
+            contracts: { tools: ["wiki_status"] },
+            toolMetadata: { wiki_status: { profiles: ["coding"] } },
+          },
+        ],
+      },
+    };
+    createOpenClawCodingToolsMock.mockImplementation((options) =>
+      (options as { preparedModelRuntime?: unknown }).preparedModelRuntime === preparedModelRuntime
+        ? [
+            {
+              name: "wiki_status",
+              description: "Check wiki status",
+              parameters: { type: "object", properties: {} },
+              execute: toolExecuteMock,
+            },
+          ]
+        : [],
+    );
     const client = createFakeClient();
     let toolResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
@@ -2297,7 +2320,12 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    const result = await runCodexAppServerSideQuestion(sideParams());
+    const result = await runCodexAppServerSideQuestion(
+      sideParams({
+        cfg: { tools: { profile: "coding" } } as never,
+        preparedModelRuntime,
+      } as never),
+    );
 
     expect(result).toEqual({ text: "Tool answer." });
     const [toolCallId, toolArguments, toolSignal, toolOptions] = mockCall(toolExecuteMock);

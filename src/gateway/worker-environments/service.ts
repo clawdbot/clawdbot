@@ -406,18 +406,28 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const service = {
     list: environmentAccess.list,
     get: environmentAccess.get,
-    create: async (profileId: string, idempotencyKey: string) =>
+    listMachineOptions: async (profileId: string) =>
+      providerLifecycle.listMachineOptions(profileId),
+    create: async (profileId: string, idempotencyKey: string, machineClass?: string) =>
       environmentAccess.project(
-        await providerLifecycle.createWithProfile(profileId, idempotencyKey),
+        await providerLifecycle.createWithProfile(
+          profileId,
+          idempotencyKey,
+          machineClass === undefined ? {} : { machineClass },
+        ),
       ),
     createFromProfileSnapshot: async (
       profile: { profileId: string; providerId: string; profileSnapshot: WorkerProfile },
       idempotencyKey: string,
+      machineClass?: string,
     ) =>
       environmentAccess.project(
         await providerLifecycle.createWithProfile(profile.profileId, idempotencyKey, {
-          providerId: profile.providerId,
-          profileSnapshot: profile.profileSnapshot,
+          inherited: {
+            providerId: profile.providerId,
+            profileSnapshot: profile.profileSnapshot,
+          },
+          ...(machineClass === undefined ? {} : { machineClass }),
         }),
       ),
     destroy: async (environmentId: string) =>

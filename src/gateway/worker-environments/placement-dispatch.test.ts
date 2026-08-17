@@ -55,12 +55,13 @@ describe("worker placement dispatch", () => {
       profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
     };
 
-    await harness.service.dispatch({ ...REQUEST, inheritedProfile });
+    await harness.service.dispatch({ ...REQUEST, inheritedProfile, machineClass: "beast" });
 
     expect(harness.environments.create).not.toHaveBeenCalled();
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
       { profileId: REQUEST.profileId, ...inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
+      "beast",
     );
   });
 

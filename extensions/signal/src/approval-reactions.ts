@@ -1,13 +1,12 @@
 // Signal plugin module implements approval reactions behavior.
-import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import {
   addApprovalReactionHintToText,
   createApprovalReactionTargetStore,
   hasApprovalReactionHintText,
   listApprovalReactionBindings,
+  readApprovalReactionDecisionList,
   resolveTypedApprovalReactionTarget,
-  type ApprovalReactionDecisionBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
@@ -27,6 +26,11 @@ import {
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalTarget } from "./aliases.js";
 import { getSignalApprovalApprovers, signalApprovalAuth } from "./approval-auth.js";
+import {
+  buildTargetRoute,
+  isSignalApprovalReactionRouteStillEnabled,
+  type SignalApprovalReactionRoute,
+} from "./approval-reaction-routes.js";
 import { looksLikeUuid } from "./identity.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
@@ -34,8 +38,6 @@ import { getOptionalSignalRuntime } from "./runtime.js";
 const PERSISTENT_NAMESPACE = "signal.approval-reactions.v2";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
-
-type SignalApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type SignalApprovalReactionResolution = {
   approvalId: string;
@@ -45,23 +47,6 @@ type SignalApprovalReactionResolution = {
 };
 
 type ApprovalKind = "exec" | "plugin";
-type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
-type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
-
-type SignalApprovalReactionRoute =
-  | {
-      deliveryMode: "session";
-      agentId?: string;
-      sessionKey?: string;
-    }
-  | {
-      deliveryMode: "target";
-      to: string;
-      accountId?: string;
-      agentId?: string;
-      sessionKey?: string;
-    };
-
 type SignalApprovalReactionTarget = ApprovalReactionTargetRecord<SignalApprovalReactionRoute> & {
   approvalKind: ApprovalKind;
   targetAuthorKeys: readonly string[];
@@ -102,132 +87,6 @@ const signalApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
-
-function resolveApprovalForwardingConfig(params: {
-  cfg: OpenClawConfig;
-  approvalKind: ApprovalKind;
-}): ApprovalForwardingConfig | undefined {
-  return params.approvalKind === "plugin"
-    ? params.cfg.approvals?.plugin
-    : params.cfg.approvals?.exec;
-}
-
-function normalizeApprovalForwardingMode(
-  mode: ApprovalForwardingConfig["mode"] | undefined,
-): ApprovalForwardingMode {
-  return mode ?? "session";
-}
-
-function approvalModeIncludesSession(mode: ApprovalForwardingMode): boolean {
-  return mode === "session" || mode === "both";
-}
-
-function approvalModeIncludesTargets(mode: ApprovalForwardingMode): boolean {
-  return mode === "targets" || mode === "both";
-}
-
-function matchesSignalApprovalReactionFilters(params: {
-  config: ApprovalForwardingConfig;
-  route: Pick<SignalApprovalReactionRoute, "agentId" | "sessionKey">;
-}): boolean {
-  return matchesApprovalRequestFilters({
-    request: {
-      agentId: params.route.agentId,
-      sessionKey: params.route.sessionKey,
-    },
-    agentFilter: params.config.agentFilter,
-    sessionFilter: params.config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
-}
-
-function targetAccountMatches(params: {
-  routeAccountId?: string | null;
-  configuredAccountId?: string | null;
-}): boolean {
-  const configuredAccountId = normalizeOptionalString(params.configuredAccountId);
-  if (!configuredAccountId) {
-    return true;
-  }
-  const routeAccountId = normalizeOptionalString(params.routeAccountId);
-  return Boolean(
-    routeAccountId &&
-    normalizeAccountId(routeAccountId) === normalizeAccountId(configuredAccountId),
-  );
-}
-
-function resolveSignalApprovalRouteTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-}): string | null {
-  try {
-    return (
-      resolveSignalTarget({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        input: params.to,
-      })?.to ??
-      normalizeSignalMessagingTarget(params.to) ??
-      null
-    );
-  } catch {
-    return null;
-  }
-}
-
-function hasMatchingSignalApprovalReactionTarget(params: {
-  cfg: OpenClawConfig;
-  config: ApprovalForwardingConfig;
-  route: Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }>;
-}): boolean {
-  return (params.config.targets ?? []).some((target) => {
-    if (normalizeLowercaseStringOrEmpty(target.channel) !== "signal") {
-      return false;
-    }
-    const configuredTo = resolveSignalApprovalRouteTarget({
-      cfg: params.cfg,
-      accountId: target.accountId ?? params.route.accountId,
-      to: target.to,
-    });
-    if (!configuredTo || configuredTo !== params.route.to) {
-      return false;
-    }
-    return targetAccountMatches({
-      routeAccountId: params.route.accountId,
-      configuredAccountId: target.accountId,
-    });
-  });
-}
-
-function isSignalApprovalReactionRouteStillEnabled(params: {
-  cfg: OpenClawConfig;
-  target: Pick<SignalApprovalReactionTarget, "approvalKind" | "route">;
-}): boolean {
-  const config = resolveApprovalForwardingConfig({
-    cfg: params.cfg,
-    approvalKind: params.target.approvalKind,
-  });
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (params.target.route.deliveryMode === "target") {
-    return (
-      approvalModeIncludesTargets(mode) &&
-      matchesSignalApprovalReactionFilters({ config, route: params.target.route }) &&
-      hasMatchingSignalApprovalReactionTarget({
-        cfg: params.cfg,
-        config,
-        route: params.target.route,
-      })
-    );
-  }
-  if (!approvalModeIncludesSession(mode)) {
-    return false;
-  }
-  return matchesSignalApprovalReactionFilters({ config, route: params.target.route });
-}
 
 export function resolveSignalApprovalConversationKey(to: string): string | null {
   return normalizeSignalMessagingTarget(to) ?? null;
@@ -307,9 +166,12 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
     (value.approvalKind !== "exec" && value.approvalKind !== "plugin") ||
     !value.route ||
     (value.route.deliveryMode !== "session" && value.route.deliveryMode !== "target") ||
-    !Array.isArray(value.targetAuthorKeys) ||
-    !Array.isArray(value.allowedDecisions)
+    !Array.isArray(value.targetAuthorKeys)
   ) {
+    return null;
+  }
+  const allowedDecisions = readApprovalReactionDecisionList(value.allowedDecisions);
+  if (!allowedDecisions) {
     return null;
   }
   const targetRouteTo =
@@ -342,57 +204,10 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
   return {
     approvalId: value.approvalId,
     approvalKind: value.approvalKind,
-    allowedDecisions: value.allowedDecisions,
+    allowedDecisions,
     targetAuthorKeys: value.targetAuthorKeys,
     route,
   };
-}
-
-function listSignalApprovalReactionBindings(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): SignalApprovalReactionBinding[] {
-  return listApprovalReactionBindings({ allowedDecisions });
-}
-
-function buildTargetRoute(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  approvalId: string;
-  approvalKind: ApprovalKind;
-  agentId?: string | null;
-  sessionKey?: string | null;
-}): Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }> | null {
-  const to = resolveSignalApprovalRouteTarget({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    to: params.to,
-  });
-  if (!to) {
-    return null;
-  }
-  const route: Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }> = {
-    deliveryMode: "target",
-    to,
-    ...(normalizeOptionalString(params.accountId)
-      ? { accountId: normalizeOptionalString(params.accountId) }
-      : {}),
-    ...(normalizeOptionalString(params.agentId)
-      ? { agentId: normalizeOptionalString(params.agentId) }
-      : {}),
-    ...(normalizeOptionalString(params.sessionKey)
-      ? { sessionKey: normalizeOptionalString(params.sessionKey) }
-      : {}),
-  };
-  return isSignalApprovalReactionRouteStillEnabled({
-    cfg: params.cfg,
-    target: {
-      approvalKind: params.approvalKind,
-      route,
-    },
-  })
-    ? route
-    : null;
 }
 
 export function hasSignalApprovalReactionApprovers(params: {
@@ -423,9 +238,9 @@ export function registerSignalApprovalReactionTarget(params: {
         .filter((entry): entry is string => Boolean(entry)),
     ),
   );
-  const allowedDecisions = listSignalApprovalReactionBindings(params.allowedDecisions).map(
-    (binding) => binding.decision,
-  );
+  const allowedDecisions = listApprovalReactionBindings({
+    allowedDecisions: params.allowedDecisions,
+  }).map((binding) => binding.decision);
   if (
     !params.routeAllowed ||
     (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
@@ -500,7 +315,6 @@ export function addSignalApprovalReactionHintToStructuredPayload(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     to: params.to,
-    approvalId: metadata.approvalId,
     approvalKind: metadata.approvalKind,
     agentId: metadata.agentId,
     sessionKey: metadata.sessionKey,
@@ -583,7 +397,6 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
     cfg: params.cfg,
     accountId: params.target.accountId,
     to: params.target.to,
-    approvalId: metadata.approvalId,
     approvalKind: metadata.approvalKind,
     agentId: metadata.agentId,
     sessionKey: metadata.sessionKey,
@@ -795,4 +608,3 @@ export function clearSignalApprovalReactionTargetsForTest(): void {
   signalApprovalReactionTargets.clearForTest();
   loadResolveApprovalOverGateway.clear();
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

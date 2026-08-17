@@ -476,7 +476,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   const startRuntime = async (hooks: {
     isClosePreludeStarted: () => boolean;
     registerSidecar: (sidecar: WorkerPlacementSidecar) => void;
+    unregisterSidecar: (sidecar: WorkerPlacementSidecar) => void;
   }): Promise<WorkerPlacementSidecar | null> => {
+    if (hooks.isClosePreludeStarted()) {
+      return null;
+    }
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
     let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
     const placementReconcile = { current: undefined as Promise<void> | undefined };
@@ -548,12 +552,14 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         if (stopPromise) {
           return stopPromise;
         }
-        stopped = true;
-        clearInterval(placementReconcileInterval);
-        placementReconcileInterval = undefined;
-        uninstallSessionIdentityMutation();
-        uninstallPlacementAdmission();
-        stopPromise = (async () => {
+        if (!stopped) {
+          stopped = true;
+          clearInterval(placementReconcileInterval);
+          placementReconcileInterval = undefined;
+          uninstallSessionIdentityMutation();
+          uninstallPlacementAdmission();
+        }
+        const currentStop = (async () => {
           await Promise.allSettled(
             [placementReconcile.current, diskSpaceSweep.current].filter(
               (operation): operation is Promise<void> => operation !== undefined,
@@ -562,11 +568,22 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           await nodeWorkspaceRetention.stop();
           await params.environments.stop();
         })();
-        return stopPromise;
+        stopPromise = currentStop;
+        void currentStop.catch(() => {
+          if (stopPromise === currentStop) {
+            stopPromise = undefined;
+          }
+        });
+        return currentStop;
       },
     };
     // Close must see the drain handle before reconciliation can yield.
     hooks.registerSidecar(sidecar);
+    const stopBeforeReady = async () => {
+      await sidecar.stop();
+      hooks.unregisterSidecar(sidecar);
+      return null;
+    };
     // Track startup reconciliation in the placement slot so a concurrent
     // close prelude drains it before uninstalling guards and stopping environments.
     const startupRecovery = recoverPendingWorkspaceReconciliations();
@@ -579,8 +596,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       }
     }
     if (hooks.isClosePreludeStarted()) {
-      await sidecar.stop();
-      return null;
+      return await stopBeforeReady();
     }
     const startupReconcile = (async () => {
       await dispatchService.reconcile();
@@ -596,18 +612,15 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         }
       }
       if (hooks.isClosePreludeStarted()) {
-        await sidecar.stop();
-        return null;
+        return await stopBeforeReady();
       }
       void nodeWorkspaceRetention.start();
       if (hooks.isClosePreludeStarted()) {
-        await sidecar.stop();
-        return null;
+        return await stopBeforeReady();
       }
       params.environments.start();
       if (hooks.isClosePreludeStarted()) {
-        await sidecar.stop();
-        return null;
+        return await stopBeforeReady();
       }
       void sweepDiskSpace();
       placementReconcileInterval = setInterval(
@@ -617,7 +630,13 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       placementReconcileInterval.unref?.();
       return sidecar;
     } catch (error) {
-      await sidecar.stop();
+      try {
+        await stopBeforeReady();
+      } catch (cleanupError) {
+        params.warn(
+          `Worker placement cleanup after startup failure failed: ${formatErrorMessage(cleanupError)}`,
+        );
+      }
       throw error;
     }
   };

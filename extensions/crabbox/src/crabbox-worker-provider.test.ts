@@ -95,6 +95,34 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
+  it("advertises named machine classes and preserves a configured literal default", () => {
+    const provider = createCrabboxWorkerProvider();
+
+    expect(provider.listMachineOptions?.(PROFILE)).toEqual([
+      {
+        id: "standard",
+        label: "Standard",
+        description: "Cheap smoke checks and small repos",
+        default: true,
+      },
+      { id: "fast", label: "Fast", description: "General maintainer testing" },
+      { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+      { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+    ]);
+    expect(provider.listMachineOptions?.({ ...PROFILE, class: "c7a.24xlarge" })).toEqual([
+      { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
+      { id: "fast", label: "Fast", description: "General maintainer testing" },
+      { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+      { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+      {
+        id: "c7a.24xlarge",
+        label: "c7a.24xlarge",
+        description: "Configured instance type",
+        default: true,
+      },
+    ]);
+  });
+
   it("returns a pinned endpoint when inspect exposes provisioned host-key material", async () => {
     let warmed = false;
     const provider = providerWithRunner(async (argv) => {
@@ -1013,6 +1041,37 @@ describe("Crabbox worker provider", () => {
       "--json",
     ]);
   });
+
+  it("overrides the configured class for one provision operation", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return argv[1] === "warmup"
+        ? commandResult()
+        : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+    });
+
+    await provider.provision(PROFILE, OPERATION_ID, { machineClass: "c7a.24xlarge" });
+
+    const warmup = calls.find((argv) => argv[1] === "warmup");
+    expect(warmup?.slice(warmup.indexOf("--class"), warmup.indexOf("--class") + 2)).toEqual([
+      "--class",
+      "c7a.24xlarge",
+    ]);
+  });
+
+  it.each([" ", "x".repeat(129)])(
+    "rejects an invalid per-operation machine class before allocation",
+    async (machineClass) => {
+      const runCommand = vi.fn(async () => commandResult());
+      const provider = providerWithRunner(runCommand);
+
+      await expect(
+        provider.provision(PROFILE, OPERATION_ID, { machineClass }),
+      ).rejects.toMatchObject({ code: "invalid_profile" });
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("replays a committed timed-out warmup through a fresh provider instance", async () => {
     const calls: string[][] = [];

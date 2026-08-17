@@ -4,7 +4,7 @@ import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { loadDashboardsRoute } from "./route.ts";
+import { dashboardSessionListQuery, dashboardsRouteData } from "./route.ts";
 import { renderDashboards, type DashboardsRouteData } from "./view.ts";
 
 class DashboardsPage extends OpenClawLightDomElement {
@@ -14,29 +14,22 @@ class DashboardsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: DashboardsRouteData;
 
   private observedSessions?: ApplicationContext["sessions"];
-  private observedAgentSelection?: ApplicationContext["agentSelection"];
-  private observedDependencies = "";
-  private dependenciesInitialized = false;
-  private refreshGeneration = 0;
+  private observedScopeId?: string | null;
+  private unsubscribeList?: () => void;
   private data?: DashboardsRouteData;
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.sessions,
-      (sessions) => {
-        this.synchronizeDependencies();
-        return sessions.subscribe(() => this.synchronizeDependencies());
-      },
-    )
-    .effect(
-      () => this.context?.agentSelection,
-      (agentSelection) => {
-        this.synchronizeDependencies();
-        return agentSelection.subscribe(() => this.synchronizeDependencies());
-      },
-    );
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.agentSelection,
+    (agentSelection) => {
+      this.bindList();
+      return agentSelection.subscribe(() => this.bindList());
+    },
+  );
 
   override disconnectedCallback() {
-    this.refreshGeneration += 1;
+    this.unsubscribeList?.();
+    this.unsubscribeList = undefined;
+    this.observedSessions = undefined;
+    this.observedScopeId = undefined;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -45,68 +38,41 @@ class DashboardsPage extends OpenClawLightDomElement {
     if (changed.has("routeData")) {
       this.data = this.routeData;
     }
+    this.bindList();
   }
 
-  private synchronizeDependencies(): void {
+  private bindList(): void {
     const context = this.context;
     if (!context) {
       return;
     }
     const sessions = context.sessions;
-    const agentSelection = context.agentSelection;
-    const dependencies = `${agentSelection.state.scopeId ?? "all"}\u0000${
-      sessions.canonicalListRevision
-    }`;
-    const sourceChanged =
-      sessions !== this.observedSessions || agentSelection !== this.observedAgentSelection;
-    if (
-      this.dependenciesInitialized &&
-      !sourceChanged &&
-      dependencies === this.observedDependencies
-    ) {
+    const scopeId = context.agentSelection.state.scopeId?.trim() || null;
+    if (sessions === this.observedSessions && scopeId === this.observedScopeId) {
       return;
     }
-    const shouldRefresh =
-      context.gateway.snapshot.phase === "connected" &&
-      (this.dependenciesInitialized ||
-        (this.routeData?.result === null && this.routeData.error === null));
-    this.dependenciesInitialized = true;
+    this.unsubscribeList?.();
     this.observedSessions = sessions;
-    this.observedAgentSelection = agentSelection;
-    this.observedDependencies = dependencies;
-    if (shouldRefresh) {
-      void this.refresh(context, sessions, agentSelection, dependencies);
+    this.observedScopeId = scopeId;
+    const query = dashboardSessionListQuery(context);
+    const apply = (snapshot: ReturnType<typeof sessions.listSnapshot>) => {
+      if (
+        this.context !== context ||
+        this.observedSessions !== sessions ||
+        this.observedScopeId !== scopeId ||
+        (!snapshot.result && !snapshot.error)
+      ) {
+        return;
+      }
+      this.data = dashboardsRouteData(context, snapshot);
+      this.requestUpdate();
+    };
+    this.unsubscribeList = sessions.subscribeList(query, apply);
+    const snapshot = sessions.listSnapshot(query);
+    apply(snapshot);
+    if (!snapshot.result && !snapshot.loading && context.gateway.snapshot.phase === "connected") {
+      void sessions.refreshList({ ...query, force: true });
     }
-  }
-
-  private async refresh(
-    context: ApplicationContext,
-    sessions: ApplicationContext["sessions"],
-    agentSelection: ApplicationContext["agentSelection"],
-    dependencies: string,
-  ): Promise<void> {
-    const gateway = context.gateway;
-    const client = gateway.snapshot.phase === "connected" ? gateway.snapshot.client : null;
-    if (!client) {
-      return;
-    }
-    const generation = ++this.refreshGeneration;
-    const data = await loadDashboardsRoute(context);
-    if (
-      generation !== this.refreshGeneration ||
-      this.context !== context ||
-      context.sessions !== sessions ||
-      context.agentSelection !== agentSelection ||
-      this.observedDependencies !== dependencies ||
-      context.gateway !== gateway ||
-      gateway.snapshot.phase !== "connected" ||
-      gateway.snapshot.client !== client ||
-      (data.result === null && data.error === null)
-    ) {
-      return;
-    }
-    this.data = data;
-    this.requestUpdate();
   }
 
   override render() {

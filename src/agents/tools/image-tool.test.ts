@@ -1845,9 +1845,10 @@ describe("image tool implicit imageModel config", () => {
       testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
 
       const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool.label).toBe("View Image");
+      expect(tool.label).toBe("Inspect Image");
       expect(tool.catalogMode).toBe("direct-only");
-      expect(tool.description).toContain("direct visual inspection");
+      expect(tool.description).toContain("private model context");
+      expect(tool.description).toContain("Does not display, attach, or send");
 
       const result = await tool.execute("native-image", {
         prompt: "Read the screenshot error.",
@@ -1861,7 +1862,10 @@ describe("image tool implicit imageModel config", () => {
       ).content;
 
       expect(content).toEqual([
-        { type: "text", text: "Loaded 1 image for direct visual inspection." },
+        {
+          type: "text",
+          text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
+        },
         expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
       ]);
       expect((result as { details?: Record<string, unknown> }).details).toMatchObject({

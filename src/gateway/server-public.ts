@@ -11,6 +11,11 @@ export type GatewayCloseOptions = {
 
 export type GatewayServer = {
   close: (opts?: GatewayCloseOptions) => Promise<void>;
+  /**
+   * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.
+   * Closing never forces settlement. Direct callers may safely ignore this pre-handled promise.
+   */
+  startupSettled: Promise<void>;
 };
 
 export type GatewayServerOptions = {

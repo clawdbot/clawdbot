@@ -132,12 +132,14 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 export async function readConfigFileSnapshot(
   options: ConfigSnapshotReadOptions = {},
 ): Promise<ConfigFileSnapshot> {
+  const pluginValidation =
+    options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined);
   return await createConfigIO({
     ...(options.measure ? { measure: options.measure } : {}),
     ...(options.observe === false ? { observe: false } : {}),
     ...(options.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
-    ...(options.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(pluginValidation ? { pluginValidation } : {}),
     ...(options.suppressFutureVersionWarning ? { suppressFutureVersionWarning: true } : {}),
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }

@@ -12,6 +12,13 @@ export type ApprovalReactionDeliveryBinding = {
   approvalSlug?: string;
 };
 
+/** Build the private marker revalidated after channel delivery. */
+export function buildApprovalReactionDeliveredBindingMarker(
+  binding: ApprovalReactionDeliveryBinding,
+): { version: 1 } & ApprovalReactionDeliveryBinding {
+  return { version: 1, ...binding };
+}
+
 /** Read a nonempty, duplicate-free list without accepting unrecognized decisions. */
 export function readApprovalReactionDecisionList(
   value: unknown,

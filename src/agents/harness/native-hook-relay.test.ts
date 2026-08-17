@@ -992,13 +992,11 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
-    await Promise.resolve();
-
     const state = getNativeHookRelaySharedStateForTests();
-    expect(state.pendingPermissionApprovals.size).toBe(1);
+    await vi.waitFor(() => expect(state.pendingPermissionApprovals.size).toBe(1));
     expect(state.permissionApprovalWindows.get(relay.relayId)).toHaveLength(1);
 
     resolveDecision?.("allow-always");
@@ -1016,7 +1014,7 @@ describe("native hook relay registry", () => {
           cwd: "/repo",
           tool_name: "Bash",
           tool_use_id: "native-call-2",
-          tool_input: { command: "browserforce tabs" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1051,7 +1049,7 @@ describe("native hook relay registry", () => {
           cwd: "/repo",
           tool_name: "Bash",
           tool_use_id: "native-call-1",
-          tool_input: { command: "browserforce tabs" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1068,7 +1066,7 @@ describe("native hook relay registry", () => {
           cwd: "/repo",
           tool_name: "Bash",
           tool_use_id: "native-call-2",
-          tool_input: { command: "browserforce tabs" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1115,7 +1113,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     expect(JSON.parse(duplicateApproval.stdout)).toEqual({
@@ -1136,7 +1134,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-2",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     expect(JSON.parse(primaryApproval.stdout)).toEqual({
@@ -3856,7 +3854,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     relay.unregister();
@@ -3875,7 +3873,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-2",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
 
@@ -3918,7 +3916,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     first.unregister();
@@ -3939,7 +3937,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-2",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
 
@@ -3949,7 +3947,7 @@ describe("native hook relay registry", () => {
       agentId: "agent-1",
       sessionId: "session-2",
       sessionKey: "agent:main:session-2",
-      toolInput: { command: "browserforce tabs" },
+      toolInput: { command: "git status" },
     });
   });
 
@@ -4017,7 +4015,7 @@ describe("native hook relay registry", () => {
         rawPayload: {
           hook_event_name: "PermissionRequest",
           tool_name: "Bash",
-          tool_input: { command: "cargo test" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
@@ -4055,8 +4053,7 @@ describe("native hook relay registry", () => {
       rawPayload: payload,
     });
 
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
     resolveDecision?.("allow");
     const responses = await Promise.all([first, second]);
 
@@ -4105,8 +4102,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: payload,
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
     expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
 
     firstRelay.unregister();
@@ -4122,8 +4118,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: payload,
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
     expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
 
     resolvers[0]?.("allow");
@@ -4136,8 +4131,10 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: payload,
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
 
     resolvers[1]?.("allow");
     await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
@@ -4182,8 +4179,7 @@ describe("native hook relay registry", () => {
       },
     });
 
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
     const secondResponse = await second;
     expect(JSON.parse(secondResponse.stdout)).toEqual({
       hookSpecificOutput: {
@@ -4260,8 +4256,7 @@ describe("native hook relay registry", () => {
         rawPayload: duplicatePayload,
       }),
     );
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
 
     const newRequest = invokeNativeHookRelay({
       provider: "codex",
@@ -4273,8 +4268,7 @@ describe("native hook relay registry", () => {
         tool_input: { command: "curl https://example.com" },
       },
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
 
     for (const resolve of resolvers) {
       resolve("allow");

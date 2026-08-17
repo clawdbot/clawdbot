@@ -189,6 +189,7 @@ export class McpLoopbackToolCache {
       params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
+      params.modelHasVision === true ? "vision" : "text-only",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,

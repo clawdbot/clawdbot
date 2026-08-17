@@ -13,6 +13,7 @@ import {
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+import * as signalRuntime from "./runtime.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
@@ -171,6 +172,42 @@ describe("Signal approval reactions", () => {
         targetAuthor: "+15550009999",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("rejects persisted targets containing an invalid approval decision", async () => {
+    const runtime = vi.spyOn(signalRuntime, "getOptionalSignalRuntime").mockReturnValue({
+      state: {
+        openKeyedStore: () => ({
+          register: async () => {},
+          lookup: async () => ({
+            version: 1,
+            target: {
+              approvalId: "exec-corrupt",
+              approvalKind: "exec",
+              allowedDecisions: ["allow-once", "invalid"],
+              targetAuthorKeys: ["+15550009999"],
+              route: { deliveryMode: "session" },
+            },
+          }),
+          delete: async () => false,
+        }),
+      },
+    } as never);
+    try {
+      clearSignalApprovalReactionTargetsForTest();
+      await expect(
+        resolveSignalApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          conversationKey: "+15551230000",
+          messageId: "corrupt-message",
+          reactionKey: "👍",
+          targetAuthor: "+15550009999",
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      clearSignalApprovalReactionTargetsForTest();
+      runtime.mockRestore();
+    }
   });
 
   it("registers only delivered chunks that contain visible reaction hints", async () => {

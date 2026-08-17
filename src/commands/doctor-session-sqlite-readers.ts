@@ -504,9 +504,7 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   }
 }
 
-function* iterateJsonlLinesSync(
-  filePath: string,
-): Generator<{ final: boolean; lineNumber: number; text: string }> {
+function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
@@ -525,14 +523,14 @@ function* iterateJsonlLinesSync(
         lineNumber += 1;
         const text = part.trim();
         if (text) {
-          yield { final: false, lineNumber, text };
+          yield { lineNumber, text };
         }
       }
     }
     carry += decoder.decode();
     const text = carry.trim();
     if (text) {
-      yield { final: true, lineNumber: lineNumber + 1, text };
+      yield { lineNumber: lineNumber + 1, text };
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
@@ -551,15 +549,8 @@ function sqliteNumber(value: unknown): number {
   return 0;
 }
 
-function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string }): unknown {
-  try {
-    return JSON.parse(line.text);
-  } catch (error) {
-    if (line.final) {
-      return undefined;
-    }
-    throw error;
-  }
+function parseJsonlLine(line: { text: string }): unknown {
+  return JSON.parse(line.text);
 }
 
 // Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).

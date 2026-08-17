@@ -29,11 +29,13 @@ export async function startGatewayServerCore(
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
     clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
+    sealAndJoinRegisteredSidecarStops,
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
@@ -43,7 +45,7 @@ export async function startGatewayServerCore(
   try {
     const transport = await createGatewayHttpTransport(gatewayKernel.createHttpTransportOptions());
     gatewayKernel.transportBridge.attach(transport);
-    await finishGatewayStartup({
+    const startup = await finishGatewayStartup({
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
@@ -58,6 +60,7 @@ export async function startGatewayServerCore(
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
+    startupSettled = startup.startupSettled;
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -70,6 +73,7 @@ export async function startGatewayServerCore(
   const close = createCloseHandler();
 
   return {
+    startupSettled,
     close: async (optsLocal) => {
       await runGatewayShutdownSteps({
         steps: [
@@ -90,6 +94,7 @@ export async function startGatewayServerCore(
             },
           },
           { name: "gateway close prelude", run: runClosePrelude },
+          { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
           { name: "gateway close", run: () => close(optsLocal) },
           {
             name: "fallback gateway context",

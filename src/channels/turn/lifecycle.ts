@@ -64,12 +64,10 @@ type RoutedAssembledChannelTurn = Omit<
 
 type AnyChannelDeliveryAdapter = ChannelEventDeliveryAdapter | ChannelTurnDeliveryAdapter;
 
-type PendingChannelDeliveryAttempt = {
-  payload: ReplyPayload;
-  info: ChannelDeliveryInfo;
-  result?: ChannelDeliveryResult | void;
-  error?: unknown;
-};
+type PendingChannelDeliveryAttempt = { payload: ReplyPayload; info: ChannelDeliveryInfo } & (
+  | { state: "fulfilled"; result: ChannelDeliveryResult | void }
+  | { state: "rejected"; error: unknown }
+);
 
 function resolvePartialChannelDeliveryResult(
   error: unknown,
@@ -230,11 +228,8 @@ async function settleChannelDeliveryAttempts(params: {
   }
 }
 
-// Failed-send custody policy: a permanent typed non-dispatch rejection is a
-// proven no-send (terminal suppression, no replay, no notice); an untyped error
-// after the pre-I/O claim affirms real ambiguity (unknown -> owed notice); a
-// retryable typed rejection restores prepared custody so recovery can replay —
-// the pre-claim already wrote unknown, and leaving it would fake ambiguity.
+// Permanent non-dispatch rejection proves no send; an untyped post-claim error stays ambiguous.
+// Retryable rejection restores prepared custody so recovery can replay instead of faking ambiguity.
 async function settleFailedPendingFinalDelivery(
   payload: ReplyPayload,
   error: unknown,
@@ -259,7 +254,7 @@ async function settleChannelDeliveryAttempt(params: {
   emitMessageSent?: ReturnType<typeof createMessageSentEmitter>["emitMessageSent"];
 }): Promise<ChannelDeliveryResult | undefined> {
   const { attempt } = params;
-  if ("error" in attempt) {
+  if (attempt.state === "rejected") {
     const partial = resolvePartialChannelDeliveryResult(attempt.error);
     if (!isPlatformMessageNotDispatchedError(attempt.error)) {
       params.emitMessageSent?.({
@@ -398,8 +393,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
 ): Promise<ChannelTurnResult> {
   const [params, ownership] = args;
   const replyPipeline = resolveAssembledReplyPipeline(params);
-  const turnAdoptionLifecycle =
-    params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
@@ -465,11 +459,11 @@ async function dispatchChannelTurnWithDeliveryOwner(
       outboundEchoSourceId: params.outboundEchoSourceId,
       log: params.log,
       messageId: params.messageId,
-      ...(turnAdoptionLifecycle
+      ...(adoption
         ? {
             runDispatchLifecycle: {
-              turnAdoptionLifecycle,
-              onDispatchSkipped: async () => await turnAdoptionLifecycle.onAdopted(),
+              turnAdoptionLifecycle: adoption,
+              onDispatchSkipped: async () => await adoption.onAdopted(),
             },
           }
         : {}),
@@ -517,6 +511,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                     }
                     const { reason: _reason, ...deliveryInfo } = info;
                     normalizationSuppressionAttempts.push({
+                      state: "fulfilled",
                       payload,
                       info: deliveryInfo,
                       result: createSuppressedChannelDeliveryResult({ reason: info.reason }),
@@ -562,8 +557,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       });
                       throwIfDurableInboundReplyDeliveryFailed(durable);
                       if (isDurableInboundReplyDeliveryHandled(durable)) {
-                        // Durable sends already emit canonical message_sent from
-                        // deliverOutboundPayloadsInternal after outbound hooks settle.
+                        // Durable sends emit canonical message_sent after outbound hooks settle.
                         await runChannelDeliveryObserver({
                           onDelivered: delivery.onDelivered,
                           payload: preparedPayload,
@@ -626,6 +620,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       if (delivery.observeMessageSent) {
                         await settleChannelDeliveryAttempt({
                           attempt: {
+                            state: "rejected",
                             payload: effectivePayload,
                             info: directInfo,
                             error,
@@ -637,10 +632,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       throw error;
                     }
                     if (result?.finalization) {
-                      // Finalization can reject while the buffered dispatcher is still unwinding.
-                      // Observe it now; settlement still awaits the original promise and its error.
+                      // Observe rejection while the dispatcher unwinds; settlement awaits the same promise.
                       void result.finalization.catch(() => undefined);
                       pendingDeliveryAttempts.push({
+                        state: "fulfilled",
                         payload: effectivePayload,
                         info: directInfo,
                         result,
@@ -648,6 +643,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                     } else {
                       const finalized = await settleChannelDeliveryAttempt({
                         attempt: {
+                          state: "fulfilled",
                           payload: effectivePayload,
                           info: directInfo,
                           result,
@@ -694,9 +690,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
         } catch (error: unknown) {
           settlementError = error;
         }
-        // Deferred settlement can carry the provider-visible receipt/content that the earlier
-        // dispatch failure lacks. Preserve that partial result so callers do not retry a send
-        // that the channel already accepted.
+        // Preserve deferred provider receipts so callers do not retry an accepted send.
         if (
           settlementError !== undefined &&
           resolvePartialChannelDeliveryResult(settlementError) !== undefined
@@ -734,9 +728,8 @@ export function dispatchRoutedChannelTurn(params: ChannelTurnPlan): Promise<Chan
 export async function dispatchRoutedChannelTurn(
   params: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
 ): Promise<ChannelTurnResult> {
-  const assembled = assembleResolvedChannelTurn(params);
   return await dispatchChannelTurnWithDeliveryOwner(
-    assembled as RoutedAssembledChannelTurn,
+    assembleResolvedChannelTurn(params) as RoutedAssembledChannelTurn,
     "routed-delivery",
   );
 }

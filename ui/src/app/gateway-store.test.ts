@@ -349,6 +349,34 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).toContain("1006");
   });
 
+  it("keeps retryable startup unavailable in the initial progress state", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    const startupClose = {
+      code: 4013,
+      reason: "gateway starting",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    };
+    current().opts.onClose?.(startupClose);
+
+    expect(gateway.snapshot.phase).toBe("starting");
+    expect(gateway.snapshot.lastError).toBeNull();
+    expect(gateway.snapshot.lastErrorCode).toBeNull();
+
+    const listener = vi.fn();
+    gateway.subscribe(listener);
+    current().opts.onClose?.(startupClose);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("returns a never-connected terminal close to stopped", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -570,6 +598,35 @@ describe("createApplicationGateway connection phase", () => {
       buildId: "replacement-build",
     });
     expect(gateway.snapshot.phase).toBe("reload-required");
+  });
+
+  it("keeps reload-required ahead of retryable startup presentation", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          reason: "startup-sidecars",
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+        retryable: true,
+      },
+      willRetry: true,
+    });
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
+      buildId: "replacement-build",
+    });
+    expect(gateway.snapshot.phase).toBe("reload-required");
+    expect(gateway.snapshot.lastError).toContain("Control UI updated");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
   });
 
   it("keeps a bare protocol mismatch in the login-gate path", () => {

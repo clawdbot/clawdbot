@@ -101,6 +101,14 @@ describe("show_widget", () => {
     );
   });
 
+  it("keeps widget documents from duplicating host-owned metadata and controls", () => {
+    const description = createShowWidgetTool().description;
+
+    expect(description).toContain("`title` is host metadata");
+    expect(description).toContain("Start directly with content");
+    expect(description).toContain("do not repeat the title");
+  });
+
   it("uses flat provider-safe enums for dashboard options", () => {
     const tool = createShowWidgetTool();
     const properties = (

@@ -67,6 +67,7 @@ describe("device worker placement dispatch", () => {
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
       { profileId: request.profileId, ...request.inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
+      undefined,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
