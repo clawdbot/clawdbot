@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
@@ -1672,6 +1674,63 @@ describe("config plugin validation", () => {
     const dupWarning = res.warnings.find((w) => w.message.includes("duplicate plugin id"));
     expect(dupWarning).toBeDefined();
     expect(dupWarning!.message).toContain(`overridden copy at ${loserPath}`);
+  });
+
+  it("counts config-selected duplicate diagnostics as overridden in validation consumers", () => {
+    const bundledGoogleRecord: PluginManifestRecord = {
+      id: "google",
+      origin: "bundled",
+      channels: [],
+      providers: [],
+      contracts: { webSearchProviders: ["google"] },
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: "/plugin-fixtures/bundled-google",
+      source: "test",
+      manifestPath: "/plugin-fixtures/bundled-google/openclaw.plugin.json",
+      schemaCacheKey: "test:google",
+      configSchema: {
+        type: "object",
+        properties: { apiKey: { type: "string" } },
+      },
+    };
+
+    const configSelectedDuplicate: PluginDiagnostic = {
+      level: "warn",
+      pluginId: "google",
+      source: "/plugin-fixtures/overridden-copy/openclaw.plugin.json",
+      code: "duplicate-plugin-id",
+      message:
+        "duplicate plugin id resolved by explicit config-selected plugin; bundled plugin will be overridden by config plugin (/plugin-fixtures/config-copy/index.js)",
+    };
+
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          allow: ["imessage"],
+          entries: {
+            google: { config: { apiKey: "test-google-key" } },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [bundledGoogleRecord],
+            diagnostics: [configSelectedDuplicate],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(res.warnings, "plugins.entries.google", "but config is present");
   });
 
   it("does not append source hint for non-duplicate diagnostics with source", () => {
