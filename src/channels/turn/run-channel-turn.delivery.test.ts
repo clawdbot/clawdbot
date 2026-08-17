@@ -6,6 +6,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import type { ReplyDispatchReceipt } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -19,6 +20,8 @@ import {
 import { hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch } from "./dispatch-result.js";
 import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
 import {
+  createDispatch,
+  createDispatcherBackedDispatch,
   createReplyDispatchReceipt,
   expectNonVisibleFinalReceipt,
 } from "./run-channel-turn.delivery.test-helpers.js";
@@ -118,28 +121,6 @@ function createRecordInboundSession(events: string[] = []): RecordInboundSession
   return vi.fn(async () => {
     events.push("record");
   }) as unknown as RecordInboundSession;
-}
-
-function createDispatch(
-  events: string[] = [],
-  deliverPayload: { text: string } = { text: "reply" },
-): DispatchReplyWithBufferedBlockDispatcher {
-  return vi.fn(async (params) => {
-    events.push("dispatch");
-    const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
-    const deliveredNotVisible =
-      typeof delivery === "object" &&
-      delivery !== null &&
-      "visibleReplySent" in delivery &&
-      delivery.visibleReplySent === false;
-    return {
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt: createReplyDispatchReceipt({
-        final: deliveredNotVisible ? { deliveredNotVisible: 1 } : { delivered: 1 },
-      }),
-    };
-  }) as DispatchReplyWithBufferedBlockDispatcher;
 }
 
 function dispatchTestAssembledTurn(
@@ -249,6 +230,7 @@ describe("channel turn delivery", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setLoggerOverride(null);
     resetLogger();
   });
@@ -615,14 +597,29 @@ describe("channel turn delivery", () => {
   });
 
   it("classifies routed delivery only after provider finalization settles", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
     const onDelivered = vi.fn();
-    const finalization = Promise.resolve({
-      messageIds: ["final-1"],
-      visibleReplySent: true as const,
-      content: "final content",
+    let sealedReceipt: ReplyDispatchReceipt | undefined;
+    const finalization = new Promise<{
+      messageIds: string[];
+      visibleReplySent: true;
+      content: string;
+    }>((resolve) => {
+      setTimeout(() => {
+        resolve({
+          messageIds: ["final-1"],
+          visibleReplySent: true,
+          content: "final content",
+        });
+      }, 50);
     });
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      createDispatcherBackedDispatch((receipt) => {
+        sealedReceipt = receipt;
+      }),
+    );
 
-    const result = await dispatchRoutedChannelTurn({
+    const turn = dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -632,7 +629,16 @@ describe("channel turn delivery", () => {
         onDelivered,
       },
     });
+    await vi.advanceTimersByTimeAsync(10);
+    const receiptBeforeFinalization = sealedReceipt;
+    await vi.advanceTimersByTimeAsync(40);
+    const result = await turn;
 
+    expect(receiptBeforeFinalization).toBeUndefined();
+    expect(sealedReceipt).toMatchObject({
+      anyVisibleDelivered: true,
+      counts: { final: { delivered: 1, deliveredNotVisible: 0 } },
+    });
     expect(onDelivered).toHaveBeenCalledWith(
       { text: "reply" },
       { kind: "final" },
@@ -645,6 +651,42 @@ describe("channel turn delivery", () => {
     expectDispatched(result);
     expect(result.dispatchResult.counts.final).toBe(1);
     expect(result.dispatchResult.queuedFinal).toBe(true);
+  });
+
+  it("seals rejected provider finalization as failed after send", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const finalizationError = new Error("provider finalization failed");
+    let sealedReceipt: ReplyDispatchReceipt | undefined;
+    const finalization = new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(finalizationError), 50);
+    });
+    void finalization.catch(() => undefined);
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      createDispatcherBackedDispatch((receipt) => {
+        sealedReceipt = receipt;
+      }),
+    );
+
+    const turn = dispatchRoutedChannelTurn({
+      cfg,
+      channel: "telegram",
+      route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
+      ctxPayload: createCtx({ Surface: "telegram" }),
+      delivery: {
+        deliver: async () => ({ visibleReplySent: false, finalization }),
+      },
+    });
+    const rejection = expect(turn).rejects.toBe(finalizationError);
+    await vi.advanceTimersByTimeAsync(10);
+    const receiptBeforeFinalization = sealedReceipt;
+    await vi.advanceTimersByTimeAsync(40);
+
+    await rejection;
+    expect(receiptBeforeFinalization).toBeUndefined();
+    expect(sealedReceipt).toMatchObject({
+      anyVisibleDelivered: true,
+      counts: { final: { deliveredNotVisible: 0, failedAfterSend: 1 } },
+    });
   });
 
   it("routes assembled final replies through durable outbound delivery", async () => {

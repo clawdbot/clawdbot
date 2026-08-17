@@ -1,10 +1,51 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type {
   ReplyDispatchKind,
   ReplyDispatchReceipt,
   ReplyDispatchSettledCounts,
 } from "../../auto-reply/reply/reply-dispatcher.types.js";
+
+export function createDispatch(
+  events: string[] = [],
+  deliverPayload: { text: string } = { text: "reply" },
+): DispatchReplyWithBufferedBlockDispatcher {
+  return vi.fn(async (params) => {
+    events.push("dispatch");
+    const delivery = await params.dispatcherOptions.deliver(deliverPayload, { kind: "final" });
+    const deliveredNotVisible =
+      typeof delivery === "object" &&
+      delivery !== null &&
+      "visibleReplySent" in delivery &&
+      delivery.visibleReplySent === false;
+    return {
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: createReplyDispatchReceipt({
+        final: deliveredNotVisible ? { deliveredNotVisible: 1 } : { delivered: 1 },
+      }),
+    };
+  }) as DispatchReplyWithBufferedBlockDispatcher;
+}
+
+export function createDispatcherBackedDispatch(
+  onReceipt: (receipt: ReplyDispatchReceipt | undefined) => void,
+): DispatchReplyWithBufferedBlockDispatcher {
+  return vi.fn(async (params) => {
+    const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+    dispatcher.sendFinalReply({ text: "reply" });
+    dispatcher.markComplete();
+    const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
+    onReceipt(settledReceipt);
+    return {
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt,
+    };
+  }) as DispatchReplyWithBufferedBlockDispatcher;
+}
 
 export function createReplyDispatchReceipt(
   outcomes: Partial<Record<ReplyDispatchKind, Partial<ReplyDispatchSettledCounts>>>,

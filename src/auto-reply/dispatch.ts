@@ -286,6 +286,15 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const replyPayloadRunState = {
     runId: params.replyOptions?.runId,
   };
+  let settledDeliveries = Promise.resolve();
+  const settleDeliveries = () =>
+    (settledDeliveries = settledDeliveries.then(() =>
+      runOrderedForegroundReplySettledDeliveries(
+        foregroundReplyLease,
+        params.dispatcherOptions.onSettled,
+        params.dispatcherOptions.onFreshSettledDelivery,
+      ),
+    ));
   const replyPayloadBeforeDeliver =
     ownership.outboundHooks === "disabled"
       ? undefined
@@ -321,6 +330,8 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
       beforeDeliver,
+      onSettled: settleDeliveries,
+      onFreshSettledDelivery: undefined,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   const onTypingController = params.replyOptions?.onTypingController
@@ -348,11 +359,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     });
   } finally {
     try {
-      await runOrderedForegroundReplySettledDeliveries(
-        foregroundReplyLease,
-        params.dispatcherOptions.onSettled,
-        params.dispatcherOptions.onFreshSettledDelivery,
-      );
+      await settledDeliveries;
     } finally {
       foregroundReplyLease?.release();
       markRunComplete();
