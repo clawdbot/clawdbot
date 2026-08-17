@@ -230,6 +230,40 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("uses one canonical account identity for display-style poll delivery and state", async () => {
+    const cfgWithDisplayAccount = {
+      channels: {
+        msteams: {
+          accounts: {
+            "Support Bot": {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await requireSendPoll()({
+      cfg: cfgWithDisplayAccount,
+      accountId: "Support Bot",
+      to: "conversation:abc",
+      poll: {
+        question: "Approve?",
+        options: ["Yes", "No"],
+      },
+    });
+
+    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support-bot" }),
+    );
+    expect(firstPollRecord()).toMatchObject({
+      accountId: "support-bot",
+      id: "poll-1",
+    });
+  });
+
   it("passes accountId through injected text send dependencies", async () => {
     const injected = vi.fn().mockResolvedValue({
       messageId: "dep-msg-1",

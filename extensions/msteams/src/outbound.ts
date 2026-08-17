@@ -1,4 +1,5 @@
 // Msteams plugin module implements outbound behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -317,7 +318,9 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
     },
     sendPoll: async ({ cfg, to, poll, accountId, threadId }) => {
-      const effectiveAccountId = accountId ?? resolveDefaultMSTeamsAccountId(cfg);
+      const effectiveAccountId = normalizeAccountId(
+        accountId ?? resolveDefaultMSTeamsAccountId(cfg),
+      );
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
