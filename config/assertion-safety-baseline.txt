@@ -3541,7 +3541,6 @@ src/plugin-sdk/qa-channel-protocol.ts	1
 src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2
 src/plugin-sdk/qa-runtime.ts	5
-src/plugin-sdk/reply-payload.ts	1
 src/plugin-sdk/runtime-store-registry.ts	1
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	3
