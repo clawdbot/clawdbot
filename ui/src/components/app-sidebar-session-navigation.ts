@@ -5,7 +5,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
-import { listSelectableAgents } from "../lib/agents/display.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { filterVisibleSessionRows, sessionMatchesArchivedFilter } from "../lib/sessions/index.ts";
@@ -37,12 +36,13 @@ import {
   extendSidebarSessionSelection,
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
-  latestVisibleAgentSessionRow,
   mergeAdoptedSessionPullRequestRows,
   partitionSidebarVisibleSections,
   promoteSidebarSessionCreatedOrder,
   resolveSidebarAgentChipSubtitle,
+  resolveActiveSidebarAgent,
   resolveSidebarHomeAttention,
+  resolveLatestSidebarAgentSession,
   resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
   toggleSidebarSessionSelection,
@@ -266,10 +266,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return result.rows;
   }
 
-  protected hideEmptyCreatorFilteredGroup(category: string | undefined, rowCount: number): boolean {
-    return this.sessionCreatorFilterActive && Boolean(category) && rowCount === 0;
-  }
-
   public getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
@@ -353,7 +349,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
           : this.sessionData.sessionCatalogs.map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyCreatorFilteredGroup: (category, rowCount) =>
-        this.hideEmptyCreatorFilteredGroup(category, rowCount),
+        this.sessionCreatorFilterActive && Boolean(category) && rowCount === 0,
       visibleSessionLimits: this.sessionData.visibleSessionLimits,
     });
   }
@@ -501,30 +497,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   activeChipAgent() {
-    const roster = this.context?.agents.state.agentsList?.agents ?? [];
-    const activeId = this.expandedAgentId();
-    const agent = roster.find((entry) => normalizeAgentId(entry.id) === activeId);
-    const identities = new Map(
-      (this.context?.agentIdentity.entries() ?? []).map(
-        (identity) => [identity.agentId, identity] as const,
-      ),
-    );
-    const agents = listSelectableAgents(roster);
-    const identity = identities.get(activeId) ?? null;
-    return { activeId, agent, agents, identity, identities };
+    return resolveActiveSidebarAgent({
+      activeId: this.expandedAgentId(),
+      roster: this.context?.agents.state.agentsList?.agents ?? [],
+      identities: this.context?.agentIdentity.entries() ?? [],
+    });
   }
 
   /** Newest visible session for an agent; the chip menu resumes here. */
   private latestAgentSessionRow(agentId: string): SessionsListResult["sessions"][number] | null {
-    return latestVisibleAgentSessionRow({
+    return resolveLatestSidebarAgentSession({
       agentId,
-      sessionsAgentId: this.sessionData.sessionsAgentId,
-      sessionsResult: this.sessionData.sessionsResult,
-      sessionRowsByAgent: this.sessionData.sessionRowsByAgent,
-      defaultAgentId: resolveUiDefaultAgentId({
-        agentsList: this.context?.agents.state.agentsList,
-        hello: this.context?.gateway.snapshot.hello,
-      }),
+      sessionData: this.sessionData,
+      context: this.context,
     });
   }
 

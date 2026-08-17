@@ -127,6 +127,7 @@ describe("listGatewayMethods", () => {
       "portal.open",
       "portal.close",
       "sessions.move",
+      "sessions.assignOwner",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -294,6 +295,7 @@ describe("listGatewayMethods", () => {
       "portal.open",
       "portal.close",
       "sessions.move",
+      "sessions.assignOwner",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

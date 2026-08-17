@@ -4,6 +4,7 @@ import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
   resolveChannelSessionInfo,
@@ -35,6 +36,7 @@ import {
   normalizeAgentId,
   resolveUiCanonicalMainSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
@@ -442,6 +444,44 @@ export function latestVisibleAgentSessionRow(input: {
     archivedFilter: "active",
   });
   return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+}
+
+export function resolveActiveSidebarAgent(input: {
+  activeId: string;
+  roster: NonNullable<ApplicationContext<RouteId>["agents"]["state"]["agentsList"]>["agents"];
+  identities: ReturnType<ApplicationContext<RouteId>["agentIdentity"]["entries"]>;
+}) {
+  const identities = new Map(
+    input.identities.map((identity) => [identity.agentId, identity] as const),
+  );
+  return {
+    activeId: input.activeId,
+    agent: input.roster.find((entry) => normalizeAgentId(entry.id) === input.activeId),
+    agents: listSelectableAgents(input.roster),
+    identity: identities.get(input.activeId) ?? null,
+    identities,
+  };
+}
+
+export function resolveLatestSidebarAgentSession(input: {
+  agentId: string;
+  sessionData: {
+    sessionsAgentId: string | null;
+    sessionsResult: SessionsListResult | null;
+    sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
+  };
+  context: ApplicationContext<RouteId> | undefined;
+}): SessionRow | null {
+  return latestVisibleAgentSessionRow({
+    agentId: input.agentId,
+    sessionsAgentId: input.sessionData.sessionsAgentId,
+    sessionsResult: input.sessionData.sessionsResult,
+    sessionRowsByAgent: input.sessionData.sessionRowsByAgent,
+    defaultAgentId: resolveUiDefaultAgentId({
+      agentsList: input.context?.agents.state.agentsList,
+      hello: input.context?.gateway.snapshot.hello,
+    }),
+  });
 }
 
 /**

@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sql } from "kysely";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionCreatedActor } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -47,17 +53,24 @@ export function projectSqliteSessionOwner(
 }
 
 export function hasSqliteSessionOwnerColumns(database: DatabaseSync): boolean {
-  // SAFETY: PRAGMA schema_version returns one row; the value is runtime-checked below.
-  const schema = database.prepare("PRAGMA schema_version").get() as { schema_version?: unknown };
-  const schemaVersion = typeof schema.schema_version === "number" ? schema.schema_version : -1;
+  const db = getSessionKysely(database);
+  const schema = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom(sql`pragma_schema_version`.as("pragma_schema"))
+      .select(sql`schema_version`.as("schema_version")),
+  );
+  const schemaVersion = typeof schema?.schema_version === "number" ? schema.schema_version : -1;
   const cached = ownerColumnAvailability.get(database);
   if (cached?.schemaVersion === schemaVersion) {
     return cached.available;
   }
-  // SAFETY: PRAGMA table_info rows are objects; name is runtime-checked in the flatMap.
-  const tableInfoRows = database.prepare("PRAGMA table_info(session_nodes)").all() as Array<{
-    name?: unknown;
-  }>;
+  const tableInfoRows = executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom(sql`pragma_table_info('session_nodes')`.as("pragma_columns"))
+      .select(sql`name`.as("name")),
+  ).rows;
   const columns = new Set(
     tableInfoRows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
   );

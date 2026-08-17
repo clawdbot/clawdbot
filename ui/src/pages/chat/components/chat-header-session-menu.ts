@@ -5,11 +5,10 @@ import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "../../../components/menu-shortcuts.ts";
 import {
-  renderSessionOwnerChip,
+  renderSessionOwnerMenuAvatar,
   type SessionOwnerOption,
 } from "../../../components/session-owner-chip.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -148,7 +147,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           title=${this.actionTitle("assign-owner")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
-            >${renderSessionOwnerChip(owner, "row", "owned")}</span
+            >${renderSessionOwnerMenuAvatar(owner)}</span
           >
           <span class="session-menu__text">${owner.label ?? owner.id}</span>
           ${checked

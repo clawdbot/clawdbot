@@ -11,7 +11,7 @@ import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { renderSessionIconPicker } from "./session-icon-picker.ts";
-import { renderSessionOwnerChip, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { renderSessionOwnerMenuAvatar, type SessionOwnerOption } from "./session-owner-chip.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
@@ -201,7 +201,7 @@ class SessionMenu extends OpenClawLightDomElement {
           title=${this.actionTitle("assign-owner")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
-            >${renderSessionOwnerChip(owner, "row", "owned")}</span
+            >${renderSessionOwnerMenuAvatar(owner)}</span
           >
           <span class="session-menu__text">${owner.label ?? owner.id}</span>
           ${checked

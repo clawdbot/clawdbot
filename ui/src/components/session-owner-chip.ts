@@ -147,6 +147,19 @@ function ownerHue(id: string): number {
   return Math.abs(hash) % 360;
 }
 
+export function renderSessionOwnerMenuAvatar(owner: SessionOwnerOption) {
+  return html`<openclaw-viewer-avatar
+    .user=${{
+      id: owner.id,
+      name: owner.label,
+      avatarUrl: owner.avatarUrl,
+      watchedSessions: [],
+    }}
+    variant="session"
+    aria-hidden="true"
+  ></openclaw-viewer-avatar>`;
+}
+
 /**
  * Permanent session-owner avatar. Ownership is provenance, so the chip remains
  * when its owner leaves; live viewing only changes avatar saturation. Render
