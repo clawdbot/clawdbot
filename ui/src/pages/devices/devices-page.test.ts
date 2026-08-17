@@ -145,8 +145,11 @@ function gatewaySnapshot(
   };
 }
 
-function gateway(client: GatewayBrowserClient | null): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
+function gateway(
+  client: GatewayBrowserClient | null,
+  snapshotOverride?: ApplicationGatewaySnapshot,
+): ApplicationContext["gateway"] {
+  const snapshot: ApplicationGatewaySnapshot = snapshotOverride ?? {
     client,
     phase: "stopped",
     offlineStable: false,
@@ -231,6 +234,34 @@ describe("DevicesPage gateway lifecycle", () => {
 
     expect(page.pageState.nodes).toEqual([]);
     expect(page.ensureInitialData).toHaveBeenCalledOnce();
+  });
+
+  it("reloads node status when runner inventory changes", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "node.list" ? { nodes: [] } : { paired: [], pending: [] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, gatewaySnapshot(client, true));
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+
+    onEvent?.({ event: "node.runnerInventory.changed", payload: { nodeId: "node-1" } });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+    page.remove();
   });
 
   it("retries a node load after a same-client disconnect", async () => {

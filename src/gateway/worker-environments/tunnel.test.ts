@@ -62,6 +62,8 @@ describe("worker tunnel manager", () => {
     expect(tunnel?.argv).toContain("StreamLocalBindMask=0177");
     expect(tunnel?.argv).toContain("StreamLocalBindUnlink=yes");
     expect(tunnel?.options.input).not.toContain("rm -f");
+    expect(tunnel?.options.input).toContain("sleep 15; printf '.'");
+    expect(tunnel?.options.input).toContain("remote command received SIGHUP");
     expect(tunnel?.argv[tunnel.argv.indexOf("-R") + 1]).toMatch(
       /^\/tmp\/ocw-[a-f0-9]{16}-3\/gateway\.sock:127\.0\.0\.1:18789$/u,
     );
@@ -106,18 +108,32 @@ describe("worker tunnel manager", () => {
     });
     const onDispatchReady = vi.fn();
     await expect(
-      handle.launchTurn({ plan, placementGeneration: 1, timeoutMs: 123, onDispatchReady }),
+      handle.launchTurn({
+        plan,
+        turnClaim: {
+          sessionId: plan.admission.sessionId,
+          claimId: "claim-1",
+          runId: plan.assignment.runId,
+          placementGeneration: 1,
+          owner: {
+            kind: "worker",
+            environmentId: plan.admission.environmentId,
+            ownerEpoch: plan.admission.ownerEpoch,
+          },
+        },
+        timeoutMs: 123,
+        onDispatchReady,
+      }),
     ).resolves.toEqual(success());
     expect(onDispatchReady).toHaveBeenCalledOnce();
     const launch = fake.runs.at(-1);
     const remoteLaunchCommand = launch?.argv.at(-1) ?? "";
     expect(remoteLaunchCommand).toContain("'sh' '-c'");
-    expect(remoteLaunchCommand).toContain(
-      'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker',
-    );
+    expect(remoteLaunchCommand).toContain('exec node "$HOME/.openclaw-worker/$1/worker.mjs"');
     expect(remoteLaunchCommand).toContain(`'${BUNDLE_HASH}'`);
     expect(launch?.options.input).toContain('"connectionEndpoint":{"kind":"unix"');
-    expect(launch?.options.timeoutMs).toBe(123);
+    expect(launch?.options.timeoutMs).toBeGreaterThan(0);
+    expect(launch?.options.timeoutMs).toBeLessThanOrEqual(123);
     await handle.stop();
     expect(tunnel?.process.stopCount).toBe(1);
     expect(manager.status("worker:one")).toBe("stopped");
@@ -277,6 +293,110 @@ describe("worker tunnel manager", () => {
     await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
     expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
     await handle.stop();
+  });
+
+  it("waits before stateful dispatch and aborts reconnect waits on owner stop", async () => {
+    const fake = fakeRunner();
+    const sleepStarted = deferred<AbortSignal>();
+    const { handle } = await startConnectedTunnel(fake, "worker:reconnect-command-policy", 1, {
+      manager: {
+        sleep: async (_ms, signal) => {
+          if (!signal) {
+            throw new Error("missing reconnect signal");
+          }
+          sleepStarted.resolve(signal);
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                reject(
+                  signal.reason instanceof Error
+                    ? signal.reason
+                    : new Error("reconnect sleep aborted"),
+                ),
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    fake.starts[0]!.process.exit(255);
+    await sleepStarted.promise;
+
+    const idempotent = handle.runWorkspaceCommand(PWD_COMMAND);
+    const idempotentResult = expect(idempotent).rejects.toThrow(
+      "Worker tunnel owner is no longer connected",
+    );
+    const stateful = handle.runWorkspaceCommand({ ...PWD_COMMAND, transportRetry: "never" });
+    const statefulSettled = vi.fn();
+    void stateful.then(statefulSettled, statefulSettled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(statefulSettled).not.toHaveBeenCalled();
+
+    await handle.stop();
+    await idempotentResult;
+    await expect(stateful).rejects.toThrow("Worker tunnel owner is no longer connected");
+  });
+
+  it("does not dispatch a stateful command cancelled during reconnect", async () => {
+    const fake = fakeRunner();
+    const releaseReconnect = deferred<void>();
+    const { handle, manager } = await startConnectedTunnel(fake, "worker:cancel-reconnect", 1, {
+      manager: {
+        sleep: async () => await releaseReconnect.promise,
+      },
+    });
+    const controller = new AbortController();
+    const onDispatchReady = vi.fn();
+
+    try {
+      fake.starts[0]!.process.exit(255);
+      await waitForFast(() =>
+        expect(manager.status("worker:cancel-reconnect")).toBe("reconnecting"),
+      );
+      const command = handle.runWorkspaceCommand({
+        ...PWD_COMMAND,
+        transportRetry: "never",
+        signal: controller.signal,
+        onDispatchReady,
+      });
+      const settled = vi.fn();
+      void command.then(settled, settled);
+
+      controller.abort(new Error("turn cancelled"));
+      await waitForFast(() => expect(settled).toHaveBeenCalledOnce(), { timeout: 100 });
+      await expect(command).rejects.toThrow("turn cancelled");
+
+      releaseReconnect.resolve();
+      await waitForStarts(fake.starts, 2);
+      fake.starts[1]!.process.becomeReady();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      expect(fake.runs.filter((run) => run.argv.at(-1)?.includes("'pwd'"))).toHaveLength(0);
+    } finally {
+      releaseReconnect.resolve();
+      await handle.stop();
+    }
+  });
+
+  it("does not replay a stateful command after an ambiguous transport exit", async () => {
+    const fake = fakeRunner((argv) =>
+      argv.at(-1)?.includes("'pwd'") ? { ...success(), code: 255 } : undefined,
+    );
+    const { handle } = await startConnectedTunnel(fake, "worker:stateful-no-replay", 1, {
+      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
+    });
+
+    try {
+      await expect(
+        handle.runWorkspaceCommand({ ...PWD_COMMAND, transportRetry: "never" }),
+      ).resolves.toMatchObject({ code: 255 });
+      expect(fake.runs.filter((run) => run.argv.at(-1)?.includes("'pwd'"))).toHaveLength(1);
+    } finally {
+      await handle.stop();
+    }
   });
 
   it("shares setup and best-effort stop cleanup deadlines across fallback candidates", async () => {

@@ -25,6 +25,7 @@ import {
 import {
   activeRuns,
   cancelPendingBridgeStates,
+  cancelPendingBridgeStatesById,
   codeModeWaitingReason,
   createPendingBridgeStates,
   disposeCodeModeRun,
@@ -238,6 +239,9 @@ async function settleCodeModeResult(params: {
 }) {
   let result = params.result;
   let pending = params.pending ?? [];
+  if (result.status === "waiting") {
+    cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
+  }
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
   let deliveredOutputCount = params.deliveredOutputCount ?? 0;
@@ -308,7 +312,7 @@ async function settleCodeModeResult(params: {
       const newPendingRequests = result.pendingRequests.filter(
         (request) => !pendingIds.has(request.id),
       );
-      if (newPendingRequests.length > 0) {
+      if (newPendingRequests.some((request) => request.method !== "sleep")) {
         // createPendingBridgeStates starts host calls synchronously. Flip the
         // evidence first so every later failure is permanently non-retryable.
         params.bridgeDispatch.started = true;
@@ -387,6 +391,9 @@ async function settleCodeModeResult(params: {
           params.signal,
         ),
       );
+      if (result.status === "waiting") {
+        cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
+      }
       output.push(...result.output);
       if (boundOutputToLimit(output, params.config)) {
         deliveredOutputCount = 0;
@@ -439,7 +446,7 @@ async function settleCodeModeResult(params: {
         const newPendingRequests = result.pendingRequests.filter(
           (request) => !pendingIds.has(request.id),
         );
-        if (newPendingRequests.length > 0) {
+        if (newPendingRequests.some((request) => request.method !== "sleep")) {
           params.bridgeDispatch.started = true;
         }
         pending.push(
@@ -478,7 +485,7 @@ async function settleCodeModeResult(params: {
         releaseReservation?.();
       }
     }
-    if (result.pendingRequests.length > 0) {
+    if (result.pendingRequests.some((request) => request.method !== "sleep")) {
       params.bridgeDispatch.started = true;
     }
     return snapshotState({

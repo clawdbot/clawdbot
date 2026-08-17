@@ -302,11 +302,17 @@ vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
 }));
 
 vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
+  filterWorkspaceSkills: (entries: unknown[]) => entries,
+  loadVisibleSkills: vi.fn(() => []),
   loadWorkspaceSkills: vi.fn(() => []),
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/bundle-commands.js", () => ({
+  loadEnabledClaudeBundleCommands: vi.fn(() => []),
 }));
 
 vi.mock("../skills/discovery/agent-filter.js", () => ({

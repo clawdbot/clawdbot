@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { recordAuditEvent } from "./audit-event-store.js";
 import {
   pageExecutionDecisionFactsForContext,
   pruneExpiredExecutionDecisionFacts,
@@ -20,10 +21,16 @@ import {
 import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
 import {
   configureExecutionIdentityAdmissionSink,
+  createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionEnvelope,
 } from "./execution-identity-admission.js";
 import { processExecutionIdentityAdmissionWork } from "./execution-identity-context.js";
+import {
+  configureMessageActionDecisionSink,
+  recordMessageActionDecision,
+} from "./message-action-decision.js";
+import { recordOutboundMessageProgress } from "./message-delivery-progress-store.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -39,7 +46,15 @@ function databaseOptions() {
 
 function seedExecutionContext(
   database: ReturnType<typeof databaseOptions>,
+  overrides: {
+    runId?: string;
+    contextId?: string;
+    executionId?: string;
+  } = {},
 ): ExecutionIdentityContextV1 {
+  const runId = overrides.runId ?? "run-1";
+  const contextId = overrides.contextId ?? "context-1";
+  const executionId = overrides.executionId ?? "execution-1";
   let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
   const clear = configureExecutionIdentityAdmissionSink((work) => {
     if (work.kind === "capture") {
@@ -50,7 +65,7 @@ function seedExecutionContext(
   try {
     enqueueExecutionIdentityContextAtAdmission(
       {
-        runId: "run-1",
+        runId,
         agentId: "main",
         ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
         runtime: { kind: "embedded" },
@@ -58,8 +73,8 @@ function seedExecutionContext(
       {
         enabled: true,
         now: 50,
-        contextId: "context-1",
-        executionId: "execution-1",
+        contextId,
+        executionId,
         runtimeInstanceId: "runtime-1",
       },
     );
@@ -74,9 +89,9 @@ function seedExecutionContext(
     { ...database, now: 50 },
   );
   if (
-    stored.contextId !== "context-1" ||
-    stored.executionId !== "execution-1" ||
-    stored.runId !== "run-1"
+    stored.contextId !== contextId ||
+    stored.executionId !== executionId ||
+    stored.runId !== runId
   ) {
     throw new Error(`unexpected execution context: ${JSON.stringify(stored)}`);
   }
@@ -111,7 +126,334 @@ function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
   };
 }
 
+function tokenForContext(context: ExecutionIdentityContextV1) {
+  return createExecutionIdentityAdmissionToken(context.runId, {
+    contextId: context.contextId,
+    executionId: context.executionId,
+    now: context.createdAt,
+  });
+}
+
 describe("execution decision facts", () => {
+  it("persists repeated same-reason broadcast denials with opaque distinct ids", () => {
+    const database = databaseOptions();
+    seedExecutionContext(database);
+    const token = createExecutionIdentityAdmissionToken("run-1", {
+      contextId: "context-1",
+      executionId: "execution-1",
+      now: 100,
+    });
+    const clear = configureMessageActionDecisionSink(
+      (decision) => recordExecutionDecisionFact(decision, { ...database, now: 100 }) === "inserted",
+    );
+    try {
+      for (const receiptDiscriminator of ["broadcast:0", "broadcast:1"]) {
+        expect(
+          recordMessageActionDecision({
+            token,
+            actionId: "broadcast-action",
+            action: "broadcast",
+            channel: "qa-channel",
+            outcome: "denied",
+            reasonCode: "message_target_unknown",
+            coverageState: "enforced",
+            policyRefs: ["message-target:known"],
+            summary: "Message action was denied before platform delivery.",
+            remediation: [],
+            receiptDiscriminator,
+            occurredAt: 100,
+          }),
+        ).toBe(true);
+      }
+    } finally {
+      clear();
+    }
+
+    const receipts = pageExecutionDecisionFactsForContext({
+      context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
+      limit: 10,
+      now: 100,
+      database,
+    }).receipts;
+    expect(receipts).toHaveLength(2);
+    expect(new Set(receipts.map((item) => item.receiptId)).size).toBe(2);
+    expect(JSON.stringify(receipts)).not.toContain("broadcast:0");
+    expect(JSON.stringify(receipts)).not.toContain("broadcast:1");
+  });
+
+  it("projects owner-native outbound delivery into run inspection", () => {
+    const database = databaseOptions();
+    const context = seedExecutionContext(database);
+    const now = Date.now();
+    recordAuditEvent(
+      {
+        sourceId: "message:outbound:queue:delivery-1:payload:0",
+        sourceSequence: 1,
+        occurredAt: now,
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "run-1",
+        executionIdentityToken: tokenForContext(context),
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        resultCount: 1,
+        targetId: "raw-target",
+        messageId: "raw-message-id",
+      },
+      database,
+    );
+
+    expect(
+      presentExecutionDecisionReceipts({
+        context,
+        decisionLimit: 10,
+        options: { ...database, now },
+      }).decisions,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: expect.objectContaining({ family: "message", operation: "send" }),
+          decision: { outcome: "allowed", reasonCode: "message_delivered" },
+          enforcement: expect.objectContaining({ coverageState: "attribution-only" }),
+          source: expect.objectContaining({ owner: "audit_events" }),
+        }),
+      ]),
+    );
+  });
+
+  it("does not assign run-only delivery evidence to either exact execution sharing a run id", () => {
+    const database = databaseOptions();
+    const first = seedExecutionContext(database, {
+      runId: "shared-run",
+      contextId: "context-first",
+      executionId: "execution-first",
+    });
+    const second = seedExecutionContext(database, {
+      runId: "shared-run",
+      contextId: "context-second",
+      executionId: "execution-second",
+    });
+    const now = Date.now();
+    recordAuditEvent(
+      {
+        sourceId: "message:shared-run:unbound",
+        sourceSequence: 1,
+        occurredAt: now,
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "shared-run",
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        resultCount: 1,
+      },
+      database,
+    );
+
+    for (const context of [first, second]) {
+      expect(
+        presentExecutionDecisionReceipts({
+          context,
+          decisionLimit: 10,
+          options: { ...database, now },
+        }).decisions.filter((item) => item.action.family === "message"),
+      ).toEqual([]);
+    }
+    expect(
+      tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
+    ).toBe(false);
+
+    recordAuditEvent(
+      {
+        sourceId: "message:shared-run:first-execution",
+        sourceSequence: 2,
+        occurredAt: now + 1,
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "shared-run",
+        executionIdentityToken: tokenForContext(first),
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        resultCount: 1,
+      },
+      database,
+    );
+    const messageReceipts = (context: ExecutionIdentityContextV1) =>
+      presentExecutionDecisionReceipts({
+        context,
+        decisionLimit: 10,
+        options: { ...database, now: now + 1 },
+      }).decisions.filter((item) => item.action.family === "message");
+    expect(messageReceipts(first)).toHaveLength(1);
+    expect(messageReceipts(second)).toEqual([]);
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          "SELECT context_id, execution_id, run_id FROM outbound_message_execution_bindings",
+        )
+        .all(),
+    ).toEqual([
+      {
+        context_id: "context-first",
+        execution_id: "execution-first",
+        run_id: "shared-run",
+      },
+    ]);
+  });
+
+  it("keeps delivery stages distinct, redacted, replay-safe, and retention bounded", () => {
+    const database = databaseOptions();
+    const context = seedExecutionContext(database);
+    const now = Date.now();
+    const common = {
+      sourceSequence: 1,
+      occurredAt: now,
+      kind: "message" as const,
+      actorType: "agent" as const,
+      actorId: "main",
+      agentId: "main",
+      runId: "run-1",
+      executionIdentityToken: tokenForContext(context),
+      direction: "outbound" as const,
+      channel: "qa-channel",
+      conversationKind: "direct" as const,
+      targetId: "raw-channel-target",
+    };
+    const events = [
+      {
+        ...common,
+        occurredAt: now,
+        sourceId: "queue-1:queued",
+        action: "message.outbound.queued" as const,
+        status: "started" as const,
+        outcome: "queued" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 1,
+        sourceId: "queue-1:platform",
+        action: "message.outbound.platform-started" as const,
+        status: "started" as const,
+        outcome: "platform_started" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 2,
+        sourceId: "queue-1:finished",
+        action: "message.outbound.finished" as const,
+        status: "succeeded" as const,
+        outcome: "sent" as const,
+        messageId: "raw-platform-message",
+      },
+      {
+        ...common,
+        occurredAt: now + 3,
+        sourceId: "queue-2:failed",
+        action: "message.outbound.finished" as const,
+        status: "failed" as const,
+        outcome: "failed" as const,
+        errorCode: "message_delivery_failed" as const,
+        failureStage: "queue" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 4,
+        sourceId: "queue-3:failed",
+        action: "message.outbound.finished" as const,
+        status: "failed" as const,
+        outcome: "failed" as const,
+        errorCode: "message_delivery_failed" as const,
+        failureStage: "platform_send" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 5,
+        sourceId: "queue-4:suppressed",
+        action: "message.outbound.finished" as const,
+        status: "blocked" as const,
+        outcome: "suppressed" as const,
+        reasonCode: "no_visible_payload" as const,
+      },
+    ];
+    for (const event of events) {
+      expect(
+        event.action === "message.outbound.finished"
+          ? recordAuditEvent(event, database)
+          : recordOutboundMessageProgress(event, database),
+      ).toBeDefined();
+    }
+    expect(
+      recordOutboundMessageProgress(
+        {
+          ...common,
+          occurredAt: now,
+          sourceId: "queue-1:queued",
+          action: "message.outbound.queued",
+          status: "started",
+          outcome: "queued",
+        },
+        database,
+      ),
+    ).toBeUndefined();
+
+    const inspect = () =>
+      presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: "m:0:0",
+        decisionLimit: 10,
+        options: { ...database, now },
+      });
+    expect(inspect().decisions.map((item) => item.decision.reasonCode)).toEqual([
+      "message_queued",
+      "message_platform_started",
+      "message_delivered",
+      "message_delivery_failed_queue",
+      "message_delivery_failed_platform_send",
+      "message_suppressed_no_visible_payload",
+    ]);
+    expect(inspect().decisions.map((item) => item.enforcement.coverageState)).toEqual(
+      Array.from({ length: 6 }, () => "attribution-only"),
+    );
+    expect(inspect().decisions.map((item) => item.source.owner)).toEqual([
+      "outbound_message_progress",
+      "outbound_message_progress",
+      "audit_events",
+      "audit_events",
+      "audit_events",
+      "audit_events",
+    ]);
+    expect(JSON.stringify(inspect())).not.toContain("raw-channel-target");
+    expect(JSON.stringify(inspect())).not.toContain("raw-platform-message");
+
+    closeOpenClawStateDatabaseForTest();
+    expect(inspect().decisions).toHaveLength(6);
+    expect(
+      presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: "m:0:0",
+        decisionLimit: 10,
+        options: { ...database, now: now + RETENTION_MS + events.length + 1 },
+      }).decisions,
+    ).toEqual([]);
+  });
+
   it("stays absent until a future owner writes one immutable fact", () => {
     const database = databaseOptions();
     seedExecutionContext(database);

@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Googlechat plugin module implements monitor behavior.
 import {
   formatInboundMediaUnavailableText,
@@ -9,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -169,7 +171,7 @@ function resolveBotDisplayName(params: {
   if (accountName?.trim()) {
     return accountName.trim();
   }
-  const agent = config.agents?.list?.find((a) => a.id === agentId);
+  const agent = resolveAgentConfig(config, agentId);
   if (agent?.name?.trim()) {
     return agent.name.trim();
   }
@@ -587,4 +589,3 @@ export function resolveGoogleChatWebhookPath(params: {
     defaultPath: "/googlechat",
   });
 }
-import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";

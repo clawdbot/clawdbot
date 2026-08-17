@@ -1,5 +1,5 @@
 // Gateway WebSocket device authorization issues the session and bootstrap handoff tokens.
-import { ensureDeviceToken } from "../../../infra/device-pairing.js";
+import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type {
   AuthenticatedGatewayConnect,

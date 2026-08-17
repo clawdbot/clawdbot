@@ -6,6 +6,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -40,7 +41,9 @@ function extractComparableText(message: unknown): string | undefined {
   if (!joined) {
     return undefined;
   }
-  const visible = role === "user" ? stripInboundMetadata(joined) : joined;
+  const visible = stripInlineDirectiveTagsForDisplay(
+    role === "user" ? stripInboundMetadata(joined) : joined,
+  ).text;
   const normalized = visible.replace(/\s+/g, " ").trim();
   return normalized || undefined;
 }

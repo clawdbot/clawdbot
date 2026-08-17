@@ -26,12 +26,14 @@ type SessionChangeContext = Pick<
 type PendingSessionChange = {
   context: SessionChangeContext;
   dirty: boolean;
+  firstDeferredAt?: number;
   key: string;
   payload: SessionChangedPayload;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
 const SESSIONS_CHANGED_DEBOUNCE_MS = 100;
+const SESSIONS_CHANGED_MAX_WAIT_MS = 500;
 const sessionsMutationVersions = new WeakMap<object, number>();
 const pendingChangesByContext = new WeakMap<object, Map<string, PendingSessionChange>>();
 const pendingSessionChanges = new Set<PendingSessionChange>();
@@ -157,12 +159,16 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   if (pending) {
     pending.payload = payload;
     pending.dirty = true;
+    pending.firstDeferredAt ??= Date.now();
     if (pending.timer) {
       clearTimeout(pending.timer);
     }
+    // Keep resetting for a quiet-period trailing emit without letting a sustained
+    // mutation stream postpone the authoritative row forever.
+    const maxWaitRemaining = pending.firstDeferredAt + SESSIONS_CHANGED_MAX_WAIT_MS - Date.now();
     pending.timer = setTimeout(
       () => finishPendingSessionChange(pending),
-      SESSIONS_CHANGED_DEBOUNCE_MS,
+      Math.max(0, Math.min(SESSIONS_CHANGED_DEBOUNCE_MS, maxWaitRemaining)),
     );
     pending.timer.unref?.();
     return;

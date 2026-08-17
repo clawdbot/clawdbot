@@ -1,8 +1,14 @@
 // Raw WebSocket proof for the pre-registration Control UI build admission boundary.
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  readControlUiBuildMismatchId,
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -80,6 +86,37 @@ vi.mock("../../../version.js", async (importOriginal) => {
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
+// A stale Control UI browser still owns a device identity; the build check is
+// only reachable once the device passes connect auth and silent local pairing.
+const temporaryIdentityPaths: string[] = [];
+
+async function buildSignedControlUiDevice(nonce: string) {
+  const { buildDeviceAuthPayload } = await import("../../device-auth.js");
+  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+    await import("../../../infra/device-identity.js");
+  const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);
+  temporaryIdentityPaths.push(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const signedAtMs = Date.now();
+  const payload = buildDeviceAuthPayload({
+    deviceId: identity.deviceId,
+    clientId: "openclaw-control-ui",
+    clientMode: "webchat",
+    role: "operator",
+    scopes: [],
+    signedAtMs,
+    token: "test-token",
+    nonce,
+  });
+  return {
+    id: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    signature: signDevicePayload(identity.privateKeyPem, payload),
+    signedAt: signedAtMs,
+    nonce,
+  };
+}
+
 function createLogger() {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
@@ -94,9 +131,19 @@ function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.clearAllMocks();
   resolveRuntimeServiceBuildIdMock.mockReturnValue("gateway-build");
+  const { rm } = await import("node:fs/promises");
+  await Promise.all(
+    temporaryIdentityPaths
+      .splice(0)
+      .flatMap((identityPath) =>
+        [identityPath, `${identityPath}-wal`, `${identityPath}-shm`].map((file) =>
+          rm(file, { force: true }),
+        ),
+      ),
+  );
 });
 
 describe("Control UI build admission over WebSocket", () => {
@@ -124,12 +171,30 @@ describe("Control UI build admission over WebSocket", () => {
     }
     const origin = `http://127.0.0.1:${address.port}`;
     let connectedClient: unknown = null;
+    // Hold the injected close until the post-rejection frame reaches the handler;
+    // otherwise socket timing can make the no-RPC assertion vacuous.
+    let releasePostRejectionFrame = () => {};
+    const postRejectionFrameObserved = new Promise<void>((resolve) => {
+      releasePostRejectionFrame = resolve;
+    });
+    let closeRequested = false;
 
     wss.on("connection", (socket, request) => {
-      const send = (value: unknown) => socket.send(JSON.stringify(value));
+      const send = (value: unknown) => {
+        socket.send(JSON.stringify(value));
+        return { kind: "sent" } as const;
+      };
       attachGatewayWsMessageHandler({
         socket,
         upgradeReq: request as IncomingMessage,
+        ingressAttribution: {
+          kind: "direct-local",
+          clientIp: "127.0.0.1",
+          rateLimit: {
+            subject: { key: "127.0.0.1" },
+            resetOnSuccess: true,
+          },
+        },
         connId: "legacy-build-connection",
         remoteAddr: "127.0.0.1",
         localAddr: "127.0.0.1",
@@ -137,7 +202,6 @@ describe("Control UI build admission over WebSocket", () => {
         requestOrigin:
           typeof request.headers.origin === "string" ? request.headers.origin : undefined,
         connectNonce: "legacy-build-nonce",
-        isControlUiDeviceAuthMigrationPending: () => true,
         getResolvedAuth: () => ({
           mode: "token",
           token: "test-token",
@@ -146,12 +210,16 @@ describe("Control UI build admission over WebSocket", () => {
         gatewayMethods: [],
         events: [],
         extraHandlers: {},
-        buildRequestContext: () => ({}) as GatewayRequestContext,
+        buildRequestContext: () => ({ broadcast: vi.fn() }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
         send,
         close: (code, reason) => {
-          setTimeout(() => socket.close(code, reason), 25);
+          if (closeRequested) {
+            return;
+          }
+          closeRequested = true;
+          void postRejectionFrameObserved.then(() => socket.close(code, reason));
         },
         isClosed: () => socket.readyState >= WebSocket.CLOSING,
         clearHandshakeTimer: vi.fn(),
@@ -163,7 +231,12 @@ describe("Control UI build admission over WebSocket", () => {
         setHandshakeState: vi.fn(),
         advanceHandshakePhase: vi.fn(),
         setCloseCause: vi.fn(),
-        setLastFrameMeta: setLastFrameMetaMock,
+        setLastFrameMeta: (meta) => {
+          setLastFrameMetaMock(meta);
+          if (meta.method === "health" && meta.id === "post-rejection-rpc") {
+            releasePostRejectionFrame();
+          }
+        },
         originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
         logGateway: createLogger() as never,
         logHealth: createLogger() as never,
@@ -171,6 +244,7 @@ describe("Control UI build admission over WebSocket", () => {
       });
     });
 
+    const device = await buildSignedControlUiDevice("legacy-build-nonce");
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, {
       headers: {
         origin,
@@ -215,6 +289,7 @@ describe("Control UI build admission over WebSocket", () => {
             role: "operator",
             caps: [],
             auth: { token: "test-token" },
+            device,
           },
         }),
       );
@@ -226,9 +301,18 @@ describe("Control UI build admission over WebSocket", () => {
           code: ErrorCodes.UNAVAILABLE,
           message: "protocol mismatch: Control UI updated; reload this page to continue",
           retryable: false,
-          details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+          details: {
+            code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+            gatewayBuildId: "gateway-build",
+            reloadRequired: true,
+          },
         },
       });
+      expect(
+        readControlUiBuildMismatchId(
+          (rejection.error as { details?: unknown } | undefined)?.details,
+        ),
+      ).toBe("gateway-build");
       ws.send(
         JSON.stringify({
           type: "req",

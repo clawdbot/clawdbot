@@ -432,11 +432,7 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (
-    opts.installDaemon !== undefined ||
-    opts.tailscaleResetOnExit !== undefined ||
-    opts.customImageInput !== undefined
-  ) {
+  if (opts.installDaemon !== undefined || opts.customImageInput !== undefined) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {

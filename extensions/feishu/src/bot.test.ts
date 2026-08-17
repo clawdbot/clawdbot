@@ -24,6 +24,33 @@ import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js"
 import { setFeishuRuntime } from "./runtime.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
+const failedFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 1,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: false,
+} as const;
+
 type ConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type BoundConversation = ReturnType<
   ReturnType<typeof getSessionBindingService>["resolveByConversation"]
@@ -1179,7 +1206,7 @@ describe("handleFeishuMessage command authorization", () => {
     mockDispatchReplyFromConfig.mockResolvedValueOnce({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
-      failedCounts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: failedFinalReceipt,
     });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({

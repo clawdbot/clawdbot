@@ -382,6 +382,7 @@ export async function prepareSimpleCompletionModel(params: {
               params.agentDir,
               config,
               {
+                ...(params.agentId ? { agentId: params.agentId } : {}),
                 authStorage: resolved.authStorage,
                 modelRegistry: resolved.modelRegistry,
                 skipAgentDiscovery: true,

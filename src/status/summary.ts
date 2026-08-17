@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty as normalizeStatusModelPart } from "@op
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
@@ -16,6 +16,7 @@ import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -279,10 +280,6 @@ export async function getStatusSummary(
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
   await waitForContextWindowCacheLoad();
-  const contextSourceConfig =
-    options.sourceConfig !== undefined
-      ? options.sourceConfig
-      : projectConfigOntoRuntimeSourceSnapshot(cfg);
   const { resolveManifestModel, createProviderContextResolver } =
     await loadStaticModelCatalogResolvers();
   const resolveProviderContext = createProviderContextResolver({ cfg });
@@ -379,8 +376,9 @@ export async function getStatusSummary(
   const mainSessionKey = resolveSystemMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  taskMaintenanceModule.configureTaskRegistryMaintenance();
-  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  // Status may overlap a live Gateway, so task inspection must not initialize
+  // the writable process registry or its schema-owning shared-state handle.
+  const inspectableTasks = taskMaintenanceModule.listInspectableTasksReadOnly();
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
@@ -401,11 +399,9 @@ export async function getStatusSummary(
   const configContextTokens =
     resolveContextTokensForModel({
       cfg,
-      sourceCfg: contextSourceConfig,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
       ...configModelContext,
-      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       // Keep `status`/`status --json` startup read-only. These summary lookups
       // use offline static catalogs but never start live provider discovery.
@@ -476,21 +472,25 @@ export async function getStatusSummary(
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
+        const resolvedContextTokens = resolveContextTokensForModel({
+          cfg,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+          ...modelContext,
+          fallbackContextTokens: configContextTokens ?? undefined,
+          allowAsyncLoad: false,
+        });
+        const trustedSessionContextTokens = resolveTrustedSessionContextTokens({
+          entry,
+          provider: lookupModel.provider,
+          model: lookupModelId,
+        });
         const contextTokens =
-          resolveContextTokensForModel({
-            cfg,
-            sourceCfg: contextSourceConfig,
-            provider: lookupModel.provider,
-            model: lookupModelId,
-            ...modelContext,
-            contextTokensOverride: resolveTrustedSessionContextTokens({
-              entry,
-              provider: lookupModel.provider,
-              model: lookupModelId,
-            }),
-            fallbackContextTokens: configContextTokens ?? undefined,
-            allowAsyncLoad: false,
-          }) ?? null;
+          trustedSessionContextTokens === undefined
+            ? (resolvedContextTokens ?? null)
+            : resolvedContextTokens === undefined
+              ? trustedSessionContextTokens
+              : Math.min(trustedSessionContextTokens, resolvedContextTokens);
         const total = resolveSessionTotalTokens(entry);
         const freshTotal = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh = freshTotal !== undefined;
@@ -549,28 +549,33 @@ export async function getStatusSummary(
       }),
     );
 
-  const storeSources = agentList.agents.map((agent) => ({
-    agentId: agent.id,
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
-  }));
+  const storeSources = agentList.agents.map((agent) => {
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
+    return {
+      agentId: agent.id,
+      databasePath: resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: agent.id,
+      }).path,
+      storePath,
+    };
+  });
   const paths = new Set<string>();
   const pathCounts = new Map<string, number>();
   for (const source of storeSources) {
-    paths.add(source.storePath);
-    pathCounts.set(source.storePath, (pathCounts.get(source.storePath) ?? 0) + 1);
+    paths.add(source.databasePath);
+    pathCounts.set(source.databasePath, (pathCounts.get(source.databasePath) ?? 0) + 1);
   }
 
   const byAgent = await Promise.all(
-    agentList.agents.map(async (agent) => {
-      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
-      const candidates = loadSessionCandidates(storePath, agent.id);
+    storeSources.map(async ({ agentId, databasePath, storePath }) => {
+      const candidates = loadSessionCandidates(storePath, agentId);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
-        { agentIdOverride: agent.id },
+        { agentIdOverride: agentId },
       );
       return {
-        agentId: agent.id,
-        path: storePath,
+        agentId,
+        path: databasePath,
         count: candidates.length,
         recent: sessions,
       };
@@ -579,12 +584,14 @@ export async function getStatusSummary(
 
   const allSessions = storeSources
     .filter((source, index, sources) => {
-      return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
+      return (
+        sources.findIndex((candidate) => candidate.databasePath === source.databasePath) === index
+      );
     })
     .flatMap((source) =>
       loadSessionCandidates(
         source.storePath,
-        pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
+        pathCounts.get(source.databasePath) === 1 ? source.agentId : undefined,
       ),
     );
   const recent = await buildSessionRows(

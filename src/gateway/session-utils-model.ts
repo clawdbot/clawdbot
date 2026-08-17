@@ -6,7 +6,7 @@ import {
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   findModelCatalogEntry,
@@ -37,6 +37,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -327,10 +328,12 @@ export function getSessionDefaults(
         allowPluginNormalization: options?.allowPluginNormalization,
       });
   const contextTokens =
-    resolveAgentConfig(cfg, agentId)?.contextTokens ??
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const agentRuntime = projectWorkerPlacementAgentRuntime(
     resolveModelAgentRuntimeMetadata({
@@ -665,7 +668,9 @@ export async function projectSessionPatchResult(params: {
   });
   return {
     ok: true,
-    path: params.storePath,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.targetAgentId,
+    }).path,
     key: params.canonicalKey,
     entry: params.entry,
     resolved: {

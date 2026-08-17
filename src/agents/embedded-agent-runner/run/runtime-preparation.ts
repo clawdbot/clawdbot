@@ -105,6 +105,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     });
   const initialResolvedRuntimeModel = resolveEffectiveModel(runtimeModel);
   let contextTokenBudget = initialResolvedRuntimeModel.contextTokenBudget;
+  let authoredContextTokenCap = initialResolvedRuntimeModel.authoredContextTokenCap;
   let contextWindowInfo = initialResolvedRuntimeModel.contextWindowInfo;
   let outerContextTokenMeta: { contextTokens?: number } =
     contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
@@ -116,6 +117,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     runtimeModel = candidate;
     effectiveModel = resolved.effectiveModel;
     contextTokenBudget = resolved.contextTokenBudget;
+    authoredContextTokenCap = resolved.authoredContextTokenCap;
     contextWindowInfo = resolved.contextWindowInfo;
     outerContextTokenMeta =
       contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
@@ -572,6 +574,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       pluginHarnessOwnsTransport,
       effectiveModel,
       contextTokenBudget,
+      authoredContextTokenCap,
       contextWindowInfo,
       outerContextTokenMeta,
       activePreparedAuthPlan,

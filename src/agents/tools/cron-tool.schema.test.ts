@@ -519,16 +519,12 @@ describe("createCronToolSchema with cron triggers disabled", () => {
     expect(propertyAt(configlessSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
-  it("gates the surface when config omits cron.triggers entirely (disabled default)", () => {
+  it("keeps the full surface when config omits cron.triggers (enabled default)", () => {
     const defaultPostureSchema = createCronTool({
       config: { cron: { enabled: true } } as OpenClawConfig,
     }).parameters as unknown as Record<string, unknown>;
-    expect(keysAt(defaultPostureSchema, "job")).not.toContain("trigger");
-    expect(propertyAt(defaultPostureSchema, "job.schedule.kind")?.enum).toEqual([
-      "at",
-      "every",
-      "cron",
-    ]);
+    expect(keysAt(defaultPostureSchema, "job")).toContain("trigger");
+    expect(propertyAt(defaultPostureSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
   it("still validates a plain reminder add call", () => {

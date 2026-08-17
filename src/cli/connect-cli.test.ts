@@ -1,6 +1,7 @@
 // Connect CLI tests cover accepted targets and handoff to the canonical node runtime.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { NodeHostConfig } from "../node-host/config.js";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
 import { registerConnectCli } from "./connect-cli.js";
 
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
+  loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
   runtime: {
     error: vi.fn(),
     exit: vi.fn(),
@@ -15,12 +17,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../node-host/runner.js", () => ({ runNodeHost: mocks.runNodeHost }));
+vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 vi.mock("./node-cli/daemon.js", () => ({
   runNodeDaemonInstall: mocks.runNodeDaemonInstall,
 }));
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-}));
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  mocks.fetchWithSsrFGuard.mockImplementation(actual.fetchWithSsrFGuard);
+  return { fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
+});
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 
 const payload = {
@@ -96,6 +102,9 @@ describe("connect cli", () => {
       displayName: "Build Node",
     });
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(fetched ? 1 : 0);
+    if (fetched) {
+      expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
+    }
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
@@ -121,6 +130,67 @@ describe("connect cli", () => {
       "Plain HTTP join URLs are allowed only for loopback gateways.",
     );
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
+  it("sends Cloudflare Access credentials on the pinned HTTPS join request", async () => {
+    const clientId = ["cf", "client", "id"].join("-");
+    const clientSecret = ["cf", "client", "secret"].join("-");
+    mocks.loadNodeHostConfig.mockResolvedValueOnce({
+      version: 1,
+      nodeId: "node-test",
+      gateway: {
+        host: "gateway.example",
+        port: 443,
+        tls: true,
+        cloudflareAccess: { clientId, clientSecret },
+      },
+    });
+    const target = `https://gateway.example/j/${"a".repeat(22)}`;
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      finalUrl: target,
+      release: vi.fn(async () => undefined),
+    });
+
+    await runConnect([target]);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxRedirects: 0,
+        init: {
+          headers: {
+            "CF-Access-Client-Id": clientId,
+            "CF-Access-Client-Secret": clientSecret,
+          },
+        },
+      }),
+    );
+  });
+
+  it("rejects Cloudflare Access credentials before a plaintext join request", async () => {
+    const clientSecret = ["cf", "plaintext", "secret"].join("-");
+    mocks.loadNodeHostConfig.mockResolvedValueOnce({
+      version: 1,
+      nodeId: "node-test",
+      gateway: {
+        host: "127.0.0.1",
+        port: 80,
+        tls: false,
+        cloudflareAccess: { clientId: "cf-plaintext-id", clientSecret },
+      },
+    });
+
+    await runConnect([`http://127.0.0.1/j/${"a".repeat(22)}`]);
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Cloudflare Access credentials require an HTTPS join URL.",
+    );
+    expect(String(mocks.runtime.error.mock.calls[0]?.[0])).not.toContain(clientSecret);
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(mocks.runNodeHost).not.toHaveBeenCalled();
   });

@@ -48,6 +48,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
   runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
 }));
 
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
   createBundledProviderStaticCatalogContextResolver,
@@ -192,6 +193,7 @@ function expectManifestAliasResolution(
 }
 
 beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
   manifestMocks.loadPluginManifest.mockReset();
@@ -769,6 +771,12 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
   it("resolves exact rows from bundled provider static catalogs", async () => {
     const cfg = { plugins: { entries: { google: { enabled: true } } } };
+    const metadataSnapshot = {
+      plugins: [],
+      owners: {},
+      index: {},
+      manifestRegistry: { plugins: [] },
+    } as never;
     const provider = {
       id: "google",
       pluginId: "google",
@@ -805,6 +813,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
       cfg,
+      metadataSnapshot,
     });
 
     expect(model).toMatchObject({
@@ -835,6 +844,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       requireCompleteDiscoveryEntryCoverage: true,
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
+      pluginMetadataSnapshot: metadataSnapshot,
     });
     expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider });
   });

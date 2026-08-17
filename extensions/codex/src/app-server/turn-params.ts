@@ -98,6 +98,9 @@ export function buildTurnStartParams(
     ],
     ...(additionalContext ? { additionalContext } : {}),
     cwd: options.cwd,
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...(useThreadPermissionProfile
@@ -107,7 +110,7 @@ export function buildTurnStartParams(
             options.sandboxPolicy ??
             codexSandboxPolicyForTurn(
               options.appServer.sandbox,
-              options.cwd,
+              options.appServer.sessionRoot ?? options.cwd,
               options.appServer.start?.args,
             ),
         }),

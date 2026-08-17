@@ -92,8 +92,10 @@ export async function finalizeCronRun(params: {
     execution.fallbackProvider ??
     execution.liveSelection.provider;
   const contextTokens =
-    resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
-    (await cronContextRuntimeLoader.load()).lookupContextTokens(modelUsed, {
+    (await cronContextRuntimeLoader.load()).resolveContextTokensForModel({
+      cfg: prepared.cfgWithAgentDefaults,
+      provider: providerUsed,
+      model: modelUsed,
       allowAsyncLoad: false,
     }) ??
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??

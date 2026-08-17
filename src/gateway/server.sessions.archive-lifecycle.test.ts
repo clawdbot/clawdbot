@@ -310,14 +310,12 @@ test("sessions.patch cancels active work and commits only after admission and te
   await writeSessionStore({
     entries: { [sessionKey]: sessionStoreEntry(sessionId) },
   });
-  let interrupted = false;
+  const interrupted = createDeferredCore();
   const admission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: [sessionKey, sessionId],
     assertAllowed: () => {},
-    onInterrupt: () => {
-      interrupted = true;
-    },
+    onInterrupt: () => interrupted.resolve(),
   });
   const persistence = createDeferredCore();
   const active = activeRunContext({
@@ -336,10 +334,8 @@ test("sessions.patch cancels active work and commits only after admission and te
         client: { connId: "archive-writer", connect: { scopes: ["operator.write"] } } as never,
       },
     );
-    await vi.waitFor(() => {
-      expect(interrupted).toBe(true);
-      expect(active.controller.signal.aborted).toBe(true);
-    });
+    await interrupted.promise;
+    expect(active.controller.signal.aborted).toBe(true);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
     let replacementAdmitted = false;

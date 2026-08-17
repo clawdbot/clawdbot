@@ -52,8 +52,30 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/32k (6%)        id:abc123",
+      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       id:abc123",
     );
+  });
+
+  it("shows recorded totals without a percentage when freshness provenance is missing", async () => {
+    // Regression: sessions rendered `unknown/... (?%)` for totals `status`
+    // still displayed, because the table dropped non-fresh recorded totals.
+    const store = await writeStore({
+      "agent:main:+15555550123": {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 45 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: true,
+        model: "test:opus",
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
+    expect(row).toContain("2.0k/200k (?%)");
   });
 
   it("renders the agent runtime in the tabular view", async () => {
@@ -64,7 +86,6 @@ describe("sessionsCommand", () => {
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));
@@ -101,7 +122,6 @@ describe("sessionsCommand", () => {
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
-          contextTokens: 200_000,
         },
       },
     }));
@@ -144,7 +164,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
-    expect(row).toContain("unknown/32k (?%)");
+    expect(row).toContain("unknown/200k (?%)");
     expect(row).toContain("think:high");
   });
 
@@ -233,6 +253,21 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.find((row) => row.key === "agent:main:main")).not.toHaveProperty(
       "sessionFile",
     );
+  });
+
+  it("reports an existing empty SQLite store as an empty successful list", async () => {
+    const store = await writeStore({}, "sessions-empty");
+    const { runtime, logs, errors } = makeRuntime();
+
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    expect(errors).toEqual([]);
+    expect(logs).toEqual([
+      expect.stringContaining(`Session store: ${store}`),
+      expect.stringContaining("Sessions listed: 0"),
+      "No sessions found.",
+    ]);
   });
 
   it("exports subagent lineage metadata in JSON output", async () => {
@@ -396,7 +431,6 @@ describe("sessionsCommand", () => {
         defaults: {
           model: { primary: "test:opus" },
           models: { "test:opus": {} },
-          contextTokens: 32000,
           sessionStore: { agentId: "ops" },
         },
         entries: { ops: {}, research: {} },

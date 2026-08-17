@@ -21,6 +21,7 @@
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@noble/ed25519": "3.1.0",
+    "@noble/hashes": "2.2.0",
     "@novnc/novnc": "1.7.0",
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",
@@ -41,12 +42,14 @@
     "lit": "3.3.3",
     "markdown-it": "14.3.0",
     "markdown-it-task-lists": "2.1.1",
-    "remend": "1.3.0"
+    "remend": "1.3.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/markdown-it": "14.1.2",
     "@vitest/browser": "4.1.10",
     "@vitest/browser-playwright": "4.1.10",
+    "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
     "playwright": "1.62.1",

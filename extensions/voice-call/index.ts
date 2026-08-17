@@ -1,4 +1,5 @@
 // Voice Call plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -28,7 +29,6 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
-import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
@@ -176,7 +176,7 @@ export default definePluginEntry({
           };
     const continueOperationStore = createVoiceCallContinueOperationStore({
       config,
-      coreConfig: api.config as CoreConfig,
+      coreConfig: api.config as OpenClawConfig,
     });
 
     const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
@@ -233,7 +233,7 @@ export default definePluginEntry({
 
         const runtimePromise = createVoiceCallRuntime({
           config,
-          coreConfig: api.config as CoreConfig,
+          coreConfig: api.config as OpenClawConfig,
           fullConfig: api.config,
           agentRuntime: api.runtime.agent,
           stateRuntime: api.runtime.state,

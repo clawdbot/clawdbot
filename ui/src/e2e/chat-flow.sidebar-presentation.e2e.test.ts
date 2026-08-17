@@ -8,6 +8,7 @@ import {
   expectDefined,
   installMockGateway,
   pauseVirtualClock,
+  requireRecord,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -17,9 +18,110 @@ const terminalMetadataProofDir = path.join(
   "control-ui-e2e",
   "remote-session-sidebar-metadata",
 );
+const sessionSecondRowProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "session-status-second-row-implementation",
+);
+const subtitleStabilityProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "sidebar-subtitle-stability",
+);
 
 suite.define(() => {
-  it("replaces an intermediate running subtitle with the durable final reply", async () => {
+  it("keeps a running subtitle and row height stable when its session is opened", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(subtitleStabilityProofDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: subtitleStabilityProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const firstKey = "agent:main:session-a";
+    const secondKey = "agent:main:session-b";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            key: firstKey,
+            kind: "direct",
+            label: "First running session",
+            updatedAt: 2,
+            activeRunIds: ["run-first"],
+            hasActiveRun: true,
+            status: "running",
+          },
+          {
+            key: secondKey,
+            kind: "direct",
+            label: "Second running session",
+            updatedAt: 1,
+            activeRunIds: ["run-second"],
+            hasActiveRun: true,
+            status: "running",
+          },
+        ]),
+      },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.messages.subscribe")).some(
+            (request) => requireRecord(request.params).key === secondKey,
+          ),
+        )
+        .toBe(true);
+      await gateway.emitGatewayEvent("agent", {
+        sessionKey: secondKey,
+        runId: "run-second",
+        stream: "tool",
+        data: { name: "bash" },
+      });
+      await secondRow.getByText("Using bash").waitFor();
+      const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(800);
+        await secondRow.screenshot({
+          path: path.join(subtitleStabilityProofDir, "01-running-before-open.png"),
+        });
+      }
+
+      await secondRow.locator("a.sidebar-recent-session__link").click();
+      await expect.poll(() => secondRow.getAttribute("class")).toContain("--active");
+      await secondRow.getByText("Using bash").waitFor();
+      const heightAfter = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
+
+      expect(heightAfter).toBe(heightBefore);
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(800);
+        await secondRow.screenshot({
+          path: path.join(subtitleStabilityProofDir, "02-running-after-open.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+      if (proofVideo) {
+        await proofVideo.saveAs(
+          path.join(subtitleStabilityProofDir, "sidebar-subtitle-stability.webm"),
+        );
+      }
+    }
+  });
+
+  it("replaces an intermediate running subtitle with the unread final digest", async () => {
     if (captureUiProofEnabled) {
       await mkdir(terminalMetadataProofDir, { recursive: true });
     }
@@ -66,7 +168,7 @@ suite.define(() => {
         observerDigest: {
           agentId: "main",
           runId,
-          headline: "Implementing the repair",
+          headline: "Repair landed cleanly",
           health: "done",
           updatedAt: Date.now() + 1,
           revision: 2,
@@ -106,7 +208,8 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listCount);
-      await row.getByText("The repaired sidebar now shows the final reply.").waitFor();
+      await row.getByText("Repair landed cleanly").waitFor();
+      expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
         await page.screenshot({
           fullPage: true,
@@ -208,6 +311,154 @@ suite.define(() => {
           textOverflow: getComputedStyle(label).textOverflow,
         })),
       ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps session titles on the first line and status on a fixed second line", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionSecondRowProofDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: sessionSecondRowProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const busyKey = "agent:main:busy-session";
+    const plainKey = "agent:main:plain-session";
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            key: busyKey,
+            kind: "direct",
+            label: "Terminal tab bar redesign proposal",
+            updatedAt: 2,
+            activeRunIds: ["run-busy-session"],
+            hasActiveRun: true,
+            observerDigest: {
+              agentId: "main",
+              runId: "run-busy-session",
+              headline:
+                "The isolated clone is ready, but direct Git fetch and every remaining operation continue in the background",
+              health: "on-track",
+              updatedAt: 2,
+              revision: 1,
+            },
+            incognito: true,
+            hasAutomation: true,
+            status: "running",
+            unread: true,
+          },
+          {
+            key: plainKey,
+            kind: "direct",
+            label: "A session without secondary metadata",
+            updatedAt: 1,
+          },
+        ]),
+      },
+      sessionKey: busyKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
+      const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
+      await busyRow.locator(".session-row-badges").waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(sessionSecondRowProofDir, "01-second-row-endcap.png"),
+        });
+      }
+
+      const layout = await busyRow.evaluate((row) => {
+        const rect = (selector: string) => {
+          const element = row.querySelector<HTMLElement>(selector);
+          if (!element) {
+            throw new Error(`Missing session row fixture ${selector}`);
+          }
+          const box = element.getBoundingClientRect();
+          return {
+            bottom: box.bottom,
+            height: box.height,
+            left: box.left,
+            right: box.right,
+            top: box.top,
+          };
+        };
+        return {
+          atoms: Array.from(
+            row.querySelectorAll(
+              ".sidebar-recent-session__details-endcap :is(svg, .session-run-spinner, .session-unread-dot)",
+            ),
+            (element) => {
+              const box = element.getBoundingClientRect();
+              return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
+            },
+          ),
+          badges: rect(".session-row-badges"),
+          busyHeight: row.getBoundingClientRect().height,
+          endcap: rect(".sidebar-recent-session__details-endcap"),
+          name: rect(".sidebar-recent-session__name"),
+          spinner: rect(".session-run-spinner"),
+          state: rect(".session-row-state"),
+          subtitle: rect(".sidebar-recent-session__subtitle"),
+        };
+      });
+      const plainHeight = await plainRow.evaluate((row) => row.getBoundingClientRect().height);
+
+      expect(layout.busyHeight).toBeCloseTo(plainHeight, 1);
+      expect(layout.badges.top).toBeGreaterThanOrEqual(layout.name.bottom - 1);
+      expect(layout.name.right).toBeGreaterThan(layout.badges.left);
+      expect((layout.badges.top + layout.badges.bottom) / 2).toBeCloseTo(
+        (layout.subtitle.top + layout.subtitle.bottom) / 2,
+        1,
+      );
+      expect((layout.state.top + layout.state.bottom) / 2).toBeCloseTo(
+        (layout.subtitle.top + layout.subtitle.bottom) / 2,
+        1,
+      );
+      expect(layout.state.left).toBeGreaterThanOrEqual(layout.endcap.left);
+      expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
+      expect(layout.spinner.left).toBeGreaterThanOrEqual(layout.endcap.left);
+      expect(layout.spinner.right).toBeLessThanOrEqual(layout.endcap.right);
+      expect(layout.atoms.length).toBeGreaterThanOrEqual(4);
+      for (const atom of layout.atoms) {
+        expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
+        expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
+        expect(atom.top).toBeGreaterThanOrEqual(layout.endcap.top);
+        expect(atom.bottom).toBeLessThanOrEqual(layout.endcap.bottom);
+      }
+
+      await busyRow.hover();
+      await expect
+        .poll(() =>
+          busyRow
+            .locator(".sidebar-recent-session__details-endcap")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("0");
+      await expect
+        .poll(() =>
+          busyRow
+            .locator("[data-session-menu]")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("1");
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(sessionSecondRowProofDir, "02-hover-actions.png"),
+        });
+      }
+      await plainRow.waitFor();
     } finally {
       await suite.closeBrowserContext(context);
     }

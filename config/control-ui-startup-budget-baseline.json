@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 333338,
-  "reason": "cumulative 2026-08-15 UI fix growth (tab retry/session attention/talk backpressure stream) plus chat transcript virtualizer re-attach fix (#123974); CI runs 31861213699 and 31861214469 build-artifacts bytes",
-  "updatedAt": "2026-08-15"
+  "startupJsGzipBytes": 339585,
+  "reason": "Startup growth reflects session placement move controls, ownership chips, assignment menus, participant stack, cloud worker settings navigation and machine selection, plus the session permission picker (five-option menu with Default), permission chip, and guardian review notices joining the startup chat composer path.",
+  "updatedAt": "2026-08-17"
 }

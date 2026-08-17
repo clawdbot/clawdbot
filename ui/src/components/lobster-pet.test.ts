@@ -311,6 +311,29 @@ describe("lobster pet element", () => {
     expect(getLobsterdexEntries().get(look.palette.id)?.name).toBeTruthy();
   });
 
+  it("anchors the dismiss menu at the raw pointer position with a top-start placement", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42);
+    await arrive(element);
+
+    // Coordinates deliberately exceed a guessed 264x80 pre-clamp: a
+    // reintroduced clamp would move the trigger away from these exact values.
+    const clientX = 1200;
+    const clientY = 850;
+    element
+      .querySelector(".lobster-pet")
+      ?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY }),
+      );
+    await element.updateComplete;
+
+    const dropdown = element.querySelector(".lobster-pet-dismiss-menu");
+    expect(dropdown?.getAttribute("placement")).toBe("top-start");
+    const trigger = element.querySelector<HTMLElement>('[slot="trigger"]');
+    expect(trigger?.style.left).toBe(`${clientX}px`);
+    expect(trigger?.style.top).toBe(`${clientY}px`);
+  });
+
   it("offers a temporary dismissal from the right-click menu", async () => {
     vi.useFakeTimers();
     const element = createPet(42);

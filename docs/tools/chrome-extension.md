@@ -32,33 +32,38 @@ a script launcher or registry key without a proven binary framing path.
 
 ## Install
 
-Launch Chrome, then run this command before loading the extension:
+Launch Chrome, then pre-register the native host before adding the extension:
 
 ```bash
 openclaw browser extension install
 ```
 
-Keep the command running. It copies the bundled extension to a stable
-OpenClaw-owned directory, predicts the unpacked extension ID from that exact
-path, and pre-registers an origin-locked native host in existing Chrome-family
-user-data roots. Only after pre-registration succeeds does it print the stable
-path to load.
+Keep the command running. It pre-registers an origin-locked native host for the
+exact official Chrome Web Store identity and for OpenClaw's deterministic
+development IDs. After pre-registration succeeds, add
+[OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
 
-Chrome does not let a normal CLI silently install an unpacked extension. This
-one step is unavoidable:
+The extension pairs on its first native call; you do not need to open its
+popup, reload it, or restart Chrome during a normal first-time setup. The
+installer then reads the profile's `Secure Preferences` and verifies the exact
+Store ID independently from any extension path.
+
+For extension development, the command also copies the bundled extension to a
+stable OpenClaw-owned directory. Use that unpacked copy only as a development
+fallback:
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
 4. Select the path printed by the command.
 
-Leave the install command running while you complete those steps. The extension
-pairs on its first native call; you do not need to open its popup, reload the
-extension, or restart Chrome during a normal first-time setup. The installer
-then reads the profile's `Secure Preferences` and verifies that Chrome loaded
-the approved realpath under the predicted ID.
+Leave the install command running while completing either Store or development
+setup. For unpacked development, the installer verifies that Chrome loaded the
+approved realpath under its predicted deterministic ID.
 
-The installer accepts an ID only when all of these are true:
+The installer recognizes the official Store installation only by the exact
+Foundation Store ID. That identity never makes a recorded path OpenClaw-owned.
+For unpacked development, it accepts an ID only when all of these are true:
 
 - the ID matches Chrome's 32-character extension ID format;
 - Chrome records the install location as unpacked;
@@ -76,9 +81,10 @@ Use a different bounded wait when needed:
 openclaw browser extension install --wait-ms 60000
 ```
 
-For automation, use `--json`. The result includes the stable copy, discovered
-IDs and profiles, native-host registration health, and whether manual setup is
-required. It never includes a relay key or pairing string.
+For automation, use `--json`. The result reports Store discovery separately
+from approved unpacked IDs and paths, plus native-host registration health and
+whether manual setup is required. It never includes a relay key or pairing
+string.
 
 ## Use it
 
@@ -160,7 +166,8 @@ Chromium caches the first missing-native-host result for the running browser
 process. If an existing extension already attempted automatic setup before the
 native host was installed, restart Chrome once (a full browser-process reload).
 Retrying from the popup or Settings cannot clear that process-level miss.
-Normal setup avoids it by pre-registering the host before **Load unpacked**.
+Normal setup avoids it by pre-registering the host before adding or reopening
+the Store extension. For development, pre-register before **Load unpacked**.
 
 ## Status and removal
 
@@ -177,8 +184,8 @@ Remove only OpenClaw-owned native-host manifests and launchers:
 openclaw browser extension uninstall-host
 ```
 
-This does not remove the unpacked extension from Chrome. Use
-`chrome://extensions` for that. It also does not delete the stable extension
+This does not remove the Store or unpacked extension from Chrome. Use
+`chrome://extensions` for that. It also does not delete the stable development
 copy or an existing relay key.
 
 `openclaw browser extension path` is read-only. It prints the stable installed
@@ -261,12 +268,21 @@ OpenClaw-owned mode-`0700` directory. Manifests are mode `0600`; the launcher is
 owner-executable. Symlinks, foreign ownership, unsafe modes, path traversal,
 wildcard origins, and foreign same-name registrations fail closed.
 
-The unpacked ID calculation matches Chromium's
+The managed manifest authorizes the exact Foundation Chrome Web Store origin
+plus deterministic development origins in canonical order. The Store identity
+is a fixed product trust grant, not proof that an arbitrary path is
+OpenClaw-owned.
+
+Install the official Chrome Web Store build for normal use. Only load unpacked
+development copies you trust: Chrome can give a key-matched unpacked build the
+same extension identity and native-host access.
+
+The unpacked development ID calculation matches Chromium's
 `crx_file::id_util::GenerateIdForPath`: hash the canonical absolute path's raw
 bytes with SHA-256 (native UTF-16LE path bytes on Windows, with only a lowercase
 drive letter uppercased), keep the first 16 digest bytes, then map hexadecimal
-digits `0` through `f` to letters `a` through `p`. The extension manifest has no
-`key`; registration authorizes only exact IDs derived from approved
+digits `0` through `f` to letters `a` through `p`. The unpacked extension
+manifest has no `key`; only these development IDs depend on approved
 OpenClaw-owned realpaths.
 
 The relay itself uses connection-bound HMAC proofs. The persistent per-host key
@@ -281,8 +297,8 @@ openclaw doctor
 ```
 
 - **No extension ID detected:** keep Chrome running, rerun `extension install`,
-  and use **Load unpacked** only after the command says native bootstrap is
-  ready and prints the stable path.
+  then add the official Store extension. Use **Load unpacked** only as a
+  development fallback after the command says native bootstrap is ready.
 - **Extension was loaded before native setup:** restart Chrome once to clear its
   cached native-host miss, then rerun the ordered install flow.
 - **Waiting for local OpenClaw:** run `extension status`; install or repair the

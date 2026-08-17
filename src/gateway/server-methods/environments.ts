@@ -2,6 +2,7 @@ import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-
 import {
   type DesktopObserveParams,
   type EnvironmentSummary,
+  type WorkerMachineOption,
   ErrorCodes,
   errorShape,
   validateDesktopLaunchParams,
@@ -21,7 +22,11 @@ import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { isNodeRunnerSessionHost } from "../node-registry-private.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  isNodeRunnerSessionHost,
+} from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
@@ -88,6 +93,7 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
     ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
     ...(node.lastDisconnectedAtMs !== undefined
       ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
@@ -97,6 +103,7 @@ function summarizeNodeEnvironment(
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
 /** Projects a durable worker row without exposing its SSH credential reference. */
@@ -155,11 +162,18 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
         : [],
     ),
   );
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    context.nodeRegistry,
+    connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: devices.paired,
     pairedNodes: nodes.paired,
     connectedNodes,
     sessionHostNodeIds,
+    workerBundleByNodeId,
+    issuesByNodeId,
   });
   const config = context.getRuntimeConfig();
   const gateway =
@@ -179,6 +193,14 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     return [];
   }
 }
+function projectWorkerMachineOption(option: WorkerMachineOption): WorkerMachineOption {
+  return {
+    id: option.id,
+    label: option.label,
+    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.default === undefined ? {} : { default: option.default }),
+  };
+}
 export function listWorkerProfiles(context: GatewayRequestContext) {
   if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
     return [];
@@ -190,6 +212,25 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
       return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
+  const summaries = listWorkerProfiles(context);
+  return await Promise.all(
+    summaries.map(async (summary) => {
+      try {
+        const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
+        const machines = options?.map(projectWorkerMachineOption) ?? [];
+        return machines.length > 0
+          ? { id: summary.id, providerId: summary.providerId, machines }
+          : summary;
+      } catch (error) {
+        context.logGateway.warn(
+          `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,
+        );
+        return summary;
+      }
+    }),
+  );
 }
 async function respondWorkerMutation(
   respond: RespondFn,
@@ -409,7 +450,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
       );
-      const profiles = listWorkerProfiles(context);
+      const profiles = await listWorkerProfilesWithMachines(context);
       respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
     });
   },

@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -27,7 +30,7 @@ suite.define(() => {
         };
       }, gatewayUrl);
       const gateway = await installMockGateway(page, {
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         serverBuildId: "replacement-build",
         terminalEnabled: true,
       });
@@ -67,7 +70,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         controlUiBuildSource: "configured",
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
           "terminal.open": {
             agentId: "main",
@@ -113,7 +116,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         defaultAgentId: "main",
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
           "agents.list": {
             agents: [
@@ -123,6 +126,21 @@ suite.define(() => {
             defaultId: "main",
             mainKey: "main",
             scope: "agent",
+          },
+          // The startup projection owns the roster when chat.startup is
+          // advertised, so the second agent must arrive through it.
+          "chat.startup": {
+            agentsList: {
+              agents: [
+                { id: "main", identity: { name: "Main" }, name: "Main" },
+                { id: "research", identity: { name: "Research" }, name: "Research" },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            messages: [],
+            sessionId: "terminal-selection-e2e-session",
           },
           "terminal.open": {
             agentId: "research",
@@ -137,7 +155,7 @@ suite.define(() => {
 
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
-      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("chat.startup");
       await page.waitForFunction(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
           | (HTMLElement & { available: boolean })
@@ -191,7 +209,7 @@ suite.define(() => {
       });
       const gateway = await installMockGateway(page, {
         deferredMethods: ["connect"],
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
           "terminal.list": { sessions: [] },
           "terminal.open": {
@@ -243,21 +261,41 @@ suite.define(() => {
         .locator(".tabstrip-tab__close")
         .evaluate((close) => {
           const header = close.closest<HTMLElement>(".tp-header");
+          const tab = close.previousElementSibling;
+          const tabBase = tab?.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
           if (!header) {
             throw new Error("Terminal close control must stay inside the tab header");
           }
+          if (!tabBase) {
+            throw new Error("Terminal close control must follow a rendered tab surface");
+          }
           const headerBounds = header.getBoundingClientRect();
           const closeBounds = close.getBoundingClientRect();
+          const tabBounds = tabBase.getBoundingClientRect();
+          const closeStyle = getComputedStyle(close);
+          const tabStyle = getComputedStyle(tabBase);
           return {
+            backgroundColor: tabStyle.backgroundColor,
+            borderBottomWidth: tabStyle.borderBottomWidth,
+            borderRadius: tabStyle.borderRadius,
+            closeBorderBottomWidth: closeStyle.borderBottomWidth,
             centerOffset: Math.abs(
               closeBounds.top +
                 closeBounds.height / 2 -
                 (headerBounds.top + headerBounds.height / 2),
             ),
+            closeInset: tabBounds.right - closeBounds.right,
             height: closeBounds.height,
+            tabHeight: tabBounds.height,
             width: closeBounds.width,
           };
         });
+      expect(closeControlMetrics.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(closeControlMetrics.borderBottomWidth).toBe("0px");
+      expect(closeControlMetrics.borderRadius).not.toBe("0px");
+      expect(closeControlMetrics.closeBorderBottomWidth).toBe("0px");
+      expect(closeControlMetrics.closeInset).toBeGreaterThanOrEqual(-0.5);
+      expect(closeControlMetrics.tabHeight).toBe(30);
       expect(closeControlMetrics.width).toBe(28);
       expect(closeControlMetrics.height).toBe(28);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);
@@ -298,7 +336,7 @@ suite.define(() => {
         });
         const gateway = await installMockGateway(page, {
           deferredMethods: ["connect"],
-          featureMethods: ["terminal.open"],
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
           methodResponses: {
             "terminal.list": { sessions: [] },
             "terminal.open": {

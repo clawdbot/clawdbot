@@ -15,9 +15,9 @@ import {
   type PackageUpdateStepAdvisory,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
-export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import {
   collectInstalledGlobalPackageErrors,
+  cleanupGlobalRenameDirs,
   globalInstallArgs,
   globalInstallFallbackArgs,
   listActivePnpmIsolatedGlobalPackages,
@@ -26,12 +26,14 @@ import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
   resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
+  resolveNpmLifecyclePolicyGate,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   type CommandRunner,
   type NpmGlobalPrefixLayout,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
@@ -84,6 +86,32 @@ const PACKAGE_PREINSTALL_SCRIPT_PATH = path.join(
   "scripts",
   "preinstall-package-manager-warning.mjs",
 );
+
+async function resolveNpmUpdateLifecyclePolicy(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+}): Promise<{
+  policy: "unflagged" | "allow-scripts" | null;
+  failedStep: PackageUpdateStepResult | null;
+}> {
+  const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
+  if (!gate.error) {
+    return { policy: gate.policy, failedStep: null };
+  }
+  const argv = [params.installTarget.command, "--version"];
+  const version = params.installTarget.npmOwner?.version ?? "";
+  return {
+    policy: null,
+    failedStep: {
+      name: "npm lifecycle policy preflight",
+      command: argv.join(" "),
+      cwd: process.cwd(),
+      durationMs: 0,
+      exitCode: 1,
+      stdoutTail: version || null,
+      stderrTail: gate.error,
+    },
+  };
+}
 
 async function resolveCanonicalPath(filePath: string): Promise<string> {
   return path.resolve(await fs.realpath(filePath).catch(() => filePath));
@@ -842,6 +870,17 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packedInstallDir: string | null = null;
 
   try {
+    const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
+      installTarget: params.installTarget,
+    });
+    if (npmPreflight.failedStep) {
+      return {
+        steps: [npmPreflight.failedStep],
+        verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
+        afterVersion: null,
+        failedStep: npmPreflight.failedStep,
+      };
+    }
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,
       packageName: params.packageName,
@@ -856,6 +895,14 @@ export async function runGlobalPackageUpdateSteps(params: {
         afterVersion: null,
         failedStep: pnpmPreflight.failedStep,
       };
+    }
+    const packageRoot = params.packageRoot ?? params.installTarget.packageRoot;
+    if (packageRoot) {
+      // Lifecycle policy must refuse before cleanup can remove an interrupted update backup.
+      await cleanupGlobalRenameDirs({
+        globalRoot: path.dirname(packageRoot),
+        packageName: params.packageName,
+      });
     }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
     // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
@@ -933,6 +980,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         undefined,
         installLocation,
         preparedSpec.installCwd,
+        npmPreflight.policy ?? undefined,
       ),
       ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
@@ -965,6 +1013,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         undefined,
         stagedInstall?.prefix,
         preparedSpec.installCwd,
+        npmPreflight.policy ?? undefined,
       );
       if (fallbackArgv) {
         const fallbackStep = await params.runStep({

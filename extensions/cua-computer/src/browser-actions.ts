@@ -1,6 +1,6 @@
 import { browserElement, browserTarget, requireWindowTarget } from "./action-targets.js";
 import type { CuaComputerActParams } from "./action-targets.js";
-import type { CuaDriverSession } from "./driver-client.js";
+import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
   browserBinding,
   browserDialogEnvelope,
@@ -8,6 +8,7 @@ import {
   browserToolEnvelope,
   callWindowTool,
 } from "./driver-result.js";
+import type { CuaExecutionResources } from "./execution-resources.js";
 import {
   clearDialogRef,
   invalidateBrowserObservation,
@@ -21,6 +22,7 @@ import {
 export async function handleBrowserAct(
   driver: CuaDriverSession,
   state: CuaFrameState,
+  resources: CuaExecutionResources,
   input: CuaComputerActParams,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
@@ -174,36 +176,66 @@ export async function handleBrowserAct(
     case "browser_set_input_files": {
       const target = browserTarget(driver, state, input);
       const ref = browserElement(state, input, target)!;
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_set_input_files",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ref,
-          files: input.files,
-        },
-        signal,
-      );
+      const files = await resources.resolveFiles(input.resourceHandles ?? []);
+      let result: CuaToolResult;
+      try {
+        result = await callWindowTool(
+          driver,
+          state,
+          "browser_set_input_files",
+          {
+            target_id: target.targetId,
+            tab_id: target.tabId,
+            ref,
+            files,
+          },
+          signal,
+        );
+      } catch (error) {
+        signal?.throwIfAborted();
+        throw new Error(
+          "COMPUTER_DRIVER_ERROR: browser_set_input_files failed; inspect node logs and resource state before retrying",
+          { cause: error },
+        );
+      }
       return JSON.stringify(browserToolEnvelope(result, "browser_set_input_files"));
     }
     case "browser_download": {
       const target = browserTarget(driver, state, input);
       const ref = browserElement(state, input, target)!;
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_download",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ref,
-          destination_root: input.destinationRoot,
+      const resource = await resources.createDirectory("browser-download");
+      let result: CuaToolResult;
+      try {
+        result = await callWindowTool(
+          driver,
+          state,
+          "browser_download",
+          {
+            target_id: target.targetId,
+            tab_id: target.tabId,
+            ref,
+            destination_root: resource.path,
+          },
+          signal,
+        );
+      } catch (error) {
+        await resources.discard(resource.handle).catch(() => {});
+        signal?.throwIfAborted();
+        throw new Error(
+          "COMPUTER_DRIVER_ERROR: browser_download failed; inspect node logs and resource state before retrying",
+          { cause: error },
+        );
+      }
+      const envelope = browserToolEnvelope(result, "browser_download");
+      const fileResourceHandles = await resources.captureFiles(resource.handle);
+      return JSON.stringify({
+        ...envelope,
+        details: {
+          ...envelope.details,
+          resourceHandle: resource.handle,
+          fileResourceHandles,
         },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_download"));
+      });
     }
     case "browser_pointer": {
       const target = browserTarget(driver, state, input);

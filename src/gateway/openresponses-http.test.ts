@@ -1808,6 +1808,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects resolved terminal agent failures without exposing provider details", async () => {
+    const privateDetail = "raw provider detail should stay private";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+    } as never);
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    const body = await res.text();
+    expect(res.status).toBe(500);
+    expect(JSON.parse(body)).toMatchObject({
+      status: "failed",
+      output: [],
+      error: { code: "api_error", message: "internal error" },
+    });
+    expect(body).not.toContain(privateDetail);
+  });
+
+  it("rejects resolved error stop reasons", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { stopReason: "error" },
+    } as never);
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    expect(res.status).toBe(500);
+  });
+
   it.each(
     STREAM_FAILURE_CASES.flatMap((failure) =>
       [false, true].map((emitErrorLifecycle) => ({
@@ -1943,6 +1973,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
                 port,
                 { stream, model: "openclaw", input: "hi" },
                 {
+                  "x-forwarded-for": "198.51.100.42",
                   "x-forwarded-proto": "https",
                   "x-forwarded-user": "operator@example.com",
                   "x-openclaw-scopes": scopes,
@@ -1960,6 +1991,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           agentCommandMock.mockClear();
           agentCommandMock.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
           const forwardedHeaders = {
+            "x-forwarded-for": "198.51.100.42",
             "x-forwarded-proto": "https",
             authorization: "Bearer forwarded-untrusted",
           };
@@ -2012,6 +2044,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
             port,
             { model: "openclaw", input: "hi" },
             {
+              "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
               "x-openclaw-scopes": "operator.admin, operator.write",
               "x-openclaw-sender-is-owner": "true",

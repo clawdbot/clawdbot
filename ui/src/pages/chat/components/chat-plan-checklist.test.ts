@@ -14,9 +14,13 @@ const planStatus: PlanStatus = {
   ],
 };
 
-function renderChecklist(status: PlanStatus | null, active: boolean) {
+function renderChecklist(
+  status: PlanStatus | null,
+  active: boolean,
+  variant: "bar" | "card" = "card",
+) {
   const container = document.createElement("div");
-  render(renderChatPlanChecklist(status, { active, variant: "card" }), container);
+  render(renderChatPlanChecklist(status, { active, variant }), container);
   return container;
 }
 
@@ -27,8 +31,9 @@ describe("renderChatPlanChecklist", () => {
 
     expect(card).not.toBeNull();
     expect(card).not.toBeInstanceOf(HTMLDetailsElement);
-    expect(card?.querySelector(".plan-checklist__current")?.textContent).toBe("Wire the checklist");
-    expect(card?.querySelector(".plan-checklist__count")?.textContent).toBe("1/3");
+    expect(card?.getAttribute("aria-label")).toBe("Plan: 1 of 3 completed");
+    expect(card?.querySelector(".plan-checklist__summary")).toBeNull();
+    expect(card?.querySelector(".plan-checklist__count")).toBeNull();
     expect(card?.querySelector(".plan-checklist__explanation")?.textContent).toBe(
       "Keep the change focused",
     );
@@ -42,6 +47,15 @@ describe("renderChatPlanChecklist", () => {
       { label: "Wire the checklist, in progress", status: "plan-checklist__step--in_progress" },
       { label: "Run focused tests, pending", status: "plan-checklist__step--pending" },
     ]);
+  });
+
+  it("renders the bar as details with the current step summary and count", () => {
+    const container = renderChecklist(planStatus, true, "bar");
+    const bar = container.querySelector(".plan-checklist--bar");
+
+    expect(bar).toBeInstanceOf(HTMLDetailsElement);
+    expect(bar?.querySelector(".plan-checklist__current")?.textContent).toBe("Wire the checklist");
+    expect(bar?.querySelector(".plan-checklist__count")?.textContent).toBe("1/3");
   });
 
   it("hides the checklist without a plan or active run", () => {

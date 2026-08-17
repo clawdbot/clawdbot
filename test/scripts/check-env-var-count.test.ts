@@ -156,13 +156,16 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget|over budget/u);
   });
 
-  it("allows only the owner-approved 502 to 503 budget increase", () => {
+  it.each([
+    [501, 502],
+    [502, 503],
+  ])("allows only the owner-approved %i to %i budget increase", (baseBudget, nextBudget) => {
     const root = tempDirs.make("openclaw-env-count-approved-grow-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    const names = Array.from({ length: 504 }, (_, index) => `OPENCLAW_TEST_${index}`);
-    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "502\n");
-    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, 502).join("\n"));
+    const names = Array.from({ length: nextBudget + 1 }, (_, index) => `OPENCLAW_TEST_${index}`);
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${baseBudget}\n`);
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, baseBudget).join("\n"));
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
     execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
     execFileSync(
@@ -171,12 +174,12 @@ describe("check-env-var-count", () => {
       { cwd: root, stdio: "ignore" },
     );
 
-    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, 503).join("\n"));
-    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "503\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, nextBudget).join("\n"));
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${nextBudget}\n`);
     expect(() => main(["--base", "HEAD"], root)).not.toThrow();
 
     fs.writeFileSync(path.join(root, "src/runtime.ts"), names.join("\n"));
-    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "504\n");
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${nextBudget + 1}\n`);
     expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
   });
 

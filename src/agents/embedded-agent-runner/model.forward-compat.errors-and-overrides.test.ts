@@ -1,6 +1,6 @@
 // Coverage for forward-compatible model fallback errors and provider overrides.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../../config/config.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../../config/config.js";
 import { discoverModels } from "../agent-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
@@ -111,7 +111,6 @@ vi.mock("../agent-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   expectResolvedForwardCompatFallbackResult,
   expectUnknownModelErrorResult,

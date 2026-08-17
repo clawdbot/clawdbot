@@ -231,10 +231,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 }
 
 export const testing = {
-  median,
   parseArgs,
-  parseRuns,
-  validateCliArgs,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

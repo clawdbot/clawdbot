@@ -708,15 +708,15 @@ describe("doctor state integrity oauth dir checks", () => {
     });
     const text = await runStateIntegrityText(cfg);
     expect(text).toContain("recent sessions are missing transcripts");
-    expect(text).toMatch(/openclaw sessions --store ".*sessions\.json"/);
+    expect(text).toMatch(/openclaw sessions --store ".*openclaw-agent\.sqlite"/);
     expect(text).toMatch(
-      /openclaw sessions cleanup --store ".*sessions\.json" --dry-run --fix-missing/,
+      /openclaw sessions cleanup --store ".*openclaw-agent\.sqlite" --dry-run --fix-missing/,
     );
     expect(text).not.toMatch(
-      /openclaw sessions cleanup --store ".*sessions\.json" --dry-run(?! --fix-missing)/,
+      /openclaw sessions cleanup --store ".*openclaw-agent\.sqlite" --dry-run(?! --fix-missing)/,
     );
     expect(text).toMatch(
-      /openclaw sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/,
+      /openclaw sessions cleanup --store ".*openclaw-agent\.sqlite" --enforce --fix-missing/,
     );
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");

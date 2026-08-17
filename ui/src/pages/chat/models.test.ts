@@ -1,7 +1,7 @@
 // Control UI tests cover models behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { applyModelCatalogResult, loadModels } from "./models.ts";
+import { loadModels } from "./models.ts";
 
 describe("loadModels", () => {
   it("requests the configured model list view", async () => {
@@ -138,39 +138,5 @@ describe("loadModels", () => {
     await loadModels(client, { agentId: "writer", refresh: true });
 
     expect(request).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("applyModelCatalogResult", () => {
-  it("preserves availability from metadata results", () => {
-    expect(
-      applyModelCatalogResult([
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-          available: true,
-        },
-        {
-          id: "gpt-5.3-codex-spark",
-          name: "GPT-5.3 Codex Spark",
-          provider: "codex",
-          available: false,
-        },
-      ]),
-    ).toEqual([
-      {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        provider: "openai",
-        available: true,
-      },
-      {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        provider: "codex",
-        available: false,
-      },
-    ]);
   });
 });

@@ -112,10 +112,6 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
   };
 }
 
-function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-}
-
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
 );
@@ -636,6 +632,9 @@ export async function getReplyFromConfig(
       sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
       sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
     } catch (error) {
+      if (isSessionWorkStartInvalidatedError(error)) {
+        throw error;
+      }
       logVerbose(
         `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
       );
@@ -697,7 +696,7 @@ export async function getReplyFromConfig(
     if (opts?.isHeartbeat) {
       const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
         text,
-        resolveHeartbeatAckMaxChars(cfg, agentId),
+        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
       );
       if (heartbeatPending.shouldClear) {
         Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
