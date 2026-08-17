@@ -2161,6 +2161,78 @@ NODE
     }
   });
 
+  it.runIf(
+    process.getuid?.() !== 0 ||
+      spawnSync("setpriv", ["--version"], { encoding: "utf8" }).status === 0,
+  )("updates a readable mode-0400 profile and preserves its mode", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-readonly-profile-"));
+    const home = join(tmp, "home");
+    const profile = join(home, ".profile");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(profile, "# readonly profile\n");
+    chmodSync(profile, 0o400);
+
+    try {
+      const script = `source "${SCRIPT_PATH}"; persist_path_line_to_profile "$HOME/.profile" 'export PATH="$HOME/.local/bin:$PATH"'`;
+      let result: ReturnType<typeof spawnSync>;
+      if (process.getuid?.() === 0) {
+        chmodSync(tmp, 0o755);
+        chownSync(home, 65534, 65534);
+        chownSync(profile, 65534, 65534);
+        result = spawnSync(
+          "setpriv",
+          ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", script],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              HOME: home,
+              PATH: "/usr/bin:/bin",
+              BASH_ENV: "",
+              ENV: "",
+              OPENCLAW_INSTALL_SH_NO_RUN: "1",
+            },
+          },
+        );
+      } else {
+        result = runInstallShell(script, { HOME: home, PATH: "/usr/bin:/bin" });
+      }
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(profile, "utf8")).toBe(
+        'export PATH="$HOME/.local/bin:$PATH"\n# readonly profile\n',
+      );
+      expect(statSync(profile).mode & 0o777).toBe(0o400);
+    } finally {
+      chmodSync(profile, 0o600);
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses to create a Fish profile through a parent symlink outside HOME", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-fish-parent-link-"));
+    const home = join(tmp, "home");
+    const outside = join(tmp, "outside");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(home, ".config"));
+
+    try {
+      const result = runInstallShell(
+        `source "${SCRIPT_PATH}"; persist_shell_path_prepend "$HOME/.local/bin" '$HOME/.local/bin'`,
+        { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/usr/bin/fish" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        "Refusing shell profile parent outside your home",
+      );
+      expect(existsSync(join(outside, "fish", "conf.d", "openclaw.fish"))).toBe(false);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("leaves a profile intact and reports failure when its metadata copy fails", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-profile-copy-failure-"));
     const home = join(tmp, "home");

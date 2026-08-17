@@ -1825,8 +1825,39 @@ resolve_safe_profile_target() {
     printf '%s\n' "$resolved"
 }
 
+prepare_safe_profile_parent() {
+    local profile="$1" parent ancestor home_real ancestor_real parent_real
+    parent="$(dirname "$profile")"
+    ancestor="$parent"
+    home_real="$(cd "$HOME" 2>/dev/null && pwd -P)" || return 1
+    while [[ ! -d "$ancestor" ]]; do
+        if [[ -e "$ancestor" || -L "$ancestor" ]]; then
+            ui_warn "Refusing non-directory shell profile parent: ${profile}"
+            return 1
+        fi
+        ancestor="$(dirname "$ancestor")"
+    done
+    ancestor_real="$(cd "$ancestor" 2>/dev/null && pwd -P)" || return 1
+    case "$ancestor_real" in
+        "$home_real"|"$home_real"/*) ;;
+        *)
+            ui_warn "Refusing shell profile parent outside your home: ${profile}"
+            return 1
+            ;;
+    esac
+    mkdir -p "$parent" || return 1
+    parent_real="$(cd "$parent" 2>/dev/null && pwd -P)" || return 1
+    case "$parent_real" in
+        "$home_real"|"$home_real"/*) ;;
+        *)
+            ui_warn "Refusing shell profile parent outside your home: ${profile}"
+            return 1
+            ;;
+    esac
+}
+
 persist_path_line_to_profile() {
-    local profile="$1" path_line="$2" rc tmp_rc
+    local profile="$1" path_line="$2" rc tmp_rc original_mode
     rc="$profile"
     if [[ -L "$profile" ]]; then
         rc="$(resolve_safe_profile_target "$profile")" || return 1
@@ -1835,7 +1866,7 @@ persist_path_line_to_profile() {
         return 1
     fi
 
-    mkdir -p "$(dirname "$rc")"
+    prepare_safe_profile_parent "$rc" || return 1
     if [[ "$(sed -n '1p' "$rc" 2>/dev/null || true)" == "$path_line" ]]; then
         return 0
     fi
@@ -1846,14 +1877,22 @@ persist_path_line_to_profile() {
             ui_warn "Failed to copy shell profile: ${profile}"
             return 1
         fi
+        original_mode="$(stat -c '%a' "$rc" 2>/dev/null || stat -f '%Lp' "$rc" 2>/dev/null)" || return 1
+        chmod u+w "$tmp_rc" || return 1
     fi
-    {
+    if ! {
         printf '%s\n' "$path_line"
         if [[ -f "$rc" ]]; then
             grep -Fvx "$path_line" "$rc" || true
         fi
-    } > "$tmp_rc"
-    mv "$tmp_rc" "$rc"
+    } > "$tmp_rc"; then
+        ui_warn "Failed to write shell profile: ${profile}"
+        return 1
+    fi
+    if [[ -n "${original_mode:-}" ]]; then
+        chmod "$original_mode" "$tmp_rc" || return 1
+    fi
+    mv "$tmp_rc" "$rc" || return 1
 }
 
 promote_supported_node_binary() {
