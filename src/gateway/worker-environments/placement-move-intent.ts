@@ -9,7 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as StateDatabase,
   WorkerSessionPlacementMoves,
@@ -25,8 +25,6 @@ const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_m
 const MOVE_SCHEMA_END = "\n) STRICT;";
 const MOVE_OPERATION_PREFIX = "move:v1:";
 const MOVE_MACHINE_CLASS_MAX_LENGTH = 128;
-
-type MoveColumnInfo = { name?: unknown };
 
 type MoveRow = Selectable<WorkerSessionPlacementMoves>;
 type MoveDatabase = Pick<
@@ -72,13 +70,9 @@ function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
     return;
   }
   db.exec(moveSchemaSql()); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
-  const columns = /* sqlite-allow-raw -- Canonical additive schema inspection only. */ db
-    .prepare("PRAGMA table_info(worker_session_placement_moves)")
-    .all() as MoveColumnInfo[];
-  if (!columns.some((column) => column.name === "target_machine_class")) {
-    // sqlite-allow-raw -- Unreleased additive column migration.
-    db.exec("ALTER TABLE worker_session_placement_moves ADD COLUMN target_machine_class TEXT");
-  }
+  // Databases that created this table before the column shipped upgrade in place;
+  // the column is bare and nullable, so old readers stay compatible.
+  ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
   ensuredMoveSchemaHandles.add(db);
 }
 
