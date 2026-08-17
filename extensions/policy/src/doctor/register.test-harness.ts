@@ -32,7 +32,7 @@ export function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawC
   };
 }
 
-export type PolicyConfigFixture = OpenClawConfig & Record<string, unknown>;
+type PolicyConfigFixture = OpenClawConfig & Record<string, unknown>;
 
 export function cfgWithPolicyOverrides(
   overrides: Partial<OpenClawConfig> = {},
