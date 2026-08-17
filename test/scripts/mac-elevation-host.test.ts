@@ -2896,6 +2896,7 @@ describe("mac elevation host command contract", () => {
         encoding: "utf8",
       }).stdout.trim();
       symlinkSync(jqPath, path.join(binDir, "jq"));
+      writeExecutable(path.join(binDir, "diskutil"), "#!/bin/sh\nexit 0\n");
       const installReceiptPath = path.join(harness.stateDir, "elevation-host-install.json");
 
       const recovered = runInstaller(
