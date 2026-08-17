@@ -4736,6 +4736,85 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history deduplicates a directive-tagged local Claude delivery with managed audio", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-delivery-dedupe";
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
+      const deliveryTimestamp = Date.parse("2026-03-26T16:29:55.500Z");
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      const managedAudioUrl = "/api/chat/media/outgoing/main/claude-delivery/full";
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-delivery-ready",
+          timestamp: new Date(deliveryTimestamp).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "CLAUDE DELIVERY READY" }],
+          },
+        }),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      try {
+        await writeStoredMainSession(
+          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
+        );
+        await writeMainSessionTranscript(
+          [
+            createTextTranscriptEvent(
+              "assistant",
+              "[[reply_to:delivery-run-1]]CLAUDE DELIVERY READY",
+              {
+                timestamp: deliveryTimestamp,
+                message: {
+                  content: [
+                    {
+                      type: "text",
+                      text: "[[reply_to:delivery-run-1]]CLAUDE DELIVERY READY",
+                    },
+                    { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl },
+                  ],
+                },
+              },
+            ),
+          ],
+          sessionId,
+        );
+
+        const history = await rpcReq<{
+          messages?: Array<{ role?: unknown; content?: unknown }>;
+        }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
+        expect(history.ok).toBe(true);
+        const assistantMessages = (history.payload?.messages ?? []).filter(
+          (message) => message.role === "assistant",
+        );
+        expect(assistantMessages).toHaveLength(1);
+        const survivingContent = expectDefined(
+          assistantMessages[0]?.content,
+          "surviving assistant content",
+        );
+        expect(Array.isArray(survivingContent)).toBe(true);
+        const contentBlocks = survivingContent as Array<{ type?: unknown; text?: unknown }>;
+        expect(
+          contentBlocks.filter(
+            (block) => block.type === "text" && block.text === "CLAUDE DELIVERY READY",
+          ),
+        ).toHaveLength(1);
+        expect(contentBlocks.filter((block) => block.type === "audio")).toHaveLength(1);
+        expect(JSON.stringify(assistantMessages)).not.toContain("[[reply_to:");
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
