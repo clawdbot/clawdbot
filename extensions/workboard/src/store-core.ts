@@ -241,6 +241,21 @@ export class WorkboardCoreStore {
     };
   }
 
+  async boardDefaultAssignees(): Promise<Map<string, string>> {
+    const assignees = new Map<string, string>();
+    for (const entry of await this.boardStore.entries()) {
+      if (entry.value?.version !== 1 || !entry.value.board?.id) {
+        continue;
+      }
+      const board = entry.value.board;
+      const assignee = board.orchestration?.defaultAssignee;
+      if (assignee) {
+        assignees.set(board.id, assignee);
+      }
+    }
+    return assignees;
+  }
+
   async upsertBoard(input: WorkboardBoardInput): Promise<WorkboardBoardMetadata> {
     return await this.enqueueMutation(async () => {
       const id = normalizeBoardIdRequired(input.id);
