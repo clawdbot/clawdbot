@@ -779,6 +779,7 @@ jobs:
           gateway_home="$(mktemp -d)"
           gateway_readiness_home="$(mktemp -d)"
           gateway_port="$(node -e "const net=require('node:net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{ console.log(s.address().port); s.close(); });")"
+          gateway_token="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
           gateway_state="$gateway_home/.openclaw"
           gateway_config="$gateway_state/openclaw.json"
           gateway_readiness_state="$gateway_readiness_home/.openclaw"
@@ -803,7 +804,7 @@ jobs:
               "mode": "local",
               "port": ${gateway_port},
               "bind": "loopback",
-              "auth": { "mode": "none" },
+              "auth": { "mode": "token" },
               "controlUi": { "enabled": false },
               "tailscale": { "mode": "off" }
             },
@@ -823,8 +824,8 @@ jobs:
             rm -rf "$gateway_home" "$gateway_readiness_home"
           }
           trap cleanup_gateway EXIT
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
-            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth none --allow-unconfigured --force \
+          OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
+            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth token --allow-unconfigured --force \
             >"$gateway_log" 2>&1 &
           gateway_pid="$!"
 
@@ -853,7 +854,7 @@ jobs:
             sleep 1
           done
 
-          # Exercise the real WebSocket handshake and health RPC without warming benchmark device state.
+          # Exercise the same shared-secret WebSocket path without creating benchmark device state.
           while true; do
             gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))
             if (( gateway_ready_remaining <= 0 )); then
@@ -863,7 +864,7 @@ jobs:
               exit 1
             fi
             gateway_ready_remaining_ms=$((gateway_ready_remaining * 1000))
-            if OPENCLAW_HOME="$gateway_readiness_home" OPENCLAW_STATE_DIR="$gateway_readiness_state" OPENCLAW_CONFIG_PATH="$gateway_readiness_config" \
+            if OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_readiness_home" OPENCLAW_STATE_DIR="$gateway_readiness_state" OPENCLAW_CONFIG_PATH="$gateway_readiness_config" \
               node dist/entry.js gateway health \
                 --port "$gateway_port" \
                 --timeout "$gateway_ready_remaining_ms" \
@@ -882,11 +883,11 @@ jobs:
             fi
           done
 
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
+          OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
             node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts" \
             --entry "$GITHUB_WORKSPACE/openclaw.mjs" \
-            --case gatewayHealthJsonConnected \
-            --case gatewayHealthJsonFirstDevice \
+            --case gatewayHealthJsonWarmState \
+            --case gatewayHealthJsonFreshState \
             --case configGetGatewayPort \
             --runs "$source_runs" \
             --warmup 1 \
