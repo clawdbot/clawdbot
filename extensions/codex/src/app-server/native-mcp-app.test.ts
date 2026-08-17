@@ -12,9 +12,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 vi.mock("./shared-client.js", () => sharedClientMocks);
 
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
-import { testing } from "./native-mcp-app.test-support.js";
-
-const { createNativeMcpRuntime } = testing;
+import { createCodexNativeMcpRuntime } from "./native-mcp-runtime.js";
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {
@@ -146,7 +144,7 @@ describe("Codex native MCP Apps", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const runtime = createNativeMcpRuntime({
+    const runtime = createCodexNativeMcpRuntime({
       client: { request, getInstanceId: () => "client-1" } as unknown as CodexAppServerClient,
       threadId: "thread-1",
       attempt: createAttempt(),
@@ -209,12 +207,12 @@ describe("Codex native MCP Apps", () => {
       request,
       getInstanceId: () => "client-1",
     } as unknown as CodexAppServerClient;
-    const runtime = createNativeMcpRuntime({
+    const runtime = createCodexNativeMcpRuntime({
       client,
       threadId: "thread-1",
       attempt: createAttempt(),
     });
-    const siblingRuntime = createNativeMcpRuntime({
+    const siblingRuntime = createCodexNativeMcpRuntime({
       client,
       threadId: "thread-2",
       attempt: createAttempt(),
@@ -242,7 +240,7 @@ describe("Codex native MCP Apps", () => {
       .fn()
       .mockRejectedValueOnce(cancellation)
       .mockResolvedValueOnce({ content: [] });
-    const runtime = createNativeMcpRuntime({
+    const runtime = createCodexNativeMcpRuntime({
       client: { request, getInstanceId: () => "client-1" } as unknown as CodexAppServerClient,
       threadId: "thread-1",
       attempt: createAttempt(),
