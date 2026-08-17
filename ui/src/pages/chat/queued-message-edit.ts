@@ -34,6 +34,18 @@ type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
 
+function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueueItem): boolean {
+  return (
+    item.id === edit.source.id &&
+    item.sendRunId === edit.source.sendRunId &&
+    item.sendAttempts === edit.source.sendAttempts &&
+    item.sendState === edit.source.sendState &&
+    item.agentId === edit.source.agentId &&
+    item.sessionKey === edit.source.sessionKey &&
+    item.orderKey === edit.source.orderKey
+  );
+}
+
 /** Closed outcomes so the page owns the operator-visible wording. */
 type QueuedMessageEditResult = "started" | "unavailable";
 
@@ -59,9 +71,11 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
     return null;
   }
   // Route changes intentionally release the edit hold so another pane can
-  // drain the row. Do not revive a token whose source disappeared while away:
-  // there would be no row to render its submit/cancel controls on return.
-  if (!readQueuedMessageById(host, edit.id)) {
+  // drain or update the row. Do not revive a token whose source changed while
+  // away: its replacement CAS would reject the stale captured version and
+  // there would be no safe submit/cancel action to offer on return.
+  const source = readQueuedMessageById(host, edit.id);
+  if (!source || !queuedMessageEditSourceMatches(edit, source)) {
     host.chatQueuedEdit = null;
     return null;
   }

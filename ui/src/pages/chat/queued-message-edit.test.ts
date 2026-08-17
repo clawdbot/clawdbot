@@ -12,6 +12,7 @@ import {
   admitQueuedMessageForSession,
   removeQueuedMessageWithoutReleasing,
   subscribeChatOutboxProjection,
+  updateQueuedMessageForSession,
 } from "./chat-queue.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
@@ -535,6 +536,28 @@ describe("queued message edit round-trip", () => {
     expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
 
     peerUnsubscribe();
+    unsubscribe();
+  });
+
+  it("clears an edit whose source fails while the pane is away", () => {
+    const { host, unsubscribe } = queueHost([{}, {}]);
+    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
+
+    host.sessionKey = "agent:other";
+    expect(activeQueuedMessageEdit(host as never)).toBeNull();
+    expect(
+      updateQueuedMessageForSession(host as never, SESSION_KEY, "queued-1", (item) => ({
+        ...item,
+        sendState: "failed",
+        sendError: "Gateway rejected the queued send",
+      })),
+    ).toMatchObject({ sendState: "failed" });
+
+    host.sessionKey = SESSION_KEY;
+    expect(activeQueuedMessageEdit(host as never)).toBeNull();
+    expect(host.chatQueuedEdit).toBeNull();
+    expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
+
     unsubscribe();
   });
 });
