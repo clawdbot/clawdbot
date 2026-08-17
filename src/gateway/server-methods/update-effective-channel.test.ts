@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { UpdateChannel } from "../../infra/update-channels.js";
 
 type TestUpdateAvailable = {
   currentVersion: string;
@@ -16,7 +17,7 @@ type TestUpdateSchedule =
   | null;
 
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn<() => TestUpdateAvailable>(() => null));
-const getUpdateEffectiveChannelMock = vi.hoisted(() => vi.fn(() => "stable" as const));
+const getUpdateEffectiveChannelMock = vi.hoisted(() => vi.fn<() => UpdateChannel>(() => "stable"));
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
 const refreshGatewayUpdateStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>

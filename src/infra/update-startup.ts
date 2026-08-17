@@ -128,7 +128,7 @@ export function getUpdateSchedule(): UpdateScheduleState | null {
 
 export function getUpdateEffectiveChannel(): UpdateChannel {
   return (
-    updateScheduleCache?.channel ??
+    normalizeUpdateChannel(updateScheduleCache?.channel) ??
     resolveEffectiveUpdateChannel({ currentVersion: VERSION, installKind: "package" }).channel
   );
 }
