@@ -320,19 +320,25 @@ suite.define(() => {
           trailing: rtl
             ? trailingBounds.left - closeBounds.left
             : closeBounds.right - trailingBounds.right,
-          tabOuterRadius: rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
-          tabJoinRadius: rtl ? tabStyle.borderTopLeftRadius : tabStyle.borderTopRightRadius,
-          closeJoinRadius: rtl ? closeStyle.borderTopRightRadius : closeStyle.borderTopLeftRadius,
-          closeOuterRadius: rtl ? closeStyle.borderTopLeftRadius : closeStyle.borderTopRightRadius,
+          tabOuterRadius: Number.parseFloat(
+            rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
+          ),
+          tabJoinRadius: Number.parseFloat(
+            rtl ? tabStyle.borderTopLeftRadius : tabStyle.borderTopRightRadius,
+          ),
+          closeJoinRadius: Number.parseFloat(
+            rtl ? closeStyle.borderTopRightRadius : closeStyle.borderTopLeftRadius,
+          ),
+          closeOuterRadius: Number.parseFloat(
+            rtl ? closeStyle.borderTopLeftRadius : closeStyle.borderTopRightRadius,
+          ),
         };
       }, direction);
       expect(tabPadding.trailing, `${direction} glyph insets`).toBeCloseTo(tabPadding.leading, 0);
-      expect(parseFloat(tabPadding.tabJoinRadius), `${direction} tab join`).toBe(0);
-      expect(parseFloat(tabPadding.closeJoinRadius), `${direction} close join`).toBe(0);
-      expect(parseFloat(tabPadding.tabOuterRadius), `${direction} tab outer`).toBeGreaterThan(0);
-      expect(parseFloat(tabPadding.closeOuterRadius), `${direction} close outer`).toBeGreaterThan(
-        0,
-      );
+      expect(tabPadding.tabJoinRadius, `${direction} tab join`).toBe(0);
+      expect(tabPadding.closeJoinRadius, `${direction} close join`).toBe(0);
+      expect(tabPadding.tabOuterRadius, `${direction} tab outer`).toBeGreaterThan(0);
+      expect(tabPadding.closeOuterRadius, `${direction} close outer`).toBeGreaterThan(0);
     }
     await tab.evaluate((node) => {
       const panel = node.closest(".side-panel");
