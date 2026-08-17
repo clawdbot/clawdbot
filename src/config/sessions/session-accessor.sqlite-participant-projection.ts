@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-session-participants-schema.js";
@@ -21,7 +20,7 @@ export type SessionParticipantRecord = {
 
 function projectParticipantRow(row: {
   actor_id: string;
-  actor_source: string | null;
+  actor_source?: string | null;
   actor_type: string;
   first_prompted_at: number;
   last_prompted_at: number;
@@ -45,16 +44,16 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   if (!tableExists(database, SESSION_PARTICIPANTS_TABLE) || sessionKeys?.length === 0) {
     return [];
   }
-  const actorSource = tableHasColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source")
-    ? "actor_source"
-    : sql<string | null>`NULL`.as("actor_source");
+  // Lazy-ensured column: pre-feature databases lack actor_source, so select it
+  // only when present; projection treats the absent field as unknown/legacy.
+  const hasActorSource = tableHasColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source");
   let query = getSessionKysely(database)
     .selectFrom("session_participants")
     .select([
       "session_key",
       "actor_type",
       "actor_id",
-      actorSource,
+      ...(hasActorSource ? (["actor_source"] as const) : []),
       "first_prompted_at",
       "last_prompted_at",
     ]);
