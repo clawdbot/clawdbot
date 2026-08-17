@@ -192,6 +192,21 @@ describe("openclaw-session-link-hovercard-provider", () => {
     expect(document.querySelector(".session-link-hovercard")).toBeNull();
   });
 
+  it("does not overlay sidebar session navigation", async () => {
+    const { provider, request } = createProvider({ response: previewResponse() });
+    const anchor = document.createElement("a");
+    anchor.className = "sidebar-recent-session__link";
+    anchor.href = "/chat/main/research";
+    anchor.textContent = "Research";
+    provider.append(anchor);
+    document.body.append(provider);
+
+    await hover(anchor);
+
+    expect(document.querySelector(".session-link-hovercard")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("resolves a short session path only from the loaded roster", async () => {
     const sessionKey = "agent:main:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
     const row = {
