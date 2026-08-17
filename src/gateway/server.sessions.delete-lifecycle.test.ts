@@ -36,6 +36,25 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
+const sessionArchiveMaterializationHook = vi.hoisted(() => ({
+  afterMaterialize: undefined as (() => void) | undefined,
+}));
+
+vi.mock("../config/sessions/session-accessor.sqlite-archive.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-archive.js")>();
+  return {
+    ...actual,
+    materializeSessionStateDeletePlans: async (
+      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
+    ) => {
+      const result = await actual.materializeSessionStateDeletePlans(...args);
+      sessionArchiveMaterializationHook.afterMaterialize?.();
+      return result;
+    },
+  };
+});
+
 const {
   createConfiguredGlobalAgentSessionStore,
   createSessionStoreDir,
@@ -44,6 +63,7 @@ const {
 } = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
+  sessionArchiveMaterializationHook.afterMaterialize = undefined;
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -459,6 +479,45 @@ test("sessions.delete reports an exact-entry replacement after cleanup", async (
     sessionId,
     updatedAt,
   });
+});
+
+test("sessions.delete reports an exact-entry replacement during transcript materialization", async () => {
+  const sessionKey = "agent:main:cron:materialization-race";
+  const sessionId = "materialization-race-run";
+  const lifecycleRevision = "materialization-race-revision";
+  const updatedAt = 1_737_600_000_000;
+  const { storePath } = await createSessionStoreDir();
+  const events = [{ type: "session" as const, id: sessionId, content: "original transcript" }];
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision, updatedAt }),
+    },
+  });
+  await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+  sessionArchiveMaterializationHook.afterMaterialize = () => {
+    replaceSessionEntrySync(
+      { sessionKey, storePath },
+      sessionStoreEntry(sessionId, {
+        label: "concurrent replacement",
+        lifecycleRevision,
+        updatedAt,
+      }),
+    );
+  };
+
+  await expectSessionDeleteChanged({
+    key: sessionKey,
+    expectedLifecycleRevision: lifecycleRevision,
+    expectedSessionId: sessionId,
+  });
+
+  expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+    label: "concurrent replacement",
+    lifecycleRevision,
+    sessionId,
+    updatedAt,
+  });
+  await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(events);
 });
 
 test("sessions.delete includes cleanup-owned row changes in its guarded deletion", async () => {

@@ -343,12 +343,19 @@ export function assertLifecycleTargetSnapshotUnchanged(
   current: SqliteLifecycleTargetSnapshot,
   operationLabel: string,
 ): void {
+  if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
+    throw new SqliteSessionMutationConflictError(operationLabel);
+  }
+}
+
+export function sqliteLifecycleTargetSnapshotsEqual(
+  expected: SqliteLifecycleTargetSnapshot,
+  current: SqliteLifecycleTargetSnapshot,
+): boolean {
   const primaryMatches =
     expected.primary?.key === current.primary?.key &&
     sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry);
-  if (!primaryMatches || !sqliteSessionSnapshotRowsEqual(expected.rows, current.rows)) {
-    throw new SqliteSessionMutationConflictError(operationLabel);
-  }
+  return primaryMatches && sqliteSessionSnapshotRowsEqual(expected.rows, current.rows);
 }
 
 export function normalizeLifecycleTarget(target: { canonicalKey: string; storeKeys: string[] }): {
