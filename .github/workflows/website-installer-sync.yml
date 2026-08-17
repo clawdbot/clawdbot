@@ -295,6 +295,16 @@ jobs:
               }
             }
 
+            $env:OPENCLAW_INSTALL_METHOD = "bogus"
+            try {
+              $invalidEnvironment = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-NoOnboard")
+              if ($invalidEnvironment.ExitCode -eq 0 -or $invalidEnvironment.Output -match '\[OK\] Windows detected') {
+                throw "$hostCommand accepted invalid OPENCLAW_INSTALL_METHOD.`n$($invalidEnvironment.Output)"
+              }
+            } finally {
+              Remove-Item Env:OPENCLAW_INSTALL_METHOD -ErrorAction SilentlyContinue
+            }
+
             $help = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-?")
             if ($help.ExitCode -ne 0 -or $help.Output -match '\[OK\] Windows detected') {
               throw "$hostCommand failed to handle -? before installer startup.`n$($help.Output)"

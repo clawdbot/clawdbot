@@ -442,8 +442,7 @@ Use non-interactive flags/env vars for predictable runs.
   </Accordion>
 
   <Accordion title="Windows: how to get verbose installer output">
-    `install.ps1` does not expose a `-Verbose` switch.
-    Use PowerShell tracing for script-level diagnostics:
+    `install.ps1` uses `CmdletBinding`, so it accepts PowerShell's common `-Verbose` parameter. The installer does not currently write a dedicated verbose stream. For script-level diagnostics, use PowerShell tracing:
 
     ```powershell
     Set-PSDebug -Trace 1
