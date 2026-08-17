@@ -7,8 +7,7 @@ export function requestStaleWorkerDestroy(
   record: WorkerEnvironmentRecord,
   store: WorkerEnvironmentStore,
 ): WorkerEnvironmentRecord {
-  // Attached sessions need the build cause after teardown so placement reconciliation can
-  // persist an actionable terminal reason instead of inferring from destroyed environment state.
+  // Preserve the stale-build cause after teardown so placement recovery remains actionable.
   return record.state === "attached"
     ? store.requestDestroy({
         environmentId: record.environmentId,
