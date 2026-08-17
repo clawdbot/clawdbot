@@ -210,6 +210,15 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
+  it("rejects topic-qualified transcript filenames over 255 bytes", () => {
+    const sessionId = "会".repeat(82);
+
+    expect(validateSessionId(sessionId)).toBe(sessionId);
+    expect(() => resolveSessionTranscriptPathInDir(sessionId, "/tmp/sessions", 1)).toThrow(
+      /Invalid session transcript filename/,
+    );
+  });
+
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 

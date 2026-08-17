@@ -277,6 +277,9 @@ export function resolveSessionTranscriptPathInDir(
     safeTopicId !== undefined
       ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
       : `${safeSessionId}.jsonl`;
+  if (Buffer.byteLength(fileName, "utf8") > 255) {
+    throw new Error(`Invalid session transcript filename: ${fileName}`);
+  }
   return resolvePathWithinSessionsDir(sessionsDir, fileName);
 }
 
