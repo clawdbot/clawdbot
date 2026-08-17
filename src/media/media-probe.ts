@@ -5,6 +5,7 @@ import {
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { logWarn } from "../logger.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -155,6 +156,35 @@ function isMissingFdProtocolError(error: unknown): boolean {
   );
 }
 
+function isMissingFfprobeError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("ffprobe not found in trusted system directories")
+  );
+}
+
+let warnedMissingFfprobe = false;
+
+/**
+ * Probe failures intentionally degrade to absent fields, but a missing ffprobe
+ * binary silently disables ALL media metadata — Telegram video sends then omit
+ * width/height and clients render large videos with a wrong aspect ratio, with
+ * nothing in the logs pointing at the cause (the docker images do not bundle
+ * ffmpeg). Surface that one operator-fixable condition loudly, once.
+ */
+function warnOnceOnMissingFfprobe(error: unknown): void {
+  if (warnedMissingFfprobe || !isMissingFfprobeError(error)) {
+    return;
+  }
+  warnedMissingFfprobe = true;
+  logWarn(
+    "media: ffprobe is unavailable — media metadata probing is disabled. " +
+      "Video sends will omit width/height and may render with a wrong aspect ratio " +
+      "(e.g. on Telegram). Install ffmpeg to restore metadata probing; the docker " +
+      "images do not bundle it.",
+  );
+}
+
 async function probeMediaSource(
   source: FfprobeSource,
   kind: MediaProbeKind,
@@ -171,6 +201,7 @@ async function probeMediaSource(
     const stdout = await runProbe(source.kind === "fileDescriptor" ? "fd" : "pipe");
     return parseFfprobeMediaMetadata(stdout, kind);
   } catch (error) {
+    warnOnceOnMissingFfprobe(error);
     if (source.kind === "fileDescriptor" && isMissingFdProtocolError(error)) {
       try {
         return parseFfprobeMediaMetadata(await runProbe("pipe"), kind);

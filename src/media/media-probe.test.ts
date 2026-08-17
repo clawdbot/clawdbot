@@ -12,6 +12,14 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
 
+const { logWarn } = vi.hoisted(() => ({
+  logWarn: vi.fn(),
+}));
+
+vi.mock("../logger.js", () => ({
+  logWarn,
+}));
+
 let testDir = "";
 let songPath = "";
 let clipPath = "";
@@ -46,6 +54,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   runFfprobe.mockReset();
+  logWarn.mockReset();
 });
 
 async function probeMediaFile(filePath: string, kind: MediaProbeKind): Promise<MediaProbeResult> {
@@ -273,5 +282,32 @@ describe("probeVideoDimensions", () => {
       ],
       { input: buffer },
     );
+  });
+});
+
+describe("missing ffprobe operator warning", () => {
+  it("does not warn for ordinary probe failures", async () => {
+    runFfprobe.mockRejectedValue(new Error("Invalid data found when processing input"));
+
+    await expect(probeMediaFile(clipPath, "video")).resolves.toEqual({});
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns once, with operator guidance, when ffprobe is not installed", async () => {
+    runFfprobe.mockRejectedValue(
+      new Error(
+        "ffprobe not found in trusted system directories. " +
+          "Install it via your system package manager (e.g. apt install ffmpeg / dnf install ffmpeg).",
+      ),
+    );
+
+    await expect(probeMediaFile(clipPath, "video")).resolves.toEqual({});
+    await expect(probeMediaFile(songPath, "audio")).resolves.toEqual({});
+
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    const message = String(logWarn.mock.calls[0]?.[0]);
+    expect(message).toContain("ffprobe is unavailable");
+    expect(message).toContain("width/height");
+    expect(message).toContain("Install ffmpeg");
   });
 });
