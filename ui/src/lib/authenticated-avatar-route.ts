@@ -3,11 +3,47 @@ type AvatarRouteEntry = {
   consumers: Map<symbol, () => void>;
   controller: AbortController;
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
+  retryTimer: ReturnType<typeof setTimeout> | undefined;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+const AUTHENTICATED_AVATAR_MAX_RETRY_AFTER_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
+
+function retryAfterMs(response: Response): number | undefined {
+  if (response.status !== 503) {
+    return undefined;
+  }
+  // Gateway-owned avatar routes use the delta-seconds form. Reject absent,
+  // malformed, immediate, or long-lived hints so one response cannot create an
+  // unbounded polling or retention loop in the shared loader.
+  const value = response.headers?.get("retry-after")?.trim();
+  if (!value || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const delayMs = Number(value) * 1_000;
+  return Number.isSafeInteger(delayMs) &&
+    delayMs > 0 &&
+    delayMs <= AUTHENTICATED_AVATAR_MAX_RETRY_AFTER_MS
+    ? delayMs
+    : undefined;
+}
+
+function deleteEntry(key: string, entry: AvatarRouteEntry) {
+  if (sharedAvatarRoutes.get(key) !== entry) {
+    return;
+  }
+  sharedAvatarRoutes.delete(key);
+  if (entry.retryTimer !== undefined) {
+    clearTimeout(entry.retryTimer);
+    entry.retryTimer = undefined;
+  }
+  entry.controller.abort();
+  if (entry.blobUrl) {
+    URL.revokeObjectURL(entry.blobUrl);
+  }
+}
 
 function avatarRouteKey(
   url: string,
@@ -33,11 +69,7 @@ function releaseEntry(key: string, owner: symbol) {
     if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size > 0) {
       return;
     }
-    sharedAvatarRoutes.delete(key);
-    entry.controller.abort();
-    if (entry.blobUrl) {
-      URL.revokeObjectURL(entry.blobUrl);
-    }
+    deleteEntry(key, entry);
   }, 0);
 }
 
@@ -51,6 +83,7 @@ async function fetchAvatarRoute(
   const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
   let blobUrl: string | null = null;
   let notFound = false;
+  let retryDelayMs: number | undefined;
   try {
     // Ordered credential recovery: a saved token can be stale while the session's
     // password is valid, so a rejected credential falls through to the next one
@@ -65,6 +98,7 @@ async function fetchAvatarRoute(
         break;
       }
       notFound = response.status === 404;
+      retryDelayMs = retryAfterMs(response);
       if (response.status !== 401 && response.status !== 403) {
         break;
       }
@@ -85,8 +119,22 @@ async function fetchAvatarRoute(
     if (notFound && cacheNotFound) {
       return;
     }
+    if (retryDelayMs !== undefined && entry.consumers.size > 0) {
+      // Retry only while the exact shared entry still has an active view. The
+      // Gateway emits Retry-After only while its authoritative snapshot is
+      // pending, so completion removes the hint and ends this loop naturally.
+      entry.retryTimer = setTimeout(() => {
+        entry.retryTimer = undefined;
+        if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size === 0) {
+          return;
+        }
+        entry.controller = new AbortController();
+        void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
+      }, retryDelayMs);
+      return;
+    }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
-    sharedAvatarRoutes.delete(key);
+    deleteEntry(key, entry);
     return;
   }
   entry.blobUrl = blobUrl;
@@ -143,6 +191,7 @@ export class AuthenticatedAvatarRouteLoader {
         consumers: new Map(),
         controller: new AbortController(),
         releaseTimer: undefined,
+        retryTimer: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
       void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);

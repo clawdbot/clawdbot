@@ -441,20 +441,32 @@ export async function handleWorkspaceIconHttpRequest(
   // The header can paint before this session's chat.startup lands, so a miss
   // waits for the producer instead of reporting one the browser cannot fix.
   const cached = readPreparedSessionWorkspaceIcon(parsed.sessionKey);
-  const icon =
+  let icon =
     cached?.resolution !== undefined
       ? cached.resolution
       : await awaitSessionWorkspaceIcon(parsed.sessionKey, res);
   if (icon === undefined) {
-    // No snapshot arrived: never opened, aged out of the bounded cache until a
-    // new chat.startup republishes it, preparation exceeded the deadline, or
-    // the wait pool was full. A resolved absence 404s below instead.
-    // Uncacheable, so the folder fallback cannot freeze into the answer.
-    res.statusCode = 503;
-    res.setHeader("cache-control", "no-store");
-    res.setHeader("retry-after", "1");
-    res.end("workspace icon snapshot is not ready");
-    return true;
+    // A resolution can win the deadline race after the waiter settles. Reread
+    // the authoritative snapshot before answering so the client never retries
+    // bytes that are already available.
+    const latest = readPreparedSessionWorkspaceIcon(parsed.sessionKey);
+    if (latest?.resolution !== undefined) {
+      icon = latest.resolution;
+    } else {
+      // No snapshot arrived: never opened, aged out of the bounded cache until a
+      // new chat.startup republishes it, preparation exceeded the deadline, or
+      // the wait pool was full. A resolved absence 404s below instead.
+      // Uncacheable, so the folder fallback cannot freeze into the answer.
+      res.statusCode = 503;
+      res.setHeader("cache-control", "no-store");
+      // Only a published pending snapshot authorizes automatic revalidation.
+      // Never-opened and evicted sessions remain terminal misses for this view.
+      if (latest) {
+        res.setHeader("retry-after", "1");
+      }
+      res.end("workspace icon snapshot is not ready");
+      return true;
+    }
   }
   if (!icon) {
     res.setHeader("cache-control", "no-store");

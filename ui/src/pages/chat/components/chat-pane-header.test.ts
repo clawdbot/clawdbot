@@ -30,6 +30,7 @@ type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 const containers: HTMLElement[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   containers.splice(0).forEach((container) => container.remove());
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
 });
@@ -869,6 +870,47 @@ describe("chat pane workspace chip icon", () => {
     expect(container.querySelector(".workspace-icon")).toBeNull();
     expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
     fetchSpy.mockRestore();
+  });
+
+  it("recovers the workspace icon after a transient route timeout", async () => {
+    vi.useFakeTimers();
+    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        headers: new Headers({ "retry-after": "1" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        blob: async () => png,
+      } as unknown as Response);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-workspace-icon");
+    try {
+      const { container, element } = await mountChip({
+        routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
+        authTokens: ["token"],
+        authReady: true,
+      });
+      await Promise.resolve();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(container.querySelector(".workspace-icon")).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+      await element?.updateComplete;
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
+      expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
+        "blob:recovered-workspace-icon",
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
 
   it("does not refetch a missing project icon when the header rerenders", async () => {

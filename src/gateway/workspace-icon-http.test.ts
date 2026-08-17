@@ -400,11 +400,11 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await expect(admitted.status).resolves.toBe(200);
   });
 
-  it("keeps a session no chat startup is preparing retryable", async () => {
+  it("does not advertise retries when no chat startup owns the session", async () => {
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("retry-after")).toBe("1");
+    expect(response.headers.get("retry-after")).toBeNull();
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 
@@ -421,6 +421,33 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
   });
 
+  it("serves a pending snapshot after the first request times out and retries", async () => {
+    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    let releaseRead = () => {};
+    iconReadControl.gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:slow-pending" });
+
+    try {
+      const timedOut = await fetch(iconRoute("agent:main:slow-pending"));
+      expect(timedOut.status).toBe(503);
+      expect(timedOut.headers.get("retry-after")).toBe("1");
+
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+      const retried = await fetch(iconRoute("agent:main:slow-pending"));
+      expect(retried.status).toBe(200);
+      expect(Buffer.from(await retried.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
+    } finally {
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+    }
+  });
+
   it("bounds requests waiting on a cached pending preparation", async () => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
@@ -431,13 +458,12 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:cached-pending" });
     const held = Array.from({ length: 4 }, () => openIconRequest("agent:main:cached-pending"));
     await settleRequests();
-    const refused = openIconRequest("agent:main:cached-pending");
+    const refused = fetch(iconRoute("agent:main:cached-pending"));
 
     try {
-      const settled = vi.fn();
-      void refused.status.then(settled);
-      await settleRequests();
-      expect(settled).toHaveBeenCalledWith(503);
+      const response = await refused;
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("1");
     } finally {
       releaseRead();
       iconReadControl.gate = null;
@@ -445,8 +471,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
       for (const request of held) {
         request.abort();
       }
-      refused.abort();
-      await Promise.all([...held, refused].map((request) => request.status));
+      await Promise.all(held.map((request) => request.status));
     }
   });
 
