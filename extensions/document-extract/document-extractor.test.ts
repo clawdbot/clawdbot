@@ -336,9 +336,20 @@ describe("PDF document extractor", () => {
         "file:///srv/dist/openclaw/extensions/document-extract/document-extractor.worker.ts",
     },
     {
+      label: "source module directly beneath a dist directory",
+      moduleUrl: "file:///srv/openclaw/dist/document-extractor.ts",
+      workerUrl: "file:///srv/openclaw/dist/document-extractor.worker.ts",
+    },
+    {
       label: "built plugin output",
       moduleUrl:
         "file:///opt/openclaw/dist/extensions/document-extract/document-extractor.js",
+      workerUrl:
+        "file:///opt/openclaw/dist/extensions/document-extract/document-extractor.worker.js",
+    },
+    {
+      label: "built shared root chunk",
+      moduleUrl: "file:///opt/openclaw/dist/document-extractor-BLf9-L80.js",
       workerUrl:
         "file:///opt/openclaw/dist/extensions/document-extract/document-extractor.worker.js",
     },
@@ -380,32 +391,45 @@ describe("PDF document extractor", () => {
     const pending = controllers.map((controller) =>
       extractor.extract(request({ signal: controller.signal })),
     );
+    const settlements = Promise.allSettled(pending);
 
-    await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => {
-      expect(Atomics.load(startedView, 0)).toBe(1);
-      expect(Atomics.load(startedView, 1)).toBe(1);
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    expect(createWorker).toHaveBeenCalledTimes(2);
+    try {
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(Atomics.load(startedView, 0)).toBe(1);
+        expect(Atomics.load(startedView, 1)).toBe(1);
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(createWorker).toHaveBeenCalledTimes(2);
 
-    controllers[0].abort(new Error("release first PDF worker"));
-    await expect(pending[0]).rejects.toThrow("release first PDF worker");
-    expect(workers[0]?.threadId).toBe(-1);
-    await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() => expect(Atomics.load(startedView, 2)).toBe(1));
+      controllers[0].abort(new Error("release first PDF worker"));
+      await expect(pending[0]).rejects.toThrow("release first PDF worker");
+      expect(workers[0]?.threadId).toBe(-1);
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(Atomics.load(startedView, 2)).toBe(1));
 
-    const secondAssertion = expect(pending[1]).rejects.toThrow("release second PDF worker");
-    const thirdAssertion = expect(pending[2]).rejects.toThrow("release queued PDF worker");
-    controllers[1].abort(new Error("release second PDF worker"));
-    controllers[2].abort(new Error("release queued PDF worker"));
-    await secondAssertion;
-    await thirdAssertion;
-    expect(workers[1]?.threadId).toBe(-1);
-    expect(workers[2]?.threadId).toBe(-1);
-    expect(pdfDocument.extract).not.toHaveBeenCalled();
+      const secondAssertion = expect(pending[1]).rejects.toThrow("release second PDF worker");
+      const thirdAssertion = expect(pending[2]).rejects.toThrow("release queued PDF worker");
+      controllers[1].abort(new Error("release second PDF worker"));
+      controllers[2].abort(new Error("release queued PDF worker"));
+      await secondAssertion;
+      await thirdAssertion;
+      expect(workers[1]?.threadId).toBe(-1);
+      expect(workers[2]?.threadId).toBe(-1);
+      expect(pdfDocument.extract).not.toHaveBeenCalled();
+    } finally {
+      for (const controller of controllers) {
+        if (!controller.signal.aborted) {
+          controller.abort(new Error("PDF worker test cleanup"));
+        }
+      }
+      await settlements;
+      await Promise.allSettled(
+        workers.filter((worker) => worker.threadId !== -1).map((worker) => worker.terminate()),
+      );
+    }
   });
 
   it("completes queued connected work on a warm worker", async () => {
@@ -557,17 +581,31 @@ describe("PDF document extractor", () => {
     const queuedController = new AbortController();
     const active = extractor.extract(request({ signal: activeController.signal }));
     const queued = extractor.extract(request({ signal: queuedController.signal }));
+    const settlements = Promise.allSettled([active, queued]);
 
-    await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(Atomics.load(startedView, 0)).toBe(1));
-    queuedController.abort(new Error("queued PDF request disconnected"));
-    await expect(queued).rejects.toThrow("queued PDF request disconnected");
-    expect(createWorker).toHaveBeenCalledTimes(1);
+    try {
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(Atomics.load(startedView, 0)).toBe(1));
+      queuedController.abort(new Error("queued PDF request disconnected"));
+      await expect(queued).rejects.toThrow("queued PDF request disconnected");
+      expect(createWorker).toHaveBeenCalledTimes(1);
 
-    activeController.abort(new Error("active PDF request disconnected"));
-    await expect(active).rejects.toThrow("active PDF request disconnected");
-    expect(worker?.threadId).toBe(-1);
-    expect(createWorker).toHaveBeenCalledTimes(1);
+      activeController.abort(new Error("active PDF request disconnected"));
+      await expect(active).rejects.toThrow("active PDF request disconnected");
+      expect(worker?.threadId).toBe(-1);
+      expect(createWorker).toHaveBeenCalledTimes(1);
+    } finally {
+      if (!queuedController.signal.aborted) {
+        queuedController.abort(new Error("queued PDF test cleanup"));
+      }
+      if (!activeController.signal.aborted) {
+        activeController.abort(new Error("active PDF test cleanup"));
+      }
+      await settlements;
+      if (worker && worker.threadId !== -1) {
+        await Promise.allSettled([worker.terminate()]);
+      }
+    }
   });
 
   it("terminates in-flight PDF work when the caller aborts", async () => {
@@ -590,14 +628,25 @@ describe("PDF document extractor", () => {
     });
     const extractor = createPdfDocumentExtractor({ createWorker });
     const pending = extractor.extract(request({ signal: controller.signal }));
+    const settlement = Promise.allSettled([pending]);
 
-    await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(Atomics.load(startedView, 0)).toBe(1));
-    controller.abort(new Error("client disconnected"));
+    try {
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(Atomics.load(startedView, 0)).toBe(1));
+      controller.abort(new Error("client disconnected"));
 
-    await expect(pending).rejects.toThrow("client disconnected");
-    expect(worker?.threadId).toBe(-1);
-    expect(pdfDocument.extract).not.toHaveBeenCalled();
+      await expect(pending).rejects.toThrow("client disconnected");
+      expect(worker?.threadId).toBe(-1);
+      expect(pdfDocument.extract).not.toHaveBeenCalled();
+    } finally {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("PDF worker test cleanup"));
+      }
+      await settlement;
+      if (worker && worker.threadId !== -1) {
+        await Promise.allSettled([worker.terminate()]);
+      }
+    }
   });
 
   it("releases worker admission when an image-error callback throws", async () => {

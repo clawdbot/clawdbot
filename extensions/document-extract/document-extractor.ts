@@ -1,6 +1,6 @@
 // Document Extract plugin module implements document extractor behavior.
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import type { PdfDocument, PdfEngine, PdfImage } from "clawpdf";
 import {
@@ -205,6 +205,23 @@ export async function extractPdfContentInProcess(
 
 function resolvePdfExtractionWorkerUrl(currentModuleUrl = import.meta.url): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
+  const normalized = currentPath.replaceAll(path.sep, "/");
+  const distMarker = "/dist/";
+  const distIndex = normalized.lastIndexOf(distMarker);
+  const pathWithinDist =
+    distIndex >= 0 ? normalized.slice(distIndex + distMarker.length) : undefined;
+  if (
+    pathWithinDist &&
+    !pathWithinDist.includes("/") &&
+    path.extname(currentPath) === ".js"
+  ) {
+    // Bundling may hoist this implementation into a shared root dist chunk while
+    // the worker stays in the plugin artifact directory.
+    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
+    return pathToFileURL(
+      path.join(distRoot, "extensions", "document-extract", "document-extractor.worker.js"),
+    );
+  }
   const extension = path.extname(currentPath) || ".js";
   return new URL(`./document-extractor.worker${extension}`, currentModuleUrl);
 }

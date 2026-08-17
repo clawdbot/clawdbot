@@ -139,18 +139,22 @@ describe("OpenAI HTTP media preprocessing", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(extractImageContentFromSourceMock).toHaveBeenCalledTimes(1));
-    clientReq.destroy();
+    try {
+      await vi.waitFor(() => expect(extractImageContentFromSourceMock).toHaveBeenCalledTimes(1));
+      clientReq.destroy();
 
-    await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
-      timeout: 1_000,
-      interval: 20,
-    });
+      await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
+        timeout: 1_000,
+        interval: 20,
+      });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(agentCommandMock).not.toHaveBeenCalled();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    } finally {
+      clientReq.destroy();
+    }
   });
 
   it("returns a retryable service-unavailable response when PDF extraction is saturated", async () => {
@@ -252,17 +256,21 @@ describe("OpenAI HTTP media preprocessing", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(extractPdfDocumentMock).toHaveBeenCalledTimes(1));
-    clientReq.destroy();
+    try {
+      await vi.waitFor(() => expect(extractPdfDocumentMock).toHaveBeenCalledTimes(1));
+      clientReq.destroy();
 
-    await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
-      timeout: 1_000,
-      interval: 20,
-    });
+      await vi.waitFor(() => expect(preprocessingSignal?.aborted).toBe(true), {
+        timeout: 1_000,
+        interval: 20,
+      });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(agentCommandMock).not.toHaveBeenCalled();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    } finally {
+      clientReq.destroy();
+    }
   });
 });
