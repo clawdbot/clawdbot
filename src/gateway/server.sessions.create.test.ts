@@ -1495,6 +1495,50 @@ test.each([
   },
 );
 
+test("sessions.create does not start title generation for a model denied by policy", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-title-denied-model-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = {
+    workspace,
+    model: { primary: "openai/gpt-5.6-luna" },
+    models: { "openai/gpt-5.6-luna": {} },
+  };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
+    { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
+  ];
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:denied-title-route";
+  try {
+    const created = await directSessionReq(
+      "sessions.create",
+      {
+        agentId: "main",
+        key,
+        model: "anthropic/sonnet-4.6@work",
+        worktree: true,
+        message: "Keep this title source on an allowed route",
+      },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(false);
+    expect(created.error?.message).toContain("model not allowed");
+    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
+    expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test.each([
   {
     name: "generator error",

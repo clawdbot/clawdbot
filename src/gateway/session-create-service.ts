@@ -18,12 +18,8 @@ import {
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
-  buildModelAliasIndex,
-  inferUniqueProviderFromConfiguredModels,
   resolveDefaultModelForAgent,
-  resolveModelRefFromString,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -103,35 +99,38 @@ export function resolveSessionCreateModelSelection(
   cfg: OpenClawConfig,
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
-) {
+):
+  | Pick<
+      SessionEntry,
+      "providerOverride" | "modelOverride" | "agentRuntimeOverride" | "authProfileOverride"
+    >
+  | null
+  | undefined {
   const model = normalizeOptionalString(typeof input === "string" ? input : input?.model);
   if (!model) {
     return undefined;
   }
   const defaults = resolveDefaultModelForAgent({ cfg, agentId });
-  const split = splitTrailingAuthProfile(model);
-  // Patch selection resolves this config-owned ref/profile before its catalog status check;
-  // the persisted create path remains the sole availability/allowlist validator.
-  const resolved = resolveModelRefFromString({
+  // Reuse patch policy with the config-owned catalog projection. Persisted creation
+  // remains the sole live-catalog availability validator.
+  const resolved = resolveSessionPatchModelSelection({
     cfg,
-    raw: split.model,
-    defaultProvider:
-      (!split.model.includes("/")
-        ? inferUniqueProviderFromConfiguredModels({ cfg, model: split.model })
-        : undefined) ?? defaults.provider,
-    aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: defaults.provider }),
+    catalog: [],
+    raw: model,
+    defaultProvider: defaults.provider,
+    defaultModel: defaults.model,
   });
-  if (!resolved) {
-    return undefined;
+  if (!resolved.ok) {
+    return null;
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(
     typeof input === "string" ? undefined : input?.agentRuntime,
   );
   return {
-    providerOverride: resolved.ref.provider,
-    modelOverride: resolved.ref.model,
+    providerOverride: resolved.provider,
+    modelOverride: resolved.model,
     ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
-    ...(split.profile ? { authProfileOverride: split.profile } : {}),
+    ...(resolved.profile ? { authProfileOverride: resolved.profile } : {}),
   };
 }
 
