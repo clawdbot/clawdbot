@@ -277,18 +277,16 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             "canvas",
             CANVAS_SNAPSHOT_MAX_BYTES,
           );
+          const details = { node, format: payload.format, media: { outbound: false } };
           try {
             const result = await imageResultFromFile({
               label: "canvas:snapshot",
               path: saved.path,
               // Rendered pages are model observations, never automatic outbound attachments.
-              details: { node, format: payload.format, media: { outbound: false } },
+              details,
               imageSanitization,
             });
-            const details = result.details as { path?: string; media: { mediaUrl?: string } };
-            delete details.path;
-            delete details.media.mediaUrl;
-            return result;
+            return { ...result, details };
           } finally {
             // The model-visible image is hydrated above; the staging path is not returned.
             await removeCanvasSnapshotFile(saved.path);
