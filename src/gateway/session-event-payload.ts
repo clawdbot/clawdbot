@@ -70,7 +70,9 @@ export function buildGatewaySessionEventFields(params: {
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
-    sessionRoot: sessionRow.sessionRoot,
+    ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
+      ? { sessionRoot: sessionRow.sessionRoot }
+      : {}),
     forkedFromParent: sessionEntryForkedFromParent(sessionRow) ? true : undefined,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,

@@ -37,7 +37,18 @@ it("projects session actors and explicitly clears absent attribution", () => {
   });
 });
 
-it("projects the prepared permission boundary", () => {
+it("projects the prepared permission boundary only for an explicit mode", () => {
+  const ordinary = buildGatewaySessionEventFields({
+    sessionRow: {
+      key: "agent:main:ordinary",
+      kind: "direct",
+      sessionRoot: "/workspace/private",
+      updatedAt: 3,
+    },
+  });
+  expect(ordinary).toMatchObject({ permissionMode: null });
+  expect(ordinary).not.toHaveProperty("sessionRoot");
+
   expect(
     buildGatewaySessionEventFields({
       sessionRow: {
@@ -45,7 +56,7 @@ it("projects the prepared permission boundary", () => {
         kind: "direct",
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
-        updatedAt: 3,
+        updatedAt: 4,
       },
     }),
   ).toMatchObject({ permissionMode: "workspace", sessionRoot: "/workspace/project" });
