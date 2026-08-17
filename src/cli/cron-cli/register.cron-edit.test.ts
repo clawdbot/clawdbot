@@ -1132,10 +1132,30 @@ describe("cron edit command", () => {
       }
       return { ok: true };
     });
-    await expectCronEditRejection(
-      ["--precheck-timeout-ms", "5000"],
-      "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
-    );
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--precheck-timeout-ms", "5000"], {
+        from: "user",
+      });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+        ),
+      );
+      expect(exitSpy).toHaveBeenCalledExactlyOnceWith(1);
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
   });
 
   it("merges --precheck-timeout-ms onto an existing precheck gate", async () => {
@@ -1167,5 +1187,4 @@ describe("cron edit command", () => {
       "Invalid --precheck-timeout-ms (must be a positive integer).",
     );
   });
-
 });

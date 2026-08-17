@@ -259,8 +259,12 @@ describe("runCronJobPrecheck", () => {
         },
       );
       expect(result.decision).toBe("run");
-      expect(spawned?.cmd).toBe("/bin/sh");
-      expect(spawned?.args?.[0]).toBe("-c");
+      expect(spawned).not.toBeNull();
+      if (!spawned) {
+        throw new Error("expected precheck spawn");
+      }
+      expect(spawned.cmd).toBe("/bin/sh");
+      expect(spawned.args[0]).toBe("-c");
     } finally {
       if (prevShell === undefined) delete process.env.SHELL;
       else process.env.SHELL = prevShell;

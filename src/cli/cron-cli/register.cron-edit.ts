@@ -34,6 +34,7 @@ type CronJobForEdit = CronJob & { configRevision?: string };
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
+    // SAFETY: Gateway cron.get returns the job object shape used by edit path.
     return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
@@ -52,6 +53,26 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
     }
     return existing;
   }
+}
+
+function readPrecheckField(existingPrecheck: unknown): {
+  command?: string;
+  timeoutMs?: number;
+  cwd?: string;
+} {
+  if (!existingPrecheck || typeof existingPrecheck !== "object") {
+    return {};
+  }
+  const rec = existingPrecheck as Record<string, unknown>; // SAFETY: precheck object from gateway job
+  const command = "command" in rec ? normalizeOptionalString(rec.command) : undefined;
+  const timeoutMs =
+    "timeoutMs" in rec && typeof rec.timeoutMs === "number" ? rec.timeoutMs : undefined;
+  const cwd = "cwd" in rec ? normalizeOptionalString(rec.cwd) : undefined;
+  return {
+    ...(command ? { command } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(cwd ? { cwd } : {}),
+  };
 }
 
 export function registerCronEditCommand(cron: Command) {
@@ -315,48 +336,20 @@ export function registerCronEditCommand(cron: Command) {
               !precheckCommand && hasPrecheckAncillary
                 ? (await readExistingCronJob()).precheck
                 : undefined;
-            if (!precheckCommand && hasPrecheckAncillary) {
-              const existingCommand =
-                existingPrecheck &&
-                typeof existingPrecheck === "object" &&
-                "command" in existingPrecheck
-                  ? normalizeOptionalString(
-                      (existingPrecheck as { command?: unknown }).command as string,
-                    )
-                  : undefined;
-              if (!existingCommand) {
-                throw new Error(
-                  "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
-                );
-              }
+            const existingFields = readPrecheckField(existingPrecheck);
+            if (!precheckCommand && hasPrecheckAncillary && !existingFields.command) {
+              throw new Error(
+                "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+              );
             }
-            const baseCommand =
-              precheckCommand ??
-              (existingPrecheck &&
-              typeof existingPrecheck === "object" &&
-              "command" in existingPrecheck
-                ? normalizeOptionalString(
-                    (existingPrecheck as { command?: unknown }).command as string,
-                  )
-                : undefined);
+            const baseCommand = precheckCommand ?? existingFields.command;
             if (!baseCommand) {
               throw new Error(
                 "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
               );
             }
-            const existingTimeoutMs =
-              existingPrecheck &&
-              typeof existingPrecheck === "object" &&
-              "timeoutMs" in existingPrecheck &&
-              typeof (existingPrecheck as { timeoutMs?: unknown }).timeoutMs === "number"
-                ? (existingPrecheck as { timeoutMs: number }).timeoutMs
-                : undefined;
-            const existingCwd =
-              existingPrecheck &&
-              typeof existingPrecheck === "object" &&
-              "cwd" in existingPrecheck
-                ? normalizeOptionalString((existingPrecheck as { cwd?: unknown }).cwd as string)
-                : undefined;
+            const existingTimeoutMs = existingFields.timeoutMs;
+            const existingCwd = existingFields.cwd;
             const timeoutMs =
               precheckTimeoutRaw !== undefined
                 ? parsePositiveTimeoutMs(precheckTimeoutRaw)
