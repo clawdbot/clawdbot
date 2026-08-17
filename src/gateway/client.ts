@@ -61,6 +61,11 @@ function createOpenClawGatewayClientHostDeps(
   preparedDeviceAuth?: DeviceAuthEntry,
 ): GatewayClientHostDeps {
   const readOnly = sharedStateMode === "read-only";
+  // Prepared auth is immutable request input. Any later durable mutation must
+  // still match this token so a stale request cannot undo a concurrent rotation.
+  const rotationFence = preparedDeviceAuth
+    ? { expectedToken: preparedDeviceAuth.token }
+    : undefined;
   const deviceAuthDeps: Pick<
     GatewayClientHostDeps,
     "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
@@ -74,10 +79,20 @@ function createOpenClawGatewayClientHostDeps(
               : loadOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
         storeDeviceAuthToken: readOnly
           ? () => {}
-          : (params) => storeOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+          : (params) =>
+              storeOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...rotationFence,
+              }),
         clearDeviceAuthToken: readOnly
           ? () => {}
-          : (params) => clearOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+          : (params) =>
+              clearOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...rotationFence,
+              }),
       }
     : readOnly
       ? {
@@ -85,7 +100,11 @@ function createOpenClawGatewayClientHostDeps(
           storeDeviceAuthToken: () => {},
           clearDeviceAuthToken: () => {},
         }
-      : { loadDeviceAuthToken, storeDeviceAuthToken, clearDeviceAuthToken };
+      : {
+          loadDeviceAuthToken,
+          storeDeviceAuthToken: (params) => storeDeviceAuthToken({ ...params, ...rotationFence }),
+          clearDeviceAuthToken: (params) => clearDeviceAuthToken({ ...params, ...rotationFence }),
+        };
   const preparedDeviceAuthDeps = preparedDeviceAuth
     ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
     : deviceAuthDeps;
