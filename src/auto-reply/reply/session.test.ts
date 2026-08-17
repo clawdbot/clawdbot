@@ -498,44 +498,6 @@ describe("initSessionState guarded initialization", () => {
     );
   });
 
-  it("restores an archived deterministic route for an admitted channel message", async () => {
-    const storePath = await createStorePath("openclaw-session-init-archived-channel-");
-    const sessionKey = "agent:main:discord:channel:1456744319972282449";
-    const sessionId = "archived-channel-session";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId,
-        archivedAt: Date.now() - 1_000,
-        archivedBy: { type: "human", id: "profile-operator" },
-        updatedAt: Date.now(),
-      },
-    });
-    const ctx = buildChannelInboundEventContext({
-      channel: "discord",
-      accountId: "default",
-      from: "discord:user:12345",
-      sender: { id: "12345", name: "Operator" },
-      conversation: { kind: "channel", id: "1456744319972282449" },
-      route: { agentId: "main", routeSessionKey: sessionKey },
-      reply: { to: "channel:1456744319972282449" },
-      message: { body: "hello again", rawBody: "hello again" },
-    });
-
-    const result = await initSessionState({
-      ctx,
-      cfg: { session: { store: storePath } } as OpenClawConfig,
-    });
-
-    expect(result.sessionId).toBe(sessionId);
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionEntry.archivedAt).toBeUndefined();
-    expect(result.sessionEntry.archivedBy).toBeUndefined();
-    const persisted = expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session");
-    expect(persisted.sessionId).toBe(sessionId);
-    expect(persisted.archivedAt).toBeUndefined();
-    expect(persisted.archivedBy).toBeUndefined();
-  });
-
   it("serializes concurrent initializers before reading the guarded snapshot", async () => {
     const storePath = await createStorePath("openclaw-session-init-race-");
     const sessionKey = "agent:main:telegram:chat:42";

@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/run-state.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { isNativeCommandTurn } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   createAbortAwareDispatcher,
@@ -31,6 +34,41 @@ type DispatchReplyOperationAcquisition =
   | { status: "ready" }
   | { status: "busy" }
   | { status: "aborted" };
+
+async function restoreArchivedDispatchSession(params: {
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionKey?: string;
+  storePath?: string;
+}): Promise<SessionEntry | undefined> {
+  const { ctx, entry, sessionKey, storePath } = params;
+  if (
+    !entry ||
+    !sessionKey ||
+    !storePath ||
+    entry.archivedAt === undefined ||
+    ctx.InboundAccessAuthorized !== true ||
+    ctx.InboundEventKind === "room_event" ||
+    isNativeCommandTurn(ctx.CommandTurn) ||
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType !== "human"
+  ) {
+    return entry;
+  }
+  const snapshotSessionId = entry.sessionId;
+  const snapshotArchivedAt = entry.archivedAt;
+  // Admission must see the current owner: a rebound or re-archived row stays untouched and fails closed.
+  return (
+    (await updateSessionEntry({ sessionKey, storePath }, (currentEntry) => {
+      if (
+        currentEntry.sessionId !== snapshotSessionId ||
+        currentEntry.archivedAt !== snapshotArchivedAt
+      ) {
+        return null;
+      }
+      return { archivedAt: undefined, archivedBy: undefined };
+    })) ?? undefined
+  );
+}
 
 export function createDispatchReplyOperationCoordinator(params: {
   ctx: FinalizedMsgContext;
@@ -124,6 +162,12 @@ export function createDispatchReplyOperationCoordinator(params: {
   const ensureDispatchReplyOperation = async (
     phase: "pre_dispatch" | "dispatch",
   ): Promise<DispatchReplyOperationAcquisition> => {
+    params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
+      ctx: params.ctx,
+      entry: params.operationSessionStoreEntry.entry,
+      sessionKey: params.dispatchOperationSessionKey,
+      storePath: params.operationSessionStoreEntry.storePath,
+    });
     if (phase === "dispatch") {
       // The next full reply operation revalidates the persisted session. Drop
       // the hook-only lease after its queued delivery settles so a waiting

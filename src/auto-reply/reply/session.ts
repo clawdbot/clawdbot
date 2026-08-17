@@ -92,10 +92,7 @@ import {
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import {
-  isNativeCommandTurn,
-  resolveCommandTurnTargetSessionKey,
-} from "../command-turn-context.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
   FinalizedRuntimeMsgContext,
   FinalizedTemplateContext as TemplateContext,
@@ -593,16 +590,7 @@ async function initSessionStateAttemptLocked(
     isGroup,
     ctx,
   });
-  let entry = initializationSnapshot.currentEntry;
-  if (
-    entry?.archivedAt !== undefined &&
-    ctx.InboundAccessAuthorized === true &&
-    !isSystemEvent &&
-    !isNativeCommandTurn(ctx.CommandTurn)
-  ) {
-    // Archiving hides deterministic external routes; their next admitted user turn restores in place.
-    entry = { ...entry, archivedAt: undefined, archivedBy: undefined };
-  }
+  const entry = initializationSnapshot.currentEntry;
   const createdNewEntry = entry === undefined;
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
   if (archivedSessionError) {
