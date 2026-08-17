@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
+import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -286,6 +287,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           cleanup: () => {
             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
             finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+            tagUnresolvedTextAsCommentary(output);
           },
         });
       } finally {

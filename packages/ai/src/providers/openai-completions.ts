@@ -47,6 +47,7 @@ import {
   rememberPendingCommentaryTags,
   tagInterruptedTextPhases,
   tagPendingCommentaryText,
+  tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -653,6 +654,8 @@ export const streamOpenAICompletions: StreamFunction<
       const terminal = projectProviderError(error, options?.signal);
       Object.assign(output, terminal);
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+      clearPendingCommentaryText(provisionalCommentaryTags);
+      tagUnresolvedTextAsCommentary(output);
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // Streaming scratch buffers are only used during parsing; never persist them.

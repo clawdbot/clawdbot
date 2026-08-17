@@ -8,6 +8,7 @@ type OpenAIChunk = Record<string, unknown>;
 
 const openAiMockState = vi.hoisted(() => ({
   error: undefined as Error | undefined,
+  streamError: undefined as Error | undefined,
   chunks: [] as OpenAIChunk[],
   payloads: [] as unknown[],
 }));
@@ -25,6 +26,9 @@ vi.mock("openai", () => ({
             async *[Symbol.asyncIterator]() {
               for (const chunk of openAiMockState.chunks) {
                 yield chunk;
+              }
+              if (openAiMockState.streamError) {
+                throw openAiMockState.streamError;
               }
             },
           });
@@ -248,6 +252,12 @@ const openAiInterleavedThenTrailingReasoningChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiInterruptedErrorChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Second thought." }),
+] satisfies OpenAIChunk[];
+
 const anthropicFailure = {
   status: 429,
   body: {
@@ -308,6 +318,7 @@ function resetOpenAiMock(
   chunks: readonly OpenAIChunk[] = openAiChunks,
 ): void {
   openAiMockState.payloads = [];
+  openAiMockState.streamError = undefined;
   openAiMockState.chunks = outcome === "success" ? [...chunks] : [];
   openAiMockState.error =
     outcome === "error"
@@ -326,8 +337,10 @@ async function runOpenAi(
   chunks: readonly OpenAIChunk[] = openAiChunks,
   emitReasoning = true,
   modelOverride?: Model<"openai-completions">,
+  streamError?: Error,
 ): Promise<ParityOutput> {
   resetOpenAiMock(outcome, chunks);
+  openAiMockState.streamError = streamError;
   const baseModel = modelOverride ?? openAiModel;
   const model = emitReasoning ? baseModel : { ...baseModel, reasoning: false };
   const [{ streamOpenAICompletions }, { createOpenAICompletionsTransportStreamFn }] =
@@ -639,6 +652,38 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "thinking",
           thinking: "Trailing thought.",
+          thinkingSignature: "reasoning_content",
+        },
+      ]);
+    }
+  });
+
+  it("keeps interrupted text non-deliverable when the stream errors", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiInterruptedErrorChunks,
+        true,
+        undefined,
+        new Error("synthetic interrupted stream"),
+      );
+
+      expect(result.terminal.stopReason).toBe("error");
+      expect(result.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
           thinkingSignature: "reasoning_content",
         },
       ]);

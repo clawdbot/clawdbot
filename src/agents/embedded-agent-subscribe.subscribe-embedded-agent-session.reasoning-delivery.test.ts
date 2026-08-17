@@ -342,27 +342,75 @@ describe("Chat Completions pre-tool narration", () => {
 
     expect(onPartialReply).not.toHaveBeenCalled();
 
+    const terminalMessage = {
+      ...message,
+      content: [
+        {
+          type: "text",
+          text: "Interim text.",
+          textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Final text.",
+          textSignature: JSON.stringify({ v: 1, id: "final-0", phase: "final_answer" }),
+        },
+      ],
+    } as unknown as AssistantMessage;
+    emit({
+      type: "message_update",
+      message: terminalMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Final text." },
+    });
+    emit({ type: "message_end", message: terminalMessage });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(postedText(onBlockReply)).toBe("Final text.");
+  });
+
+  it("does not deliver interrupted text when producer phase resolution ends in error", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-reasoning-error",
+      onPartialReply,
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const pendingMessage = {
+      role: "assistant",
+      api: "openai-completions",
+      openclawDelivery: { textPhaseRequiresTerminal: true },
+      content: [{ type: "text", text: "Interim text." }],
+    } as unknown as AssistantMessage;
+    emit({ type: "message_start", message: pendingMessage });
+    emit({
+      type: "message_update",
+      message: pendingMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Interim text." },
+    });
     emit({
       type: "message_end",
       message: {
-        ...message,
+        ...pendingMessage,
+        stopReason: "error",
+        errorMessage: "synthetic interrupted stream",
         content: [
           {
             type: "text",
             text: "Interim text.",
             textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
           },
-          {
-            type: "text",
-            text: "Final text.",
-            textSignature: JSON.stringify({ v: 1, id: "final-0", phase: "final_answer" }),
-          },
         ],
       },
     });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(postedText(onBlockReply)).toBe("Final text.");
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("withholds pre-tool narration from durable text_end block replies", () => {

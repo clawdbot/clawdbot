@@ -65,6 +65,16 @@ export function tagInterruptedTextPhases(
   tagUnphasedText(content.slice(finalAnswerIndex), "final_answer", "final-answer");
 }
 
+/** Prevents unresolved completion text from becoming a fallback answer after stream failure. */
+export function tagUnresolvedTextAsCommentary(message: {
+  content: ReadonlyArray<unknown>;
+  openclawDelivery?: { textPhaseRequiresTerminal?: true };
+}): void {
+  if (message.openclawDelivery?.textPhaseRequiresTerminal) {
+    tagUnphasedText(message.content, "commentary", "commentary");
+  }
+}
+
 /** Rolls back only the exact provisional signatures created by this transport turn. */
 export function clearPendingCommentaryText(tags: PendingCommentaryTags): void {
   for (const [block, signature] of tags) {

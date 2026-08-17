@@ -12,6 +12,7 @@ import {
   rememberPendingCommentaryTags,
   tagInterruptedTextPhases,
   tagPendingCommentaryText,
+  tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -577,6 +578,9 @@ export async function processCompletionsStream(
   }
   if (output.stopReason !== "toolUse") {
     clearPendingCommentaryText(provisionalCommentaryTags);
+  }
+  if (output.stopReason === "error" || output.stopReason === "aborted") {
+    tagUnresolvedTextAsCommentary(output);
   }
   if (output.stopReason === "toolUse") {
     tagPendingCommentaryText(output.content);

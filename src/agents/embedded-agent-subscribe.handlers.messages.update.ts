@@ -203,11 +203,10 @@ export function handleMessageUpdate(
   // early unphased deltas from durable block replies until that decision exists.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
-  const isPhasePendingCompletionsText =
-    !deliveryPhase && isOpenAiCompletionsAssistantMessage(partialAssistant);
-  const isPhasePendingReasoningCompletionsText =
-    isPhasePendingCompletionsText &&
-    partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
+  const isCompletionsAssistant = isOpenAiCompletionsAssistantMessage(partialAssistant);
+  const isPhasePendingCompletionsText = !deliveryPhase && isCompletionsAssistant;
+  const isReasoningCompletionsText =
+    isCompletionsAssistant && partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -284,7 +283,7 @@ export function handleMessageUpdate(
 
   // A completions stream cannot classify text interrupted by later reasoning
   // until terminal. Keep that text out of live reply lanes until its phase resolves.
-  if (isPhasePendingReasoningCompletionsText) {
+  if (isReasoningCompletionsText) {
     return;
   }
 
