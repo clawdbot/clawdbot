@@ -85,6 +85,12 @@ export type NpmGlobalPrefixLayout = {
 
 type NpmLifecyclePolicy = "unsupported-transition" | "unflagged" | "allow-scripts";
 
+export type SupportedNpmLifecyclePolicy = Exclude<NpmLifecyclePolicy, "unsupported-transition">;
+
+export type NpmLifecyclePolicyGate =
+  | { policy: SupportedNpmLifecyclePolicy | null; error: null }
+  | { policy: null; error: string };
+
 /** Selects npm's lifecycle policy from the version of the owning executable. */
 export function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
   const parsed = parseSemver(version);
@@ -98,6 +104,30 @@ export function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy |
     return "unflagged";
   }
   return parsed.minor >= 16 ? "allow-scripts" : "unsupported-transition";
+}
+
+/** Resolves the owning npm policy once, before any update mutation. */
+export function resolveNpmLifecyclePolicyGate(
+  installTarget: ResolvedGlobalInstallTarget,
+): NpmLifecyclePolicyGate {
+  if (installTarget.manager !== "npm") {
+    return { policy: null, error: null };
+  }
+  const version = installTarget.npmOwner?.version ?? "";
+  const policy = installTarget.npmOwner?.lifecyclePolicy ?? null;
+  if (policy === "unflagged" || policy === "allow-scripts") {
+    return { policy, error: null };
+  }
+  if (policy === "unsupported-transition") {
+    return {
+      policy: null,
+      error: `npm ${version} cannot safely approve OpenClaw lifecycle scripts. Upgrade the owning npm to 11.16 or newer before updating; no package changes were made.`,
+    };
+  }
+  return {
+    policy: null,
+    error: `Unable to determine the owning npm version before updating; no package changes were made.${installTarget.npmOwner?.probeError ? ` ${installTarget.npmOwner.probeError}` : ""}`,
+  };
 }
 
 async function resolveNpmOwner(params: {
@@ -1266,7 +1296,7 @@ export function globalInstallArgs(
   pkgRoot?: string | null,
   installPrefix?: string | null,
   installCwd?: string | null,
-  npmLifecyclePolicy: Exclude<NpmLifecyclePolicy, "unsupported-transition"> = "allow-scripts",
+  npmLifecyclePolicy: SupportedNpmLifecyclePolicy = "allow-scripts",
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
@@ -1317,7 +1347,7 @@ export function globalInstallFallbackArgs(
   pkgRoot?: string | null,
   installPrefix?: string | null,
   installCwd?: string | null,
-  npmLifecyclePolicy: Exclude<NpmLifecyclePolicy, "unsupported-transition"> = "allow-scripts",
+  npmLifecyclePolicy: SupportedNpmLifecyclePolicy = "allow-scripts",
 ): string[] | null {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager !== "npm") {

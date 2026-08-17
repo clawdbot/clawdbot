@@ -26,6 +26,7 @@ import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
   resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
+  resolveNpmLifecyclePolicyGate,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   type CommandRunner,
@@ -91,16 +92,12 @@ async function resolveNpmUpdateLifecyclePolicy(params: {
   policy: "unflagged" | "allow-scripts" | null;
   failedStep: PackageUpdateStepResult | null;
 }> {
-  if (params.installTarget.manager !== "npm") {
-    return { policy: null, failedStep: null };
+  const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
+  if (!gate.error) {
+    return { policy: gate.policy, failedStep: null };
   }
   const argv = [params.installTarget.command, "--version"];
   const version = params.installTarget.npmOwner?.version ?? "";
-  const policy = params.installTarget.npmOwner?.lifecyclePolicy ?? null;
-  if (policy === "unflagged" || policy === "allow-scripts") {
-    return { policy, failedStep: null };
-  }
-  const transition = policy === "unsupported-transition";
   return {
     policy: null,
     failedStep: {
@@ -110,9 +107,7 @@ async function resolveNpmUpdateLifecyclePolicy(params: {
       durationMs: 0,
       exitCode: 1,
       stdoutTail: version || null,
-      stderrTail: transition
-        ? `npm ${version} cannot safely approve OpenClaw lifecycle scripts. Upgrade the owning npm to 11.16 or newer before updating; no package changes were made.`
-        : `Unable to determine the owning npm version before updating; no package changes were made.${params.installTarget.npmOwner?.probeError ? ` ${params.installTarget.npmOwner.probeError}` : ""}`,
+      stderrTail: gate.error,
     },
   };
 }

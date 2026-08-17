@@ -6799,6 +6799,33 @@ describe("update-cli", () => {
     expectNoSideEffects(runRestartScript, runDaemonRestart);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["11.13.0", "11.15.9"])(
+    "refuses npm %s package-to-dev updates before checkout or install",
+    async (npmVersion) => {
+      const packageRoot = createCaseDir("openclaw-npm-transition");
+      mockPackageInstallStatus(packageRoot);
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        if (argv[0] === "npm" && argv[1] === "--version") {
+          return commandResult({ stdout: `${npmVersion}\n` });
+        }
+        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+          return commandResult({ stdout: `${path.dirname(packageRoot)}\n` });
+        }
+        return commandResult();
+      });
+
+      await updateCommand({ channel: "dev", yes: true, restart: false });
+
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(commandCalls().some(([argv]) => argv[0] === "git")).toBe(false);
+      expect(
+        commandCalls().some(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g"),
+      ).toBe(false);
+      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
+    },
+  );
+
   it("explains why git updates cannot run with edited files", async () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();
