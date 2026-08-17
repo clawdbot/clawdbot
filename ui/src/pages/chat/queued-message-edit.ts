@@ -50,6 +50,8 @@ function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueue
 type QueuedMessageEditResult = "started" | "unavailable";
 
 export const QUEUED_MESSAGE_EDIT_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before editing it here.";
+export const QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before removing it.";
 export const QUEUED_MESSAGE_REORDER_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before reordering it.";

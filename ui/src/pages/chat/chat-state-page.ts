@@ -40,6 +40,7 @@ import {
   cancelQueuedMessageEdit,
   isQueuedMessageRemovalBlocked,
   QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
+  QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
@@ -317,7 +318,7 @@ export function createPageState(
   };
   state.removeQueuedMessage = (id) => {
     if (isQueuedMessageRemovalBlocked(state, id)) {
-      setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+      setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
       renderLifecycle.invalidate();
       return;
     }
