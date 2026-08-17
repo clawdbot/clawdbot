@@ -532,6 +532,10 @@ function createArtifactVerificationHarness() {
       "printf '%s\\n' '<key>CFBundleShortVersionString</key><string>4.2.0</string>' '<key>CFBundleVersion</key><string>420</string>' '</dict></plist>' >>\"$app/Contents/Info.plist\"",
       "cat >\"$app/Contents/MacOS/OpenClaw\" <<'APP_HELPER'",
       "#!/bin/sh",
+      'if [ "${1:-}" = "--elevation-sync-file" ] && [ "${TEST_KILL_AFTER_PENDING_RECEIPT:-0}" = "1" ] && [ ! -e "$TEST_PENDING_KILL_MARKER" ] && echo "${2:-}" | grep -q \'elevation-host-install[.]pending[.]json$\'; then',
+      '  : >"$TEST_PENDING_KILL_MARKER"',
+      '  kill -KILL "$PPID"',
+      "fi",
       'if [ "${1:-}" = "--elevation-rename-exclusive" ]; then',
       '  if [ "${TEST_DANGLING_ROLLBACK_DURING_MOVE:-0}" = "1" ] && echo "$3" | grep -q \'[.]rollback-elevation-host-\'; then',
       '    ln -s /missing/openclaw-rollback-target "$3"',
@@ -701,6 +705,7 @@ function createInstallRollbackHarness(
     killDuringMigrationRestoreBootstrapOnce?: boolean;
     killAfterMigrationRestoreBootstrapOnce?: boolean;
     killAfterInitialMigrationCustody?: boolean;
+    killAfterPendingReceipt?: boolean;
     killAfterRollbackAppCustody?: boolean;
     migrationRestoreBootstrapFails?: boolean;
     raceMigrationCustodyDestination?: boolean;
@@ -1022,6 +1027,8 @@ function createInstallRollbackHarness(
       TEST_KILL_AFTER_INITIAL_MIGRATION_CUSTODY: options.killAfterInitialMigrationCustody
         ? "1"
         : "0",
+      TEST_KILL_AFTER_PENDING_RECEIPT: options.killAfterPendingReceipt ? "1" : "0",
+      TEST_PENDING_KILL_MARKER: path.join(tempRoot, "pending-kill-marker"),
       TEST_KILL_AFTER_ROLLBACK_APP_CUSTODY: options.killAfterRollbackAppCustody ? "1" : "0",
       TEST_NODE_GENERATION_FILE: nodeGenerationFile,
       TEST_RECOVERY_KILL_MARKER: path.join(tempRoot, "recovery-kill-marker"),
@@ -1876,6 +1883,54 @@ describe("mac elevation host command contract", () => {
       expect(existsSync(path.join(harness.stateDir, "elevation-host-install.pending.json"))).toBe(
         false,
       );
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "recovers on the first attempt when killed immediately after publishing the prepared receipt",
+    () => {
+      const harness = createInstallRollbackHarness({ killAfterPendingReceipt: true });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const interrupted = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+      expect(interrupted.signal).toBe("SIGKILL");
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+
+      const recovered = runInstaller(
+        harness.installerPath,
+        [
+          "recover",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+        ],
+        harness.env,
+      );
+      expect(recovered.status, recovered.stderr).toBe(0);
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
     },
   );
 

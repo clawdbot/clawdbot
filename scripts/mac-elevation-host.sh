@@ -87,6 +87,7 @@ FINAL_RECEIPT_PATH=""
 PENDING_RECEIPT_PATH=""
 RECOVERY_PENDING_INSTALL=0
 PENDING_RECEIPT_CREATED=0
+PENDING_RECEIPT_RETIRE_ID=""
 EXPECTED_NODE_ID=""
 EXPECTED_NODE_PROFILE=""
 BEFORE_NODE_CONNECTED_AT=0
@@ -2557,8 +2558,7 @@ select_recovery_receipt() {
     -f "$FINAL_RECEIPT_PATH" && ! -L "$FINAL_RECEIPT_PATH" ]] &&
     (verify_install_receipt 1 && require_committed_install_receipt) >/dev/null 2>&1
   then
-    remove_pending_receipt "$pending_transaction_id" ||
-      fail 'could not remove a completed pending install receipt'
+    PENDING_RECEIPT_RETIRE_ID="$pending_transaction_id"
     RECEIPT_PATH="$FINAL_RECEIPT_PATH"
     return 0
   fi
@@ -2569,6 +2569,7 @@ select_recovery_receipt() {
 recover_host() {
   local current_app_valid=0 current_app_matches_receipt=0 current_receipt_sha plan_value plan_state plan_identity
   local migration_identity recovery_helper_app
+  local pending_migration_identity_needs_record=0
   if [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]; then
     RECOVERY_CURRENT_APP_STATE="absent"
   elif [[ -L "$APP_PATH" || ! -d "$APP_PATH" ]]; then
@@ -2678,8 +2679,7 @@ recover_host() {
       fail 'could not bind the unchanged migration source to the pending transaction'
     [[ "$migration_identity" == "$MIGRATION_CUSTODY_IDENTITY" ]] ||
       fail 'pending migration source identity no longer matches the prepared transaction'
-    record_recovery_migration_identity "$migration_identity" ||
-      fail 'could not persist the pending migration source identity'
+    pending_migration_identity_needs_record=1
   fi
   if [[ -n "$migration_identity" ]]; then
     [[ "$migration_identity" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]] ||
@@ -2716,6 +2716,15 @@ recover_host() {
     RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
     RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
     prepare_current_app_rename_helper
+  fi
+  if [[ "$pending_migration_identity_needs_record" == "1" ]]; then
+    record_recovery_migration_identity "$migration_identity" ||
+      fail 'could not persist the pending migration source identity'
+  fi
+  if [[ -n "$PENDING_RECEIPT_RETIRE_ID" ]]; then
+    remove_pending_receipt "$PENDING_RECEIPT_RETIRE_ID" ||
+      fail 'could not remove a completed pending install receipt'
+    PENDING_RECEIPT_RETIRE_ID=""
   fi
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
     local backup_generation="${ROLLBACK_APP_PATH#"$APP_PATH.rollback-elevation-host-"}"
