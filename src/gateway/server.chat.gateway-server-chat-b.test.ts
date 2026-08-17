@@ -4786,23 +4786,19 @@ describe("gateway server chat", () => {
         );
         await writeMainSessionTranscript(
           [
-            createTextTranscriptEvent(
-              "assistant",
-              "CLAUDE DELIVERY READY",
-              {
-                timestamp: deliveryTimestamp,
-                message: {
-                  content: [
-                    {
-                      type: "text",
-                      text: "CLAUDE DELIVERY READY",
-                    },
-                    { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl },
-                  ],
-                  openclawDelivery: { replyToId: "delivery-run-1" },
-                },
+            createTextTranscriptEvent("assistant", "CLAUDE DELIVERY READY", {
+              timestamp: deliveryTimestamp,
+              message: {
+                content: [
+                  {
+                    type: "text",
+                    text: "CLAUDE DELIVERY READY",
+                  },
+                  { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl },
+                ],
+                openclawDelivery: { replyToId: "delivery-run-1" },
               },
-            ),
+            }),
           ],
           sessionId,
         );
