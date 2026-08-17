@@ -27,6 +27,7 @@ import {
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -1305,7 +1306,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.error = null;
   };
 
-  private readonly handlePanelClick = (event: Event) => {
+  private readonly handlePanelClick = (event: MouseEvent) => {
     if (openInlineChatImage(event, this.onOpenImage ?? undefined)) {
       return;
     }
@@ -1316,7 +1317,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     const sessionTarget = markdownSessionLinkFromEvent(event);
-    if (sessionTarget) {
+    if (sessionTarget && shouldHandleNavigationClick(event)) {
+      event.preventDefault();
       this.onOpenSessionLink?.(sessionTarget);
     }
   };

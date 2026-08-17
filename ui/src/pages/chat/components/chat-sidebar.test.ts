@@ -110,8 +110,8 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
-  it.each(["click", "Enter", " "])(
-    "opens markdown preview session links with %j",
+  it.each(["click", "Ctrl+click", "Enter", " "])(
+    "handles markdown preview session links with %j",
     async (action) => {
       const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
         content: unknown;
@@ -126,8 +126,22 @@ describe("markdown sidebar", () => {
       await panel.updateComplete;
 
       const link = panel.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      if (action === "click") {
-        link?.click();
+      if (action === "click" || action === "Ctrl+click") {
+        link?.setAttribute("href", "/chat/roboclaw/2139bddb");
+        const modified = action === "Ctrl+click";
+        const event = new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+          ctrlKey: modified,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(!modified);
+        if (modified) {
+          expect(onOpenSessionLink).not.toHaveBeenCalled();
+          panel.remove();
+          return;
+        }
       } else {
         link?.focus();
         const event = new KeyboardEvent("keydown", {

@@ -10,6 +10,7 @@ import {
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -137,7 +138,7 @@ function renderTranscriptShell(
         : null}
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
-      @click=${(event: Event) => {
+      @click=${(event: MouseEvent) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);
         if (target) {
@@ -145,7 +146,8 @@ function renderTranscriptShell(
           return;
         }
         const sessionTarget = markdownSessionLinkFromEvent(event);
-        if (sessionTarget) {
+        if (sessionTarget && shouldHandleNavigationClick(event)) {
+          event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
         }
       }}
