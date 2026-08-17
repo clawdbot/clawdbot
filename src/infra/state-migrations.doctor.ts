@@ -570,7 +570,7 @@ export async function detectLegacyStateMigrations(params: {
   const configuredChannels = Object.entries(params.cfg.channels ?? {});
   // Doctor already resolved this migration owner; plugin defaults must not infer it again.
   let migrationOwnerConfig = params.cfg;
-  if (listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
+  if (migrationAgentId && listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
     const agents = structuredClone(params.cfg.agents);
     delete agents.ownership;
     for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {

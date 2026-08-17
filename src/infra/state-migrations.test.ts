@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
@@ -888,6 +888,32 @@ describe("state migrations", () => {
     expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
       default: ["123456789"],
     });
+  });
+
+  it("preserves ambiguous pairing ownership when only the session fallback exists", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      channels: { chatapp: {} },
+    };
+    const credentialsDir = path.join(stateDir, "credentials");
+    await fs.mkdir(credentialsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(credentialsDir, "chatapp-allowFrom.json"),
+      '["123456789"]\n',
+      "utf8",
+    );
+    const plugin = createChannelTestPluginBase({
+      id: "chatapp",
+      config: { defaultAccountId: (config) => resolveDefaultAgentId(config) },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+
+    await expect(
+      detectLegacyStateMigrations({ cfg, env, homedir: () => root }),
+    ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
   });
 
   it("keeps automatic migration read-only when the shared schema is current", async () => {
