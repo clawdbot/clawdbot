@@ -12,7 +12,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderSessionOwnerChip, type SessionCreatorOption } from "./session-owner-chip.ts";
+import { renderSessionOwnerChip, type SessionOwnerOption } from "./session-owner-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -42,7 +42,7 @@ function renderSidebarMenuRadioItem(params: {
   value: string;
   checked: boolean;
   label: string;
-  creator?: SessionCreatorOption;
+  creator?: SessionOwnerOption;
 }) {
   return html`
     <wa-dropdown-item
@@ -62,7 +62,7 @@ function renderSidebarMenuRadioItem(params: {
 }
 
 function renderSidebarCreatorFilter(
-  creators: readonly SessionCreatorOption[],
+  creators: readonly SessionOwnerOption[],
   creatorFilterId: string | null,
 ) {
   if (creators.length < 2) {
@@ -70,11 +70,11 @@ function renderSidebarCreatorFilter(
   }
   return html`
     <div class="session-menu__separator" role="separator"></div>
-    <div class="sidebar-session-sort-menu__title">${t("sessionsView.people")}</div>
+    <div class="sidebar-session-sort-menu__title">${t("sessionsView.owners")}</div>
     ${renderSidebarMenuRadioItem({
       value: "creator:",
       checked: creatorFilterId === null,
-      label: t("sessionsView.allCreators"),
+      label: t("sessionsView.allOwners"),
     })}
     ${creators.map((creator) =>
       renderSidebarMenuRadioItem({
@@ -184,7 +184,7 @@ export function renderSidebarCatalogViewMenu(params: {
   position: { x: number; y: number } | null;
   trigger: HTMLElement | null;
   grouping: CatalogProjectGrouping;
-  creators: readonly SessionCreatorOption[];
+  creators: readonly SessionOwnerOption[];
   creatorFilterId: string | null;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
   onCreatorFilterChange: (creatorId: string | null) => void;
@@ -255,7 +255,7 @@ export function renderSidebarSessionSortMenu(params: {
   statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
   showSystem: boolean;
-  creators: readonly SessionCreatorOption[];
+  creators: readonly SessionOwnerOption[];
   creatorFilterId: string | null;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;

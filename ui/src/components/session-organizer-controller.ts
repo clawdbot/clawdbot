@@ -37,6 +37,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
@@ -187,6 +188,18 @@ export class SessionOrganizerController {
     }
     const operations = await this.loadOperations(scope);
     await operations?.stopCloudWorker(this.host, session, scope);
+  }
+
+  async assignSessionOwner(
+    session: SidebarRecentSession,
+    owner: Pick<SessionOwnerOption, "type" | "id">,
+  ): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.assignSessionOwner(this.host, session, owner, scope);
   }
 
   async deleteSession(session: SidebarRecentSession): Promise<void> {

@@ -67,7 +67,7 @@ import {
 import { SessionAttentionController } from "./session-attention-controller.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionCreatedActor, SessionCreatorOption } from "./session-owner-chip.ts";
+import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
@@ -121,7 +121,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   @state() sessionCreatorFilterId: string | null = null;
 
-  sessionCreatorOptions: readonly SessionCreatorOption[] = [];
+  sessionCreatorOptions: readonly SessionOwnerOption[] = [];
   protected activeSessionCreatorId: string | null = null;
   sessionCreatorFilterActive = false;
   sessionOwnershipVisible = false;
@@ -238,7 +238,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   protected applySessionCreatorFilter(
     projected: readonly SidebarRecentSession[],
-    creatorRows: readonly { createdActor?: SessionCreatedActor }[] = [],
+    creatorRows: readonly {
+      createdActor?: SessionCreatedActor;
+      owner?: { actor: SessionCreatedActor };
+    }[] = [],
     creatorFacet?: readonly { id: string; label?: string }[],
   ): SidebarRecentSession[] {
     const result = applySidebarSessionCreatorFilter({

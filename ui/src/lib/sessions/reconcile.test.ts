@@ -202,6 +202,30 @@ test("sessions.changed preserves the creator facet when ownership is unchanged",
   expect(reconciled.result?.creators).toEqual([{ id: createdActor.id, label: createdActor.label }]);
 });
 
+test("sessions.changed applies reassignment and invalidates the complete owner facet", () => {
+  const key = "agent:main:main";
+  const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
+  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdActor }]);
+  result.creators = [{ id: createdActor.id, label: createdActor.label }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "owner",
+    updatedAt: 1,
+    owner: {
+      actor: { type: "agent", id: "research", label: "Research" },
+      assignedBy: createdActor,
+      assignedAt: 2,
+    },
+  });
+
+  expect(reconciled.result?.sessions[0]?.owner).toMatchObject({
+    actor: { id: "research" },
+    assignedAt: 2,
+  });
+  expect(reconciled.result?.creators).toBeUndefined();
+});
+
 describe("reconcileSessionChanged", () => {
   it("drops a cleared category from the merged row", () => {
     const key = "agent:main:discord:channel:1";

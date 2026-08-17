@@ -50,9 +50,9 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
 import {
-  listSessionCreators,
+  listSessionOwners,
   type SessionCreatedActor,
-  type SessionCreatorOption,
+  type SessionOwnerOption,
 } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -85,13 +85,15 @@ export function compareSidebarSessionRowsByMode(input: {
       : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
   }
   const creators = input.creators ?? [];
-  const idA = a.createdActor?.id?.trim() ?? "";
-  const idB = b.createdActor?.id?.trim() ?? "";
+  const ownerA = a.owner?.actor ?? a.createdActor;
+  const ownerB = b.owner?.actor ?? b.createdActor;
+  const idA = ownerA?.id?.trim() ?? "";
+  const idB = ownerB?.id?.trim() ?? "";
   if (idA !== idB) {
     const creatorA = creators.find((candidate) => candidate.id === idA);
     const creatorB = creators.find((candidate) => candidate.id === idB);
-    const labelA = creatorA?.label?.trim() || a.createdActor?.label?.trim() || idA;
-    const labelB = creatorB?.label?.trim() || b.createdActor?.label?.trim() || idB;
+    const labelA = creatorA?.label?.trim() || ownerA?.label?.trim() || idA;
+    const labelB = creatorB?.label?.trim() || ownerB?.label?.trim() || idB;
     const byCreator = labelA.localeCompare(labelB) || idA.localeCompare(idB);
     if (byCreator !== 0) {
       return byCreator;
@@ -203,6 +205,7 @@ export function buildSidebarSessionNavigationState(input: {
       displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,
+      owner: row.owner,
       archivedBy: row.archivedBy,
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
@@ -571,12 +574,15 @@ export function promoteSidebarSessionCreatedOrder(
 
 export function applySidebarSessionCreatorFilter(input: {
   projected: readonly SidebarRecentSession[];
-  creatorRows: readonly { createdActor?: SessionCreatedActor }[];
+  creatorRows: readonly {
+    createdActor?: SessionCreatedActor;
+    owner?: { actor: SessionCreatedActor };
+  }[];
   creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
   selectedCreatorId: string | null;
 }): {
   rows: SidebarRecentSession[];
-  creatorOptions: readonly SessionCreatorOption[];
+  creatorOptions: readonly SessionOwnerOption[];
   ownershipVisible: boolean;
   activeCreatorId: string | null;
 } {
@@ -589,7 +595,7 @@ export function applySidebarSessionCreatorFilter(input: {
       pending.push(...row.children);
     }
   }
-  const creatorOptions = listSessionCreators([
+  const creatorOptions = listSessionOwners([
     ...(input.creatorFacet ?? []).map((creator) => ({
       createdActor: { type: "human" as const, ...creator },
     })),
@@ -609,7 +615,7 @@ export function applySidebarSessionCreatorFilter(input: {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
-      if (row.createdActor?.id === activeCreatorId) {
+      if ((row.owner?.actor ?? row.createdActor)?.id === activeCreatorId) {
         filtered.push({ ...row, children });
       } else {
         for (const child of children) {

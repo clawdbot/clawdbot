@@ -156,6 +156,60 @@ it("returns the complete deterministic creator facet independently of pagination
   expect(filtered.creators).toEqual(result.creators);
 });
 
+it("projects and filters the effective owner while preserving creator provenance", () => {
+  const store: Record<string, SessionEntry> = {
+    "agent:main:default-owner": {
+      createdActor: { type: "human", id: "profile-ada" },
+      sessionId: "session-default-owner",
+      updatedAt: 2,
+    },
+    "agent:main:assigned-owner": {
+      createdActor: { type: "human", id: "profile-ada" },
+      owner: {
+        actor: { type: "human", id: "profile-bob" },
+        assignedBy: { type: "human", id: "profile-ada" },
+        assignedAt: 10,
+      },
+      sessionId: "session-assigned-owner",
+      updatedAt: 1,
+    },
+  };
+  const result = listSessionsFromStore({
+    cfg: {} as OpenClawConfig,
+    storePath: "/tmp/openclaw-session-owners",
+    store,
+    opts: { archived: "all" },
+  });
+
+  expect(result.sessions.find((row) => row.key.endsWith(":default-owner"))).toMatchObject({
+    createdActor: { id: "profile-ada", label: "Ada" },
+    owner: { actor: { id: "profile-ada", label: "Ada" } },
+  });
+  expect(result.sessions.find((row) => row.key.endsWith(":assigned-owner"))).toMatchObject({
+    createdActor: { id: "profile-ada", label: "Ada" },
+    owner: {
+      actor: { id: "profile-bob", label: "Bob" },
+      assignedBy: { id: "profile-ada", label: "Ada" },
+      assignedAt: 10,
+    },
+  });
+  expect(result.creators).toEqual([
+    {
+      id: "profile-ada",
+      label: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
+    },
+    { id: "profile-bob", label: "Bob" },
+  ]);
+  const filtered = listSessionsFromStore({
+    cfg: {} as OpenClawConfig,
+    storePath: "/tmp/openclaw-session-owners",
+    store,
+    opts: { archived: "all", creatorId: "profile-bob" },
+  });
+  expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:assigned-owner"]);
+});
+
 it("preserves legacy list output across visibility, scope, creator, and search filters", async () => {
   const now = 1_000_000;
   vi.spyOn(Date, "now").mockReturnValue(now);
@@ -339,7 +393,7 @@ it("keeps the serialized list response deterministic for the current filter path
   const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"creators":[{"id":"creator-b"}]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
+    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"owner":{"actor":{"type":"system","id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
   ].join("");
 
   expect(JSON.stringify(result)).toBe(expectedSerializedResponse);

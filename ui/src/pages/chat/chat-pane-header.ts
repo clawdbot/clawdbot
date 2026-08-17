@@ -6,7 +6,10 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import { listSessionCreators } from "../../components/session-owner-chip.ts";
+import {
+  listAssignableSessionOwners,
+  listSessionOwners,
+} from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import {
   hasSessionPresenceViewers,
@@ -167,11 +170,24 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           session: row,
         })
       : {};
+    const assignmentAccess = row
+      ? readSessionMethodAccess(this.context.gateway.snapshot, {
+          method: "sessions.assignOwner",
+          params: {
+            key: row.key,
+            owner: { type: "human", id: sharingSnapshot.selfUser?.id ?? "profile" },
+          },
+          requiredScope: "operator.write",
+        })
+      : null;
     const continueInTerminalDisabledReason = row
       ? this.continueInTerminalDisabledReason(row)
       : undefined;
     const actionDisabledReasons: Partial<Record<HeaderMenuActionKind, string>> = {
       ...sessionActionDisabledReasons,
+      ...(assignmentAccess && !assignmentAccess.allowed
+        ? { "assign-owner": assignmentAccess.reason }
+        : {}),
       ...(continueInTerminalDisabledReason
         ? { "continue-in-terminal": continueInTerminalDisabledReason }
         : {}),
@@ -325,12 +341,25 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
     const showOwnerChip =
-      (result?.creators ?? listSessionCreators(result?.sessions ?? [])).length >= 2;
-    const renderedOwnerId = showOwnerChip ? row?.createdActor?.id : undefined;
+      (result?.creators ?? listSessionOwners(result?.sessions ?? [])).length >= 2;
+    const renderedOwnerId = showOwnerChip
+      ? (row?.owner?.actor ?? row?.createdActor)?.id
+      : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
       (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
     );
+    const ownerOptions = listAssignableSessionOwners({
+      sessions: result?.sessions ?? (row ? [row] : []),
+      facet: result?.creators,
+      agents: this.context.agents.state.agentsList?.agents,
+      self: sharingSnapshot.selfUser ?? null,
+    });
+    const selfOwner = sharingSnapshot.selfUser
+      ? (ownerOptions.find(
+          (owner) => owner.type === "human" && owner.id === sharingSnapshot.selfUser?.id,
+        ) ?? null)
+      : null;
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -444,6 +473,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
+              .ownerOptions=${ownerOptions}
+              .selfOwner=${selfOwner}
+              .currentOwnerId=${(row.owner?.actor ?? row.createdActor)?.id ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}

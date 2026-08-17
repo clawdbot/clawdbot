@@ -102,7 +102,11 @@ function addSessionCreatorIdentity(
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
   cfg: OpenClawConfig,
 ): void {
-  const actor = projectSessionActor(entry.createdActor, userProfileIdentityById, cfg);
+  const actor = projectSessionActor(
+    entry.owner?.actor ?? entry.createdActor,
+    userProfileIdentityById,
+    cfg,
+  );
   const id = normalizeOptionalString(actor?.id);
   if (!id) {
     return;
@@ -316,7 +320,7 @@ function filterSessionEntries(params: {
     if (params.userProfileIdentityById) {
       addSessionCreatorIdentity(creators, entry, params.userProfileIdentityById, cfg);
     }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
+    if (creatorId && (entry.owner?.actor ?? entry.createdActor)?.id !== creatorId) {
       continue;
     }
     entries.push([key, entry]);

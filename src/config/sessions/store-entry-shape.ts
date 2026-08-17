@@ -58,6 +58,7 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     memoryFlushFailureCount,
     memoryFlushLastFailedAt: _memoryFlushLastFailedAt,
     memoryFlushLastFailureError: _memoryFlushLastFailureError,
+    owner: _projectedOwner,
     ...canonicalValue
   } = value;
   const icon =

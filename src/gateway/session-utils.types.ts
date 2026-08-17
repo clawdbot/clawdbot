@@ -5,6 +5,7 @@ import type {
   SessionCreatedActor,
   SessionClassification,
   SessionPeerKind,
+  SessionOwner,
   SessionPlacement,
   SessionPlacementMove,
   SessionRow,
@@ -85,6 +86,7 @@ export type GatewaySessionRow = {
   subagentControlScope?: SessionEntry["subagentControlScope"];
   createdVia?: SessionEntry["createdVia"];
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
   createdAt?: SessionEntry["createdAt"];
   forkSource?: SessionEntry["forkSource"];
   previousSessionId?: SessionEntry["previousSessionId"];

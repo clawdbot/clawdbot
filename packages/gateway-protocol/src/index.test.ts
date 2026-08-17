@@ -23,6 +23,7 @@ import {
   validateSessionsObserverVisibilityParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
+  validateSessionsAssignOwnerParams,
   validateSessionsSearchParams,
   validateSessionsSendParams,
   validateSessionsUsageParams,
@@ -168,6 +169,18 @@ describe("lazy protocol validators", () => {
       { archived: "all" },
     ]);
     expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+  });
+
+  it("keeps sessions.assignOwner target actors closed and non-empty", () => {
+    expectAccepted(validateSessionsAssignOwnerParams, [
+      { key: "agent:main:handoff", owner: { type: "human", id: "profile-ada" } },
+      { key: "agent:main:handoff", owner: { type: "agent", id: "research" }, agentId: "main" },
+    ]);
+    expectRejected(validateSessionsAssignOwnerParams, [
+      { key: "agent:main:handoff", owner: { type: "system", id: "system" } },
+      { key: "agent:main:handoff", owner: { type: "human", id: "" } },
+      { key: "agent:main:handoff", owner: { type: "human", id: "ada", label: "Ada" } },
+    ]);
   });
 
   it("validates session board face list and patch values", () => {

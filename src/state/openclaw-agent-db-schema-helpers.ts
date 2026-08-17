@@ -22,6 +22,7 @@ import {
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
 import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
+import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
@@ -57,7 +58,12 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
-  allowedMissingColumns: ["standing_intents.creator_sender"],
+  allowedMissingColumns: [
+    "standing_intents.creator_sender",
+    ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
+      ({ columnName, tableName }) => `${tableName}.${columnName}`,
+    ),
+  ],
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },

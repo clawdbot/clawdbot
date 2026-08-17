@@ -250,6 +250,7 @@ export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParams
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = compile(S.SessionsDeleteParamsSchema);
+export const validateSessionsAssignOwnerParams = compile(S.SessionsAssignOwnerParamsSchema);
 export const validateSessionsGroupsListParams = compile(S.SessionsGroupsListParamsSchema);
 export const validateSessionsGroupsListResult = compile(S.SessionsGroupsListResultSchema);
 export const validateSessionsGroupsDefaultsParams = compile(S.SessionsGroupsDefaultsParamsSchema);

@@ -29,6 +29,7 @@ import type {
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
+  SessionOwnerAssignment,
   SessionCreatedVia,
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
@@ -384,6 +385,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
+    /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
+    owner?: SessionOwnerAssignment;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
     /** Exact source generation and optional cut entry for an actual transcript-copy fork. */

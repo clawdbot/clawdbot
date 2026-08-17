@@ -11,6 +11,7 @@ import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { renderSessionIconPicker } from "./session-icon-picker.ts";
+import { renderSessionOwnerChip, type SessionOwnerOption } from "./session-owner-chip.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
@@ -41,6 +42,7 @@ export type SessionMenuAction =
   | { kind: "toggle-unread" }
   | { kind: "rename" }
   | { kind: "set-icon"; icon: string | null }
+  | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
   | { kind: "fork" }
   | { kind: "workboard" }
   | { kind: "move-to-group"; category: string | null }
@@ -82,6 +84,9 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
+  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
+  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
+  @property({ attribute: false }) currentOwnerId: string | null = null;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
@@ -166,8 +171,48 @@ class SessionMenu extends OpenClawLightDomElement {
         kind: "set-icon",
         icon: encodedIcon ? decodeURIComponent(encodedIcon) : null,
       });
+      return;
+    }
+    if (value === "assign-owner:self" && this.selfOwner) {
+      this.runAction({ kind: "assign-owner", owner: this.selfOwner });
+      return;
+    }
+    if (value.startsWith("assign-owner:")) {
+      const [, type, encodedId] = value.split(":");
+      const id = encodedId ? decodeURIComponent(encodedId) : "";
+      if ((type === "human" || type === "agent") && id) {
+        this.runAction({ kind: "assign-owner", owner: { type, id } });
+      }
     }
   };
+
+  private renderOwnerSubmenu() {
+    return this.ownerOptions.map((owner) => {
+      const checked = owner.id === this.currentOwnerId;
+      return html`
+        <wa-dropdown-item
+          slot="submenu"
+          class="session-menu__item"
+          value=${`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+          role="menuitemradio"
+          aria-checked=${String(checked)}
+          ${ref((element) => syncDropdownItemRadio(element, checked))}
+          ?disabled=${this.actionDisabled("assign-owner", checked)}
+          title=${this.actionTitle("assign-owner")}
+        >
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${renderSessionOwnerChip(owner, "row", "owned")}</span
+          >
+          <span class="session-menu__text">${owner.label ?? owner.id}</span>
+          ${checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing}
+        </wa-dropdown-item>
+      `;
+    });
+  }
 
   private readonly handleAfterHide = (event: Event) => {
     // A keyed replacement can finish hiding after its successor opens.
@@ -510,6 +555,35 @@ class SessionMenu extends OpenClawLightDomElement {
                 <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
                 ${menuShortcutHint("r")}
               </wa-dropdown-item>
+              ${this.selfOwner
+                ? html`<wa-dropdown-item
+                    class="session-menu__item"
+                    value="assign-owner:self"
+                    ?disabled=${this.actionDisabled(
+                      "assign-owner",
+                      this.currentOwnerId === this.selfOwner.id,
+                    )}
+                    title=${this.actionTitle("assign-owner")}
+                  >
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.users}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.assignToMe")}</span>
+                  </wa-dropdown-item>`
+                : nothing}
+              ${this.ownerOptions.length > 0
+                ? html`<wa-dropdown-item
+                    class="session-menu__item"
+                    ?disabled=${this.actionDisabled("assign-owner")}
+                    title=${this.actionTitle("assign-owner")}
+                  >
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.users}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.assignTo")}</span>
+                    ${this.renderOwnerSubmenu()}
+                  </wa-dropdown-item>`
+                : nothing}
               <wa-dropdown-item
                 class="session-menu__item"
                 data-shortcut="i"

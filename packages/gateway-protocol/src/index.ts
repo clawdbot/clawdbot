@@ -14,8 +14,10 @@ export * from "./schema/ui-command.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
+  SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionOwner,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,
@@ -308,6 +310,10 @@ export {
   SessionsPluginPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
+  SessionsAssignOwnerParamsSchema,
+  SessionsAssignOwnerResultSchema,
+  type SessionsAssignOwnerParams,
+  type SessionsAssignOwnerResult,
   SessionGroupSchema,
   SessionGroupDefaultsSchema,
   SessionsGroupsListParamsSchema,

@@ -1,5 +1,9 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
 import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwner,
+  SessionsAssignOwnerParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -174,6 +178,11 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
+  assignOwner: (
+    key: string,
+    owner: SessionsAssignOwnerParams["owner"],
+    options?: { agentId?: string | null },
+  ) => Promise<SessionOwner | null>;
   setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;
   /** Keep optimistic row changes in the published snapshot through later publishes. */

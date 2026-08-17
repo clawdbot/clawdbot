@@ -6,6 +6,12 @@ export type SessionCreatedActor = {
   id?: string;
   label?: string;
 };
+
+export type SessionOwnerAssignment = {
+  actor: SessionCreatedActor;
+  assignedBy?: SessionCreatedActor;
+  assignedAt?: number;
+};
 export type SessionCreatedVia =
   | "operator" // gateway sessions.create (Control UI / operator clients)
   | "spawn" // sessions_spawn native or ACP subagent spawn

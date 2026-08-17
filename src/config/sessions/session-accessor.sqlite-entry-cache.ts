@@ -4,6 +4,7 @@ import {
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
@@ -163,13 +164,30 @@ function createLazyListProjections(
 
 function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSessionEntrySnapshot {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["session_key", "entry_json", "updated_at"])
-      .orderBy("session_key"),
-  ).rows;
+  const rows = hasSqliteSessionOwnerColumns(database.db)
+    ? executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select([
+            "session_key",
+            "entry_json",
+            "updated_at",
+            "owner_actor_type",
+            "owner_actor_id",
+            "owner_assigned_by_type",
+            "owner_assigned_by_id",
+            "owner_assigned_at",
+          ])
+          .orderBy("session_key"),
+      ).rows
+    : executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["session_key", "entry_json", "updated_at"])
+          .orderBy("session_key"),
+      ).rows;
   const entries = new Map<string, SessionEntry>();
   for (const row of rows) {
     const entry = parseSessionEntryJson(row);
@@ -223,13 +241,29 @@ function incrementallyRevalidateSessionEntrySnapshot(
     listProjections.delete(sessionKey);
   }
   if (changedKeys.length > 0) {
-    const changedRows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "entry_json"])
-        .where("session_key", "in", changedKeys),
-    ).rows;
+    const changedRows = hasSqliteSessionOwnerColumns(database.db)
+      ? executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select([
+              "session_key",
+              "entry_json",
+              "owner_actor_type",
+              "owner_actor_id",
+              "owner_assigned_by_type",
+              "owner_assigned_by_id",
+              "owner_assigned_at",
+            ])
+            .where("session_key", "in", changedKeys),
+        ).rows
+      : executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select(["session_key", "entry_json"])
+            .where("session_key", "in", changedKeys),
+        ).rows;
     for (const row of changedRows) {
       const entry = parseSessionEntryJson(row);
       if (entry) {
@@ -324,10 +358,27 @@ function publishSqliteSessionEntryCacheUpsert(
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
+  const ownerRow = hasSqliteSessionOwnerColumns(database.db)
+    ? executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .selectFrom("session_nodes")
+          .select([
+            "owner_actor_type",
+            "owner_actor_id",
+            "owner_assigned_by_type",
+            "owner_assigned_by_id",
+            "owner_assigned_at",
+          ])
+          .where("session_key", "=", row.session_key)
+          .limit(1),
+      ).rows[0]
+    : undefined;
   const entry = parseSessionEntryJson({
     current_session_id: row.current_session_id,
     entry_json: row.entry_json,
     updated_at: row.updated_at,
+    ...ownerRow,
   });
   if (!entry) {
     invalidateTrackedCache(database);

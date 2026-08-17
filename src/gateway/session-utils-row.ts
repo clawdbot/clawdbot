@@ -1,6 +1,9 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionCreatedActor,
+  SessionOwner,
+} from "../../packages/gateway-protocol/src/index.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -112,6 +115,28 @@ export function projectSessionActor(
     userProfileIdentityById.set(id, identity);
   }
   return { type: actor.type, id, ...identity };
+}
+
+function projectSessionOwner(
+  entry: SessionEntry | undefined,
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
+  cfg: OpenClawConfig,
+): SessionOwner | undefined {
+  const persisted = entry?.owner;
+  const actor = projectSessionActor(
+    persisted?.actor ?? entry?.createdActor,
+    userProfileIdentityById,
+    cfg,
+  );
+  if (!actor) {
+    return undefined;
+  }
+  const assignedBy = projectSessionActor(persisted?.assignedBy, userProfileIdentityById, cfg);
+  return {
+    actor,
+    ...(assignedBy ? { assignedBy } : {}),
+    ...(persisted?.assignedAt !== undefined ? { assignedAt: persisted.assignedAt } : {}),
+  };
 }
 
 export function buildGatewaySessionRow(params: {
@@ -435,6 +460,7 @@ export function buildGatewaySessionRow(params: {
       rowContext?.userProfileIdentityById,
       cfg,
     ),
+    owner: projectSessionOwner(entry, rowContext?.userProfileIdentityById, cfg),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,

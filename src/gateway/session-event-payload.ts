@@ -43,6 +43,7 @@ export function buildGatewaySessionEventFields(params: {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
+    owner: sessionRow.owner ?? null,
     kind: sessionRow.kind,
     visibility: sessionRow.visibility,
     channel: sessionRow.channel,

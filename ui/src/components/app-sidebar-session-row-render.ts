@@ -175,11 +175,16 @@ export function renderRecentSession(params: {
   const pullRequestState = session.worktreeId
     ? host.sessionPullRequestIndicatorState(session.key, session.worktreeId)
     : "none";
-  const ownerAttribution = host.sessionsStatusFilter === "archived" ? "archived" : "created";
+  const ownerAttribution =
+    host.sessionsStatusFilter === "archived"
+      ? "archived"
+      : session.owner?.assignedAt !== undefined
+        ? "owned"
+        : "created";
   const ownerActor = host.sessionOwnershipVisible
     ? host.sessionsStatusFilter === "archived"
       ? session.archivedBy
-      : session.createdActor
+      : (session.owner?.actor ?? session.createdActor)
     : undefined;
   const ownerId = ownerActor?.id?.trim();
   const ownerViewing = ownerId

@@ -14,6 +14,11 @@ describe("SessionRowSchema", () => {
         label: "Ada",
         avatarUrl: "/api/users/profile-ada/avatar?v=7",
       },
+      owner: {
+        actor: { type: "agent", id: "research", label: "Research" },
+        assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+        assignedAt: 42,
+      },
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       icon: "🦞",
       visibility: "suggest",

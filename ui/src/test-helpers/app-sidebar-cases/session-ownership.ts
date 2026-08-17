@@ -226,7 +226,7 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(1);
     const menu = await openCreatorMenu(sidebar);
-    expect(menu.textContent).toContain("People");
+    expect(menu.textContent).toContain("Owners");
     expect(menu.querySelector('[value="creator:"]')).not.toBeNull();
     expect(menu.querySelector('[value="creator:profile-ada"]')).not.toBeNull();
     expect(menu.querySelector('[value="creator:profile-bob"]')).not.toBeNull();
@@ -274,7 +274,7 @@ describe("AppSidebar session ownership", () => {
     const menu = await openCreatorMenu(sidebar);
     expect(
       [...menu.querySelectorAll(".sidebar-session-sort-menu__title")].some(
-        (title) => title.textContent?.trim() === "People",
+        (title) => title.textContent?.trim() === "Owners",
       ),
     ).toBe(false);
     expect(menu.querySelector('[value^="creator:"]')).toBeNull();
@@ -409,7 +409,7 @@ describe("AppSidebar session ownership", () => {
     expect(soloFacepile?.excludeUserId).toBeUndefined();
   });
 
-  it("filters by creator and hides custom groups without matching sessions", async () => {
+  it("filters by effective owner and hides custom groups without matching sessions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", [
       "agent:main:main",
@@ -425,9 +425,19 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob) {
       throw new Error("expected creator rows");
     }
-    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    ada.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    ada.owner = {
+      actor: { type: "human", id: "profile-ada", label: "Ada" },
+      assignedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      assignedAt: 10,
+    };
     ada.category = "Research";
-    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    bob.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    bob.owner = {
+      actor: { type: "human", id: "profile-bob", label: "Bob" },
+      assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+      assignedAt: 11,
+    };
     bob.category = "Operations";
     harness.publish({ groups: ["Research", "Operations"] });
     const { sidebar } = await mountSidebar(gateway, harness.sessions);

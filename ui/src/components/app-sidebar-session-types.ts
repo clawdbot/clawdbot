@@ -4,6 +4,7 @@ import type { SessionVisibility } from "../../../packages/gateway-protocol/src/s
 import type {
   SessionObserverDigest,
   SessionCreatedActor,
+  SessionOwner,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -61,6 +62,7 @@ export type SidebarRecentSession = {
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
   archivedBy?: SessionCreatedActor;
   label: string;
   /**
@@ -392,10 +394,10 @@ export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
-  { mode: "people", labelKey: "sessionsView.people" },
+  { mode: "people", labelKey: "sessionsView.owners" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

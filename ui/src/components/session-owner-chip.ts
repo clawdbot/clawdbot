@@ -8,20 +8,27 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
-export type SessionCreatorOption = SessionCreatedActor & { id: string };
+export type SessionOwnerOption = SessionCreatedActor & {
+  type: "human" | "agent";
+  id: string;
+};
 
-export function listSessionCreators(
-  sessions: readonly { createdActor?: SessionCreatedActor }[],
-): SessionCreatorOption[] {
-  const creators = new Map<string, SessionCreatorOption>();
+export function listSessionOwners(
+  sessions: readonly {
+    createdActor?: SessionCreatedActor;
+    owner?: { actor: SessionCreatedActor };
+  }[],
+): SessionOwnerOption[] {
+  const owners = new Map<string, SessionOwnerOption>();
   for (const session of sessions) {
-    const id = session.createdActor?.id?.trim();
-    if (!id) {
+    const actor = session.owner?.actor ?? session.createdActor;
+    const id = actor?.id?.trim();
+    if (!actor || !id || (actor.type !== "human" && actor.type !== "agent")) {
       continue;
     }
-    const label = session.createdActor?.label?.trim();
-    const avatarUrl = session.createdActor?.avatarUrl?.trim();
-    const existing = creators.get(id);
+    const label = actor.label?.trim();
+    const avatarUrl = actor.avatarUrl?.trim();
+    const existing = owners.get(id);
     const nextLabel =
       label && (!existing?.label || label.localeCompare(existing.label) < 0)
         ? label
@@ -29,25 +36,76 @@ export function listSessionCreators(
     const nextAvatarUrl = [existing?.avatarUrl, avatarUrl]
       .filter((value): value is string => Boolean(value))
       .toSorted()[0];
-    if (!existing || nextLabel !== existing.label || nextAvatarUrl !== existing.avatarUrl) {
-      creators.set(id, {
-        type: session.createdActor?.type ?? "human",
+    if (
+      !existing ||
+      actor.type !== existing.type ||
+      nextLabel !== existing.label ||
+      nextAvatarUrl !== existing.avatarUrl
+    ) {
+      owners.set(id, {
+        type: actor.type,
         id,
         ...(nextLabel ? { label: nextLabel } : {}),
         ...(nextAvatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
       });
     }
   }
-  return [...creators.values()].toSorted((a, b) => {
+  return [...owners.values()].toSorted((a, b) => {
     const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
     return byLabel || a.id.localeCompare(b.id);
   });
 }
 
+export function listAssignableSessionOwners(params: {
+  sessions: readonly {
+    createdActor?: SessionCreatedActor;
+    owner?: { actor: SessionCreatedActor };
+  }[];
+  facet?: readonly { id: string; label?: string; avatarUrl?: string }[];
+  agents?: readonly { id: string; name?: string }[];
+  self?: { id: string; name?: string; avatarUrl?: string } | null;
+}): SessionOwnerOption[] {
+  const agents = new Map((params.agents ?? []).map((agent) => [agent.id, agent] as const));
+  const owners = new Map(listSessionOwners(params.sessions).map((owner) => [owner.id, owner]));
+  for (const identity of params.facet ?? []) {
+    const existing = owners.get(identity.id);
+    const agent = agents.get(identity.id);
+    owners.set(identity.id, {
+      type: existing?.type ?? (agent ? "agent" : "human"),
+      id: identity.id,
+      ...((identity.label ?? existing?.label) ? { label: identity.label ?? existing?.label } : {}),
+      ...((identity.avatarUrl ?? existing?.avatarUrl)
+        ? { avatarUrl: identity.avatarUrl ?? existing?.avatarUrl }
+        : {}),
+    });
+  }
+  if (params.self?.id) {
+    owners.set(params.self.id, {
+      type: "human",
+      id: params.self.id,
+      ...(params.self.name ? { label: params.self.name } : {}),
+      ...(params.self.avatarUrl ? { avatarUrl: params.self.avatarUrl } : {}),
+    });
+  }
+  for (const agent of agents.values()) {
+    owners.set(agent.id, {
+      type: "agent",
+      id: agent.id,
+      ...(agent.name ? { label: agent.name } : {}),
+    });
+  }
+  return [...owners.values()].toSorted(
+    (left, right) =>
+      left.type.localeCompare(right.type) ||
+      (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
+      left.id.localeCompare(right.id),
+  );
+}
+
 export function renderSessionOwnerChip(
   createdActor: SessionCreatedActor | null | undefined,
   size: "row" | "header",
-  attribution: "created" | "archived" = "created",
+  attribution: "created" | "owned" | "archived" = "created",
   viewingNow?: boolean,
 ) {
   return createdActor?.id
@@ -95,7 +153,7 @@ function ownerHue(id: string): number {
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
-  @property({ type: String }) attribution: "created" | "archived" = "created";
+  @property({ type: String }) attribution: "created" | "owned" | "archived" = "created";
   @property({ attribute: false }) viewingNow?: boolean;
 
   override render() {
@@ -108,10 +166,13 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       return nothing;
     }
     const title = createdActor.label || createdActor.id;
-    const attributionLabel = t(
-      this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
-      { name: title },
-    );
+    const attributionKey =
+      this.attribution === "archived"
+        ? "sessionsView.archivedBy"
+        : this.attribution === "owned"
+          ? "sessionsView.ownedBy"
+          : "sessionsView.createdBy";
+    const attributionLabel = t(attributionKey, { name: title });
     const accessibleLabel = this.viewingNow
       ? `${attributionLabel} · ${t("sessionsView.viewingNow")}`
       : attributionLabel;
