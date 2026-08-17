@@ -206,6 +206,59 @@ describe("worker placement dispatch reclaim", () => {
     expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
+  it("completes a restarted pending result through its Gateway move intent", async () => {
+    const workspacePath = path.join(root, "pending-gateway-move");
+    const harness = createHarness(placementStore, { workspacePath });
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(
+        `INSERT INTO worker_environments (
+          environment_id, provider_id, profile_id, profile_snapshot_json,
+          provision_operation_id, lease_id, state, owner_epoch,
+          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES (?, 'test', ?, '{}', ?, 'lease-pending-move', 'attached', ?, ?, 1000, 1000, 1000)`,
+      )
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        `provision:${active.environmentId}`,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+    const claim = placementStore.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "pending-move-claim",
+      runId: "pending-move-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const begun = placementStore.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+    });
+    expect(begun.placement).toMatchObject({ state: "draining" });
+    placementStore.markWorkspaceResultPending(claim);
+
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restarted = createHarness(restartedStore, { workspacePath });
+    restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    await restarted.service.reconcile();
+
+    expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
+    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(restarted.log).not.toContain("placement:reclaimed");
+  });
+
   it("reclaims an environment-free failed placement back to clean local state", async () => {
     const harness = createHarness(placementStore);
     const requested = placementStore.startDispatch(REQUEST);

@@ -15,6 +15,7 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
@@ -157,7 +158,27 @@ export function createWorkerPlacementMoveService(options: {
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,
       };
-      if (placement.state === "draining" || placement.state === "failed") {
+      if (placement.state === "failed") {
+        if (
+          !isFailedWorkerPlacementEnvironmentGone({
+            environmentService: options.environments,
+            placement,
+          })
+        ) {
+          throw new Error(
+            `Session ${identity.sessionKey} failed move environment must finish teardown before retry`,
+          );
+        }
+        placement = options.placements.transition({
+          sessionId: placement.sessionId,
+          from: "failed",
+          to: "local",
+          expectedGeneration: placement.generation,
+        });
+        if (placement.state !== "local") {
+          throw new Error(`Session ${identity.sessionKey} failed move did not return local`);
+        }
+      } else if (placement.state === "draining") {
         const local = await options.reclaimSource(identity, intent);
         if (local.state !== "local") {
           throw new Error(`Session ${identity.sessionKey} move recovery did not return local`);

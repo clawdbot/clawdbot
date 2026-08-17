@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -319,5 +320,78 @@ describe("worker session placement moves", () => {
       }),
     ).toMatchObject({ state: "active", generation: destination.generation });
     expect(store.getPlacementMove(SESSION.sessionId)).toBeUndefined();
+  });
+
+  it("retries a failed destination from local without reclaiming the old source", async () => {
+    const source = advanceToActive();
+    seedAttachedEnvironment({
+      environmentId: source.environmentId,
+      sessionId: source.sessionId,
+      ownerEpoch: source.activeOwnerEpoch,
+    });
+    const begun = store.beginPlacementMove({
+      sessionId: source.sessionId,
+      source: {
+        generation: source.generation,
+        environmentId: source.environmentId,
+        ownerEpoch: source.activeOwnerEpoch,
+      },
+      target: { kind: "profile", profileId: "profile-destination" },
+    });
+    const reconciling = store.startReconcile({
+      sessionId: source.sessionId,
+      environmentId: source.environmentId,
+      ownerEpoch: source.activeOwnerEpoch,
+      expectedGeneration: begun.placement.generation,
+    });
+    const local = store.completePlacementMoveSourceToLocal({
+      operationId: begun.intent.operationId,
+      sessionId: source.sessionId,
+      expectedGeneration: reconciling.generation,
+    });
+    const requested = store.startDispatch(SESSION);
+    const provisioning = store.transition({
+      sessionId: source.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: requested.generation,
+      patch: { environmentId: "missing-destination-environment" },
+    });
+    store.fail({
+      sessionId: source.sessionId,
+      expectedGeneration: provisioning.generation,
+      recoveryError: "destination provisioning failed",
+    });
+    const dispatchError = new Error("destination retry reached dispatch");
+    const dispatch = vi.fn(async () => {
+      throw dispatchError;
+    });
+    const reclaimSource = vi.fn(async () => {
+      throw new Error("failed destination must not reclaim the old source");
+    });
+    const moves = createWorkerPlacementMoveService({
+      placements: store,
+      environments: { get: () => undefined },
+      runMoveBarrier: async ({ begin }) => begin(),
+      dispatch,
+      reclaimSource,
+      resolveDestination: async () => ({
+        profileId: "profile-destination",
+        executionMode: "worker-turn",
+      }),
+    });
+
+    await moves.recoverAll();
+
+    expect(reclaimSource).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(store.get(source.sessionId)).toMatchObject({
+      state: "local",
+      generation: local.generation + 4,
+    });
+    expect(store.getPlacementMove(source.sessionId)).toMatchObject({
+      operationId: begun.intent.operationId,
+      lastError: dispatchError.message,
+    });
   });
 });
