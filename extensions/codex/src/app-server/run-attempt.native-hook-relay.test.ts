@@ -315,12 +315,12 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-policy-allow",
-        command: "gh run view 1",
+        command: "/bin/echo ready",
         cwd: workspaceDir,
       },
     });
     expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ autoApprove: true }));
-    expect(commandResponse).toEqual({ decision: "accept" });
+    expect(commandResponse).toEqual({ decision: "acceptForSession" });
     await expect(
       harness.handleServerRequest({
         id: "request-file-policy-allow",
