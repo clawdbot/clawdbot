@@ -1604,6 +1604,7 @@ export interface WorkerSessionPlacementMoves {
   source_owner_epoch: number;
   target_id: string | null;
   target_kind: string;
+  target_machine_class: string | null;
   updated_at_ms: number;
 }
 

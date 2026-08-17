@@ -7877,25 +7877,29 @@ public struct SessionMoveGatewayTarget: Codable, Sendable {
 public struct SessionMoveProfileTarget: Codable, Sendable {
     public let kind: String
     public let profileid: String
+    public let machineclass: String?
 
     public init(
-        profileid: String
+        profileid: String,
+        machineclass: String? = nil
     )
     {
         self.kind = "profile"
         self.profileid = profileid
+        self.machineclass = machineclass
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case profileid = "profileId"
+        case machineclass = "machineClass"
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["kind", "profileId"]).contains($0) }
+            .filter { !Set(["kind", "profileId", "machineClass"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -7915,12 +7919,14 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
         }
         self.kind = "profile"
         self.profileid = try container.decode(String.self, forKey: .profileid)
+        self.machineclass = try container.decodeIfPresent(String.self, forKey: .machineclass)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("profile", forKey: .kind)
         try container.encode(profileid, forKey: .profileid)
+        try container.encodeIfPresent(machineclass, forKey: .machineclass)
     }
 }
 

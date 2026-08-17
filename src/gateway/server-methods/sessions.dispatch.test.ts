@@ -411,13 +411,13 @@ describe("sessions.dispatch", () => {
       }),
       {
         expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-        target: { kind: "profile", profileId: "test" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast" },
       },
     );
 
     expect(move).toHaveBeenCalledWith(
       expect.objectContaining({
-        target: { kind: "profile", profileId: "test" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast" },
       }),
       expect.any(Function),
     );

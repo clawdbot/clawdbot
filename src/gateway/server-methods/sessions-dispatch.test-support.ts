@@ -145,7 +145,7 @@ export async function invokeSessionMove(
     expected: { generation: number; environmentId: string; ownerEpoch: number };
     target:
       | { kind: "gateway" }
-      | { kind: "profile"; profileId: string }
+      | { kind: "profile"; profileId: string; machineClass?: string }
       | { kind: "device"; deviceId: string };
   },
 ) {
