@@ -450,7 +450,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
             sessionKey: target.canonicalKey ?? key,
             sessionId: result.deletedSessionId,
             storePath,
-            sessionFile: result.deletedSessionFile,
             agentId: target.agentId,
             reason: "deleted",
             archivedTranscripts: result.archivedTranscripts,

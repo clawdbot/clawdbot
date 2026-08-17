@@ -71,7 +71,6 @@ export type DeleteSessionEntryLifecycleResult = {
   deleted: boolean;
   expectedEntryMismatch?: true;
   deletedEntry?: SessionEntry;
-  deletedSessionFile?: string;
   deletedSessionId?: string;
 };
 
