@@ -15,7 +15,7 @@ import OpenClawProtocol
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
-    static let setupDetectionRequestTimeoutMs = 40_000
+    static let setupDetectionRequestTimeoutMs = 40000
 
     /// Device-code providers advertise windows up to 15 minutes. Keep transport
     /// alive long enough for approval plus the post-login inference probe.
