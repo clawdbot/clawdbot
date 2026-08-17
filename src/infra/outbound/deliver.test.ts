@@ -1158,6 +1158,37 @@ describe("deliverOutboundPayloads", () => {
     expect(fencedMediaLogWarn).not.toHaveBeenCalled();
   });
 
+  it("warns when hard-split fenced MEDIA chunks reassemble across durable sends (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const longPath = "/tmp/" + "x".repeat(80) + "-shot.png";
+    const directive = `MEDIA:${longPath}`;
+    const fenced = "```\n" + directive + "\n```";
+    // Force tiny chunks so the directive line is hard-split mid-token.
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-split-ok" });
+    setTestOutbound({
+      ...matrixOutboundForTest,
+      chunker: (value: string) => {
+        const size = 24;
+        const out: string[] = [];
+        for (let i = 0; i < value.length; i += size) {
+          out.push(value.slice(i, i + size));
+        }
+        return out;
+      },
+      chunkerMode: "text",
+      textChunkLimit: 24,
+    });
+    await deliverMatrix({
+      payloads: [{ text: fenced }],
+      deps: { matrix: sendMatrix },
+    });
+    expect(sendMatrix).toHaveBeenCalled();
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+    expect(fencedMediaLogWarn.mock.calls[0]?.[0]).toMatch(
+      /fenced code block and will not be delivered/,
+    );
+  });
+
   it("warns for fenced MEDIA after first visible send even if a later send rejects (#41966)", async () => {
     fencedMediaLogWarn.mockClear();
     const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";

@@ -34,18 +34,19 @@ vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () =>
           if (warned) {
             return;
           }
-          if (visibleChunk.trim()) {
+          if (visibleChunk) {
             acceptedVisibleText = acceptedVisibleText
-              ? `${acceptedVisibleText}\n${visibleChunk}`
+              ? `${acceptedVisibleText}${visibleChunk}`
               : visibleChunk;
           }
           const retained =
             identities.length > 0
               ? identities.some((directive: string) => {
                   const identity = directive.trim();
+                  if (!identity) return false;
                   return (
-                    identity.length > 0 &&
-                    acceptedVisibleText.split("\n").some((line) => line.trim() === identity)
+                    acceptedVisibleText.split("\n").some((line) => line.trim() === identity) ||
+                    acceptedVisibleText.includes(identity)
                   );
                 })
               : /media:/i.test(acceptedVisibleText);

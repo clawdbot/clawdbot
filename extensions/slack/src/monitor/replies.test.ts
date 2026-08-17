@@ -2,7 +2,57 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
+const fencedMediaLogWarn = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () => {
+  const { createOutboundPayloadPlan } = await import("openclaw/plugin-sdk/channel-outbound");
+  return {
+    createDirectAcceptedFencedMediaWarnLatch: (params: {
+      payload: object;
+      cfg?: unknown;
+      surface?: string;
+    }) => {
+      const planEntry = createOutboundPayloadPlan([params.payload as never], {
+        cfg: params.cfg as never,
+        surface: params.surface,
+      })[0];
+      if (!planEntry?.mediaTokenSkippedInFence) {
+        return { afterAcceptedVisibleText(_chunk: string) {} };
+      }
+      let warned = false;
+      let acceptedVisibleText = "";
+      const identities = planEntry.fencedSkippedMediaDirectives ?? [];
+      return {
+        afterAcceptedVisibleText(visibleChunk: string) {
+          if (warned) return;
+          if (visibleChunk) {
+            acceptedVisibleText = acceptedVisibleText
+              ? `${acceptedVisibleText}${visibleChunk}`
+              : visibleChunk;
+          }
+          const retained =
+            identities.length > 0
+              ? identities.some((directive: string) => {
+                  const identity = directive.trim();
+                  if (!identity) return false;
+                  return (
+                    acceptedVisibleText.split("\n").some((line) => line.trim() === identity) ||
+                    acceptedVisibleText.includes(identity)
+                  );
+                })
+              : /media:/i.test(acceptedVisibleText);
+          if (!retained) return;
+          warned = true;
+          fencedMediaLogWarn("media: MEDIA: token skipped — fenced");
+        },
+      };
+    },
+    warnFencedMediaSkipsForAcceptedOutboundDelivery: () => {},
+  };
+});
 vi.mock("../send.js", () => ({
+  sendMessageSlack: (...args: unknown[]) => sendMock(...args),
+}));
+vi.mock("./send.runtime.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
@@ -1382,3 +1432,28 @@ describe("deliverReplies message_sent hook", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("deliverReplies fenced MEDIA warn (#41966)", () => {
+  beforeAll(async () => {
+    ({ deliverReplies } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
+    sendMock.mockReset();
+    fencedMediaLogWarn.mockReset();
+    sendMock.mockResolvedValue({ messageId: "m1", channelId: "C123", ts: "1.0" });
+  });
+
+  it("warns after successful text-only fenced MEDIA send", async () => {
+    const fenced = "```\nMEDIA:/tmp/slack-fenced.png\n```";
+    await deliverReplies(baseParams({ replies: [{ text: fenced }] }));
+    expect(sendMock).toHaveBeenCalled();
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent for unfenced MEDIA text-only control", async () => {
+    await deliverReplies(baseParams({ replies: [{ text: "MEDIA:/tmp/plain.png" }] }));
+    expect(sendMock).toHaveBeenCalled();
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+});

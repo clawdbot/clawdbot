@@ -29,19 +29,24 @@ export function createDirectAcceptedFencedMediaWarnLatch(params: {
       if (warned) {
         return;
       }
-      const chunk = visibleChunk.trim();
-      if (chunk) {
+      // Join chunks exactly as accepted (no synthetic newline). Hard-split
+      // long MEDIA lines must reassemble to the stored directive identity.
+      if (visibleChunk) {
         acceptedVisibleText = acceptedVisibleText
-          ? `${acceptedVisibleText}\n${visibleChunk}`
+          ? `${acceptedVisibleText}${visibleChunk}`
           : visibleChunk;
       }
       const retained =
         identities.length > 0
           ? identities.some((directive) => {
               const identity = directive.trim();
+              if (!identity) {
+                return false;
+              }
+              // Whole-line match OR contiguous substring after hard chunk splits.
               return (
-                identity.length > 0 &&
-                acceptedVisibleText.split("\n").some((line) => line.trim() === identity)
+                acceptedVisibleText.split("\n").some((line) => line.trim() === identity) ||
+                acceptedVisibleText.includes(identity)
               );
             })
           : /media:/i.test(acceptedVisibleText);

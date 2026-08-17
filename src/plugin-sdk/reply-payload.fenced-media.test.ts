@@ -8,6 +8,7 @@ vi.mock("./channel-outbound-fenced-media-warn.js", () => ({
   ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
 }));
 
+import { createDirectAcceptedFencedMediaWarnLatch } from "./channel-outbound-fenced-media-latch.js";
 import {
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
@@ -210,5 +211,23 @@ describe("direct sendPayload fenced MEDIA diagnostic (#41966)", () => {
       },
     });
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
+  });
+});
+
+describe("createDirectAcceptedFencedMediaWarnLatch hard-split (#41966)", () => {
+  it("warns when hard-split chunks reassemble the directive without synthetic newlines", () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const directive = "MEDIA:/tmp/" + "a".repeat(60) + ".png";
+    const payload = { text: ["```", directive, "```"].join("\n") };
+    const latch = createDirectAcceptedFencedMediaWarnLatch({
+      payload,
+      surface: "slack",
+      cfg: {},
+    });
+    const mid = Math.floor(directive.length / 2);
+    latch.afterAcceptedVisibleText(["```", directive.slice(0, mid)].join("\n"));
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
+    latch.afterAcceptedVisibleText(directive.slice(mid) + "\n```");
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalledTimes(1);
   });
 });

@@ -2,6 +2,7 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createDirectAcceptedFencedMediaWarnLatch } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -204,6 +205,13 @@ export async function deliverReplies(params: {
       continue;
     }
 
+    // #41966: fenced MEDIA has no media attachment — text-only path must latch too.
+    const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+      payload,
+      cfg: params.cfg,
+      surface: "slack",
+    });
+
     // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
     // `emitMessageSentHooks` in `extensions/telegram/src/bot/delivery.replies.ts`.
     // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
@@ -258,9 +266,13 @@ export async function deliverReplies(params: {
           text: mediaCaption,
           sendText: async (text) => {
             lastResult = await sendReply({ text, threadTs });
+            fencedMediaWarn.afterAcceptedVisibleText(text);
           },
           sendMedia: async ({ mediaUrl, caption }) => {
             lastResult = await sendReply({ text: caption ?? "", mediaUrl, threadTs });
+            if (caption) {
+              fencedMediaWarn.afterAcceptedVisibleText(caption);
+            }
           },
         });
         delivered ||= mediaDelivery !== "empty";
@@ -277,6 +289,7 @@ export async function deliverReplies(params: {
           for (const chunk of chunkSlackTextAtHardLimit(text)) {
             lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
             delivered = true;
+            fencedMediaWarn.afterAcceptedVisibleText(chunk);
           }
           continue;
         }
@@ -305,6 +318,7 @@ export async function deliverReplies(params: {
         hookParts.push(outsideText);
         lastResult = await sendReply({ text: outsideText, threadTs });
         delivered = true;
+        fencedMediaWarn.afterAcceptedVisibleText(outsideText);
       }
     } catch (error) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";

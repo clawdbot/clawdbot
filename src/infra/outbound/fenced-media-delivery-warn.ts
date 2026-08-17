@@ -76,7 +76,11 @@ function textRetainsFencedSkipIdentity(
   if (identities.length > 0) {
     return identities.some((directive) => {
       const identity = directive.trim();
-      return identity.length > 0 && text.split("\n").some((line) => line.trim() === identity);
+      if (!identity) {
+        return false;
+      }
+      // Whole-line match OR contiguous substring (hard-split long directives).
+      return text.split("\n").some((line) => line.trim() === identity) || text.includes(identity);
     });
   }
   return /media:/i.test(text);
@@ -97,8 +101,10 @@ export function createFencedMediaPhysicalSendWarner(
       return;
     }
     const prior = acceptedVisibleTextBySourceIndex.get(sourceIndex) ?? "";
-    const next = text?.trim() ? (prior ? `${prior}\n${text}` : (text ?? "")) : prior;
-    if (text?.trim()) {
+    // Join accepted chunks exactly as delivered — no synthetic newline between
+    // fragments (hard-split long MEDIA: lines must reassemble contiguously).
+    const next = text ? (prior ? `${prior}${text}` : text) : prior;
+    if (text) {
       acceptedVisibleTextBySourceIndex.set(sourceIndex, next);
     }
     // Latch only after accepted visible content retains the skipped directive identity.

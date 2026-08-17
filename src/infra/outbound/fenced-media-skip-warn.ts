@@ -43,7 +43,9 @@ function textRetainsFencedSkippedMediaDirective(
       return true;
     }
   }
-  return false;
+  // Contiguous substring: durable/direct hard-splits may reassemble the directive
+  // across chunk boundaries without preserving it as an isolated line mid-flight.
+  return text.includes(identity);
 }
 
 /**

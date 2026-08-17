@@ -843,6 +843,13 @@ export async function deliverReplies(params: {
         ? reply.spokenText
         : undefined;
     const hookContent = spokenHookContent ?? rawContent;
+    // #41966: build latch from pre-hook plan facts so message_sending fence
+    // flattening that retains literal MEDIA: still reports the diagnostic.
+    const fencedMediaWarnPreHook = createDirectAcceptedFencedMediaWarnLatch({
+      payload: reply,
+      cfg: params.cfg,
+      surface: "telegram",
+    });
     const replyQuote = resolveReplyQuoteForSend({
       replyToId,
       replyQuoteByMessageId: params.replyQuoteByMessageId,
@@ -887,12 +894,8 @@ export async function deliverReplies(params: {
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
 
     // #41966: Telegram Bot API direct path does not use deliverTextOrMediaReply.
-    // Latch fenced MEDIA diagnostics only after accepted visible Bot API sends.
-    const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
-      payload: reply,
-      cfg: params.cfg,
-      surface: "telegram",
-    });
+    // Latch uses pre-hook parser facts; only after accepted visible Bot API sends.
+    const fencedMediaWarn = fencedMediaWarnPreHook;
     const onAcceptedVisibleText = (plainText: string) => {
       fencedMediaWarn.afterAcceptedVisibleText(plainText);
     };
