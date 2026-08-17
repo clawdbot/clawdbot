@@ -304,9 +304,8 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
             }),
           });
 
-          expect(discoveryRequests).toBeGreaterThan(0);
           const startupDiscoveryRequests = discoveryRequests;
-          discoveryFrozen = true;
+          expect(startupDiscoveryRequests).toBe(0);
           pendingUpdates.push(initialModelsUpdate());
 
           await expect
