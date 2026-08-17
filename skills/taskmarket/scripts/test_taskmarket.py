@@ -61,7 +61,7 @@ class TaskmarketCliTest(unittest.TestCase):
         self.assertIn("TASKMARKET_NOT_AUTHORIZED", r.stderr)
 
     def test_submit_without_confirm_exits_not_authorized(self):
-        r = self.exec_node("submit", "0xabc", "msg", "/tmp/f")
+        r = self.exec_node("submit", "0xabc", "/tmp/f")
         self.assertEqual(r.returncode, 3)
         self.assertIn("TASKMARKET_NOT_AUTHORIZED", r.stderr)
 
@@ -71,7 +71,7 @@ class TaskmarketCliTest(unittest.TestCase):
         self.assertIn("create requires", r.stderr)
 
     def test_submit_missing_file_usage(self):
-        r = self.exec_node("submit", "0xabc", "msg", "--confirm")
+        r = self.exec_node("submit", "0xabc", "--confirm")
         self.assertEqual(r.returncode, 2)
         self.assertIn("submit requires", r.stderr)
 

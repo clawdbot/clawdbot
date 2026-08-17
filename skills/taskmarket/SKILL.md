@@ -89,7 +89,7 @@ The CLI funds the task from the agent wallet and prints the created task id. Ver
 ## Submit completed work (write: requires wallet — explicit authorization required)
 
 ```bash
-node skills/taskmarket/scripts/taskmarket.js submit <taskId> <message> <file...> [--confirm]
+node skills/taskmarket/scripts/taskmarket.js submit <taskId> <file...> [--confirm]
 ```
 
 Same authorization gate as create. Under the hood it runs the first-party CLI:

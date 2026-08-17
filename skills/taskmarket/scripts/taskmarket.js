@@ -107,11 +107,11 @@ async function create(args) {
 
 async function submit(args) {
   if (!args.includes('--confirm')) {
-    exit(3, 'TASKMARKET_NOT_AUTHORIZED: submit requires explicit --confirm after showing the operator a preview (taskId, message, files)');
+    exit(3, 'TASKMARKET_NOT_AUTHORIZED: submit requires explicit --confirm after showing the operator a preview (taskId, files)');
   }
   const rest = args.filter((a) => a !== '--confirm');
-  const [taskId, message, ...files] = rest;
-  if (!taskId || !message || files.length === 0) exit(2, 'submit requires <taskId> "<message>" <file...> [--confirm]');
+  const [taskId, ...files] = rest;
+  if (!taskId || files.length === 0) exit(2, 'submit requires <taskId> <file...> [--confirm]');
   const cliArgs = ['task', 'submit', taskId, '--role', 'final'];
   for (const f of files) cliArgs.push('--file', f);
   const r = cli(cliArgs);
