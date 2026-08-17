@@ -909,6 +909,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
+  gateway_cloudflare_access_json TEXT,
   installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;

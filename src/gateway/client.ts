@@ -30,6 +30,7 @@ import {
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { VERSION } from "../version.js";
 
 export {
@@ -114,6 +115,10 @@ export class GatewayClient {
     const suppressOriginDeviceAuth = Boolean(
       deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
     );
+    if (baseOptions.cloudflareAccess) {
+      registerSecretValueForRedaction(baseOptions.cloudflareAccess.clientId);
+      registerSecretValueForRedaction(baseOptions.cloudflareAccess.clientSecret);
+    }
     this.#client = new BaseGatewayClient({
       ...baseOptions,
       clientVersion: baseOptions.clientVersion ?? VERSION,

@@ -602,6 +602,37 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
+  test("sends the closed Cloudflare Access header pair", async () => {
+    const port = await getFreePort();
+    const clientId = ["cf", "gateway", "id"].join("-");
+    const clientSecret = ["cf", "gateway", "secret"].join("-");
+    wss = new WebSocketServer({
+      port,
+      host: "127.0.0.1",
+      verifyClient: ({ req }, done) => {
+        const accepted =
+          req.headers["cf-access-client-id"] === clientId &&
+          req.headers["cf-access-client-secret"] === clientSecret;
+        done(accepted, accepted ? undefined : 403, accepted ? undefined : "Access denied");
+      },
+    });
+    const received = new Promise<Record<string, string | string[] | undefined>>((resolve) => {
+      wss?.once("connection", (_socket, request) => resolve(request.headers));
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      connectChallengeTimeoutMs: 0,
+      cloudflareAccess: { clientId, clientSecret },
+    } as ConstructorParameters<typeof GatewayClient>[0]);
+    client.start();
+
+    await expect(received).resolves.toMatchObject({
+      "cf-access-client-id": clientId,
+      "cf-access-client-secret": clientSecret,
+    });
+    client.stop();
+  });
+
   test("returns non-sensitive connection metadata", () => {
     const client = new GatewayClient({
       clientName: "cli",

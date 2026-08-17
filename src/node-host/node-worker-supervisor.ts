@@ -470,11 +470,21 @@ class NodeWorkerSupervisor {
     supervisor: NodeWorkerProcessIdentity;
   }): Promise<NodeWorkerLaunchReceipt> {
     const credential = params.descriptor.admission.credential;
-    const scrubber = createNodeWorkerCredentialScrubber(credential);
+    const cloudflareAccess =
+      params.descriptor.connectionEndpoint.kind === "websocket"
+        ? params.descriptor.connectionEndpoint.cloudflareAccess
+        : undefined;
+    const sensitiveValues = [
+      credential,
+      ...(cloudflareAccess ? [cloudflareAccess.clientId, cloudflareAccess.clientSecret] : []),
+    ];
+    const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
     // producer's latest cause so the durable terminal receipt does not become generic.
     const connectionFailure: { errorText?: string } = {};
-    registerSecretValueForRedaction(credential);
+    for (const value of sensitiveValues) {
+      registerSecretValueForRedaction(value);
+    }
     let adapter: ChildAdapter;
     try {
       const entry = resolveNodeWorkerEntry({

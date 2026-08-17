@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -617,7 +618,11 @@ export class NodeWorkerWorkspaceRuntime {
   async exec(
     input: NodeWorkerWorkspaceExecInput,
     signal?: AbortSignal,
-    gateway?: { url: string; tlsFingerprint?: string },
+    gateway?: {
+      url: string;
+      tlsFingerprint?: string;
+      cloudflareAccess?: CloudflareAccessCredentials;
+    },
   ): Promise<NodeWorkerWorkspaceExecResult> {
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
@@ -668,6 +673,7 @@ export class NodeWorkerWorkspaceRuntime {
           const stdout = await runNodeWorkerWorkspaceTransfer({
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
+            gatewayCloudflareAccess: gateway.cloudflareAccess,
             environmentId: input.environmentId,
             workspaceDir: workspacePath,
             manifestHome: sessionRoot,

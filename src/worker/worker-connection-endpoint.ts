@@ -2,6 +2,10 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ClientOptions, WebSocket } from "ws";
 import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
+import {
   GatewayWebSocketTransportConfigurationError,
   resolveGatewayWebSocketTransport,
 } from "../../packages/gateway-client/src/websocket-transport.js";
@@ -17,7 +21,12 @@ export class WorkerConnectionEndpointError extends Error {
 
 export type WorkerConnectionEndpoint =
   | { kind: "unix"; socketPath: string }
-  | { kind: "websocket"; url: string; tlsFingerprint?: string };
+  | {
+      kind: "websocket";
+      url: string;
+      tlsFingerprint?: string;
+      cloudflareAccess?: CloudflareAccessCredentials;
+    };
 
 function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
   const allowed = new Set([...required, ...optional]);
@@ -44,7 +53,7 @@ function parseWebSocketEndpoint(
   value: Record<string, unknown>,
 ): WorkerConnectionEndpoint | undefined {
   if (
-    !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint"]) ||
+    !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
     value.kind !== "websocket" ||
     typeof value.url !== "string" ||
     value.url.length > 4_096 ||
@@ -53,6 +62,10 @@ function parseWebSocketEndpoint(
         value.tlsFingerprint.trim().length === 0 ||
         value.tlsFingerprint.length > 256))
   ) {
+    return undefined;
+  }
+  const cloudflareAccess = parseCloudflareAccessCredentials(value.cloudflareAccess);
+  if (value.cloudflareAccess !== undefined && !cloudflareAccess) {
     return undefined;
   }
   let url: URL;
@@ -76,7 +89,27 @@ function parseWebSocketEndpoint(
     kind: "websocket",
     url: value.url,
     ...(value.tlsFingerprint === undefined ? {} : { tlsFingerprint: value.tlsFingerprint }),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
+}
+
+function parseCloudflareAccessCredentials(value: unknown): CloudflareAccessCredentials | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["clientId", "clientSecret"]) ||
+    typeof value.clientId !== "string" ||
+    value.clientId.trim().length === 0 ||
+    value.clientId.length > 4_096 ||
+    typeof value.clientSecret !== "string" ||
+    value.clientSecret.trim().length === 0 ||
+    value.clientSecret.length > 4_096
+  ) {
+    return undefined;
+  }
+  return { clientId: value.clientId, clientSecret: value.clientSecret };
 }
 
 export function parseWorkerConnectionEndpoint(
@@ -110,7 +143,12 @@ export function resolveWorkerConnectionTarget(
       url: endpoint.url,
       tlsFingerprint: endpoint.tlsFingerprint,
       env,
-      options: {},
+      options: endpoint.cloudflareAccess
+        ? {
+            followRedirects: false,
+            headers: buildCloudflareAccessHeaders(endpoint.cloudflareAccess),
+          }
+        : {},
     });
     return { url: endpoint.url, ...transport };
   } catch (error) {

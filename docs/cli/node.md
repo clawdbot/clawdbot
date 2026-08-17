@@ -115,6 +115,14 @@ short-lived bearer setup link must not be persisted in service arguments.
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
+For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` together before `openclaw connect`, `openclaw node
+run`, or `openclaw node install`. The node stores env SecretRefs under its
+canonical `gateway.cloudflareAccess.clientId` and `clientSecret` connection
+keys. Installed services keep the values in the managed service environment
+file, not in service arguments or inline supervisor definitions. See
+[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
+
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
 trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; without

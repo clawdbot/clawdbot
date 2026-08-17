@@ -1,6 +1,7 @@
 // Connect CLI tests cover accepted targets and handoff to the canonical node runtime.
+import { createServer } from "node:http";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
 import { registerConnectCli } from "./connect-cli.js";
 
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
+  loadNodeHostConfig: vi.fn(async () => null),
   runtime: {
     error: vi.fn(),
     exit: vi.fn(),
@@ -15,12 +17,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../node-host/runner.js", () => ({ runNodeHost: mocks.runNodeHost }));
+vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 vi.mock("./node-cli/daemon.js", () => ({
   runNodeDaemonInstall: mocks.runNodeDaemonInstall,
 }));
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-}));
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  mocks.fetchWithSsrFGuard.mockImplementation(actual.fetchWithSsrFGuard);
+  return { fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
+});
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 
 const payload = {
@@ -46,6 +52,10 @@ describe("connect cli", () => {
     mocks.runNodeHost.mockResolvedValue(undefined);
     mocks.runNodeDaemonInstall.mockResolvedValue(undefined);
     mocks.runtime.exit.mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it.each([
@@ -96,6 +106,9 @@ describe("connect cli", () => {
       displayName: "Build Node",
     });
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(fetched ? 1 : 0);
+    if (fetched) {
+      expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
+    }
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
@@ -123,5 +136,59 @@ describe("connect cli", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(mocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
+  it("sends Cloudflare Access credentials on the pinned join request", async () => {
+    const clientId = ["cf", "client", "id"].join("-");
+    const clientSecret = ["cf", "client", "secret"].join("-");
+    vi.stubEnv("CF_ACCESS_CLIENT_ID", clientId);
+    vi.stubEnv("CF_ACCESS_CLIENT_SECRET", clientSecret);
+    let observedHeaders: typeof import("node:http").IncomingHttpHeaders | undefined;
+    const server = createServer((request, response) => {
+      observedHeaders = request.headers;
+      const accepted =
+        request.headers["cf-access-client-id"] === clientId &&
+        request.headers["cf-access-client-secret"] === clientSecret;
+      response.writeHead(accepted ? 200 : 403, {
+        "content-type": accepted ? "application/json" : "text/plain",
+      });
+      response.end(accepted ? JSON.stringify(payload) : "Access denied");
+    });
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("test edge did not allocate a port"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    const target = `http://127.0.0.1:${port}/j/${"a".repeat(22)}`;
+
+    try {
+      await runConnect([target]);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+
+    expect(observedHeaders).toMatchObject({
+      "cf-access-client-id": clientId,
+      "cf-access-client-secret": clientSecret,
+    });
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxRedirects: 0,
+        init: {
+          headers: {
+            "CF-Access-Client-Id": clientId,
+            "CF-Access-Client-Secret": clientSecret,
+          },
+        },
+      }),
+    );
   });
 });

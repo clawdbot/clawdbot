@@ -2314,6 +2314,31 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("never logs a registered Cloudflare Access credential from connection errors", async () => {
+    const clientSecret = ["cf", "redaction", "secret"].join("-");
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      cloudflareAccess: { clientId: "cf-redaction-id", clientSecret },
+      deviceIdentity: null,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      ws,
+      connect.id,
+      { code: "AUTH_UNAUTHORIZED" },
+      `edge rejected service token ${clientSecret}`,
+    );
+
+    await waitForFast(() => {
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    });
+    const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(logged).toContain("edge rejected service token");
+    expect(logged).not.toContain(clientSecret);
+    client.stop();
+  });
+
   it("uses explicit shared password and does not inject stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({

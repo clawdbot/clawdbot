@@ -29,6 +29,7 @@ describe("worker connection endpoint", () => {
     expect(endpoint).toBeDefined();
 
     const target = resolveWorkerConnectionTarget(endpoint!);
+    expect(target.options.headers).toBeUndefined();
     const checkServerIdentity = (hostname: string, cert: CertMeta) =>
       target.options.checkServerIdentity?.(hostname, cert);
     expect(target.options.rejectUnauthorized).toBe(false);
@@ -47,6 +48,22 @@ describe("worker connection endpoint", () => {
       _socket: { getPeerCertificate: () => ({ fingerprint256: fingerprint }) },
     } as unknown as WebSocket;
     expect(target.validateSocket(socket)).toBeNull();
+  });
+
+  it("carries the closed Cloudflare Access credential pair to the worker upgrade", () => {
+    const clientId = ["cf", "worker", "id"].join("-");
+    const clientSecret = ["cf", "worker", "secret"].join("-");
+    const endpoint = parseWorkerConnectionEndpoint({
+      kind: "websocket",
+      url: "wss://gateway.example/__openclaw__/worker",
+      cloudflareAccess: { clientId, clientSecret },
+    });
+
+    expect(endpoint).toBeDefined();
+    expect(resolveWorkerConnectionTarget(endpoint!).options.headers).toEqual({
+      "CF-Access-Client-Id": clientId,
+      "CF-Access-Client-Secret": clientSecret,
+    });
   });
 
   it("rejects public plaintext while retaining the private-network break-glass", () => {
