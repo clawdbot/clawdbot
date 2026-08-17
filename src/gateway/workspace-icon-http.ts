@@ -271,7 +271,7 @@ function publishSessionWorkspaceIcon(
     // One completion observer fans out only to requests that still own an
     // admission slot. Snapshot-bound waiters survive cache eviction, while
     // timed-out and disconnected responses detach immediately.
-    for (const waiter of [...snapshot.waiters]) {
+    for (const waiter of snapshot.waiters) {
       waiter.settle(icon);
     }
   });
@@ -321,7 +321,6 @@ function awaitSessionWorkspaceIcon(
     // Every exit runs through here, so the timer, the disconnect listener, and
     // the admission slot this request holds are always released together.
     let settled = false;
-    let waiter: SessionWorkspaceIconWaiter;
     const settle = (resolution: WorkspaceIconResolution | undefined) => {
       if (settled) {
         return;
@@ -338,7 +337,7 @@ function awaitSessionWorkspaceIcon(
       }
       resolve(resolution);
     };
-    waiter = { settle };
+    const waiter: SessionWorkspaceIconWaiter = { settle };
     const abandon = () => settle(undefined);
     waiters.add(waiter);
     res.once("close", abandon);
