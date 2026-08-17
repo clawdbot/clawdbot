@@ -61,6 +61,19 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected lastAssistantItemId: string | null = null;
 
+  // item_id of the assistant item we most recently sent
+  // conversation.item.truncate for. Deltas that keep arriving for this exact
+  // item after the truncate (a race between the request and the provider's
+  // in-flight generation) must not be re-adopted as a new item - see
+  // OpenAIRealtimeEvents' response.audio.delta handling.
+  protected lastTruncatedItemId: string | null = null;
+
+  // event_id of the most recently sent conversation.item.truncate, so a
+  // provider-side rejection of that specific request can be recognized and
+  // used to repair state (in particular, release responseCancelInFlight if
+  // it was set for the same barge-in and nothing else will ever clear it).
+  protected manualTruncateEventId: string | null = null;
+
   protected completedToolCallIds = new Set<string>();
 
   protected standaloneSpeechQueue: string[] = [];
@@ -68,6 +81,24 @@ export abstract class OpenAIRealtimeProtocol {
   protected standaloneSpeechActive = false;
 
   protected standaloneSpeechEventId: string | null = null;
+
+  // Cumulative bytes of assistant audio delivered to the client for the item
+  // currently identified by lastAssistantItemId. Reset whenever that item
+  // changes (see OpenAIRealtimeEvents' response.audio.delta handling) or
+  // marks are cleared.
+  protected deliveredAudioBytesForCurrentItem = 0;
+
+  // Cumulative bytes of assistant audio the client has *confirmed playing*
+  // (via acknowledgeMark) for the current item. This can only ever be <=
+  // deliveredAudioBytesForCurrentItem, which is what makes it a safe source
+  // for conversation.item.truncate's audio_end_ms: it is derived from audio
+  // actually reaching the client, not from an unrelated input-audio clock.
+  protected playedAudioBytesForCurrentItem = 0;
+
+  // markSequence -> deliveredAudioBytesForCurrentItem snapshot at the moment
+  // that mark was sent, so acknowledging a mark tells us exactly how many
+  // bytes of the current item had been delivered by that point.
+  private readonly markAudioByteOffsets = new Map<number, number>();
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
@@ -94,6 +125,15 @@ export abstract class OpenAIRealtimeProtocol {
     ) {
       return;
     }
+    const playedBytes = this.markAudioByteOffsets.get(acknowledgedSequence);
+    if (playedBytes !== undefined && playedBytes > this.playedAudioBytesForCurrentItem) {
+      this.playedAudioBytesForCurrentItem = playedBytes;
+    }
+    for (const sequence of this.markAudioByteOffsets.keys()) {
+      if (sequence <= acknowledgedSequence) {
+        this.markAudioByteOffsets.delete(sequence);
+      }
+    }
     // Marks follow ordered playback. Reaching a named mark also acknowledges every
     // earlier mark, while late acknowledgements from that prefix remain harmless.
     if (acknowledgedSequence === latest) {
@@ -102,6 +142,60 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
     this.oldestOutstandingMarkSequence = acknowledgedSequence + 1;
+  }
+
+  // Bytes-per-millisecond for the negotiated output audio format. Guards
+  // against NaN (not just <= 0) so a malformed sampleRateHz silently
+  // disables barge-in truncation instead of producing a bogus audio_end_ms.
+  private audioBytesPerMs(): number | null {
+    const bytesPerSample = this.audioFormat.encoding === "pcm16" ? 2 : 1;
+    const bytesPerMs = (this.audioFormat.sampleRateHz * bytesPerSample) / 1000;
+    return Number.isFinite(bytesPerMs) && bytesPerMs > 0 ? bytesPerMs : null;
+  }
+
+  /**
+   * Converts confirmed-played bytes for the current item into milliseconds
+   * using the negotiated output audio format, or null when no mark for the
+   * current item has been acknowledged yet (callers should fall back to
+   * another audio_end_ms source in that case).
+   */
+  protected playedAudioMsForCurrentItem(): number | null {
+    if (this.playedAudioBytesForCurrentItem <= 0) {
+      return null;
+    }
+    const bytesPerMs = this.audioBytesPerMs();
+    return bytesPerMs === null
+      ? null
+      : Math.floor(this.playedAudioBytesForCurrentItem / bytesPerMs);
+  }
+
+  /**
+   * Converts bytes of assistant audio actually DELIVERED to the client for
+   * the current item into milliseconds. This is a strict upper bound on how
+   * much of the item could possibly have been heard - OpenAI cannot reject
+   * conversation.item.truncate for exceeding item duration if audio_end_ms
+   * never exceeds this value, regardless of which clock produced the
+   * pre-clamp estimate.
+   */
+  protected deliveredAudioMsForCurrentItem(): number | null {
+    if (this.deliveredAudioBytesForCurrentItem <= 0) {
+      return null;
+    }
+    const bytesPerMs = this.audioBytesPerMs();
+    return bytesPerMs === null
+      ? null
+      : Math.floor(this.deliveredAudioBytesForCurrentItem / bytesPerMs);
+  }
+
+  // Clears all per-item audio-accounting state (delivered bytes, confirmed-
+  // played bytes, and the mark->byte-offset map). Must run on every item
+  // transition - markAudioByteOffsets is private specifically so this is
+  // the only way to clear it, preventing a subclass reset (see
+  // OpenAIRealtimeEvents) from forgetting a piece of this state.
+  protected resetItemAudioAccounting(): void {
+    this.deliveredAudioBytesForCurrentItem = 0;
+    this.playedAudioBytesForCurrentItem = 0;
+    this.markAudioByteOffsets.clear();
   }
 
   protected sendSessionUpdate(): void {
@@ -238,23 +332,55 @@ export abstract class OpenAIRealtimeProtocol {
       ((responseStartTimestamp !== null &&
         (this.oldestOutstandingMarkSequence !== null || options?.audioPlaybackActive === true)) ||
         force);
-    const audioEndMs = shouldInterruptProvider
-      ? Math.max(
+    // audio_end_ms must describe audio actually heard by the user for THIS
+    // item (OpenAI Realtime conversation.item.truncate contract). The
+    // mark-acknowledgement byte count is the client's own confirmation of
+    // playback progress, so prefer it whenever at least one mark for the
+    // current item has been acknowledged. Only fall back to the
+    // media-timestamp diff (which assumes input and output audio share one
+    // continuous real-time clock - true for telephony bridges, not
+    // guaranteed for a relayed mobile client) when no such confirmation
+    // exists yet.
+    const playedMs = shouldInterruptProvider ? this.playedAudioMsForCurrentItem() : null;
+    const rawAudioEndMs = shouldInterruptProvider
+      ? (playedMs ??
+        Math.max(
           0,
           responseStartTimestamp === null
             ? this.latestMediaTimestamp
             : this.latestMediaTimestamp - responseStartTimestamp,
-        )
+        ))
       : null;
+    // deliveredAudioBytesForCurrentItem bytes are bytes OpenAI has actually
+    // sent us for this item, so the millisecond equivalent is a hard upper
+    // bound on the item's true audio duration - clamping here makes an
+    // "Audio content of Xms is already shorter than Yms" rejection
+    // structurally impossible on every path, including the media-timestamp
+    // fallback above (which has no other relationship to this item's real
+    // duration and previously could report clock drift as "audio played").
+    const deliveredMs = shouldInterruptProvider ? this.deliveredAudioMsForCurrentItem() : null;
+    const audioEndMs =
+      rawAudioEndMs !== null && deliveredMs !== null
+        ? Math.min(rawAudioEndMs, deliveredMs)
+        : rawAudioEndMs;
     const minBargeInAudioEndMs =
       this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
-    if (!force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
+    // Below-minimum audio_end_ms only means "not confident enough yet to
+    // tell OpenAI precisely where to truncate this item" - it must NOT mean
+    // "not a real barge-in". A genuine barge-in signal always cancels any
+    // in-flight provider response and clears local playback immediately;
+    // only the provider-side truncate call (which requires a trustworthy
+    // audio_end_ms) is what gets skipped below the minimum. Gating local
+    // clear on this too would let the assistant keep talking over the user
+    // for as long as mark-acknowledgement round-trips lag real time.
+    const audioEndMsBelowMinimum =
+      !force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs;
+    if (audioEndMsBelowMinimum) {
       this.config.onEvent?.({
         direction: "client",
         type: "conversation.item.truncate.skipped",
         detail: `reason=barge-in audioEndMs=${audioEndMs} minAudioEndMs=${minBargeInAudioEndMs}`,
       });
-      return;
     }
     if (
       options?.audioPlaybackActive === true &&
@@ -266,17 +392,28 @@ export abstract class OpenAIRealtimeProtocol {
       this.sendEvent({ type: "response.cancel", event_id: eventId }, "reason=barge-in");
       this.responseCancelInFlight = true;
     }
-    if (shouldInterruptProvider) {
+    if (shouldInterruptProvider && !audioEndMsBelowMinimum) {
+      const truncateEventId = `openclaw-truncate-${randomUUID()}`;
+      this.manualTruncateEventId = truncateEventId;
       this.sendEvent(
         {
           type: "conversation.item.truncate",
           item_id: assistantItemId,
           content_index: 0,
           audio_end_ms: audioEndMs,
+          event_id: truncateEventId,
         },
         `reason=barge-in audioEndMs=${audioEndMs}`,
       );
       this.config.onClearAudio("barge-in");
+      // The item we just told the server to stop at audioEndMs may still
+      // have in-flight deltas arriving for the same item_id (the truncate
+      // request and the provider's in-progress generation race). Remember
+      // it so OpenAIRealtimeEvents can recognize and drop that stale tail
+      // instead of re-adopting it as a brand new item, which would restart
+      // clock/byte accounting mid-stream and could trigger a second,
+      // spuriously-small-looking truncate rejection for the same item.
+      this.lastTruncatedItemId = assistantItemId;
       this.clearOutstandingMarks();
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
@@ -374,6 +511,8 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected resetRealtimeSessionState(): void {
     this.clearOutstandingMarks();
+    this.lastTruncatedItemId = null;
+    this.manualTruncateEventId = null;
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
@@ -398,6 +537,7 @@ export abstract class OpenAIRealtimeProtocol {
       this.oldestOutstandingMarkSequence = sequence;
     }
     this.latestOutstandingMarkSequence = sequence;
+    this.markAudioByteOffsets.set(sequence, this.deliveredAudioBytesForCurrentItem);
     const markName = `audio-${sequence}`;
     this.config.onMark?.(markName);
   }
@@ -405,6 +545,7 @@ export abstract class OpenAIRealtimeProtocol {
   protected clearOutstandingMarks(): void {
     this.oldestOutstandingMarkSequence = null;
     this.latestOutstandingMarkSequence = null;
+    this.resetItemAudioAccounting();
   }
 
   abstract submitToolResult(

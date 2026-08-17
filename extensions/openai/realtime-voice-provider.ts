@@ -220,6 +220,13 @@ async function createOpenAIRealtimeBrowserSession(
               apiKey,
               callId,
               gaSessionPolicy: sessionConfig,
+              // sessionConfig above negotiates PCM16/24kHz with OpenAI - the
+              // bridge's own audioFormat must match it (it defaults to
+              // g711_ulaw/8kHz otherwise), since audio_end_ms accounting
+              // converts delivered/played byte counts using this field. A
+              // mismatch here would silently multiply every ms estimate by
+              // the byte-rate ratio between the two formats.
+              audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
               model,
               voice,
               instructions: req.instructions,

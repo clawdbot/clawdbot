@@ -84,8 +84,13 @@ describe("OpenAI realtime voice bridge events", () => {
     });
     const socket = await connectReadyBridge(bridge);
 
+    // 2016 bytes at the default g711_ulaw/8kHz output format (1 byte/sample)
+    // is 252ms of confirmed-played audio, comfortably above the default
+    // 250ms minimum barge-in window - so audio_end_ms below is derived from
+    // bytes actually acknowledged as played, not from a manually-set clock.
+    const audio = Buffer.alloc(2016, 0x41);
     bridge.setMediaTimestamp(1000);
-    emitAssistantPlayback(socket);
+    emitAssistantPlayback(socket, { audio });
     bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
@@ -98,7 +103,86 @@ describe("OpenAI realtime voice bridge events", () => {
         type: "conversation.item.truncate",
         item_id: "item_1",
         content_index: 0,
-        audio_end_ms: 300,
+        audio_end_ms: 252,
+        event_id: expect.any(String),
+      },
+    ]);
+  });
+
+  it("skips truncate when only a sub-minimum sliver of audio has been confirmed played", async () => {
+    // Regression guard for the truncate audio_end_ms bug: before the fix,
+    // audio_end_ms was derived from an unrelated input-media-timestamp diff
+    // that could report tens of seconds of "played" audio for an item that
+    // had only streamed a couple of bytes, which OpenAI's Realtime API
+    // rejects with "Audio content of Xms is already shorter than Yms".
+    // A tiny confirmed-played chunk must instead skip truncate via the
+    // existing minBargeInAudioEndMs gate, never send an inflated value.
+    const onClearAudio = vi.fn();
+    const bridge = createNativeBridge({
+      onClearAudio,
+      onMark: () => bridge.acknowledgeMark(),
+    });
+    const socket = await connectReadyBridge(bridge);
+
+    // A single-byte delta acknowledged immediately is far below the 250ms
+    // default minimum, even though a stale/unrelated wall clock could have
+    // advanced by any arbitrary amount in the meantime.
+    bridge.setMediaTimestamp(1000);
+    emitAssistantPlayback(socket, { audio: Buffer.from([0x00]) });
+    bridge.setMediaTimestamp(1_000_000);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    // Below minBargeInAudioEndMs, the provider-side truncate is skipped
+    // (audio_end_ms isn't trustworthy enough yet to tell OpenAI precisely
+    // where this item was cut) but response.cancel still fires immediately -
+    // a genuine barge-in must never let the assistant keep generating/
+    // talking over the user just because the played-byte confirmation
+    // hasn't caught up yet.
+    expect(hasSentEventType(socket, "conversation.item.truncate")).toBe(false);
+    expect(hasSentEventType(socket, "response.cancel")).toBe(true);
+  });
+
+  it("clamps audio_end_ms to delivered audio when no mark has been acknowledged yet", async () => {
+    // Real regression guard for the original production bug: audio_end_ms
+    // was derived from an unrelated input-media-timestamp diff whenever no
+    // mark had been acknowledged for the current item yet (the fast/early
+    // barge-in case - the single most common interruption timing). That
+    // diff could report tens of seconds of "played" audio for an item that
+    // had only streamed a couple thousand bytes, which OpenAI's Realtime
+    // API rejects with "Audio content of Xms is already shorter than Yms".
+    // Unlike the previous test (which acknowledges a mark immediately and
+    // so never touches the fallback at all), this scenario never
+    // acknowledges anything, so playedAudioMsForCurrentItem() stays null
+    // and the fallback path - and its delivered-bytes clamp - is what's
+    // actually under test.
+    const onClearAudio = vi.fn();
+    const bridge = createNativeBridge({ onClearAudio });
+    const socket = await connectReadyBridge(bridge);
+
+    // 2016 bytes at g711_ulaw/8kHz (1 byte/sample) is 252ms of audio OpenAI
+    // has actually sent us for this item - a hard upper bound on how much
+    // could possibly have been heard, regardless of what the input-audio
+    // clock below claims.
+    const audio = Buffer.alloc(2016, 0x41);
+    bridge.setMediaTimestamp(1000);
+    emitAssistantPlayback(socket, { audio });
+    // A wildly divergent input-audio clock: pre-fix this produced
+    // audio_end_ms = 999000, which sailed past the 250ms minimum and was
+    // sent to OpenAI as truncate for an item that was only 252ms long.
+    bridge.setMediaTimestamp(1_000_000);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(parseSent(socket).slice(-2)).toEqual([
+      expectedResponseCancelEvent(),
+      {
+        type: "conversation.item.truncate",
+        item_id: "item_1",
+        content_index: 0,
+        audio_end_ms: 252,
+        event_id: expect.any(String),
       },
     ]);
   });
@@ -129,12 +213,16 @@ describe("OpenAI realtime voice bridge events", () => {
     bridge.setMediaTimestamp(1300);
     bridge.handleBargeIn?.();
 
+    // 299 acknowledged chunks * 15 bytes ("assistant audio") = 4485 bytes,
+    // which at g711_ulaw/8kHz (1 byte/sample) is floor(4485 / 8) = 560ms of
+    // confirmed-played audio - independent of the media-timestamp diff.
     expect(parseSent(socket).slice(-1)).toEqual([
       {
         type: "conversation.item.truncate",
         item_id: "item_1",
         content_index: 0,
-        audio_end_ms: 300,
+        audio_end_ms: 560,
+        event_id: expect.any(String),
       },
     ]);
     expect(onClearAudio).toHaveBeenCalledWith("barge-in");
@@ -323,10 +411,17 @@ describe("OpenAI realtime voice bridge events", () => {
     const socket = await connectReadyBridge(bridge);
     emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
     bridge.setMediaTimestamp(1000);
+    // No mark handler is wired up here (only onEvent), so audio_end_ms is
+    // computed via the media-timestamp fallback, then clamped to delivered
+    // bytes (see the dedicated clamp regression test above). 2400 bytes at
+    // g711_ulaw/8kHz is 300ms delivered - at or above both the fallback's
+    // 300ms clock diff and the default 250ms minimum - so this scenario
+    // stays focused on its actual subject (no duplicate response.cancel)
+    // instead of incidentally falling below the truncate minimum.
     emitServerEvent(socket, {
       type: "response.audio.delta",
       item_id: "item_1",
-      delta: Buffer.from("assistant audio").toString("base64"),
+      delta: Buffer.alloc(2400, 0x41).toString("base64"),
     });
     bridge.setMediaTimestamp(1300);
 
@@ -346,7 +441,7 @@ describe("OpenAI realtime voice bridge events", () => {
     });
   });
 
-  it("ignores zero-length playback barge-in without clearing audio", async () => {
+  it("clears audio and cancels the response for zero-length playback barge-in, but skips provider truncate", async () => {
     const onClearAudio = vi.fn();
     const onEvent = vi.fn();
     const bridge = createNativeBridge({
@@ -359,8 +454,13 @@ describe("OpenAI realtime voice bridge events", () => {
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
 
-    expect(onClearAudio).not.toHaveBeenCalled();
-    expect(hasSentEventType(socket, "response.cancel")).toBe(false);
+    // A genuine barge-in signal always stops local playback and cancels any
+    // in-flight provider response, regardless of whether audio_end_ms is
+    // trustworthy enough yet to send a precise provider-side truncate -
+    // otherwise the assistant could keep talking over the user for as long
+    // as confirmation lags real time.
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(hasSentEventType(socket, "response.cancel")).toBe(true);
     expect(parseSent(socket).some((event) => event.type === "conversation.item.truncate")).toBe(
       false,
     );
@@ -391,6 +491,7 @@ describe("OpenAI realtime voice bridge events", () => {
         item_id: "item_1",
         content_index: 0,
         audio_end_ms: 0,
+        event_id: expect.any(String),
       },
     ]);
     expect(onClearAudio).toHaveBeenCalled();
@@ -424,6 +525,7 @@ describe("OpenAI realtime voice bridge events", () => {
         item_id: "item_1",
         content_index: 0,
         audio_end_ms: 0,
+        event_id: expect.any(String),
       },
     ]);
   });

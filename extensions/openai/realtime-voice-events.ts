@@ -77,13 +77,35 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         if (!audioDelta) {
           return;
         }
+        // Stale tail of an item we already truncated: the truncate request
+        // and the provider's in-flight generation can race, so more deltas
+        // for that exact item_id can still arrive after we told the server
+        // (and the client) to stop at audioEndMs. Re-adopting it here as if
+        // it were a new item would restart clock/byte accounting mid-item
+        // and could produce a second truncate whose audio_end_ms looks
+        // small and plausible but is actually counted from the truncation
+        // point rather than the item's real start.
+        if (event.item_id && event.item_id === this.lastTruncatedItemId) {
+          return;
+        }
         const audio = base64ToBuffer(audioDelta);
         this.config.onAudio(audio);
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;
+          // New item: byte accounting from the previous item no longer applies.
+          this.resetItemAudioAccounting();
         } else if (this.responseStartTimestamp === null) {
           this.responseStartTimestamp = this.latestMediaTimestamp;
+        }
+        // item_id is optional on the wire type. Only count bytes toward a
+        // known item's duration - crediting an unidentified delta to
+        // whichever item happened to be current would let audio_end_ms
+        // exceed that item's real length again (the class of bug this
+        // accounting exists to prevent), whereas skipping the count merely
+        // makes truncate slightly more conservative.
+        if (event.item_id) {
+          this.deliveredAudioBytesForCurrentItem += audio.byteLength;
         }
         this.responseActive = true;
         this.sendMark();
@@ -149,6 +171,34 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
         const rejectedEventId = readRealtimeErrorEventId(event.error);
+        if (rejectedEventId && rejectedEventId === this.manualTruncateEventId) {
+          // A rejected conversation.item.truncate (e.g. "Audio content of
+          // Xms is already shorter than Yms") previously fell through to
+          // the generic onError branch below with no state repair. By that
+          // point handleBargeIn had already optimistically cleared
+          // lastAssistantItemId/responseStartTimestamp/marks, so there was
+          // nothing left to retry - but responseCancelInFlight, if this
+          // barge-in also sent response.cancel, is cleared ONLY by a
+          // response.cancelled event or a rejection whose detail exactly
+          // matches OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR. A
+          // truncate rejection matches neither, so responseCancelInFlight
+          // could be left permanently true, which makes every future
+          // requestResponseCreate() queue as "pending" forever and the
+          // conversation never produces another assistant turn. Release it
+          // here so a truncate rejection can never strand the session.
+          this.manualTruncateEventId = null;
+          this.config.onError?.(new Error(detail));
+          if (this.responseCancelInFlight) {
+            this.responseCancelInFlight = false;
+            this.manualResponseCancelEventId = null;
+            if (this.responseCreatePending) {
+              this.flushPendingResponseCreate();
+            } else {
+              this.restoreAutoRespondAfterManualResponse();
+            }
+          }
+          return;
+        }
         if (rejectedEventId && rejectedEventId === this.standaloneSpeechEventId) {
           this.responseCreateInFlight = false;
           this.standaloneSpeechActive = false;
