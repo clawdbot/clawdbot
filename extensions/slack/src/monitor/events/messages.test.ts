@@ -362,6 +362,18 @@ describe("registerSlackMessageEvents", () => {
 
   it.each([
     {
+      name: "message with bot identity",
+      event: {
+        type: "message",
+        bot_id: "B_OTHER",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U_OTHER",
+        text: "<@U_BOT> hello",
+        ts: "123.456",
+      },
+    },
+    {
       name: "file_share with bot_id",
       event: {
         type: "message",
@@ -385,20 +397,29 @@ describe("registerSlackMessageEvents", () => {
         ts: "123.456",
       },
     },
-  ])("drops enterprise bot-authored $name events before dispatch", async ({ event }) => {
+  ])("passes enterprise bot-authored $name to policy-aware dispatch", async ({ event }) => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    const client = {};
     await handler({
       event,
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client,
     });
 
-    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      event,
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        eventScope: expect.objectContaining({ teamId: "T111", client }),
+      }),
+    );
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("drops bot-authored enterprise app_mention events before dispatch", async () => {
+  it("drops bot-authored enterprise app_mention events in favor of the message event", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("app_mention");
     await handler({
       event: { ...makeAppMentionEvent(), bot_id: "B_OTHER" },
