@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
@@ -18,6 +19,8 @@ export function updateChatRunProgressSnapshot(
   const data = event.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
+  const review = asNullableRecord(data.review) ?? undefined;
+  const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -27,7 +30,8 @@ export function updateChatRunProgressSnapshot(
   const isTool =
     event.stream === "tool" &&
     Boolean(toolCallId) &&
-    ["start", "input_delta", "update", "result"].includes(phase);
+    ["start", "input_delta", "update", "review", "result"].includes(phase) &&
+    (phase !== "review" || Boolean(reviewId));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
   if (!isTool && !isPreamble) {
     return snapshot;
@@ -61,7 +65,15 @@ export function updateChatRunProgressSnapshot(
       if (candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
       }
-      return phase === "start" || phase === "result" || candidate.data?.phase === phase;
+      if (phase === "start" || phase === "result") {
+        return true;
+      }
+      if (phase !== "review" || candidate.data?.phase !== "review") {
+        return candidate.data?.phase === phase;
+      }
+      // One command can own parallel reviews; replace only the matching
+      // review ID so reconnect restores every still-relevant decision.
+      return asNullableRecord(candidate.data.review)?.id === reviewId;
     });
     if (phase === "result") {
       return next;
@@ -84,6 +96,7 @@ export function updateChatRunProgressSnapshot(
           ? { partialResult: data.partialResult }
           : {}),
         ...(phase === "input_delta" && Object.hasOwn(data, "diff") ? { diff: data.diff } : {}),
+        ...(phase === "review" ? { hideFromChannelProgress: true, review: data.review } : {}),
       }
     : {
         kind: "preamble",

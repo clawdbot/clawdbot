@@ -83,19 +83,34 @@ describe("createChatRunState", () => {
       toolCallId: "active",
       partialResult: "halfway",
     });
-    event(5, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(5, "tool", {
+      phase: "review",
+      toolCallId: "active",
+      review: { id: "review-1", label: "Guardian", status: "in_progress" },
+    });
     event(6, "tool", {
+      phase: "review",
+      toolCallId: "active",
+      review: { id: "review-1", label: "Guardian", status: "approved" },
+    });
+    event(7, "tool", {
+      phase: "review",
+      toolCallId: "active",
+      review: { id: "review-2", label: "Guardian", status: "denied" },
+    });
+    event(8, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
+    event(9, "tool", {
       phase: "result",
       name: "exec",
       toolCallId: "done",
       result: "x".repeat(256_000),
     });
-    event(7, "item", {
+    event(10, "item", {
       kind: "preamble",
       itemId: "p-1",
       progressText: "Inspection complete",
     });
-    event(8, "item", {
+    event(11, "item", {
       kind: "preamble",
       itemId: "p-2",
       progressText: "Running autoreview",
@@ -111,15 +126,40 @@ describe("createChatRunState", () => {
       },
       { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
       {
+        seq: 6,
+        stream: "tool",
+        data: {
+          phase: "review",
+          toolCallId: "active",
+          review: { id: "review-1", status: "approved" },
+        },
+      },
+      {
         seq: 7,
+        stream: "tool",
+        data: {
+          phase: "review",
+          toolCallId: "active",
+          review: { id: "review-2", status: "denied" },
+        },
+      },
+      {
+        seq: 10,
         stream: "item",
         ts: 1_001,
         data: { itemId: "p-1", progressText: "Inspection complete" },
       },
-      { seq: 8, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
+      { seq: 11, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
     ]);
 
-    for (let seq = 9; seq <= 71; seq += 1) {
+    event(12, "tool", { phase: "result", name: "read", toolCallId: "active" });
+    expect(
+      state.runs
+        .get("run-1")
+        ?.progressSnapshot?.events.some((candidate) => candidate.data.toolCallId === "active"),
+    ).toBe(false);
+
+    for (let seq = 13; seq <= 75; seq += 1) {
       event(seq, "tool", {
         phase: "start",
         name: "read",
@@ -133,7 +173,7 @@ describe("createChatRunState", () => {
     expect(snapshot?.events.at(-1)?.data).toEqual({
       phase: "start",
       name: "read",
-      toolCallId: "tool-71",
+      toolCallId: "tool-75",
     });
   });
 });

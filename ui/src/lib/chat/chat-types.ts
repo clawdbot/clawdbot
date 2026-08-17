@@ -50,6 +50,15 @@ export type ChatGuardianNotice = {
   message?: string;
 };
 
+export type ToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  userAuthorization?: string;
+  rationale?: string;
+};
+
 export type ChatQueueSkillWorkshopRevision = {
   proposalId: string;
   agentId?: string;

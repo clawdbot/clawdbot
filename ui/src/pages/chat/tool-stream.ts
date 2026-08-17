@@ -10,7 +10,13 @@ import type {
   ChatGuardianNotice,
   ChatQueueItem,
   ChatStreamSegment,
+  ToolApprovalReview,
 } from "../../lib/chat/chat-types.ts";
+import {
+  normalizeToolApprovalReview,
+  upsertToolApprovalReview,
+  withToolApprovalReviews,
+} from "../../lib/chat/tool-approval-reviews.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
@@ -60,6 +66,7 @@ export type ToolStreamEntry = {
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
+  approvalReviews?: ToolApprovalReview[];
   startedAt: number;
   receivedAt: number;
   message: Record<string, unknown>;
@@ -271,6 +278,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     type: "toolcall",
     name: entry.name,
     arguments: entry.args ?? {},
+    ...(entry.details !== undefined ? { details: entry.details } : {}),
   });
   // Emit the result block whenever a result landed, even with empty output;
   // otherwise a completed no-stdout command keeps its running state in the UI.
@@ -911,6 +919,12 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     return true;
   }
   const reviewId = toTrimmedString(data.reviewId) ?? String(payload.seq);
+  const targetItemId = toTrimmedString(data.targetItemId);
+  if (phase === "completed" && targetItemId && (status === "approved" || status === "denied")) {
+    // Targeted decisions arrive again as generic tool-review metadata. Keep
+    // vendor notices only as the compatibility fallback for targetless reviews.
+    return true;
+  }
   const command = toTrimmedString(data.command);
   const riskLevel = toTrimmedString(data.riskLevel);
   const rationale = toTrimmedString(data.rationale);
@@ -931,6 +945,39 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     existingIndex === -1
       ? [...current.slice(-49), notice]
       : current.map((candidate, index) => (index === existingIndex ? notice : candidate));
+  return true;
+}
+
+function removeGuardianDecisionWarning(
+  notices: readonly ChatGuardianNotice[],
+  runId: string,
+): ChatGuardianNotice[] {
+  const index = notices.findLastIndex(
+    (notice) => notice.runId === runId && notice.kind === "warning",
+  );
+  return index === -1 ? [...notices] : notices.filter((_notice, candidate) => candidate !== index);
+}
+
+function handleToolReviewEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "tool" || payload.data?.phase !== "review") {
+    return false;
+  }
+  const toolCallId = toTrimmedString(payload.data.toolCallId);
+  const review = normalizeToolApprovalReview(payload.data.review);
+  if (!toolCallId || !review) {
+    return true;
+  }
+  const entry = host.toolStreamById.get(buildToolStreamIdentity(payload.runId, toolCallId));
+  if (!entry) {
+    return true;
+  }
+  entry.approvalReviews = upsertToolApprovalReview(entry.approvalReviews ?? [], review);
+  entry.details = withToolApprovalReviews(entry.details, entry.approvalReviews);
+  entry.message = buildToolStreamMessage(entry);
+  if (review.status !== "in_progress") {
+    host.guardianNotices = removeGuardianDecisionWarning(host.guardianNotices ?? [], payload.runId);
+  }
+  scheduleToolStreamSync(host, true);
   return true;
 }
 
@@ -964,6 +1011,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handleGuardianEvent(host, payload)) {
+    return true;
+  }
+
+  if (handleToolReviewEvent(host, payload)) {
     return true;
   }
 
@@ -1073,7 +1124,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       entry.output = output || undefined;
     }
     if (resultDetails !== undefined) {
-      entry.details = resultDetails;
+      entry.details = entry.approvalReviews?.length
+        ? withToolApprovalReviews(resultDetails, entry.approvalReviews)
+        : resultDetails;
     }
     if (resultIsError !== undefined) {
       entry.isError = resultIsError;

@@ -36,11 +36,12 @@ import {
   type ToolTranscriptResultInput,
 } from "./event-projector-tool-progress.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
-import type {
-  CodexDynamicToolCallOutputContentItem,
-  CodexThreadItem,
-  JsonObject,
-  JsonValue,
+import {
+  isJsonObject,
+  type CodexDynamicToolCallOutputContentItem,
+  type CodexThreadItem,
+  type JsonObject,
+  type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
@@ -129,6 +130,7 @@ export class CodexToolTranscriptProjection {
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
   private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
+  private readonly approvalReviewsByCallId = new Map<string, JsonObject[]>();
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
   private readonly codeModeNativePatchInputsByCallId = new Map<string, string>();
 
@@ -147,6 +149,17 @@ export class CodexToolTranscriptProjection {
 
   get transcriptMessages(): readonly AgentMessage[] {
     return this.messages;
+  }
+
+  recordToolApprovalReview(toolCallId: string, review: JsonObject): void {
+    const current = this.approvalReviewsByCallId.get(toolCallId) ?? [];
+    const reviewId = typeof review.id === "string" ? review.id : "";
+    this.approvalReviewsByCallId.set(
+      toolCallId,
+      reviewId
+        ? [...current.filter((candidate) => candidate.id !== reviewId), review]
+        : [...current, review],
+    );
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
@@ -345,7 +358,19 @@ export class CodexToolTranscriptProjection {
   }
 
   async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
-    this.recordNativeToolResult(item, await this.prepareNativeMcpAppResultDetails(item));
+    const preparedDetails = await this.prepareNativeMcpAppResultDetails(item);
+    const approvalReviews = item ? this.approvalReviewsByCallId.get(item.id) : undefined;
+    // The terminal tool result is the durable owner for its reviews. Live
+    // review events disappear with the run snapshot; details survive history.
+    const details = approvalReviews?.length
+      ? isJsonObject(preparedDetails)
+        ? { ...preparedDetails, approvalReviews }
+        : {
+            ...(preparedDetails !== undefined ? { toolDetails: preparedDetails } : {}),
+            approvalReviews,
+          }
+      : preparedDetails;
+    this.recordNativeToolResult(item, details);
   }
 
   private async prepareNativeMcpAppResultDetails(

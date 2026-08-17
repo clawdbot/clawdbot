@@ -24,6 +24,23 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "printf hello",
+          cwd: "/tmp",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
       forCurrentTurn("item/autoApprovalReview/started", {
         reviewId: "review-1",
         targetItemId: "cmd-1",
@@ -57,6 +74,23 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         },
       }),
     );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "printf hello",
+          cwd: "/tmp",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "hello",
+          exitCode: 0,
+          durationMs: 1,
+        },
+      }),
+    );
 
     const started = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.guardian",
@@ -79,9 +113,45 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     expect(completed.rationale).toBe("Benign local probe.");
     expect(completed.actionType).toBe("execve");
     expect(completed.command).toBe("printf hello");
-    expect(
-      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
-    ).toBe(false);
+    const toolReviews = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event?.stream === "tool" &&
+          event.data?.phase === "review" &&
+          event.data?.toolCallId === "cmd-1",
+      );
+    expect(toolReviews.map((event) => event.data.review)).toEqual([
+      {
+        id: "review-1",
+        label: "Guardian",
+        status: "in_progress",
+      },
+      {
+        id: "review-1",
+        label: "Guardian",
+        status: "approved",
+        riskLevel: "low",
+        userAuthorization: "high",
+        rationale: "Benign local probe.",
+      },
+    ]);
+    expect(toolReviews.every((event) => event.data.hideFromChannelProgress === true)).toBe(true);
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.didSendDeterministicApprovalPrompt).toBe(false);
+    const toolResult = result.messagesSnapshot.find((message) => message.role === "toolResult");
+    expect(requireRecord(toolResult, "reviewed tool result").details).toEqual({
+      approvalReviews: [
+        {
+          id: "review-1",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Benign local probe.",
+        },
+      ],
+    });
   });
 
   it("projects thread-scoped guardian warnings", async () => {

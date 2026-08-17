@@ -246,6 +246,73 @@ describe("app-tool-stream throttled projections", () => {
 });
 
 describe("app-tool-stream result blocks", () => {
+  it("attaches a review to its tool and removes the redundant vendor warning", () => {
+    const host = createHost();
+    const toolCallId = "call-reviewed";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "git status --short" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "codex_app_server.guardian", {
+        phase: "warning",
+        message: "Automatic approval review approved: safe command.",
+      }),
+    );
+    expect(host.guardianNotices).toHaveLength(1);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "review",
+        toolCallId,
+        review: {
+          id: "review-1",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Safe command.",
+        },
+      }),
+    );
+
+    expect(host.guardianNotices).toEqual([]);
+    expect(host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId))?.details).toEqual({
+      approvalReviews: [
+        {
+          id: "review-1",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Safe command.",
+        },
+      ],
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId,
+        result: { details: { runtime: "native" } },
+      }),
+    );
+    const content = host.chatToolMessages[0]?.content as Array<Record<string, unknown>>;
+    expect(content[1]?.details).toEqual({
+      runtime: "native",
+      approvalReviews: [expect.objectContaining({ id: "review-1", status: "approved" })],
+    });
+  });
+
   it("projects live edit counts and lets the resolved result replace them without flicker", () => {
     useToolStreamFakeTimers();
     try {

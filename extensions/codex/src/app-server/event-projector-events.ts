@@ -53,6 +53,10 @@ function guardianActionCommand(action: JsonObject | undefined): string | undefin
   return argv.length > 0 ? argv.join(" ") : readString(action, "program");
 }
 
+function normalizeApprovalReviewStatus(status: string | undefined): string | undefined {
+  return status === "inProgress" ? "in_progress" : status;
+}
+
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
@@ -114,22 +118,49 @@ export class CodexEventProjection {
     this.reviewCount += 1;
     const review = isJsonObject(params.review) ? params.review : undefined;
     const action = isJsonObject(params.action) ? params.action : undefined;
+    const reviewId = readString(params, "reviewId");
+    const targetItemId = readNullableString(params, "targetItemId");
+    const reviewStatus = review ? readString(review, "status") : undefined;
+    const status = normalizeApprovalReviewStatus(reviewStatus);
+    const riskLevel = review ? readString(review, "riskLevel") : undefined;
+    const userAuthorization = review ? readString(review, "userAuthorization") : undefined;
+    const rationale = review ? readNullableString(review, "rationale") : undefined;
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
         method,
         phase: method.endsWith("/started") ? "started" : "completed",
-        reviewId: readString(params, "reviewId"),
-        targetItemId: readNullableString(params, "targetItemId"),
+        reviewId,
+        targetItemId,
         decisionSource: readString(params, "decisionSource"),
-        status: review ? readString(review, "status") : undefined,
-        riskLevel: review ? readString(review, "riskLevel") : undefined,
-        userAuthorization: review ? readString(review, "userAuthorization") : undefined,
-        rationale: review ? readNullableString(review, "rationale") : undefined,
+        status: reviewStatus,
+        riskLevel,
+        userAuthorization,
+        rationale,
         actionType: action ? readString(action, "type") : undefined,
         command: guardianActionCommand(action),
       },
     });
+    if (reviewId && targetItemId && status) {
+      const approvalReview: JsonObject = {
+        id: reviewId,
+        label: "Guardian",
+        status,
+        ...(riskLevel ? { riskLevel } : {}),
+        ...(userAuthorization ? { userAuthorization } : {}),
+        ...(rationale ? { rationale } : {}),
+      };
+      this.toolTranscript.recordToolApprovalReview(targetItemId, approvalReview);
+      this.emitAgentEvent({
+        stream: "tool",
+        data: {
+          phase: "review",
+          toolCallId: targetItemId,
+          hideFromChannelProgress: true,
+          review: approvalReview,
+        },
+      });
+    }
   }
 
   handleGuardianWarning(params: JsonObject): void {

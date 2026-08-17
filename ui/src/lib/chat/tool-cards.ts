@@ -356,12 +356,14 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
     if (isToolCall) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
+      const details = item.details ?? m.details;
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
         ...(callId ? { callId } : {}),
         name: resolveToolName(item, m),
         args,
         inputText: serializeToolInput(args),
+        ...(details !== undefined ? { details } : {}),
         ...(isLiveToolStream
           ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
           : {}),
