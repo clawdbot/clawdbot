@@ -150,7 +150,11 @@ describe("controlUi.sessionPreview", () => {
       'handlers["controlUi.sessionPreview"] test invariant',
     )(requestOptions({ sessionKey: " agent:main:research " }, respond));
 
-    expect(loadSessionPreview).toHaveBeenCalledWith("agent:main:research", expect.any(Object));
+    expect(loadSessionPreview).toHaveBeenCalledWith(
+      "agent:main:research",
+      expect.any(Object),
+      null,
+    );
     const payload = respond.mock.calls[0]?.[1] as ControlUiSessionPreview | undefined;
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(payload).toMatchObject({
