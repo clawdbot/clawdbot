@@ -5290,7 +5290,8 @@ describe("update-cli", () => {
     "continues package-to-Git updates from the published checkout after its alias is retargeted",
     async () => {
       const root = await createTrackedTempDir("openclaw-update-git-alias-");
-      const packageRoot = path.join(root, "package", "openclaw");
+      const nodeModules = path.join(root, "package", "node_modules");
+      const packageRoot = path.join(nodeModules, "openclaw");
       const targetRoot = path.join(root, "checkout-target");
       const replacementRoot = path.join(root, "checkout-replacement");
       const checkoutAlias = path.join(root, "checkout-alias");
@@ -5304,6 +5305,12 @@ describe("update-cli", () => {
         return makeOkUpdateResult({ mode: "git", root: targetRoot });
       });
       vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        if (argv[1] === "--version") {
+          return commandResult({ stdout: "12.0.0\n" });
+        }
+        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+          return commandResult({ stdout: `${nodeModules}\n` });
+        }
         if (argv[0] === "git" && argv[1] === "clone") {
           const stagingDir = requireValue(argv.at(-1), "Git clone staging directory");
           await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
