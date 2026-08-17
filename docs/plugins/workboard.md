@@ -131,11 +131,11 @@ resulting task, run id, and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
-The dashboard refreshes task status from the Gateway task ledger, matching
-tasks to cards by task id, run id, or linked session key. A queued/running
-task keeps the card's lifecycle active; a finished, failed, timed-out, or
-cancelled task moves the card toward `review` or `blocked` using the same sync
-rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
+The dashboard refreshes task status from the Gateway task ledger for its
+lifecycle display, matching tasks to cards by task id, run id, or linked
+session key. Card status changes are persisted by the Gateway-side Workboard
+plugin using the linked run and session lifecycle (see
+[Session lifecycle sync](#session-lifecycle-sync)).
 
 ## Agent tools
 
@@ -313,6 +313,13 @@ If the linked session goes missing, the card stays linked for context and
 still offers start controls to restart into a fresh session. If an active
 linked session stops reporting recent activity, Workboard marks the card
 `stale` and stores that as metadata until the lifecycle clears it.
+
+Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
+not depend on an open browser tab. Agent and subagent completion hooks persist
+terminal outcomes immediately. A bounded session sweep runs once per minute to
+reconcile active, idle, missing, and stale session state. Each store mutation
+emits the normal `plugin.workboard.changed` invalidation, so an open dashboard
+reloads the canonical card instead of writing its own lifecycle projection.
 
 While a card is in an active work state, Workboard follows the linked session:
 

@@ -117,7 +117,6 @@ export type TestChatPane = HTMLElement & {
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
-  olderOffsetsSeen: Set<number>;
   headerEditing: boolean;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
@@ -149,6 +148,27 @@ export type TestChatPane = HTMLElement & {
     workspaceGit: boolean,
   ) => TemplateResult;
 };
+
+type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
+  request?: (method: string, params?: unknown) => unknown;
+};
+
+export function createGatewayBrowserClientFixture(
+  overrides: GatewayBrowserClientFixtureOverrides = {},
+): GatewayBrowserClient {
+  return overrides as typeof overrides & GatewayBrowserClient;
+}
+
+type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
+  patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
+  state?: Partial<SessionCapability["state"]>;
+};
+
+export function createSessionCapabilityFixture(
+  overrides: SessionCapabilityFixtureOverrides = {},
+): SessionCapability {
+  return overrides as typeof overrides & SessionCapability;
+}
 
 export function createSessionContext(
   client: GatewayBrowserClient,

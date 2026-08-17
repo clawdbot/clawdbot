@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../components/icons.ts";
@@ -6,90 +6,45 @@ import { t } from "../../i18n/index.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { SidebarPanelTemplates } from "./components/chat-sidebar-region-types.ts";
+import type {
+  SidebarPanelDefinition,
+  SidebarPanelTemplates,
+} from "./components/chat-sidebar-region-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
-/**
- * Templates for the gateway-backed surfaces embedded in the side panel.
- * Each surface appears only while its capability is advertised, so a closed
- * tab can never reopen into a dead panel.
- */
-export function embeddedSurfaceTemplates(params: {
+type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   agentId: string | null;
   desktopAvailable: boolean;
-}): Partial<SidebarPanelTemplates> {
-  const { state } = params;
-  return {
-    ...(state.terminalAvailable
-      ? {
-          terminal: html`<openclaw-terminal-panel
-            embedded
-            .client=${state.connected ? state.client : null}
-            .available=${state.terminalAvailable}
-            .agentId=${params.agentId}
-            .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
-            .basePath=${state.basePath}
-          ></openclaw-terminal-panel>`,
-        }
-      : {}),
-    ...(state.browserPanelAvailable
-      ? {
-          browser: html`<openclaw-browser-panel
-            embedded
-            data-chat-autotype-exempt
-            .client=${state.connected ? state.client : null}
-            .available=${state.browserPanelAvailable}
-            .basePath=${state.basePath}
-            .authToken=${resolveAssistantAttachmentAuthToken(state)}
-          ></openclaw-browser-panel>`,
-        }
-      : {}),
-    ...(params.desktopAvailable
-      ? {
-          desktop: html`<openclaw-desktop-panel
-            embedded
-            data-chat-autotype-exempt
-            .client=${state.connected ? state.client : null}
-            .available=${params.desktopAvailable}
-          ></openclaw-desktop-panel>`,
-        }
-      : {}),
-  };
-}
-
-/** Side-chat companion rail, embedded as a regular side-panel tab. */
-export function companionRailTemplate(params: {
-  state: ChatPageHost;
+  hasBoard: boolean;
+  chat: TemplateResult;
+  workspace: TemplateResult | typeof nothing;
+  tasks: TemplateResult | typeof nothing;
+  detail: TemplateResult | null;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
   startedAt: number | undefined;
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
-  onSubmit: (question: string) => void;
-  onDraftChange: (draft: string) => void;
-  onVisibilityChange: (visible: boolean) => void;
-}) {
-  const { state } = params;
-  return html`<openclaw-chat-session-rail
-    embedded
-    .sessionKey=${state.sessionKey}
-    .digest=${params.digest}
-    .running=${Boolean(params.activeRunId)}
-    .activeRunId=${params.activeRunId}
-    .startedAt=${params.startedAt}
-    .lastReadAt=${params.lastReadAt}
-    .planStatus=${state.planStatus ?? null}
-    .pullRequests=${params.pullRequests}
-    .companion=${params.companion}
-    .connected=${state.connected}
-    .onSubmit=${params.onSubmit}
-    .onDraftChange=${params.onDraftChange}
-    .onVisibilityChange=${params.onVisibilityChange}
-  ></openclaw-chat-session-rail>`;
-}
+  onCompanionSubmit: (question: string) => void;
+  onCompanionDraftChange: (draft: string) => void;
+  onCompanionVisibilityChange: (visible: boolean) => void;
+  discussion: SessionDiscussionPanelConfig | null;
+  discussionSourceGeneration: number;
+};
+
+type SidebarPanelTextKey =
+  | "boardChat"
+  | "browser"
+  | "companion"
+  | "desktop"
+  | "discussion"
+  | "files"
+  | "review"
+  | "tasks"
+  | "terminal";
 
 /**
  * Header actions contributed by the panels that own content actions. Panels
@@ -146,42 +101,124 @@ export function sidePanelHeaderActions(params: {
   };
 }
 
-/** Discussion tab template; absent while the session has no discussion. */
-export function discussionPanelTemplate(
-  discussion: SessionDiscussionPanelConfig | null,
-  sourceGeneration: number,
-): Partial<SidebarPanelTemplates> {
-  if (!discussion) {
-    return {};
-  }
-  return {
-    discussion: html`<openclaw-session-discussion
-      .sessionKey=${discussion.sessionKey}
-      .canOpen=${discussion.canOpen}
-      .sourceGeneration=${sourceGeneration}
-      .loadInfo=${discussion.loadInfo}
-      .openDiscussion=${discussion.openDiscussion}
-      .onStateChange=${discussion.onStateChange}
-    ></openclaw-session-discussion>`,
-  };
+/** One ordered declaration for every chat side-panel slot. */
+export function sidebarPanelDefinitions(
+  params?: SidebarPanelDefinitionParams,
+): SidebarPanelDefinition[] {
+  const state = params?.state;
+  const terminalAvailable = state?.terminalAvailable === true;
+  const browserAvailable = state?.browserPanelAvailable === true;
+  const desktopAvailable = params?.desktopAvailable === true;
+  const definePanel = (
+    slot: SidebarSlotId,
+    textKey: SidebarPanelTextKey,
+    icon: TemplateResult,
+    content: TemplateResult | typeof nothing | null,
+    options?: { available?: boolean; shortcut?: string },
+  ): SidebarPanelDefinition => ({
+    slot,
+    label: t(`chat.sidePanel.${textKey}`),
+    icon,
+    available: options?.available ?? params !== undefined,
+    content,
+    empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
+    ...(options?.shortcut ? { shortcut: options.shortcut } : {}),
+  });
+  const terminal =
+    state && terminalAvailable
+      ? html`<openclaw-terminal-panel
+          embedded
+          .client=${state.connected ? state.client : null}
+          .available=${state.terminalAvailable}
+          .agentId=${params?.agentId ?? null}
+          .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          .basePath=${state.basePath}
+        ></openclaw-terminal-panel>`
+      : null;
+  const browser =
+    state && browserAvailable
+      ? html`<openclaw-browser-panel
+          embedded
+          data-chat-autotype-exempt
+          .client=${state.connected ? state.client : null}
+          .available=${state.browserPanelAvailable}
+          .basePath=${state.basePath}
+          .authToken=${resolveAssistantAttachmentAuthToken(state)}
+        ></openclaw-browser-panel>`
+      : null;
+  const companion = params
+    ? html`<openclaw-chat-session-rail
+        embedded
+        .sessionKey=${state?.sessionKey}
+        .digest=${params.digest}
+        .running=${Boolean(params.activeRunId)}
+        .activeRunId=${params.activeRunId}
+        .startedAt=${params.startedAt}
+        .lastReadAt=${params.lastReadAt}
+        .planStatus=${state?.planStatus ?? null}
+        .pullRequests=${params.pullRequests}
+        .companion=${params.companion}
+        .connected=${state?.connected === true}
+        .onSubmit=${params.onCompanionSubmit}
+        .onDraftChange=${params.onCompanionDraftChange}
+        .onVisibilityChange=${params.onCompanionVisibilityChange}
+      ></openclaw-chat-session-rail>`
+    : null;
+  const desktop =
+    state && desktopAvailable
+      ? html`<openclaw-desktop-panel
+          embedded
+          data-chat-autotype-exempt
+          .client=${state.connected ? state.client : null}
+          .available=${desktopAvailable}
+        ></openclaw-desktop-panel>`
+      : null;
+  const discussion = params?.discussion
+    ? html`<openclaw-session-discussion
+        .sessionKey=${params.discussion.sessionKey}
+        .canOpen=${params.discussion.canOpen}
+        .sourceGeneration=${params.discussionSourceGeneration}
+        .loadInfo=${params.discussion.loadInfo}
+        .openDiscussion=${params.discussion.openDiscussion}
+        .onStateChange=${params.discussion.onStateChange}
+      ></openclaw-session-discussion>`
+    : null;
+  return [
+    definePanel("detail", "review", icons.diff, params?.detail ?? null),
+    definePanel("terminal", "terminal", icons.terminal, terminal, {
+      available: terminalAvailable,
+      shortcut: "Ctrl+`",
+    }),
+    definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
+    definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
+      shortcut: "⇧⌘B",
+    }),
+    definePanel("companion", "companion", icons.bot, companion),
+    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
+    definePanel("desktop", "desktop", icons.monitor, desktop, { available: desktopAvailable }),
+    definePanel("discussion", "discussion", icons.messageSquare, discussion, {
+      available: discussion !== null,
+    }),
+    definePanel("chat", "boardChat", icons.messageSquare, params?.chat ?? null, {
+      available: params?.hasBoard === true,
+    }),
+  ];
 }
 
-/** Slot order for the add-tab menu; capability-gated surfaces are hidden. */
-export function availableSidebarSlots(params: {
-  state: ChatPageHost;
-  desktopAvailable: boolean;
-  hasDiscussion: boolean;
-  hasBoard: boolean;
-}): SidebarSlotId[] {
-  return [
-    "detail",
-    ...(params.state.terminalAvailable ? (["terminal"] as const) : []),
-    ...(params.state.browserPanelAvailable ? (["browser"] as const) : []),
-    "workspace",
-    "companion",
-    "tasks",
-    ...(params.desktopAvailable ? (["desktop"] as const) : []),
-    ...(params.hasDiscussion ? (["discussion"] as const) : []),
-    ...(params.hasBoard ? (["chat"] as const) : []),
-  ];
+export function availableSidebarSlots(definitions: SidebarPanelDefinition[]): SidebarSlotId[] {
+  return definitions
+    .filter((definition) => definition.available)
+    .map((definition) => definition.slot);
+}
+
+export function sidebarPanelTemplates(
+  definitions: SidebarPanelDefinition[],
+): SidebarPanelTemplates {
+  const templates: SidebarPanelTemplates = {};
+  for (const definition of definitions) {
+    if (definition.content !== null) {
+      templates[definition.slot] = definition.content;
+    }
+  }
+  return templates;
 }

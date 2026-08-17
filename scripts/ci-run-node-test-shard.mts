@@ -19,10 +19,6 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import {
-  acquireLocalHeavyCheckLockSync,
-  withLocalHeavyCheckLockHeld,
-} from "./lib/local-heavy-check-runtime.mts";
 
 // Two concurrent plans halve the serial tail of packed jobs. Children run with
 // inner test-projects parallelism 1 so a job never exceeds two Vitest runs;
@@ -146,9 +142,7 @@ export function buildChildEnv(
       delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
     }
   }
-  // This wrapper owns the shared lock, so every nested heavy-check wrapper must
-  // inherit that ownership rather than queueing behind its own parent.
-  return withLocalHeavyCheckLockHeld(childEnv);
+  return childEnv;
 }
 
 export function pruneFsModuleCache(root: string, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {
@@ -392,14 +386,5 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
   // the planner; overlapping them with a sibling Vitest run causes flakes.
   const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
-  const releaseLock = acquireLocalHeavyCheckLockSync({
-    cwd: process.cwd(),
-    env: process.env,
-    toolName: "test",
-  });
-  try {
-    process.exitCode = await runShardPlans(plans, { concurrency: planConcurrency });
-  } finally {
-    releaseLock();
-  }
+  process.exitCode = await runShardPlans(plans, { concurrency: planConcurrency });
 }

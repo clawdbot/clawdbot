@@ -254,24 +254,52 @@ describe("renderChatComposer controls", () => {
   });
 
   it.each([
-    ["Meta", { metaKey: true }],
-    ["Control", { ctrlKey: true }],
-  ] as const)("uses %s+Enter to steer an active queued follow-up", (_name, modifiers) => {
-    const onSend = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      draft: "Steer this now",
-      followUpMode: "queue",
-      onAbort: vi.fn(),
-      onSend,
-      sendShortcut: "enter",
-    });
+    ["Meta+Enter with a rendered draft", { metaKey: true }, "Steer this now", undefined, undefined],
+    [
+      "Control+Enter with a rendered draft",
+      { ctrlKey: true },
+      "Steer this now",
+      undefined,
+      undefined,
+    ],
+    [
+      "Control+Enter with attachment-only content",
+      { ctrlKey: true },
+      "",
+      () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
+      undefined,
+    ],
+    [
+      "Control+Enter with live textarea content before the draft prop rerenders",
+      { ctrlKey: true },
+      "",
+      undefined,
+      "Steer the live textarea value",
+    ],
+  ] as const)(
+    "uses %s to steer an active queued follow-up",
+    (_name, modifiers, draft, getAttachments, liveDraft) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft,
+        followUpMode: "queue",
+        getAttachments,
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut: "enter",
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (textarea && liveDraft !== undefined) {
+        textarea.value = liveDraft;
+      }
 
-    pressComposerEnter(container, modifiers);
+      pressComposerEnter(container, modifiers);
 
-    expect(onSend).toHaveBeenCalledOnce();
-    expect(onSend).toHaveBeenCalledWith({ followUpMode: "steer" });
-  });
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onSend).toHaveBeenCalledWith("steer");
+    },
+  );
 
   it.each([
     ["modifier-enter", true, "queue", false],
@@ -373,6 +401,17 @@ describe("renderChatComposer controls", () => {
           sendShortcut: "enter" as const,
         },
         tooltip: t("chat.queue.steer"),
+      },
+      {
+        overrides: {
+          canAbort: true,
+          connected: false,
+          draft: "Queue until the gateway reconnects",
+          followUpMode: "queue" as const,
+          onAbort: vi.fn(),
+          sendShortcut: "enter" as const,
+        },
+        tooltip: t("chat.runControls.queue"),
       },
     ];
     for (const testCase of unavailable) {

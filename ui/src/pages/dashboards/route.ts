@@ -2,32 +2,33 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/index.ts";
+import {
+  DEFAULT_SESSION_LIST_QUERY,
+  type SessionListOptions,
+  type SessionListSnapshot,
+} from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import type { DashboardsRouteData } from "./view.ts";
 
-export async function loadDashboardsRoute(
-  context: ApplicationContext,
-): Promise<DashboardsRouteData> {
-  let value = null;
-  let error: string | null = null;
-  try {
-    value = await context.sessions.list({
-      ...DEFAULT_SESSION_LIST_QUERY,
-      boardFace: "dashboard",
-      archivedFilter: "all",
-      ...(context.agentSelection.state.scopeId
-        ? { agentId: context.agentSelection.state.scopeId }
-        : {}),
-    });
-  } catch (cause) {
-    error = formatUiError(cause);
-  }
+export function dashboardSessionListQuery(context: ApplicationContext): SessionListOptions {
   return {
-    result: value,
-    error,
+    ...DEFAULT_SESSION_LIST_QUERY,
+    boardFace: "dashboard",
+    archivedFilter: "all",
+    ...(context.agentSelection.state.scopeId
+      ? { agentId: context.agentSelection.state.scopeId }
+      : {}),
+  };
+}
+
+export function dashboardsRouteData(
+  context: ApplicationContext,
+  snapshot: SessionListSnapshot,
+): DashboardsRouteData {
+  return {
+    result: snapshot.result,
+    error: snapshot.result ? null : snapshot.error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
     mainKey: resolveUiConfiguredMainKey({
@@ -35,6 +36,16 @@ export async function loadDashboardsRoute(
       hello: context.gateway.snapshot.hello,
     }),
   };
+}
+
+async function loadDashboardsRoute(context: ApplicationContext): Promise<DashboardsRouteData> {
+  const query = dashboardSessionListQuery(context);
+  let snapshot = context.sessions.listSnapshot(query);
+  if (!snapshot.result && !snapshot.loading) {
+    await context.sessions.refreshList({ ...query, force: true });
+    snapshot = context.sessions.listSnapshot(query);
+  }
+  return dashboardsRouteData(context, snapshot);
 }
 
 export const page = definePage({

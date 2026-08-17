@@ -4956,9 +4956,6 @@ describe("grouped chat rendering", () => {
     expectElement(container, ".chat-bubble", HTMLElement);
     const iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
     expect(iframe.getAttribute("title")).toBe("Tic-Tac-Toe");
-    expect(container.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
-      "Tic-Tac-Toe",
-    );
   });
 
   it("opens only safe assistant image URLs in the lightbox", () => {
@@ -5063,10 +5060,8 @@ describe("grouped chat rendering", () => {
     expect(iframe.getAttribute("src")).toBe(
       "/__openclaw__/canvas/documents/cv_canvas_live_history/index.html",
     );
+    expect(iframe.getAttribute("title")).toBe("Live history preview");
     expect(bubble.querySelector(".chat-text")?.textContent?.trim()).toBe("This item is ready.");
-    expect(bubble.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
-      "Live history preview",
-    );
   });
 
   it("keeps lifted assistant canvas previews beside flat tool rows", () => {
@@ -5140,11 +5135,9 @@ describe("grouped chat rendering", () => {
     expect(iframe.getAttribute("src")).toBe(
       "/__openclaw__/canvas/documents/cv_inline_default/index.html",
     );
+    expect(iframe.getAttribute("title")).toBe("Inline demo");
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe(
       "Inline canvas result.",
-    );
-    expect(container.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
-      "Inline demo",
     );
     expect(container.querySelector(".chat-tool-card__raw-toggle")?.textContent?.trim()).toBe(
       "Raw details",
@@ -5246,10 +5239,8 @@ describe("grouped chat rendering", () => {
     expect(iframe.getAttribute("src")).toBe(
       "/__openclaw__/canvas/documents/cv_inline_visible/index.html",
     );
+    expect(iframe.getAttribute("title")).toBe("Inline demo");
     expect(bubble.querySelector(".chat-text")?.textContent?.trim()).toBe("Inline canvas result.");
-    expect(bubble.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
-      "Inline demo",
-    );
     expect(
       container.querySelector(".chat-group.tool .chat-tool-msg-summary__label")?.textContent,
     ).toBe("Tool output");

@@ -204,9 +204,12 @@ suite.define(() => {
       await gateway.closeLatest();
       await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
 
-      const editRow = page.locator(".chat-queue__item").nth(1);
-      await editRow.locator(".chat-queue__edit").click();
-      const inlineEditor = editRow.locator(".chat-queue__edit-input");
+      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
+      const editButton = editRow.locator(".chat-queue__edit");
+      expect(await editButton.isDisabled()).toBe(false);
+      await editButton.click();
+      // `hasText` stops matching once the row text becomes a textarea value.
+      const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
       await inlineEditor.fill("edited before send");
       await page.locator(".chat-queue__edit-submit").click();

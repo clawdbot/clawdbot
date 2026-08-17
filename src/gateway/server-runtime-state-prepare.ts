@@ -470,6 +470,7 @@ export async function prepareGatewayKernelState(params: {
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     clients: connectionState.clients,
+    tailscaleMode,
   });
   const {
     clients,
@@ -572,6 +573,7 @@ export async function prepareGatewayKernelState(params: {
     sessionMessageSubscribers,
     isConnectionActive,
     getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
+    getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
     getPortalService: transportBridge.getPortalService,

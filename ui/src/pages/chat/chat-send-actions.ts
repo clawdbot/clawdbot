@@ -2,7 +2,6 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   chatQueueMovableSegments,
-  compareChatQueueOrder,
   isMovableChatQueueItem,
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
@@ -152,7 +151,7 @@ export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
  * storage failure mid-permutation leaves the prior order intact instead of a
  * partially reshuffled queue.
  */
-export type ChatQueueMoveResult = "moved" | "rejected" | "noop";
+type ChatQueueMoveResult = "moved" | "rejected" | "noop";
 
 export function moveQueuedChatMessage(
   host: ChatHost,
@@ -169,21 +168,10 @@ export function moveQueuedChatMessage(
   }
   const sessionKey = item.sessionKey ?? host.sessionKey;
   const scope = readChatQueueForScope(host, sessionKey, item.agentId);
-  const movableSegments = chatQueueMovableSegments(
+  const segment = chatQueueMovableSegments(
     scope,
     (row) => isMovableChatQueueItem(row) && !isQueuedMessageBeingEdited(host, row.id),
-  );
-  const segment = movableSegments.find((rows) => rows.some((row) => row.id === id));
-  const orderedScope = scope.toSorted(compareChatQueueOrder);
-  const fromIndex = orderedScope.findIndex((row) => row.id === id);
-  const targetIndex = Math.min(Math.max(toIndex, 0), orderedScope.length - 1);
-  const crossesPeerEdit = orderedScope
-    .slice(Math.min(fromIndex, targetIndex), Math.max(fromIndex, targetIndex) + 1)
-    .some((row) => row.id !== id && isQueuedMessageBeingEdited(host, row.id));
-  if (crossesPeerEdit) {
-    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
-    return "rejected";
-  }
+  ).find((rows) => rows.some((row) => row.id === id));
   const moves = reorderChatQueueItems(segment ?? [], id, toIndex);
   if (moves.length === 0) {
     return "noop";

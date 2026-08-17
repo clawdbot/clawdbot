@@ -1,20 +1,16 @@
-// Local Heavy Check Runtime tests cover local heavy check runtime script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+// Local Check Runtime tests cover local check runtime script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
   ensureRepoToolNodeModulesLink,
-  resolveLocalHeavyCheckEnv,
+  resolveLocalCheckEnv,
   resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForOxlint,
-  shouldAcquireLocalHeavyCheckLockForTsgo,
-  withLocalHeavyCheckLockHeld,
-} from "../../scripts/lib/local-heavy-check-runtime.mts";
+} from "../../scripts/lib/local-check-runtime.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -43,19 +39,7 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return env;
 }
 
-describe("local-heavy-check-runtime", () => {
-  it("marks every nested heavy-check wrapper as covered by the parent lock", () => {
-    const baseEnv = { BASE: "1" };
-
-    expect(withLocalHeavyCheckLockHeld(baseEnv)).toEqual({
-      BASE: "1",
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-    });
-    expect(baseEnv).toEqual({ BASE: "1" });
-  });
-
+describe("local-check-runtime", () => {
   it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
     const primaryRoot = createTempDir("openclaw-primary-checkout-");
     const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
@@ -124,12 +108,12 @@ describe("local-heavy-check-runtime", () => {
     expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
   });
 
-  it("reenables local heavy-check policy for local wrapper entrypoints", () => {
-    expect(resolveLocalHeavyCheckEnv({ OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" })).toEqual({
+  it("reenables local check policy for local wrapper entrypoints", () => {
+    expect(resolveLocalCheckEnv({ OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" })).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
       PATH: "/usr/bin",
     });
-    expect(resolveLocalHeavyCheckEnv({ OPENCLAW_LOCAL_CHECK: "false", PATH: "/usr/bin" })).toEqual({
+    expect(resolveLocalCheckEnv({ OPENCLAW_LOCAL_CHECK: "false", PATH: "/usr/bin" })).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
       PATH: "/usr/bin",
     });
@@ -137,7 +121,7 @@ describe("local-heavy-check-runtime", () => {
 
   it("preserves local-check disablement in CI", () => {
     expect(
-      resolveLocalHeavyCheckEnv({
+      resolveLocalCheckEnv({
         CI: "true",
         OPENCLAW_LOCAL_CHECK: "0",
         PATH: "/usr/bin",
@@ -306,29 +290,6 @@ describe("local-heavy-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
 
-  it("skips the heavy-check lock for tsgo metadata commands", () => {
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--help"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-h"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--version"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["-v"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--init"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--showConfig"])).toBe(false);
-  });
-
-  it("keeps the heavy-check lock for real tsgo runs", () => {
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo([])).toBe(true);
-    expect(shouldAcquireLocalHeavyCheckLockForTsgo(["--extendedDiagnostics"])).toBe(true);
-  });
-
-  it("allows forcing the tsgo lock back on", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLockForTsgo(
-        ["--help"],
-        makeEnv({ OPENCLAW_TSGO_FORCE_LOCK: "1" }),
-      ),
-    ).toBe(true);
-  });
-
   it("serializes local oxlint runs onto one thread on constrained hosts", () => {
     const { args, env } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
 
@@ -398,7 +359,6 @@ describe("local-heavy-check-runtime", () => {
       CAPTURE_PATH: capturePath,
       OPENCLAW_LOCAL_CHECK: "1",
       OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_OXLINT_SKIP_PREPARE: "1",
     };
     delete env.GOMAXPROCS;
@@ -463,155 +423,4 @@ describe("local-heavy-check-runtime", () => {
       expect(args).not.toContain("stylish");
     },
   );
-
-  it("skips the heavy-check lock for explicit oxlint file targets", () => {
-    const cwd = createTempDir("openclaw-oxlint-lock-skip-");
-    const target = path.join(cwd, "sample.ts");
-    fs.writeFileSync(target, "export const ok = true;\n", "utf8");
-
-    expect(
-      shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], { cwd }),
-    ).toBe(false);
-  });
-
-  it("skips the heavy-check lock for oxlint metadata commands", () => {
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--help"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-h"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--version"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["-V"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--rules"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--print-config"])).toBe(false);
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--init"])).toBe(false);
-  });
-
-  it("keeps the heavy-check lock for directory targets and broad oxlint runs", () => {
-    const cwd = createTempDir("openclaw-oxlint-lock-keep-");
-    fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
-    fs.writeFileSync(path.join(cwd, "src", "sample.ts"), "export const ok = true;\n", "utf8");
-
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "src"], { cwd })).toBe(
-      true,
-    );
-    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware"], { cwd })).toBe(true);
-  });
-
-  it("allows forcing the oxlint lock back on", () => {
-    const cwd = createTempDir("openclaw-oxlint-lock-force-");
-    fs.writeFileSync(path.join(cwd, "sample.ts"), "export const ok = true;\n", "utf8");
-
-    expect(
-      shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], {
-        cwd,
-        env: makeEnv({ OPENCLAW_OXLINT_FORCE_LOCK: "1" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("reclaims stale local heavy-check locks from dead pids", () => {
-    const cwd = createTempDir("openclaw-local-heavy-check-");
-    const commonDir = path.join(cwd, ".git");
-    const lockDir = path.join(commonDir, "openclaw-local-checks", "heavy-check.lock");
-    fs.mkdirSync(lockDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(lockDir, "owner.json"),
-      `${JSON.stringify({
-        pid: 999_999_999,
-        tool: "tsgo",
-        cwd,
-      })}\n`,
-      "utf8",
-    );
-
-    const release = acquireLocalHeavyCheckLockSync({
-      cwd,
-      env: makeEnv(),
-      toolName: "oxlint",
-    });
-
-    const owner = JSON.parse(fs.readFileSync(path.join(lockDir, "owner.json"), "utf8"));
-    expect(owner.pid).toBe(process.pid);
-    expect(owner.tool).toBe("oxlint");
-
-    release();
-    expect(fs.existsSync(lockDir)).toBe(false);
-  });
-
-  it("uses a worktree-local heavy-check lock when explicitly requested", () => {
-    const repoRoot = createTempDir("openclaw-local-heavy-check-worktree-");
-    execFileSync("git", ["init"], { cwd: repoRoot, stdio: "ignore" });
-    const cwd = path.join(repoRoot, "nested", "tooling");
-    fs.mkdirSync(cwd, { recursive: true });
-    const commonLockDir = path.join(repoRoot, ".git", "openclaw-local-checks", "heavy-check.lock");
-    const worktreeLockDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "openclaw-local-checks",
-      "heavy-check.lock",
-    );
-    const nestedLockDir = path.join(cwd, ".artifacts", "openclaw-local-checks", "heavy-check.lock");
-
-    const release = acquireLocalHeavyCheckLockSync({
-      cwd,
-      env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "worktree" }),
-      toolName: "check:changed",
-    });
-
-    const owner = JSON.parse(fs.readFileSync(path.join(worktreeLockDir, "owner.json"), "utf8"));
-    expect(owner.tool).toBe("check:changed");
-    expect(fs.existsSync(worktreeLockDir)).toBe(true);
-    expect(fs.existsSync(commonLockDir)).toBe(false);
-    expect(fs.existsSync(nestedLockDir)).toBe(false);
-
-    release();
-    expect(fs.existsSync(worktreeLockDir)).toBe(false);
-  });
-
-  it("rejects malformed heavy-check lock timing env values", () => {
-    const cwd = createTempDir("openclaw-local-heavy-check-malformed-env-");
-
-    expect(() =>
-      acquireLocalHeavyCheckLockSync({
-        cwd,
-        env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS: "10ms" }),
-        toolName: "oxlint",
-      }),
-    ).toThrow("OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS must be a positive integer; got: 10ms");
-    expect(() =>
-      acquireLocalHeavyCheckLockSync({
-        cwd,
-        env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "0" }),
-        toolName: "oxlint",
-      }),
-    ).toThrow("OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS must be a positive integer; got: 0");
-  });
-
-  it("cleans up stale legacy test locks when acquiring the shared heavy-check lock", () => {
-    const cwd = createTempDir("openclaw-local-heavy-check-legacy-");
-    const commonDir = path.join(cwd, ".git");
-    const locksDir = path.join(commonDir, "openclaw-local-checks");
-    const legacyLockDir = path.join(locksDir, "test.lock");
-    const heavyCheckLockDir = path.join(locksDir, "heavy-check.lock");
-    fs.mkdirSync(legacyLockDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(legacyLockDir, "owner.json"),
-      `${JSON.stringify({
-        pid: 999_999_999,
-        tool: "test",
-        cwd,
-      })}\n`,
-      "utf8",
-    );
-
-    const release = acquireLocalHeavyCheckLockSync({
-      cwd,
-      env: makeEnv(),
-      toolName: "oxlint",
-    });
-
-    expect(fs.existsSync(legacyLockDir)).toBe(false);
-    expect(fs.existsSync(heavyCheckLockDir)).toBe(true);
-
-    release();
-    expect(fs.existsSync(heavyCheckLockDir)).toBe(false);
-  });
 });

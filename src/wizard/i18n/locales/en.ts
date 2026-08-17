@@ -92,7 +92,6 @@ export const en = {
       remotePasswordMode: "How do you want to provide this gateway password?",
       remoteTokenMode: "How do you want to provide this gateway token?",
       tailscaleExposure: "Tailscale exposure",
-      tailscaleReset: "Reset Tailscale serve/funnel on exit?",
       tokenPlaceholder: "Needed for multi-machine or non-loopback access",
       tokenPrompt: "Gateway token",
       tokenPromptGenerate: "Gateway token (blank to generate)",

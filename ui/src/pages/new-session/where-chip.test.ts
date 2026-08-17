@@ -64,6 +64,81 @@ describe("Where chip state", () => {
     }).toEqual(expected);
   });
 
+  it("marks the catalog default and surfaces only a non-default machine in the chip", () => {
+    const cloudProfiles = [
+      {
+        id: "build-fleet",
+        providerId: "crabbox",
+        machines: [
+          { id: "standard", label: "Standard", description: "Balanced capacity", default: true },
+          { id: "fast", label: "Fast", description: "More compute" },
+        ],
+      },
+    ];
+    const selected = vi.fn();
+    const defaultState = resolveWhereChip({
+      execNodes: [],
+      environments: [],
+      cloudProfiles,
+      execNode: "",
+      cloudProfileId: "build-fleet",
+      machineClass: "",
+    });
+    expect(defaultState.label).toBe("build-fleet");
+    expect(defaultState.selectedMachineId).toBe("standard");
+
+    const container = document.createElement("div");
+    render(
+      renderWhereChip({
+        state: defaultState,
+        gatewayName: "",
+        cloudProfileId: "build-fleet",
+        machineClass: "",
+        execNode: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingCloud: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: true,
+        onGuardTransition: () => undefined,
+        onPopoverShow: () => undefined,
+        onPopoverHide: () => undefined,
+        onPopoverAfterHide: () => undefined,
+        onSelectExecNode: () => undefined,
+        onSelectCloudProfile: () => undefined,
+        onSelectCloudMachine: selected,
+        onConnectMachine: () => undefined,
+      }),
+      container,
+    );
+    expect(container.querySelector('[data-value="machine:standard"]')?.textContent).toContain(
+      "Default",
+    );
+    container.querySelector<HTMLButtonElement>('[data-value="machine:fast"]')?.click();
+    expect(selected).toHaveBeenCalledWith("fast");
+
+    const overrideState = resolveWhereChip({
+      execNodes: [],
+      environments: [],
+      cloudProfiles,
+      execNode: "",
+      cloudProfileId: "build-fleet",
+      machineClass: "fast",
+    });
+    expect(overrideState.label).toBe("build-fleet · Fast");
+
+    const recoveredState = resolveWhereChip({
+      execNodes: [],
+      environments: [],
+      cloudProfiles: [{ id: "build-fleet", providerId: "crabbox" }],
+      execNode: "",
+      cloudProfileId: "build-fleet",
+      machineClass: "fast",
+    });
+    expect(recoveredState.label).toBe("build-fleet · fast");
+  });
+
   it("shows bounded environment facts without default-state or infrastructure clutter", () => {
     const state = resolveWhereChip({
       execNodes: [

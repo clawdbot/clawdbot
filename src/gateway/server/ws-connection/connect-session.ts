@@ -94,6 +94,7 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
+    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -464,6 +465,18 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  // Authentication may finish before pairing/profile work does. Revalidate at
+  // the registration boundary so a credential rotation cannot miss this client.
+  if (
+    sessionUsesSharedGatewayAuth &&
+    getRequiredSharedGatewaySessionGeneration &&
+    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
+  ) {
+    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+    await releasePendingNodePairingCleanup();
+    close(4001, "gateway auth changed");
+    return;
+  }
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {

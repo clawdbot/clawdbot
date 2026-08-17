@@ -70,7 +70,7 @@ export type SessionRefreshOptions = SessionListOptions & {
   backgroundHydrate?: boolean;
 };
 
-export type SessionListScope = Pick<SessionListOptions, "agentId" | "archivedFilter">;
+export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
 export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
 

@@ -224,16 +224,12 @@ describe("chat composer queue reordering", () => {
     expect(rows[1]?.querySelector(".chat-queue__edit-input")).not.toBeNull();
     expect(rows[1]?.querySelector(".chat-queue__edit-submit")).not.toBeNull();
     expect(rows[1]?.querySelector(".chat-queue__edit-cancel")).not.toBeNull();
-    // Steer must not send the row's original payload while its unsubmitted
-    // draft is owned by the inline editor.
     expect(rows.map((row) => row.querySelector(".chat-queue__steer") !== null)).toEqual([
       true,
       false,
       true,
     ]);
 
-    // One edit at a time, so the other pencils wait; removing another row is
-    // still safe while the inline editor remains open.
     const disabled = (selector: string) =>
       rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
     expect(disabled(".chat-queue__edit")).toEqual([true, false, true]);

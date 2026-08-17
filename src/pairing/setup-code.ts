@@ -36,7 +36,6 @@ import {
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
   resolveTailnetHostWithRunner,
-  resolveTailscaleServeGatewayUrlsWithRunner,
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
@@ -360,14 +359,7 @@ async function resolveGatewayUrl(
     const publishedHost = resolveTailscalePublishedHost({
       tailscaleMode,
       tailnetHost: host,
-      serviceName: cfg.gateway?.tailscale?.serviceName,
     });
-    if (!publishedHost) {
-      return {
-        error:
-          "Tailscale Serve serviceName is configured, but Service MagicDNS could not be derived.",
-      };
-    }
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
@@ -519,19 +511,7 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
-  const urls = [urlResult.url];
-  if (urlResult.source === "gateway.bind=lan") {
-    const serveUrls = await resolveTailscaleServeGatewayUrlsWithRunner(
-      resolveGatewayPort(cfgForAuth, env),
-      options.runCommandWithTimeout,
-    );
-    for (const serveUrl of serveUrls) {
-      if (!validateMobilePairingUrl(serveUrl, "tailscale serve status")) {
-        urls.push(serveUrl);
-      }
-    }
-  }
-  const uniqueUrls = [...new Set(urls)].slice(0, PAIRING_SETUP_MAX_URLS);
+  const uniqueUrls = [urlResult.url];
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =

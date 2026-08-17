@@ -1,3 +1,4 @@
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Outbound message entrypoint resolves channel/target, durable capability
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -60,6 +61,10 @@ type MessageSendParams = {
   agentId?: string;
   /** Originating session key used for requester-scoped outbound media policy. */
   requesterSessionKey?: string;
+  /** Admitted run correlation retained with durable delivery custody. */
+  runId?: string;
+  /** Exact admitted execution provenance retained with durable delivery custody. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Originating account id used for requester-scoped outbound media policy. */
   requesterAccountId?: string;
   /** Originating sender id used for sender-scoped outbound media policy. */
@@ -399,6 +404,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       channel: outboundChannel,
       to: resolvedTarget.to,
       session: outboundSession,
+      runId: params.runId,
+      executionIdentityToken: params.executionIdentityToken,
       accountId: params.accountId,
       conversationReadOrigin: params.conversationReadOrigin,
       payloads: normalizedPayloads,

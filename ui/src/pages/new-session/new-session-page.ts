@@ -375,6 +375,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       environments: this.place.isAdmin() ? this.gateway.environments : [],
       cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,
+      machineClass: this.place.machineClass,
       execNode: this.place.execNode,
     });
     const projectState = resolveProjectChip({
@@ -396,29 +397,30 @@ class NewSessionPage extends OpenClawLightDomElement {
     const gatewayLabel = this.gateway.gatewayName
       ? t("newSession.gatewayNamed", { name: this.gateway.gatewayName })
       : t("newSession.gateway");
-    const commonPopover = (kind: "where" | "project" | "detail") => ({
-      popoverOpen: this.browser.popoverOpen(kind),
-      popoverHiding: this.browser.popoverHiding(kind),
-      onGuardTransition: (event: MouseEvent) => this.browser.guardPopoverTransition(event, kind),
-      onPopoverShow: () => this.browser.onPopoverShow(kind),
-      onPopoverHide: () => this.browser.onPopoverHide(kind),
-      onPopoverAfterHide: () => this.browser.onPopoverAfterHide(kind),
-    });
     const submitting = this.submission.submitting;
     const pendingCloud = Boolean(this.submission.pendingCloud.sessionKey);
     return html`${renderWhereChip({
       state: whereState,
       gatewayName: this.gateway.gatewayName,
       cloudProfileId: this.place.cloudProfileId,
+      machineClass: this.place.machineClass,
       execNode: this.place.execNode,
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       submitting,
       pendingCloud,
       isAdmin: this.place.isAdmin(),
-      ...commonPopover("where"),
+      ...this.browser.popoverCallbacks("where"),
       onSelectExecNode: (nodeId) => this.place.selectExecNode(nodeId),
       onSelectCloudProfile: (profileId) => this.place.selectCloudProfile(profileId),
+      onSelectCloudMachine: (machineId) =>
+        this.place.cloudMachines.select(
+          this.place.cloudProfileId,
+          machineId,
+          cloudProfiles,
+          submitting || pendingCloud,
+          () => this.requestUpdate(),
+        ),
       onConnectMachine: () => this.openConnectMachine(),
     })}${renderProjectChip({
       state: projectState,
@@ -450,7 +452,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       execNode: this.place.execNode,
       submitting,
       pendingCloud,
-      ...commonPopover("project"),
+      ...this.browser.popoverCallbacks("project"),
       browserTarget: this.browser.browserTarget,
       browserListing: this.browser.browserListing,
       browserLoading: this.browser.browserLoading,
@@ -495,7 +497,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       worktreeName: this.place.worktreeName,
       submitting,
       pendingCloud,
-      ...commonPopover("detail"),
+      ...this.browser.popoverCallbacks("detail"),
       onToggleWorktree: () => this.place.toggleWorktree(),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),

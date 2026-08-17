@@ -9,6 +9,15 @@ export type AgentHarnessHostCapabilities = Readonly<{
   assertActive: () => void;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
+  /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
+  prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
+    | {
+        ok: true;
+        requiresOneShot: boolean;
+        revalidate: () => Promise<{ ok: true } | { ok: false; message: string }>;
+      }
+    | { ok: false; message: string }
+  >;
   /** Runs policy with host-fixed HookContext; callers provide only the native action tuple. */
   runBeforeToolCall: (
     request: Omit<

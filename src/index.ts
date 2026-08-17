@@ -3,7 +3,11 @@
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { formatCliFailureLines, formatCliJsonFailure } from "./cli/failure-output.js";
+import {
+  CliParseError,
+  formatCliFailureLines,
+  formatCliJsonFailure,
+} from "./cli/failure-output.js";
 import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
@@ -151,8 +155,10 @@ if (isMain && !handledRootVersion) {
       })) {
         console.error(line);
       }
-      for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
-        console.error("[openclaw]", message);
+      if (!(err instanceof CliParseError)) {
+        for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+          console.error("[openclaw]", message);
+        }
       }
       restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
       process.exitCode = 1;

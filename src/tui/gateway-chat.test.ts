@@ -75,6 +75,7 @@ describe("GatewayChatClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceAuthScope: "wss://remote.example/rpc",
+        notifyOnStartupRetry: true,
       });
       expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");
       const onConnectError = vi.fn();
@@ -124,6 +125,30 @@ describe("GatewayChatClient", () => {
         client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
       ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
       expect(onDisconnected).not.toHaveBeenCalled();
+
+      options.onHelloOk?.({});
+      onConnectError.mockClear();
+      onDisconnected.mockClear();
+      client.onConnectError = onConnectError;
+      const startupError = new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      });
+      options.onConnectError?.(startupError);
+      options.onClose?.(1013, "gateway starting");
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
+
+      onDisconnected.mockClear();
+      client.onConnectError = undefined;
+      options.onConnectError?.(startupError);
+      options.onClose?.(1013, "gateway starting");
+
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
     } finally {
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();

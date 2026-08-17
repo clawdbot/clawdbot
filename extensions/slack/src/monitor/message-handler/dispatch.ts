@@ -522,7 +522,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             }
           : undefined,
         onReasoningEnd: async () => {
-          progress.progressReceipt.closeReasoning();
           await progress.onDraftBoundary?.();
           return false;
         },
@@ -544,7 +543,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             await statusReactions.setTool(payload.name);
           }
           if (payload.phase === "start") {
-            progress.progressReceipt.noteToolCall(payload.name);
+            progress.progressWorkCounter.noteToolCall(payload.name);
           }
           return await progress.progressDraft.pushToolEvent(payload);
         },
@@ -566,9 +565,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   itemId: payload.itemId,
                 },
               );
-              if (accepted) {
-                progress.progressReceipt.noteCommentary(payload.itemId, payload.progressText);
-              }
               return accepted || headlineVisible;
             }
             return headlineVisible;

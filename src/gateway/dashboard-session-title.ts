@@ -212,10 +212,14 @@ async function generateDashboardSessionTitle(params: {
 export function prepareWorktreeSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  entry?: DashboardSessionTitleModelEntry | null;
   userMessage: string;
   attachments?: readonly ChatAttachment[];
   onError: (error: unknown) => void;
 }) {
+  if (params.entry === null) {
+    return undefined;
+  }
   const source = buildDashboardSessionTitleSource({
     message: params.userMessage,
     attachments: params.attachments,
@@ -226,6 +230,7 @@ export function prepareWorktreeSessionTitle(params: {
   const generated = withTimeout(
     generateDashboardSessionTitle({
       ...params,
+      entry: params.entry ?? undefined,
       timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS,
     }),
     WORKTREE_SESSION_TITLE_TIMEOUT_MS,

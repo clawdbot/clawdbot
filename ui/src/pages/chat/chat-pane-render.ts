@@ -28,9 +28,8 @@ import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
-  companionRailTemplate,
-  discussionPanelTemplate,
-  embeddedSurfaceTemplates,
+  sidebarPanelDefinitions,
+  sidebarPanelTemplates,
   sidePanelHeaderActions,
 } from "./chat-pane-embedded-panels.ts";
 import {
@@ -50,7 +49,6 @@ import {
 } from "./chat-pane-state.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import type { ChatSendOptions } from "./chat-send-contract.ts";
 import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
@@ -69,7 +67,6 @@ import {
   renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarPanelTemplates } from "./components/chat-sidebar-region-types.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -285,7 +282,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const attachmentReadSignal = attachmentReads.readSignal;
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
-      : state.chatHistoryPagination?.hasMore === true;
+      : state.chatHistoryPagination.hasMore;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
@@ -526,12 +523,15 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.requestUpdate?.();
       },
       onRemoveAttachment: this.removeBrowserAnnotation,
-      onSend: (options?: ChatSendOptions) =>
+      onSend: (followUpModeOverride) =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)
           : suggestionViewer
             ? void this.addCurrentSessionSuggestion()
-            : void state.handleSendChat(undefined, options),
+            : void state.handleSendChat(
+                undefined,
+                followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+              ),
       onCompact: sessionActionCallbacks.onCompact,
       // Checkpoint deep-link carries the archived filter so the row stays findable.
       onOpenSessionCheckpoints: () => {
@@ -586,7 +586,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
       onRewindMessage: sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
-      onNewSession: () => void this.createSession(),
       onClearHistory: sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,
       currentAgentId,
@@ -633,49 +632,40 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
-    const panelTemplates: SidebarPanelTemplates = {
+    const panelDefinitions = sidebarPanelDefinitions({
+      state,
+      agentId: currentAgentId,
+      desktopAvailable,
+      hasBoard: board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
-      companion: companionRailTemplate({
-        state,
-        digest: observerDigest ?? null,
-        activeRunId: observerRunId ?? null,
-        startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
-        lastReadAt: selectedSession?.lastReadAt,
-        pullRequests: this.sessionPullRequests,
-        companion: companionThread,
-        onSubmit: (question) => void this.submitSessionCompanionQuestion(question),
-        onDraftChange: (draft) =>
-          this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
-        onVisibilityChange: this.setSessionObserverVisibility,
-      }),
-      ...embeddedSurfaceTemplates({
-        state,
-        agentId: currentAgentId,
-        desktopAvailable,
-      }),
-      ...(state.sidebarContent
-        ? {
-            detail: renderChatDetailSlot({
-              backgroundTasks,
-              chat: props,
-              content: state.sidebarContent,
-              fullMessageLoader,
-              host: state,
-              layout: sidebarLayout,
-              transcript: this.taskSidebarTranscript,
-            }),
-          }
-        : {}),
-      ...discussionPanelTemplate(discussion, this.connectionGeneration),
-    };
-    const availableSlots = availableSidebarSlots({
-      state,
-      desktopAvailable,
-      hasDiscussion: discussion !== null,
-      hasBoard: board.hasBoard,
+      detail: state.sidebarContent
+        ? renderChatDetailSlot({
+            backgroundTasks,
+            chat: props,
+            content: state.sidebarContent,
+            fullMessageLoader,
+            host: state,
+            layout: sidebarLayout,
+            transcript: this.taskSidebarTranscript,
+          })
+        : null,
+      digest: observerDigest ?? null,
+      activeRunId: observerRunId ?? null,
+      startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+      lastReadAt: selectedSession?.lastReadAt,
+      pullRequests: this.sessionPullRequests,
+      companion: companionThread,
+      onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+      onCompanionDraftChange: (draft) =>
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
+      onCompanionVisibilityChange: this.setSessionObserverVisibility,
+      discussion,
+      discussionSourceGeneration: this.connectionGeneration,
     });
+    const availableSlots = availableSidebarSlots(panelDefinitions);
+    const panelTemplates = sidebarPanelTemplates(panelDefinitions);
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
@@ -690,6 +680,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         setPanelOpen: (open) => this.setChatSidePanelOpen(open),
       }),
       layout: sidebarLayout,
+      panelDefinitions,
       panelActions: sidePanelHeaderActions({
         connected: state.connected,
         pendingQuestion: companionThread.pendingQuestion,

@@ -87,7 +87,10 @@ openclaw agents list --bindings
 OpenClaw records how each configured agent was created: `operator` for CLI,
 onboarding, and Gateway requests; `agent` when the system agent requested it;
 and `claw` when a Claw install added it. Agent-created entries also retain the
-requesting agent id. Inspect the current creation hierarchy with:
+requesting agent id. A configured agent can ask OpenClaw to create another
+agent through its `openclaw` tool. The system agent files the typed operation,
+shows the requesting agent id to the operator, and creates the agent only after
+operator approval. Inspect the current creation hierarchy with:
 
 ```bash
 openclaw agents list --tree

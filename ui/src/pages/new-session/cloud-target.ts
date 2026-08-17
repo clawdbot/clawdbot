@@ -3,7 +3,7 @@ import type { EnvironmentsListResult } from "../../../../packages/gateway-protoc
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
+import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
 import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
 
 export async function requestPlaceCatalog(
@@ -105,6 +105,28 @@ export function renderCloudProfileMenuItems(params: {
             ? params.disabledReason
             : t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
+      },
+      params.submitting,
+    ),
+  );
+}
+
+export function renderCloudMachineMenuItems(params: {
+  machines: readonly DraftMachineOption[];
+  selectedId: string;
+  submitting: boolean;
+  onSelect: (machineId: string) => void;
+}) {
+  return params.machines.map((machine) =>
+    renderSessionMenuItem(
+      {
+        value: `machine:${machine.id}`,
+        label: machine.label,
+        sub: machine.description,
+        facts: machine.default ? [t("newSession.machineDefault")] : undefined,
+        checked: params.selectedId === machine.id,
+        keepOpen: true,
+        onSelect: () => params.onSelect(machine.id),
       },
       params.submitting,
     ),

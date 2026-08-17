@@ -33,7 +33,6 @@ type TestChatPane = HTMLElement & {
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
-  olderOffsetsSeen: Set<number>;
   resetOlderMessagesViewport: () => void;
   readonly updateComplete: Promise<boolean>;
   transcriptScrollTop: number | null;
@@ -348,6 +347,20 @@ describe("chat pane native history pagination", () => {
     expect(state.chatHistoryPagination).toMatchObject({ hasMore: true });
     expect(state.lastError).toBe("history unavailable");
     expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed older load blocked across a layout-induced scroll", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("history unavailable");
+    });
+    const { pane, thread } = createNativeShowEarlierPane(request);
+    pane.transcriptScrollTop = 500;
+
+    await pane.showEarlierMessages();
+    pane.handleTranscriptScroll({ currentTarget: thread, target: thread } as unknown as Event);
+
+    expect(pane.historyAutoLoadBlocked).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("joins an in-flight canonical load before revealing its earlier window", async () => {
@@ -688,9 +701,6 @@ describe("chat pane native history pagination", () => {
       nativeHistoryMessage(4),
     ];
     state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
-    pane.olderOffsetsSeen.add(2);
-    pane.olderOffsetsSeen.add(4);
-
     await loadChatHistory(state);
 
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
@@ -699,7 +709,6 @@ describe("chat pane native history pagination", () => {
       totalMessages: 4,
     });
     expect(pane.hasOlderMessages()).toBe(false);
-    expect(pane.olderOffsetsSeen).toEqual(new Set());
   });
 
   it("keeps projected siblings while replacing the overlapping tail", async () => {

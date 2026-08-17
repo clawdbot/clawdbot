@@ -53,6 +53,13 @@ const workspaceStateMocks = vi.hoisted(() => ({
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
 }));
 
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
+}));
+const wizardMocks = vi.hoisted(() => ({
+  createClackPrompter: vi.fn(),
+}));
+
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
@@ -79,6 +86,15 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
   )),
   deleteWorkspaceState: workspaceStateMocks.deleteWorkspaceState,
   prepareWorkspaceStateDeletion: workspaceStateMocks.prepareWorkspaceStateDeletion,
+}));
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: terminalMocks.isTerminalInteractive,
+}));
+
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
@@ -211,6 +227,31 @@ describe("agents delete command", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
+    wizardMocks.createClackPrompter.mockReset();
+  });
+
+  it("requires --force when confirmation cannot use an interactive terminal", async () => {
+    await withStateDirEnv("openclaw-agents-delete-non-tty-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "ops", sessions: {} });
+      terminalMocks.isTerminalInteractive.mockReturnValue(false);
+
+      await agentsDeleteCommand({ id: "ops" }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith("Non-interactive session. Re-run with --force.");
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses deleting main even when another agent is default", async () => {

@@ -224,8 +224,6 @@ class WorkboardPage extends OpenClawLightDomElement {
       void syncWorkboardLifecycle({
         host: context.workboard,
         client: gateway.client,
-        sessions: context.sessions.state.result?.sessions ?? [],
-        canWrite: access.canWrite,
         requestUpdate: this.requestPageUpdate,
       });
     }

@@ -6,12 +6,10 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
-  admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
   updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
-import { beginQueuedMessageEdit } from "./queued-message-edit.ts";
 
 const SESSION_KEY = "agent:main";
 
@@ -57,64 +55,6 @@ describe("queued message reorder", () => {
     expect(storedOrder(host)).toEqual(["queued-3", "queued-1", "queued-2"]);
     expect(host.chatQueue.map((item) => item.id)).toEqual(storedOrder(host));
     expect(host.lastError).toBeNull();
-    unsubscribe();
-  });
-
-  it("blocks a peer reorder while another pane owns the row edit", () => {
-    const { host, unsubscribe } = queueHost([{}, {}]);
-    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
-    const stopPeer = subscribeChatOutboxProjection(peer as never);
-
-    try {
-      expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
-
-      moveQueuedChatMessage(peer as never, "queued-2", 0);
-
-      expect(storedOrder(host)).toEqual(["queued-1", "queued-2"]);
-      expect(peer.lastError).toContain("before reordering it");
-    } finally {
-      stopPeer();
-      unsubscribe();
-    }
-  });
-
-  it("treats a peer-owned edit as a barrier when moving a different row", () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}]);
-    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
-    const stopPeer = subscribeChatOutboxProjection(peer as never);
-
-    try {
-      expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
-
-      moveQueuedChatMessage(peer as never, "queued-1", 2);
-
-      expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-3"]);
-      expect(peer.lastError).toContain("before reordering it");
-    } finally {
-      stopPeer();
-      unsubscribe();
-    }
-  });
-
-  it("rejects a replacement whose captured position went stale", () => {
-    const { host, unsubscribe } = queueHost([{}, {}]);
-    const expected = listStoredChatOutboxes(host as never)
-      .flatMap(({ queue }) => queue)
-      .find((entry) => entry.id === "queued-2")!;
-    const moved = updateStoredChatComposerQueueItem(host as never, SESSION_KEY, expected, {
-      ...expected,
-      orderKey: (expected.orderKey ?? expected.createdAt) - 1,
-    });
-    expect(moved).toBe(true);
-
-    const replacement = { ...expected, text: "replacement" };
-    expect(
-      admitStoredChatComposerQueueItem(host as never, SESSION_KEY, replacement, undefined, {
-        id: expected.id,
-        expected,
-      }),
-    ).toBe(false);
-    expect(storedOrder(host)).toEqual(["queued-1", "queued-2"]);
     unsubscribe();
   });
 

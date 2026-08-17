@@ -330,8 +330,32 @@ suite.define(() => {
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
+    await expect.poll(() => preview.locator(".chat-tool-card__preview-header").count()).toBe(0);
+    await expect
+      .poll(() =>
+        preview
+          .locator(".chat-tool-card__preview-panel")
+          .evaluate((element) => getComputedStyle(element).padding),
+      )
+      .toBe("0px");
+    await expect
+      .poll(() =>
+        preview.evaluate((element) => {
+          const actions = element.querySelector(".chat-tool-card__preview-actions");
+          return actions
+            ? actions.getBoundingClientRect().bottom <= element.getBoundingClientRect().top
+            : false;
+        }),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        preview
+          .locator(".chat-tool-card__preview-frame")
+          .evaluate((element) => getComputedStyle(element).borderTopWidth),
+      )
+      .toBe("0px");
     if (recordProof) {
-      await preview.locator(".chat-tool-card__preview-header").hover();
       await expect
         .poll(() =>
           preview

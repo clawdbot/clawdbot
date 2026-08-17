@@ -2490,8 +2490,8 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual(["queued", "platform_started", "sent"]);
+    expect(events[2]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       kind: "message",
       action: "message.outbound.finished",
@@ -2513,7 +2513,7 @@ describe("deliverOutboundPayloads", () => {
       conversationId: "!room:example",
       messageId: "platform-message-1",
     });
-    expect(typeof events[0]?.durationMs).toBe("number");
+    expect(typeof events[2]?.durationMs).toBe("number");
     expect(JSON.stringify(events)).not.toContain("secret delivery body");
     expect(JSON.stringify(events)).not.toContain("secret-session-key");
   });
@@ -2536,9 +2536,14 @@ describe("deliverOutboundPayloads", () => {
     }
 
     expect(sendMatrix).toHaveBeenCalledTimes(1);
-    expect(events).toHaveLength(2);
-    expect(events.map((event) => event.outcome)).toEqual(["suppressed", "sent"]);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual([
+      "queued",
+      "queued",
+      "platform_started",
+      "suppressed",
+      "sent",
+    ]);
+    expect(events[3]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       status: "blocked",
       actorType: "system",
@@ -2547,8 +2552,8 @@ describe("deliverOutboundPayloads", () => {
       reasonCode: "no_visible_payload",
       resultCount: 0,
     });
-    expect(events[0]).not.toHaveProperty("deliveryKind");
-    expect(events[1]).toMatchObject({
+    expect(events[3]).not.toHaveProperty("deliveryKind");
+    expect(events[4]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:1",
       status: "succeeded",
       outcome: "sent",
@@ -4511,8 +4516,8 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ content: "secret body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual(["queued", "platform_started", "failed"]);
+    expect(events[2]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       outcome: "failed",
       failureStage: "platform_send",

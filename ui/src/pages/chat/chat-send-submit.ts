@@ -5,6 +5,7 @@ import type { ChatAttachment, ChatQueueSkillWorkshopRevision } from "../../lib/c
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   getChatAttachmentDataUrl,
@@ -36,7 +37,7 @@ import {
   submittedCommandScopeIsVisible,
   type ChatCommandComposerRecovery,
 } from "./chat-send-composer.ts";
-import type { ChatHost, ChatSendOptions } from "./chat-send-contract.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
 import {
   canSendVolatileQueueItem,
@@ -69,8 +70,9 @@ import {
   sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
 } from "./steer-lifecycle.ts";
 
-type ChatSendSubmitOptions = ChatSendOptions & {
+type ChatSendSubmitOptions = {
   attachmentsOverride?: readonly ChatAttachment[];
+  followUpMode?: ControlUiFollowUpMode;
   /** Only the inline queued-row submit may resume and replace an edited row. */
   resumeQueuedMessageEditId?: string;
   restoreDraft?: boolean;
@@ -472,7 +474,7 @@ export async function handleSendChat(
   const refreshSessions = !skillWorkshopRevision && isChatResetCommand(message);
   // A row edit and a composer send may intentionally carry the same payload.
   // Keep their guards independent so submitting one cannot suppress the other.
-  const submitKind = opts?.resumeQueuedMessageEditId ? "queued-edit" : "message";
+  const submitKind = requestedEditId ? "queued-edit" : "message";
   const submitKey = chatSubmitKey(
     host,
     submitKind,
@@ -497,8 +499,8 @@ export async function handleSendChat(
       setChatError(host, t("mcpServers.sessionUnavailable"));
       return;
     }
-    // History can await while the operator cancels or replaces the row edit.
-    // Do not admit that stale replacement as a new queued message.
+    // History can await while the operator cancels or changes the row edit.
+    // Never admit a replacement captured from a stale row-local draft.
     const resumedEditCandidate = activeQueuedMessageEdit(host);
     if (
       isInlineEditSubmission &&
@@ -520,9 +522,7 @@ export async function handleSendChat(
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
     const resumedEdit =
-      opts?.resumeQueuedMessageEditId && resumedEditCandidate?.id === opts.resumeQueuedMessageEditId
-        ? resumedEditCandidate
-        : null;
+      requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,

@@ -175,6 +175,18 @@ export function loadDeviceIdentityIfPresent(
   });
 }
 
+/** Load a persisted identity without creating coordinator or shared-state artifacts. */
+export function loadDeviceIdentityIfPresentReadOnly(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity | null {
+  const stored = readStoredDeviceIdentityReadOnly(options);
+  if (stored) {
+    return toDeviceIdentity(stored);
+  }
+  assertNoPendingLegacyIdentity(options);
+  return null;
+}
+
 /** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
   return signEd25519Payload(privateKeyPem, payload);

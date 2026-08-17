@@ -1,10 +1,9 @@
 // Canonical SQLite storage for gateway/device Ed25519 identities.
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -281,23 +280,17 @@ export function readStoredDeviceIdentityReadOnly(
   options: DeviceIdentityStoreOptions = {},
 ): StoredDeviceIdentity | null {
   const resolved = resolveDeviceIdentityStore(options);
-  try {
-    fs.lstatSync(resolved.databasePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    return null;
-  }
-  return withOpenClawStateDatabaseReadOnly(
-    (database) => {
-      const stored = readStoredIdentityFromDatabase(database, resolved.identityKey);
-      if (stored) {
-        validateStoredDeviceIdentity(stored, resolved.identityKey);
-      }
-      return stored;
-    },
-    { env: options.env, path: resolved.databasePath },
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      (database) => {
+        const stored = readStoredIdentityFromDatabase(database, resolved.identityKey);
+        if (stored) {
+          validateStoredDeviceIdentity(stored, resolved.identityKey);
+        }
+        return stored;
+      },
+      { env: options.env, path: resolved.databasePath },
+    ) ?? null
   );
 }
 

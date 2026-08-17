@@ -565,7 +565,7 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
-  it("rekeys stored execution identity when a new lifecycle rotates the recovery run", () => {
+  it("preserves stored execution identity when a new lifecycle rotates the recovery run", () => {
     const storedToken = createExecutionIdentityAdmissionToken("recovery-old", {
       contextId: "context-1",
       executionId: "execution-1",
@@ -590,23 +590,32 @@ describe("main session recovery state", () => {
       reservation: {
         executionIdentityAdmission: {
           kind: "retry-reference",
-          token: {
-            tokenVersion: 1,
-            contextId: "context-1",
-            executionId: "execution-1",
-            runId: "recovery-new",
-            createdAt: 123,
-          },
+          token: storedToken,
         },
       },
     });
-    expect(entry.mainRestartRecovery?.executionIdentity).toEqual({
-      tokenVersion: 1,
-      contextId: "context-1",
-      executionId: "execution-1",
-      runId: "recovery-new",
-      createdAt: 123,
-    });
+    expect(entry.mainRestartRecovery?.executionIdentity).toBe(storedToken);
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "admit_recovery",
+        lifecycleGeneration: "generation-new",
+        now: 201,
+        runId: "recovery-new",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ kind: "admitted_recovery" });
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "bind_admitted_execution_identity",
+        attempt: 1,
+        cycleId: "cycle-1",
+        lifecycleGeneration: "generation-new",
+        runId: "recovery-new",
+        sessionId: "session-1",
+        token: storedToken,
+      }),
+    ).toEqual({ kind: "no_change" });
   });
 
   it("preserves a stored execution identity when the recovery run is unchanged", () => {

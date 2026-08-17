@@ -19,7 +19,7 @@ import {
   createAutomaticDraftContext,
   createBlockModeContext,
   createMockDraftStreamForTest,
-  expectFinalWithProgressReceipt,
+  expectFinalAnswerText,
   expectFreshFinalText,
   firstDispatchParams,
   firstMockArg,
@@ -94,7 +94,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expectFinalWithProgressReceipt(fullAnswer, "🛠️ 1 tool call");
+    expectFinalAnswerText(fullAnswer);
   });
 
   it("clears partial drafts when fallback final delivery fails before completion", async () => {
@@ -522,7 +522,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Checking private context before replying.\n\n🛠️ Exec",
     );
-    expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
+    expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
   });
 

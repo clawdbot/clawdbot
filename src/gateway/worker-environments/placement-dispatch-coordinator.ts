@@ -93,6 +93,7 @@ export function coordinateWorkerPlacementDispatch(
           inFlight.request.profileId !== request.profileId ||
           inFlight.request.executionMode !== request.executionMode ||
           inFlight.request.deviceId !== request.deviceId ||
+          inFlight.request.machineClass !== request.machineClass ||
           !isDeepStrictEqual(inFlight.request.inheritedProfile, request.inheritedProfile)
         ) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);

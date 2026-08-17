@@ -7520,17 +7520,20 @@ public struct SessionsDispatchParams: Codable, Sendable {
     public let agentid: String?
     public let profileid: String?
     public let deviceid: String?
+    public let machineclass: String?
 
     public init(
         key: String,
         agentid: String? = nil,
         profileid: String? = nil,
-        deviceid: String? = nil)
+        deviceid: String? = nil,
+        machineclass: String? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.profileid = profileid
         self.deviceid = deviceid
+        self.machineclass = machineclass
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7538,6 +7541,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
         case agentid = "agentId"
         case profileid = "profileId"
         case deviceid = "deviceId"
+        case machineclass = "machineClass"
     }
 }
 
@@ -12972,6 +12976,9 @@ public struct WebLoginWaitParams: Codable, Sendable {
 public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let kind: AgentKind?
+    public let createdvia: AnyCodable?
+    public let creatoragentid: AnyCodable?
+    public let createdat: Int?
     public let name: String?
     public let identity: [String: AnyCodable]?
     public let workspace: String?
@@ -12985,6 +12992,9 @@ public struct AgentSummary: Codable, Sendable {
     public init(
         id: String,
         kind: AgentKind? = nil,
+        createdvia: AnyCodable? = nil,
+        creatoragentid: AnyCodable? = nil,
+        createdat: Int? = nil,
         name: String? = nil,
         identity: [String: AnyCodable]? = nil,
         workspace: String? = nil,
@@ -12997,6 +13007,9 @@ public struct AgentSummary: Codable, Sendable {
     {
         self.id = id
         self.kind = kind
+        self.createdvia = createdvia
+        self.creatoragentid = creatoragentid
+        self.createdat = createdat
         self.name = name
         self.identity = identity
         self.workspace = workspace
@@ -13011,6 +13024,9 @@ public struct AgentSummary: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case kind
+        case createdvia = "createdVia"
+        case creatoragentid = "creatorAgentId"
+        case createdat = "createdAt"
         case name
         case identity
         case workspace
@@ -19518,7 +19534,19 @@ public struct ChatErrorEvent: Codable, Sendable {
     }
 }
 
-public struct UpdateStatusParams: Codable, Sendable {}
+public struct UpdateStatusParams: Codable, Sendable {
+    public let refreshcheckout: Bool?
+
+    public init(
+        refreshcheckout: Bool? = nil)
+    {
+        self.refreshcheckout = refreshcheckout
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case refreshcheckout = "refreshCheckout"
+    }
+}
 
 public struct UpdateStatusResult: Codable, Sendable {
     public let sentinel: AnyCodable

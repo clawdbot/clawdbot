@@ -84,16 +84,19 @@ export function resolveTelegramConversationRoute(params: {
     const sessionKey = normalizeLowercaseStringOrEmpty(
       buildAgentSessionKey({
         agentId: topicAgentId,
+        mainKey: params.cfg.session?.mainKey,
         channel: "telegram",
         accountId: params.accountId,
         peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
-        dmScope: params.cfg.session?.dmScope,
+        dmScope: route.dmScope,
+        groupScope: route.groupScope,
         identityLinks: params.cfg.session?.identityLinks,
       }),
     );
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
       buildAgentMainSessionKey({
         agentId: topicAgentId,
+        mainKey: params.cfg.session?.mainKey,
       }),
     );
     route = {

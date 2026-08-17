@@ -19,6 +19,7 @@ type MockResolvedModel = {
     id: string;
     input: unknown[];
     contextWindow?: number;
+    requestTimeoutMs?: number;
   };
   error: null;
   authStorage: { setRuntimeApiKey: Mock<(provider?: string, apiKey?: string) => void> };

@@ -367,13 +367,11 @@ export async function resolveGatewayProbeSnapshot(params: {
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
-  serviceName?: string | null;
   controlUiBasePath?: string;
 }): string | null {
   const host = resolveTailscalePublishedHost({
     tailscaleMode: params.tailscaleMode,
     tailnetHost: params.tailscaleDns,
-    serviceName: params.serviceName,
   });
   return params.tailscaleMode !== "off" && host
     ? `https://${host}${normalizeControlUiBasePath(params.controlUiBasePath)}`

@@ -29,13 +29,6 @@ const GatewayRemoteSchemaShape = {
 
 export const GatewayRemoteConfigSchema = z.strictObject(GatewayRemoteSchemaShape).optional();
 
-export const TailscaleServiceNameSchema = z
-  .string()
-  .regex(/^svc:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
-    message:
-      'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
-  });
-
 export const SecuritySchema = z
   .strictObject({
     audit: z

@@ -190,7 +190,7 @@ function isGatewayStartupCommand(commandPath: string[]): boolean {
 }
 
 async function getConfigSnapshot(
-  options?: { observe: false; skipPluginValidation?: true },
+  options?: { observe: false; pluginValidation?: "skip" | "core-only" },
   measure?: ConfigSnapshotReadMeasure,
 ) {
   if (options?.observe === false) {
@@ -225,6 +225,7 @@ export async function ensureConfigReady(
     measure?: ConfigSnapshotReadMeasure;
     skipPristineCoreStateMigrations?: boolean;
     skipPristineStartupStateMigrations?: boolean;
+    validateConfigOnly?: boolean;
   },
   recoveryDeps?: InvalidConfigRecoveryDeps,
 ): Promise<void> {
@@ -235,6 +236,7 @@ export async function ensureConfigReady(
     (commandName === "gateway" || commandName === "daemon") && subcommandName === "restart";
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration =
+    !params.validateConfigOnly &&
     commandName !== "config" &&
     commandName !== "health" &&
     commandName !== "logs" &&
@@ -288,11 +290,12 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Read-only diagnostics must not record config health; logs also skips plugin
-  // metadata discovery because opening the shared state DB creates SQLite sidecars.
-  const configSnapshotOptions =
-    commandName === "logs"
-      ? ({ observe: false, skipPluginValidation: true } as const)
+  // Read-only diagnostics must not record config health. Core-only validation
+  // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
+  const configSnapshotOptions = params.validateConfigOnly
+    ? ({ observe: false, pluginValidation: "core-only" } as const)
+    : commandName === "logs"
+      ? ({ observe: false, pluginValidation: "core-only" } as const)
       : commandName === "status" ||
           (commandName === "gateway" && subcommandName === "call") ||
           isRestartController

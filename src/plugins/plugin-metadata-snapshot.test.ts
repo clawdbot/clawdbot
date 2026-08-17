@@ -1,7 +1,4 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
@@ -190,6 +187,7 @@ describe("plugin metadata snapshot", () => {
       config,
       env: {},
       workspaceDir: targetWorkspace,
+      workspacePluginRootPresent: false,
     });
 
     expect(resolved).not.toBe(source);
@@ -206,15 +204,55 @@ describe("plugin metadata snapshot", () => {
       workspacePluginRootPresent: true,
     });
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+  });
 
-    const pluginWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-workspace-"));
-    try {
-      fs.mkdirSync(path.join(pluginWorkspace, ".openclaw", "extensions"), { recursive: true });
-      resolvePluginMetadataSnapshot({ config, env: {}, workspaceDir: pluginWorkspace });
-      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
-    } finally {
-      fs.rmSync(pluginWorkspace, { force: true, recursive: true });
-    }
+  it("loads a fresh graph when no caller asserted workspace plugin-root absence", () => {
+    // Startup config validation never resolves workspace plugin-root presence, so it must keep
+    // loading. Projecting the published graph instead would serve whatever inventory happened to
+    // be current, and startup convergence rewrites that inventory between the two reads that
+    // form the migration checkpoint identity — the gateway then refuses to report ready.
+    const config = {};
+    const sourceWorkspace = "/workspace/source";
+    const targetWorkspace = "/workspace/target";
+    const staleIndex = makeIndex("stale");
+    staleIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    staleIndex.workspaceDir = sourceWorkspace;
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: staleIndex,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("stale"));
+    const stale = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index: staleIndex,
+      workspaceDir: sourceWorkspace,
+    });
+    setCurrentPluginMetadataSnapshot(stale, { config, env: {}, workspaceDir: sourceWorkspace });
+
+    // Convergence replaced the persisted inventory; a fresh load now sees a different graph.
+    const freshIndex = makeIndex("fresh");
+    freshIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    freshIndex.workspaceDir = targetWorkspace;
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: freshIndex,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("fresh"));
+
+    const resolved = resolvePluginMetadataSnapshot({
+      config,
+      env: {},
+      workspaceDir: targetWorkspace,
+    });
+
+    expect(resolved.index.plugins.map((plugin) => plugin.pluginId)).toEqual(["fresh"]);
+    expect(resolved.configFingerprint).toBe(
+      loadPluginMetadataSnapshot({ config, env: {}, workspaceDir: targetWorkspace })
+        .configFingerprint,
+    );
   });
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {

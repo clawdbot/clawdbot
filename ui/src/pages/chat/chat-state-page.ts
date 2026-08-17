@@ -40,7 +40,6 @@ import {
   cancelQueuedMessageEdit,
   isQueuedMessageRemovalBlocked,
   QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
-  QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
@@ -340,9 +339,7 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.moveQueuedChatMessage = (id, toIndex) => {
-    if (moveQueuedChatMessage(state, id, toIndex) === "rejected") {
-      setChatError(state, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
-    }
+    moveQueuedChatMessage(state, id, toIndex);
     renderLifecycle.invalidate();
   };
   state.editQueuedChatMessage = (id) => {

@@ -260,7 +260,6 @@ export function buildQaGatewayConfig(params: {
       },
       entries: {
         qa: {
-          default: true,
           model: buildQaModelSelection(primaryModel, alternateModel),
           ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
             ? { fastModeDefault: params.fastMode }

@@ -16,7 +16,7 @@ function createContractTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   return {
     name: "exec",
     description: "Run a command.",
-    parameters: { type: "object", properties: {} },
+    parameters: { type: "object", properties: {}, additionalProperties: true },
     execute: vi.fn(),
     ...overrides,
   } as unknown as AnyAgentTool;

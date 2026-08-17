@@ -17,20 +17,3 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
 }
-
-export function publishGatewayLifetimeSidecars(params: {
-  registered: readonly GatewayPostReadySidecarHandle[];
-  published: readonly GatewayPostReadySidecarHandle[];
-  closeStarted: boolean;
-  stopAfterCloseStarted: (params: {
-    postReadySidecars: GatewayPostReadySidecarHandle[];
-    closeStarted: boolean;
-  }) => void;
-}): GatewayPostReadySidecarHandle[] {
-  const sidecars = [...new Set([...params.registered, ...params.published])];
-  params.stopAfterCloseStarted({
-    postReadySidecars: sidecars,
-    closeStarted: params.closeStarted,
-  });
-  return params.closeStarted ? [] : sidecars;
-}

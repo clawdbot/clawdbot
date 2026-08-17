@@ -29,6 +29,7 @@ import {
   type TaskSuggestionsAcceptParams,
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
@@ -210,6 +211,7 @@ export class GatewayChatClient implements TuiBackend {
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
+      notifyOnStartupRetry: true,
       onHelloOk: (hello) => {
         this.pendingConnectError = undefined;
         this.hello = hello;
@@ -273,6 +275,9 @@ export class GatewayChatClient implements TuiBackend {
 
   private notifyConnectError(error: Error) {
     if (this.pendingConnectError) {
+      return;
+    }
+    if (isRetryableGatewayStartupUnavailableError(error)) {
       return;
     }
     if (

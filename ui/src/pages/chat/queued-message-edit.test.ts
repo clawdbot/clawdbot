@@ -10,15 +10,18 @@ import {
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   admitQueuedMessageForSession,
-  removeQueuedMessageWithoutReleasing,
   subscribeChatOutboxProjection,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
 } from "./chat-queue.ts";
+import {
+  moveQueuedChatMessage,
+  retryQueuedChatMessage,
+  steerQueuedChatMessage,
+} from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import {
   beginQueuedMessageEdit,
-  activeQueuedMessageEdit,
   cancelQueuedMessageEdit,
   isQueuedMessageBeingEdited,
   isQueuedMessageRemovalBlocked,
@@ -100,18 +103,29 @@ function rejectStoredGrowth(): void {
   });
 }
 
+async function submitQueuedEdit(host: ReturnType<typeof makeChatHost>): Promise<void> {
+  const edit = host.chatQueuedEdit;
+  if (!edit) {
+    throw new Error("expected active queued edit");
+  }
+  await handleSendChat(host as never, edit.draftText, {
+    attachmentsOverride: [...edit.attachments],
+    resumeQueuedMessageEditId: edit.id,
+  });
+}
+
 describe("queued message edit round-trip", () => {
-  it("keeps the row in place and owns the draft outside the composer", () => {
+  it("keeps the row-local draft and attachments separate from the composer", () => {
     const attachment = { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,iVB" };
     const { host, unsubscribe } = queueHost([{}, { attachments: [attachment] }, {}]);
-    host.chatMessage = "a separate composer draft";
+    host.chatMessage = "separate composer draft";
 
     expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
 
-    expect(host.chatMessage).toBe("a separate composer draft");
-    expect(host.chatAttachments).toEqual([]);
     expect(host.chatQueuedEdit?.draftText).toBe("message 2");
     expect(host.chatQueuedEdit?.attachments.map((item) => item.id)).toEqual(["att-1"]);
+    expect(host.chatMessage).toBe("separate composer draft");
+    expect(host.chatAttachments).toEqual([]);
     // The row holds its slot so the operator can see where the edit lands.
     expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
@@ -119,23 +133,34 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("leaves the current composer untouched when the edit is cancelled", () => {
-    const original = stageQueuedImage("att-original");
-    const added = stageQueuedImage("att-added");
-    const { host, unsubscribe } = queueHost([{ attachments: [original] }, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-1");
-    host.chatMessage = "a separate composer draft";
-    host.chatAttachments = [original, added];
+  it("leaves the queue untouched when the edit is cancelled", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    host.chatMessage = "separate composer draft";
+    beginQueuedMessageEdit(host as never, "queued-2");
+    updateQueuedMessageEdit(host as never, "half-typed replacement");
 
     expect(cancelQueuedMessageEdit(host as never)).toBe(true);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
-    expect(host.chatMessage).toBe("a separate composer draft");
-    expect(host.chatAttachments).toHaveLength(2);
-    expect(host.chatAttachments[0]?.id).toBe(original.id);
-    expect(getChatAttachmentDataUrl(host.chatAttachments[0] as ChatAttachment)).not.toBeNull();
-    expect(host.chatAttachments[1]?.id).toBe(added.id);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
+    expect(host.chatMessage).toBe("separate composer draft");
+    expect(host.chatAttachments).toEqual([]);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
+    unsubscribe();
+  });
+
+  it("leaves composer attachments untouched when an edit is cancelled", () => {
+    const original = stageQueuedImage("att-original");
+    const added = stageQueuedImage("att-added");
+    const { host, unsubscribe } = queueHost([{ attachments: [original] }]);
+    host.chatAttachments = [added];
+    beginQueuedMessageEdit(host as never, "queued-1");
+
+    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+
+    expect(storedOrder(host)).toEqual(["message 1"]);
+    expect(getChatAttachmentDataUrl(original)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(added)).not.toBeNull();
+    expect(host.chatAttachments).toEqual([added]);
     unsubscribe();
   });
 
@@ -143,12 +168,8 @@ describe("queued message edit round-trip", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     beginQueuedMessageEdit(host as never, "queued-2");
     updateQueuedMessageEdit(host as never, "message 2, corrected");
-    const edit = host.chatQueuedEdit!;
 
-    await handleSendChat(host as never, edit.draftText, {
-      attachmentsOverride: [...edit.attachments],
-      resumeQueuedMessageEditId: edit.id,
-    });
+    await submitQueuedEdit(host);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
@@ -158,204 +179,126 @@ describe("queued message edit round-trip", () => {
   it.each(["/stop", "/compact", "stop"])(
     "keeps the source row and rejects a command-like inline edit: %s",
     async (command) => {
-      const { host, unsubscribe } = queueHost([{}], { chatRunId: "run-active" });
-      expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
-
-      await handleSendChat(host as never, command, {
-        attachmentsOverride: [],
-        resumeQueuedMessageEditId: "queued-1",
+      const sendRequest = vi.fn(() => ({ status: "started" as const }));
+      const { host, unsubscribe } = queueHost([{}], {
+        chatRunId: "run-active",
+        connected: true,
+        requestHandlers: { "chat.send": sendRequest },
       });
+      beginQueuedMessageEdit(host as never, "queued-1");
+      updateQueuedMessageEdit(host as never, command);
+
+      await submitQueuedEdit(host);
 
       expect(storedOrder(host)).toEqual(["message 1"]);
-      expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(true);
-      expect(host.request?.mock.calls.some(([method]) => method === "chat.send") ?? false).toBe(
-        false,
-      );
+      expect(host.chatQueuedEdit?.draftText).toBe(command);
+      expect(sendRequest).not.toHaveBeenCalled();
       expect(host.chatError).toContain("Queued-row edits cannot run commands or stop aliases");
       unsubscribe();
     },
   );
 
-  it("fences a raw inline command even when annotation context is attached", async () => {
-    const annotation = {
-      id: "queued-annotation",
-      dataUrl: "data:image/png;base64,aQ==",
-      mimeType: "image/png",
-      browserAnnotation: {
-        modelContext: "Inspect the marked region.",
-        title: "Annotated page",
-        displayUrl: "https://example.com/annotated",
-        markedRegionCount: 1,
-        inspectedElement: false,
-      },
-    } satisfies ChatAttachment;
-    const { host, unsubscribe } = queueHost([{ attachments: [annotation] }], {
-      chatRunId: "run-active",
-    });
-    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
+  it("keeps a composer send separate from an open row edit", async () => {
+    const { host, unsubscribe } = queueHost([{}, {}]);
+    beginQueuedMessageEdit(host as never, "queued-1");
+    updateQueuedMessageEdit(host as never, "message 1, corrected");
+    host.chatMessage = "separate composer send";
 
-    await handleSendChat(host as never, "/stop", {
-      attachmentsOverride: [annotation],
-      resumeQueuedMessageEditId: "queued-1",
-    });
+    await handleSendChat(host as never);
 
-    expect(storedOrder(host)).toEqual(["message 1"]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(true);
-    expect(host.request?.mock.calls.some(([method]) => method === "chat.send") ?? false).toBe(
-      false,
-    );
-    expect(host.chatError).toContain("Queued-row edits cannot run commands or stop aliases");
+    expect(storedOrder(host)).toEqual(["message 1", "message 2", "separate composer send"]);
+    expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
     unsubscribe();
   });
 
-  it("rejects a stale second-pane replacement after the source is retired", async () => {
-    const paneA = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
-    const paneB = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
-    const unsubscribeA = subscribeChatOutboxProjection(paneA as never);
-    let unsubscribeB = subscribeChatOutboxProjection(paneB as never);
+  it("rejects a stale replacement after another pane changes the source version", async () => {
+    const { host, unsubscribe } = queueHost([{}, {}]);
+    beginQueuedMessageEdit(host as never, "queued-1");
+    updateQueuedMessageEdit(host as never, "message 1, corrected");
+    const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
     expect(
-      admitQueuedMessageForSession(paneA as never, SESSION_KEY, {
-        id: "queued-1",
-        text: "message 1",
-        createdAt: 1_000,
-        sendState: "waiting-reconnect",
-        sessionKey: SESSION_KEY,
-      }),
-    ).toBe(true);
+      updateQueuedMessage(stalePane as never, "queued-1", (item) => ({
+        ...item,
+        orderKey: (item.orderKey ?? item.createdAt) + 10,
+      })),
+    ).not.toBeNull();
 
-    // Model a pane that captured the edit before it was detached from the shared owner.
-    expect(beginQueuedMessageEdit(paneB as never, "queued-1")).toBe("started");
-    unsubscribeB();
+    await submitQueuedEdit(host);
 
-    expect(beginQueuedMessageEdit(paneA as never, "queued-1")).toBe("started");
-    updateQueuedMessageEdit(paneA as never, "message 1, corrected");
-    await handleSendChat(paneA as never, "message 1, corrected", {
-      attachmentsOverride: [],
-      resumeQueuedMessageEditId: "queued-1",
-    });
-
-    unsubscribeB = subscribeChatOutboxProjection(paneB as never);
-    expect(beginQueuedMessageEdit(paneB as never, "queued-1")).toBe("unavailable");
-    await handleSendChat(paneB as never, "message 1, corrected", {
-      attachmentsOverride: [],
-      resumeQueuedMessageEditId: "queued-1",
-    });
-
-    expect(storedOrder(paneA)).toEqual(["message 1, corrected"]);
-    expect(listStoredChatOutboxes(paneA as never)[0]?.queue).toHaveLength(1);
-    unsubscribeA();
-    unsubscribeB();
+    expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
+    expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
+    expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+    unsubscribe();
   });
 
   it("aborts a replacement when its edit is cancelled during history loading", async () => {
     const history = createDeferred<{ messages: unknown[] }>();
+    const historyRequest = vi.fn(() => history.promise);
+    const sendRequest = vi.fn(() => ({ status: "started" as const }));
     const { host, unsubscribe } = queueHost([{}], {
-      connected: true,
       chatLoading: true,
-      requestHandlers: { "chat.history": () => history.promise },
+      connected: true,
+      requestHandlers: {
+        "chat.history": historyRequest,
+        "chat.send": sendRequest,
+      },
     });
     beginQueuedMessageEdit(host as never, "queued-1");
     updateQueuedMessageEdit(host as never, "message 1, corrected");
-    const edit = host.chatQueuedEdit!;
 
-    const send = handleSendChat(host as never, edit.draftText, {
-      attachmentsOverride: [...edit.attachments],
-      resumeQueuedMessageEditId: edit.id,
-    });
-    await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey: SESSION_KEY }),
-      ),
-    );
-
+    const send = submitQueuedEdit(host);
+    await vi.waitFor(() => expect(historyRequest).toHaveBeenCalledOnce());
     expect(cancelQueuedMessageEdit(host as never)).toBe(true);
     history.resolve({ messages: [] });
     await send;
 
     expect(storedOrder(host)).toEqual(["message 1"]);
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(sendRequest).not.toHaveBeenCalled();
     unsubscribe();
   });
 
   it("aborts a replacement when its draft changes during history loading", async () => {
     const history = createDeferred<{ messages: unknown[] }>();
+    const historyRequest = vi.fn(() => history.promise);
+    const sendRequest = vi.fn(() => ({ status: "started" as const }));
     const { host, unsubscribe } = queueHost([{}], {
-      connected: true,
       chatLoading: true,
-      requestHandlers: { "chat.history": () => history.promise },
+      connected: true,
+      requestHandlers: {
+        "chat.history": historyRequest,
+        "chat.send": sendRequest,
+      },
     });
     beginQueuedMessageEdit(host as never, "queued-1");
     updateQueuedMessageEdit(host as never, "message 1, corrected");
-    const edit = host.chatQueuedEdit!;
 
-    const send = handleSendChat(host as never, edit.draftText, {
-      attachmentsOverride: [...edit.attachments],
-      resumeQueuedMessageEditId: edit.id,
-    });
-    await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey: SESSION_KEY }),
-      ),
-    );
-
+    const send = submitQueuedEdit(host);
+    await vi.waitFor(() => expect(historyRequest).toHaveBeenCalledOnce());
     updateQueuedMessageEdit(host as never, "message 1, changed while loading");
     history.resolve({ messages: [] });
     await send;
 
     expect(storedOrder(host)).toEqual(["message 1"]);
     expect(host.chatQueuedEdit?.draftText).toBe("message 1, changed while loading");
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(sendRequest).not.toHaveBeenCalled();
     unsubscribe();
   });
 
-  it("preserves the queued reply target instead of the composer target", async () => {
-    const queuedReplyTarget = {
-      messageId: "queued-reply",
-      sourceMessageId: "queued-reply",
-      text: "the queued source",
-      senderLabel: "Queue source",
-    };
-    const composerReplyTarget = {
-      messageId: "composer-reply",
-      sourceMessageId: "composer-reply",
-      text: "the composer source",
-      senderLabel: "Composer source",
-    };
-    const { host, unsubscribe } = queueHost([{ replyToId: queuedReplyTarget.sourceMessageId }]);
-    host.chatReplyTarget = composerReplyTarget;
-    beginQueuedMessageEdit(host as never, "queued-1");
-    updateQueuedMessageEdit(host as never, "edited queued reply");
-    const edit = host.chatQueuedEdit!;
-
-    await handleSendChat(host as never, edit.draftText, {
-      attachmentsOverride: [...edit.attachments],
-      resumeQueuedMessageEditId: edit.id,
-    });
-
-    expect(listStoredChatOutboxes(host as never)[0]?.queue[0]?.replyToId).toBe(
-      queuedReplyTarget.sourceMessageId,
-    );
-    expect(host.chatReplyTarget).toEqual(composerReplyTarget);
-    unsubscribe();
-  });
-
-  it("releases only the images the replacement dropped", async () => {
+  it("preserves attachments and reply context on the replacement", async () => {
     const kept = stageQueuedImage("att-kept");
-    const dropped = stageQueuedImage("att-dropped");
-    const { host, unsubscribe } = queueHost([{}, { attachments: [kept, dropped] }, {}]);
+    const { host, unsubscribe } = queueHost([
+      {},
+      { attachments: [kept], replyToId: "reply-source" },
+      {},
+    ]);
     beginQueuedMessageEdit(host as never, "queued-2");
     updateQueuedMessageEdit(host as never, "message 2, corrected");
-    await handleSendChat(host as never, "message 2, corrected", {
-      attachmentsOverride: [kept],
-      resumeQueuedMessageEditId: host.chatQueuedEdit!.id,
-    });
+    await submitQueuedEdit(host);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
-    // The row that owned the dropped image is gone, so nothing else can free it —
-    // and the row's own copy is already unreachable by the time the send lands.
-    expect(getChatAttachmentDataUrl(dropped)).toBeNull();
+    const replacement = listStoredChatOutboxes(host as never)[0]?.queue[1];
+    expect(replacement?.attachments?.map((attachment) => attachment.id)).toEqual(["att-kept"]);
+    expect(replacement?.replyToId).toBe("reply-source");
     expect(getChatAttachmentDataUrl(kept)).not.toBeNull();
     unsubscribe();
   });
@@ -366,42 +309,29 @@ describe("queued message edit round-trip", () => {
     updateQueuedMessageEdit(host as never, "message 2, corrected");
     rejectStoredGrowth();
 
-    await handleSendChat(host as never, "message 2, corrected", {
-      resumeQueuedMessageEditId: host.chatQueuedEdit!.id,
-    });
+    await submitQueuedEdit(host);
 
     // Retiring the original before its replacement is stored would lose both, in
     // the one failure the offline queue exists to survive. The edit stays open on
     // the row that is still there, which is what cancelling already promises.
     expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
-    expect(host.chatMessage).toBe("");
+    expect(host.chatQueuedEdit?.draftText).toBe("message 2, corrected");
     expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
     unsubscribe();
   });
 
-  it("keeps a normal composer send independent of an open row edit", async () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    host.chatMessage = "a separate composer draft";
-
-    await handleSendChat(host as never);
-
-    expect(storedOrder(host)).toEqual([
-      "message 1",
-      "message 2",
-      "message 3",
-      "a separate composer draft",
-    ]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
-    expect(host.chatMessage).toBe("");
-    unsubscribe();
-  });
-
-  it("blocks peer removal while a pane owns the row edit", () => {
+  it("fences peer remove, reorder, retry, and steer actions while a row edit is open", async () => {
     const original = { id: "queued-1", text: "message 1", createdAt: 1_000 };
     const { host, unsubscribe } = queueHost([original]);
-    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false, chatQueue: [original] });
+    const sendRequest = vi.fn(() => ({ status: "started" as const }));
+    const peer = makeChatHost({
+      chatQueue: [original],
+      chatRunId: "run-active",
+      connected: true,
+      requestHandlers: { "chat.send": sendRequest },
+      sessionKey: SESSION_KEY,
+    });
     const stopPeer = subscribeChatOutboxProjection(peer as never);
 
     try {
@@ -411,6 +341,11 @@ describe("queued message edit round-trip", () => {
       expect(isQueuedMessageRemovalBlocked(peer as never, original.id)).toBe(true);
       expect(isQueuedMessageReorderBlocked(peer as never, original.id)).toBe(true);
       expect(isQueuedMessageRetryBlocked(peer as never, original.id)).toBe(true);
+      expect(moveQueuedChatMessage(peer as never, original.id, 0)).toBe("rejected");
+      await retryQueuedChatMessage(peer as never, original.id);
+      await steerQueuedChatMessage(peer as never, original.id);
+      expect(sendRequest).not.toHaveBeenCalled();
+      expect(storedOrder(peer)).toEqual(["message 1"]);
     } finally {
       stopPeer();
       unsubscribe();
@@ -419,20 +354,16 @@ describe("queued message edit round-trip", () => {
 
   it("does not collapse same-payload row and composer sends", async () => {
     const ack = createDeferred<{ status: "started" }>();
+    const sendRequest = vi.fn(() => ack.promise);
     const { host, unsubscribe } = queueHost([{}], {
       connected: true,
-      requestHandlers: { "chat.send": () => ack.promise },
+      requestHandlers: { "chat.send": sendRequest },
     });
     beginQueuedMessageEdit(host as never, "queued-1");
     updateQueuedMessageEdit(host as never, "same payload");
-    const edit = host.chatQueuedEdit!;
 
-    const rowSend = handleSendChat(host as never, edit.draftText, {
-      attachmentsOverride: [...edit.attachments],
-      resumeQueuedMessageEditId: edit.id,
-    });
-    await vi.waitFor(() => expect(host.request).toHaveBeenCalledTimes(1));
-
+    const rowSend = submitQueuedEdit(host);
+    await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledOnce());
     host.chatMessage = "same payload";
     const composerSend = handleSendChat(host as never);
     await vi.waitFor(() => expect(host.chatMessage).toBe(""));
@@ -463,8 +394,8 @@ describe("queued message edit round-trip", () => {
     host.assistantAgentId = "nova";
     expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
 
-    updateQueuedMessageEdit(host as never, "message 1, corrected");
-    await handleSendChat(host as never, "message 1, corrected");
+    host.chatMessage = "message 1, corrected";
+    await handleSendChat(host as never);
 
     expect(storedOutboxesByAgent(host)).toEqual({
       lily: ["message 1"],
@@ -473,7 +404,7 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("edits beside an existing composer draft", () => {
+  it("starts a row edit while the composer holds a separate message", () => {
     const { host, unsubscribe } = queueHost([{}, {}]);
     host.chatMessage = "typing something else";
 
@@ -481,14 +412,12 @@ describe("queued message edit round-trip", () => {
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2"]);
     expect(host.chatMessage).toBe("typing something else");
-    expect(host.chatQueuedEdit?.draftText).toBe("message 1");
     unsubscribe();
   });
 
   it("edits one row at a time", () => {
     const { host, unsubscribe } = queueHost([{}, {}]);
     beginQueuedMessageEdit(host as never, "queued-1");
-    host.chatMessage = "";
 
     expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("unavailable");
     unsubscribe();
@@ -515,49 +444,6 @@ describe("queued message edit round-trip", () => {
     // and the stale edit must not lock the composer in the new session either.
     expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
     expect(cancelQueuedMessageEdit(host as never)).toBe(false);
-    unsubscribe();
-  });
-
-  it("clears an edit whose source is removed while the pane is away", () => {
-    const { host, unsubscribe } = queueHost([{}, {}]);
-    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
-    const peerUnsubscribe = subscribeChatOutboxProjection(peer as never);
-    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
-
-    host.sessionKey = "agent:other";
-    expect(activeQueuedMessageEdit(host as never)).toBeNull();
-    expect(
-      removeQueuedMessageWithoutReleasing(peer as never, "queued-1", SESSION_KEY),
-    ).not.toBeNull();
-
-    host.sessionKey = SESSION_KEY;
-    expect(activeQueuedMessageEdit(host as never)).toBeNull();
-    expect(host.chatQueuedEdit).toBeNull();
-    expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
-
-    peerUnsubscribe();
-    unsubscribe();
-  });
-
-  it("clears an edit whose source fails while the pane is away", () => {
-    const { host, unsubscribe } = queueHost([{}, {}]);
-    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
-
-    host.sessionKey = "agent:other";
-    expect(activeQueuedMessageEdit(host as never)).toBeNull();
-    expect(
-      updateQueuedMessageForSession(host as never, SESSION_KEY, "queued-1", (item) => ({
-        ...item,
-        sendState: "failed",
-        sendError: "Gateway rejected the queued send",
-      })),
-    ).toMatchObject({ sendState: "failed" });
-
-    host.sessionKey = SESSION_KEY;
-    expect(activeQueuedMessageEdit(host as never)).toBeNull();
-    expect(host.chatQueuedEdit).toBeNull();
-    expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
-
     unsubscribe();
   });
 });

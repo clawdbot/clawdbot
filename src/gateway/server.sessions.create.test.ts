@@ -203,7 +203,7 @@ test("sessions.create assigns and registers its requested group", async () => {
     "sessions.create",
     {
       agentId: "main",
-      category: "Client work",
+      category: "  Client work  ",
     },
     {
       context: {
@@ -1350,59 +1350,224 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
   }
 });
 
-test("sessions.create shares its generated title with the worktree and first chat send", async () => {
+test.each([
+  {
+    name: "agent default",
+    request: {},
+    catalogTarget: undefined,
+    parentEntry: undefined,
+    expectedEntry: {},
+    expectedTitleSelection: { regularModelRef: "openai/gpt-5.6-luna" },
+  },
+  {
+    name: "explicit model",
+    request: { model: "anthropic/sonnet-4.6@work" },
+    catalogTarget: undefined,
+    parentEntry: undefined,
+    expectedEntry: {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      authProfileOverride: "work",
+    },
+    expectedTitleSelection: {
+      regularModelRef: "anthropic/claude-sonnet-4-6@work",
+      preferredProfile: "work",
+    },
+  },
+  {
+    name: "registered catalog target",
+    request: { catalogId: "claude" },
+    catalogTarget: {
+      model: "anthropic/sonnet-4.6@catalog-work",
+      agentRuntime: "claude-cli",
+    },
+    parentEntry: undefined,
+    expectedEntry: {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      agentRuntimeOverride: "claude-cli",
+      authProfileOverride: "catalog-work",
+    },
+    expectedTitleSelection: {
+      regularModelRef: "anthropic/claude-sonnet-4-6@catalog-work",
+      agentHarnessRuntimeOverride: "claude-cli",
+      preferredProfile: "catalog-work",
+    },
+  },
+  {
+    name: "inherited parent",
+    request: { parentSessionKey: "main" },
+    catalogTarget: undefined,
+    parentEntry: {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+      modelOverrideSource: "user" as const,
+      agentRuntimeOverride: "codex",
+      authProfileOverride: "parent-work",
+      authProfileOverrideSource: "user" as const,
+    },
+    expectedEntry: {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+      agentRuntimeOverride: "codex",
+      authProfileOverride: "parent-work",
+    },
+    expectedTitleSelection: {
+      regularModelRef: "openai/gpt-5.6-sol@parent-work",
+      agentHarnessRuntimeOverride: "codex",
+      preferredProfile: "parent-work",
+    },
+  },
+])(
+  "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
+  async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-session-worktree-title-selection-",
+    });
+    const workspace = await initializeGitWorkspace(openClawState.root);
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = {
+      workspace,
+      model: { primary: "openai/gpt-5.6-luna" },
+    };
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [
+      { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
+      { id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" },
+      { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
+    ];
+    if (catalogTarget) {
+      const registry = createEmptyPluginRegistry();
+      registry.sessionCatalogs.push({
+        pluginId: "anthropic",
+        source: "test",
+        provider: {
+          id: "claude",
+          label: "Claude Code",
+          resolveCreateSession: () => catalogTarget,
+          list: vi.fn(async () => []),
+          read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+        },
+      });
+      registry.cliBackends.push({
+        pluginId: "anthropic",
+        source: "test",
+        backend: {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "claude" },
+          bundleMcp: false,
+        },
+      });
+      setActivePluginRegistry(registry);
+    }
+    const { storePath } = await createSessionStoreDir();
+    if (parentEntry) {
+      await writeSessionStore({
+        entries: { main: sessionStoreEntry("worktree-title-parent", parentEntry) },
+      });
+    }
+    let worktreeId: string | undefined;
+    const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
+    const message = "Review this rollout [[reply_to_current]]";
+    const attachment = {
+      type: "file",
+      mimeType: "text/plain",
+      content: Buffer.from(pastedText).toString("base64"),
+    };
+    dashboardTitleGenerationMocks.generate.mockResolvedValueOnce("Attachment Repair");
+    dispatchInboundMessageMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    try {
+      const created = await directSessionReq<{
+        key: string;
+        entry: {
+          providerOverride?: string;
+          modelOverride?: string;
+          agentRuntimeOverride?: string;
+          authProfileOverride?: string;
+        };
+        worktree: { id: string; branch: string };
+      }>(
+        "sessions.create",
+        {
+          agentId: "main",
+          worktree: true,
+          message,
+          attachments: [attachment],
+          ...request,
+        },
+        { client: { connect: { scopes: ["operator.admin"] } } as never },
+      );
+
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      worktreeId = created.payload?.worktree.id;
+      expect(created.payload?.worktree.branch).toBe("openclaw/attachment-repair");
+      expect(created.payload?.entry).toMatchObject(expectedEntry);
+      const sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+      await waitForFast(() => expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalled());
+      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+        displayName: "Attachment Repair",
+      });
+      expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 4_000, ...expectedTitleSelection }),
+      );
+      expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
+    } finally {
+      if (worktreeId) {
+        await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      }
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      closeOpenClawStateDatabaseForTest();
+      testState.agentConfig = undefined;
+      await openClawState.cleanup();
+    }
+  },
+);
+
+test("sessions.create does not start title generation for a model denied by policy", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
-    prefix: "openclaw-session-worktree-title-",
+    prefix: "openclaw-session-worktree-title-denied-model-",
   });
   const workspace = await initializeGitWorkspace(openClawState.root);
   closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openClient({ scopes: ["operator.admin"] });
-  let worktreeId: string | undefined;
-  const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
-  const message = "Review this rollout [[reply_to_current]]";
-  const attachment = {
-    type: "file",
-    mimeType: "text/plain",
-    content: Buffer.from(pastedText).toString("base64"),
+  testState.agentConfig = {
+    workspace,
+    model: { primary: "openai/gpt-5.6-luna" },
+    models: { "openai/gpt-5.6-luna": {} },
   };
-  dashboardTitleGenerationMocks.generate.mockResolvedValueOnce("Attachment Repair");
-  dispatchInboundMessageMock.mockResolvedValueOnce({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
+    { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
+  ];
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:denied-title-route";
   try {
-    const created = await rpcReq<{
-      key: string;
-      worktree: { id: string; branch: string };
-    }>(ws, "sessions.create", {
-      agentId: "main",
-      worktree: true,
-      message,
-      attachments: [attachment],
-    });
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toBe("openclaw/attachment-repair");
-    const sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
-    await waitForFast(() => expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalled());
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      displayName: "Attachment Repair",
-    });
-    expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 4_000 }),
+    const created = await directSessionReq(
+      "sessions.create",
+      {
+        agentId: "main",
+        key,
+        model: "anthropic/sonnet-4.6@work",
+        worktree: true,
+        message: "Keep this title source on an allowed route",
+      },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
-    expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
+
+    expect(created.ok).toBe(false);
+    expect(created.error?.message).toContain("model not allowed");
+    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
+    expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
   } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
-    }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
-    ws.close();
     await openClawState.cleanup();
   }
 });

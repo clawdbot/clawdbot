@@ -11,6 +11,10 @@ import {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
+  closeDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+} from "../../../logging/diagnostic-run-activity.js";
+import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
@@ -92,6 +96,7 @@ export function prepareEmbeddedAttemptStream(input: {
   builtinToolNames: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
+  diagnosticOwner: DiagnosticEmbeddedRunOwner;
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -434,6 +439,8 @@ export function prepareEmbeddedAttemptStream(input: {
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
+    diagnosticOwner: input.diagnosticOwner,
+    closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     ...(attempt.toolAuthorityFingerprint
       ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
       : {}),

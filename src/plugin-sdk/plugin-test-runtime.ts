@@ -61,6 +61,7 @@ export {
 } from "../infra/diagnostic-events.js";
 export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {

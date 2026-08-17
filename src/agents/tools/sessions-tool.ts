@@ -273,8 +273,8 @@ async function resolvePatchTarget(
         : resolved.key;
     const access = await resolveSessionToolAccess({
       action: "status",
-      defaultAgentId: requesterAgentId,
       requesterSessionKey: context.effectiveRequesterKey,
+      mainSessionKey: context.mainSessionKey,
       authorizationTargetSessionKey: authorizationKey,
       requesterAgentId,
       targetAgentId: agentId,

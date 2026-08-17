@@ -49,6 +49,7 @@ describe("session dispatch protocol schemas", () => {
         key: "agent:main:dispatch",
         agentId: "main",
         profileId: "development",
+        machineClass: "beast",
       }),
     ).toBe(true);
     expect(
@@ -63,6 +64,27 @@ describe("session dispatch protocol schemas", () => {
         key: "agent:main:dispatch",
         profileId: "development",
         deviceId: "device-1",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        deviceId: "device-1",
+        machineClass: "beast",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        machineClass: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        machineClass: "x".repeat(129),
       }),
     ).toBe(false);
     expect(

@@ -5639,43 +5639,6 @@ describe("handleSendChat", () => {
     }
   });
 
-  it("blocks retry while another pane owns the failed row edit", async () => {
-    const item = {
-      id: "failed-item-being-edited",
-      text: "do not dispatch the source while editing",
-      createdAt: 1,
-      sendError: "previous failure",
-      sendRunId: "failed-item-run",
-      sendState: "failed" as const,
-      sessionKey: "agent:main",
-    };
-    const source = makeChatHost({ chatQueue: [item], sessionKey: item.sessionKey });
-    const peer = makeChatHost({
-      requestHandlers: {},
-      chatQueue: [{ ...item }],
-      sessionKey: item.sessionKey,
-    });
-    const stopSource = subscribeChatOutboxProjection(source);
-    const stopPeer = subscribeChatOutboxProjection(peer);
-    try {
-      expect(admitQueuedMessageForSession(source, item.sessionKey, item)).toBe(true);
-      expect(beginQueuedMessageEdit(source, item.id)).toBe("started");
-
-      await retryQueuedChatMessage(peer, item.id);
-
-      expect(peer.request).not.toHaveBeenCalled();
-      expect(listStoredChatOutboxes(peer)[0]?.queue[0]).toMatchObject({
-        id: item.id,
-        sendState: "failed",
-        text: item.text,
-      });
-      expect(peer.lastError).toContain("before retrying it");
-    } finally {
-      stopPeer();
-      stopSource();
-    }
-  });
-
   it("coalesces duplicate in-flight chat submits before the gateway acknowledges them", async () => {
     const sent = createDeferred<unknown>();
 
@@ -9105,51 +9068,6 @@ describe("handleSendChat", () => {
       stopLatePeer();
       stopPeer();
       stopHost();
-    }
-  });
-
-  it("does not steer a queued row while another pane owns its inline edit", async () => {
-    const request = makeRequestMock();
-    const original = {
-      id: "peer-edit-steer",
-      text: "original queued payload",
-      createdAt: 1,
-      sendState: "waiting-idle" as const,
-      sessionKey: "agent:main:main",
-    };
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: "active-run",
-      sessionKey: original.sessionKey,
-      chatQueue: [original],
-    });
-    const peer = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: "active-run",
-      sessionKey: original.sessionKey,
-      chatQueue: [{ ...original }],
-    });
-    const stopHost = subscribeChatOutboxProjection(host);
-    const stopPeer = subscribeChatOutboxProjection(peer);
-
-    try {
-      expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
-      expect(beginQueuedMessageEdit(host as never, original.id)).toBe("started");
-
-      await steerQueuedChatMessage(peer, original.id);
-
-      expect(request).not.toHaveBeenCalled();
-      expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
-        id: original.id,
-        text: original.text,
-        sendState: "waiting-idle",
-      });
-      expect(peer.chatError).toBe(
-        "A queued message is being edited in another pane. Finish or cancel that edit before steering it.",
-      );
-    } finally {
-      stopHost();
-      stopPeer();
     }
   });
 

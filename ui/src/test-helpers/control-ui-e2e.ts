@@ -1795,6 +1795,19 @@ function installControlUiMockGateway(
         };
       case "models.list":
         return { models: scenario.models };
+      case "sessions.create": {
+        const agentId =
+          isRecord(params) && typeof params.agentId === "string"
+            ? params.agentId
+            : scenario.defaultAgentId;
+        const requestedKey =
+          isRecord(params) && typeof params.key === "string" ? params.key.trim() : "";
+        const response = {
+          key: requestedKey || `agent:${agentId}:mock-created-${createdSessions.size + 1}`,
+        };
+        recordMaterializedSession(params, response);
+        return response;
+      }
       case "sessions.list":
         return applySessionPatches(
           {

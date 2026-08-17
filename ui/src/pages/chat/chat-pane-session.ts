@@ -434,6 +434,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         .map((item) => this.catalogItemMessage(item))
         .filter((message) => message !== null);
       const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
+      const addedMessages = nextMessages.length > this.catalogMessages.length;
       // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
       // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
       // these stops the re-armed observer from looping. An advancing, never-seen
@@ -449,7 +450,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       const currentState = this.state ?? state;
       currentState.lastError = null;
       scheduleChatScroll(currentState, !older);
-      return older ? !olderExhausted : true;
+      return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
         (this.state ?? state).lastError = formatUiError(error);
@@ -462,7 +463,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.catalogLoading = false;
           currentState.chatLoading = false;
         }
-        currentState.requestUpdate();
+        if (!older) {
+          currentState.requestUpdate();
+        }
       }
     }
   }
