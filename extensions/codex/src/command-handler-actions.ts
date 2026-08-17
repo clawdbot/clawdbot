@@ -14,7 +14,11 @@ import {
 } from "./app-server/sandbox-guard.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
-import { canMutateCodexHost } from "./command-authorization.js";
+import {
+  canMutateCodexHost,
+  CODEX_FULL_PERMISSIONS_AUTH_ERROR,
+  hasCodexAdminScope,
+} from "./command-authorization.js";
 import { formatCodexDisplayText, formatComputerUseStatus } from "./command-formatters.js";
 import {
   formatComputerUsePersistentIdentityMigration,
@@ -412,6 +416,11 @@ export async function setConversationPermissions(
   const parsed = parseCodexPermissionsModeArg(value);
   if (value && !parsed && value.trim().toLowerCase() !== "status") {
     return "Usage: /codex permissions [default|yolo|status]";
+  }
+  // Match sessions.create/sessions.patch: full access requires operator.admin,
+  // even when the command sender is an owner.
+  if (parsed === "yolo" && !hasCodexAdminScope(ctx)) {
+    return CODEX_FULL_PERMISSIONS_AUTH_ERROR;
   }
   return await deps.setCodexConversationPermissions({
     mode: parsed,
