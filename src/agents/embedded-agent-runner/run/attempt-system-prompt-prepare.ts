@@ -32,6 +32,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { normalizeToolName } from "../../tool-policy-shared.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
@@ -47,6 +48,30 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
 type PromptTools = Parameters<typeof buildEmbeddedSystemPrompt>[0]["tools"];
+
+/**
+ * Whether the run can act on the skills catalog at all.
+ *
+ * A runtime `toolsAllow` list is not on its own evidence of a narrow run. Cron
+ * stores an explicit `["*"]` to record "unrestricted" (see
+ * `applyDefaultCronToolsAllow`), and agent-created jobs persist a mirror of the
+ * creating turn's own tools; both are non-empty while granting full access.
+ * Treating either as "narrow" removed `<available_skills>` from the prompt, so
+ * the model was never told which skills exist or where their SKILL.md files
+ * are, and could only rediscover them by searching the filesystem.
+ *
+ * A skill body is loaded by calling the read tool on the catalog's
+ * `<location>`, so the catalog is actionable exactly when the run may call
+ * `read`, or when the allowlist says unrestricted. Genuinely narrow helper
+ * turns (`["openclaw"]`, `[]`, read-less tool sets) still skip it.
+ */
+export function skillsCatalogIsActionable(toolsAllow: string[] | undefined): boolean {
+  if (!toolsAllow?.length) return true;
+  return toolsAllow.some((entry) => {
+    const name = normalizeToolName(entry);
+    return name === "*" || name === "read";
+  });
+}
 
 export async function prepareEmbeddedAttemptSystemPrompt(params: {
   activeContextEngine: EmbeddedRunAttemptParams["contextEngine"];
@@ -179,7 +204,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(attempt.sessionKey);
   const effectivePromptMode = attempt.toolsAllow?.length ? ("minimal" as const) : promptMode;
-  const effectiveSkillsPrompt = attempt.toolsAllow?.length ? undefined : params.skillsPrompt;
+  const effectiveSkillsPrompt = skillsCatalogIsActionable(attempt.toolsAllow)
+    ? params.skillsPrompt
+    : undefined;
   const openClawReferences = await resolveOpenClawReferencePaths({
     workspaceDir: params.effectiveWorkspace,
     argv1: process.argv[1],
