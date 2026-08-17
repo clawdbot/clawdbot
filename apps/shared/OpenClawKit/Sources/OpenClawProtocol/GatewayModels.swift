@@ -91,6 +91,13 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum SessionPermissionMode: String, Codable, Sendable {
+    case readOnly = "read-only"
+    case guarded = "guarded"
+    case workspace = "workspace"
+    case full = "full"
+}
+
 public enum SessionObserverHealth: String, Codable, Sendable {
     case onTrack = "on-track"
     case grinding = "grinding"
@@ -6137,7 +6144,7 @@ public struct SessionRow: Codable, Sendable {
     public let execcwd: String?
     public let spawnedworkspacedir: String?
     public let spawnedcwd: String?
-    public let permissionmode: AnyCodable?
+    public let permissionmode: SessionPermissionMode?
     public let sessionroot: String?
     public let createdvia: AnyCodable?
     public let createdactor: SessionCreatedActor?
@@ -6203,7 +6210,7 @@ public struct SessionRow: Codable, Sendable {
         execcwd: String? = nil,
         spawnedworkspacedir: String? = nil,
         spawnedcwd: String? = nil,
-        permissionmode: AnyCodable? = nil,
+        permissionmode: SessionPermissionMode? = nil,
         sessionroot: String? = nil,
         createdvia: AnyCodable? = nil,
         createdactor: SessionCreatedActor? = nil,
@@ -8796,7 +8803,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let category: String?
     public let model: String?
     public let thinkinglevel: String?
-    public let permissionmode: AnyCodable?
+    public let permissionmode: SessionPermissionMode?
     public let incognito: Bool?
     public let visibility: SessionVisibility?
     public let catalogid: String?
@@ -8823,7 +8830,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         category: String? = nil,
         model: String? = nil,
         thinkinglevel: String? = nil,
-        permissionmode: AnyCodable? = nil,
+        permissionmode: SessionPermissionMode? = nil,
         incognito: Bool? = nil,
         visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
