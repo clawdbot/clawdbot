@@ -7,7 +7,7 @@ const NODE_RELEASE_FLOORS = [
   { major: 24, minor: 15, patch: 0 },
   { major: 25, minor: 9, patch: 0 },
 ];
-const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS.at(-1);
+const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS[NODE_RELEASE_FLOORS.length - 1];
 
 /** Parses an anchored release SemVer, allowing a leading v and valid build metadata. */
 export function parseNodeReleaseVersion(value) {
@@ -67,7 +67,7 @@ function renderProcessNodeVersionCheck() {
     (version.major === floor.major &&
       (version.minor > floor.minor ||
         (version.minor === floor.minor && version.patch >= floor.patch)));
-  return minimum ? atLeast(minimum) : version.major > floors.at(-1).major;
+  return minimum ? atLeast(minimum) : version.major > floors[floors.length - 1].major;
 })(process.versions.node)`;
 }
 

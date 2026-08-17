@@ -146,6 +146,8 @@ function hasBunRuntime(): boolean {
   );
 }
 
+const legacyNodeBin = process.env.OPENCLAW_TEST_LEGACY_NODE_BIN;
+
 describe("openclaw launcher", () => {
   const fixtureRoots: string[] = [];
 
@@ -199,6 +201,26 @@ describe("openclaw launcher", () => {
       }
     }
   });
+
+  it.runIf(Boolean(legacyNodeBin))(
+    "prints recovery guidance when imported by a legacy Node runtime",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      const result = spawnSync(legacyNodeBin!, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v`,
+      );
+      expect(result.stderr).toContain("nvm install 26");
+      expect(result.stderr).not.toContain("TypeError");
+    },
+  );
 
   it("rejects Bun without node:sqlite even when its Node compatibility version is new enough", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
