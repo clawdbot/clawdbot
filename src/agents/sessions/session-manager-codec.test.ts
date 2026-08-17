@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  isIndexedSessionEntry,
+  parseOpaqueLeafEntry,
+  parseParentLinkedOpaqueEntry,
+} from "./session-manager-codec.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 describe("session manager codec compatibility", () => {
@@ -23,5 +28,37 @@ describe("session manager codec compatibility", () => {
     expect(manager.getEntry("persisted-hook-message")).toMatchObject({
       message: { role: "custom", customType: "hook", content: "persisted hook context" },
     });
+  });
+
+  it.each([
+    {
+      name: "message with malformed content",
+      entry: { type: "message", id: "m1", parentId: null, message: { role: "user" } },
+    },
+    {
+      name: "compaction without a kept entry",
+      entry: { type: "compaction", id: "c1", parentId: null, summary: "", tokensBefore: 1 },
+    },
+    {
+      name: "partial model change",
+      entry: { type: "model_change", id: "model1", parentId: null, provider: "openai" },
+    },
+  ])("rejects an indexed $name", ({ entry }) => {
+    expect(isIndexedSessionEntry(entry)).toBe(false);
+  });
+
+  it("parses opaque tree links without widening their variants", () => {
+    expect(parseParentLinkedOpaqueEntry({ type: "future", id: "f1", parentId: null })).toEqual({
+      id: "f1",
+      parentId: null,
+    });
+    expect(parseParentLinkedOpaqueEntry({ id: "untyped", parentId: "f1" })).toEqual({
+      id: "untyped",
+      parentId: "f1",
+    });
+    expect(
+      parseOpaqueLeafEntry({ type: "leaf", id: "leaf1", parentId: null, targetId: null }),
+    ).toEqual({ id: "leaf1", parentId: null, targetId: null });
+    expect(parseOpaqueLeafEntry({ type: "leaf", id: "leaf1", parentId: null })).toBeUndefined();
   });
 });
