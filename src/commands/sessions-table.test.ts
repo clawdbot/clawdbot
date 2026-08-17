@@ -1,6 +1,6 @@
 // Sessions table tests cover shared fixed-width cell formatting.
 import { describe, expect, it } from "vitest";
-import { formatSessionKeyCell, SESSION_KEY_PAD } from "./sessions-table.js";
+import { formatSessionFlagsCell, formatSessionKeyCell, SESSION_KEY_PAD } from "./sessions-table.js";
 
 describe("formatSessionKeyCell", () => {
   it("keeps both truncation boundaries UTF-16 safe", () => {
@@ -10,5 +10,11 @@ describe("formatSessionKeyCell", () => {
 
     expect(rendered).toBe(`${"a".repeat(15)}...${"z".repeat(5)}`.padEnd(SESSION_KEY_PAD));
     expect(rendered).toHaveLength(SESSION_KEY_PAD);
+  });
+});
+
+describe("formatSessionFlagsCell", () => {
+  it("marks archived sessions in the default table", () => {
+    expect(formatSessionFlagsCell({ archived: true }, false)).toBe("archived");
   });
 });

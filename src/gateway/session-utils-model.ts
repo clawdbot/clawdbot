@@ -4,7 +4,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import {
+  resolveEffectiveSessionAgentRuntimeMetadata,
+  resolveModelAgentRuntimeMetadata,
+} from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -25,7 +28,6 @@ import {
 import { resolveThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   concretizeAgentRuntime,
   resolveEffectiveAgentRuntime,
@@ -234,29 +236,16 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     (params.entry && cachedAcpMeta?.has(params.entry)
       ? cachedAcpMeta.get(params.entry)
       : readAcpSessionMeta({ sessionKey: params.sessionKey, agentId: params.agentId }));
-  const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
+  const agentRuntime = resolveEffectiveSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
-  const persistedAgentRuntime = resolveSessionRuntimeOverrideForProvider({
-    provider: params.provider,
-    entry: params.entry,
-    cfg: params.cfg,
-  });
-  const persistedAgentRuntimeSource: "session" | "session-key" =
-    params.entry?.modelSelectionLocked === true ? "session" : "session-key";
-  const agentRuntime =
-    acpMeta || !persistedAgentRuntime
-      ? configuredAgentRuntime
-      : {
-          id: persistedAgentRuntime,
-          source: persistedAgentRuntimeSource,
-        };
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
         provider: params.provider,
