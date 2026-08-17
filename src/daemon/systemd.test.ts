@@ -127,9 +127,10 @@ const createExecFileError = (
 };
 
 const createWritableStreamMock = (write = vi.fn()) => {
+  const stdout = { write };
   return {
     write,
-    stdout: { write } as NodeJS.WritableStream,
+    stdout: stdout as typeof stdout & NodeJS.WritableStream,
   };
 };
 
@@ -3099,7 +3100,7 @@ describe("systemd service control", () => {
 
     await expect(
       startSystemdService({
-        stdout: { write } as NodeJS.WritableStream,
+        stdout: createWritableStreamMock(write).stdout,
         env: {},
         onMutation,
       }),
