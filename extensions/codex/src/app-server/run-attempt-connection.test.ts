@@ -166,8 +166,8 @@ describe("prepareCodexAttemptConnection", () => {
   });
 
   it.each([
-    { permissionMode: "read-only" as const, execMode: "deny" },
-    { permissionMode: "guarded" as const, execMode: "ask" },
+    { permissionMode: "read-only" as const, execMode: "deny" as const },
+    { permissionMode: "guarded" as const, execMode: "ask" as const },
   ])(
     "does not preflight-kill a $permissionMode session mode for denied global exec",
     async ({ permissionMode, execMode }) => {

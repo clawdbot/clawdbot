@@ -1849,10 +1849,10 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it.each([
-    { permissionMode: "read-only" as const, execMode: "deny" },
-    { permissionMode: "guarded" as const, execMode: "ask" },
-    { permissionMode: "workspace" as const, execMode: "auto" },
-    { permissionMode: "full" as const, execMode: "full" },
+    { permissionMode: "read-only" as const, execMode: "deny" as const },
+    { permissionMode: "guarded" as const, execMode: "ask" as const },
+    { permissionMode: "workspace" as const, execMode: "auto" as const },
+    { permissionMode: "full" as const, execMode: "full" as const },
   ])(
     "uses the host-prepared $execMode for $permissionMode dynamic exec",
     async ({ permissionMode, execMode }) => {
