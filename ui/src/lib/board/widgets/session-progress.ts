@@ -43,6 +43,18 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   }
 
   override render() {
+    if (this.store?.hasError(this.targetSessionKey)) {
+      return html`<div
+        class="board-widget__plugin-loading"
+        data-test-id="session-progress-error"
+        role="alert"
+      >
+        <span>${t("sessionProgressCard.widgetUnavailable")}</span>
+        <button class="btn btn--sm" type="button" @click=${this.retryLoad}>
+          ${t("common.retry")}
+        </button>
+      </div>`;
+    }
     const card = this.store?.get(this.targetSessionKey);
     if (card === undefined) {
       return html`<p class="board-widget__plugin-loading">
@@ -71,6 +83,13 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
       this.unsubscribe = store.subscribe(() => this.requestUpdate());
     }
   }
+
+  private readonly retryLoad = () => {
+    if (!this.store || !this.targetSessionKey) {
+      return;
+    }
+    void this.store.load(this.targetSessionKey).catch(() => undefined);
+  };
 
   private releaseStore(): void {
     this.store?.unwatch(this);

@@ -173,6 +173,7 @@ export const en: TranslationMap = {
     widgetLabel: "Session progress",
     widgetLoading: "Loading session progress…",
     widgetEmpty: "No progress card yet",
+    widgetUnavailable: "Session progress is unavailable.",
     countLabel: "{completed} of {total} completed",
     stepLabel: "{step}, {status}",
     status: {

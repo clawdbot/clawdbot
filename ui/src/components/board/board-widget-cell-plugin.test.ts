@@ -203,6 +203,79 @@ describe("plugin board widget cells", () => {
     }
   });
 
+  it("surfaces a failed session progress read and retries it", async () => {
+    const sessionKey = "agent:main:protected";
+    let attempts = 0;
+    const request = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("session not shared");
+      }
+      return {
+        card: {
+          sessionKey,
+          revision: 1,
+          updatedAt: 1,
+          steps: [{ step: "Recovered progress", status: "in_progress" }],
+        },
+      };
+    });
+    const context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            features: { methods: ["progressCard.get"] },
+            controlUiWidgetKinds: [
+              { pluginId: "session", kind: "session:progress", label: "Session progress" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
+      name: "protected-session-progress",
+      tabId: "main",
+      title: "Session progress",
+      contentKind: "plugin",
+      pluginKind: "session:progress",
+      props: { sessionKey },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:dashboard";
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    document.body.append(provider);
+
+    await vi.waitFor(
+      () => expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
+    );
+    cell
+      .querySelector<HTMLButtonElement>('[data-test-id="session-progress-error"] button')
+      ?.click();
+
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
+          "Recovered progress",
+        ),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("passes activity to a retained Workboard plugin element", async () => {
     const context = {
       gateway: {
