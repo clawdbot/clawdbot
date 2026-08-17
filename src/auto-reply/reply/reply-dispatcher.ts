@@ -34,10 +34,10 @@ import {
 import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
+  isExplicitlyNonVisibleDelivery,
   isReplyDispatchProvenInvisible,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
-import { createReplyDispatchSettlementBarrier } from "./reply-dispatch-settlement.js";
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
@@ -273,6 +273,39 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: createReplyDispatchSettledCounts(),
     final: createReplyDispatchSettledCounts(),
   };
+  let sendChain: Promise<void> = Promise.resolve();
+  let settlementChain: Promise<void> = Promise.resolve();
+  let pendingFinalizations = 0;
+  let idleNotified = false;
+  const ignoreResult = () => undefined;
+  const notifyIdle = () => {
+    if (idleNotified) {
+      return;
+    }
+    idleNotified = true;
+    try {
+      void Promise.resolve(options.onIdle?.()).catch(ignoreResult);
+    } catch {}
+  };
+  const scheduleDelivery = <T>(run: () => Promise<T>): Promise<T> => {
+    idleNotified = false;
+    const delivery = sendChain.then(run);
+    sendChain = delivery.then(ignoreResult, ignoreResult);
+    const drained = sendChain;
+    void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
+    return delivery;
+  };
+  const enqueueSettlement = (settle: () => Promise<void>) =>
+    (settlementChain = settlementChain.then(settle));
+  const waitForIdle = async () => {
+    let sent: Promise<void>;
+    let settled: Promise<void>;
+    do {
+      sent = sendChain;
+      settled = settlementChain;
+      await Promise.all([sent, settled]);
+    } while (sent !== sendChain || settled !== settlementChain);
+  };
 
   const buildReceipt = (): ReplyDispatchReceipt => ({
     counts: {
@@ -285,11 +318,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     ),
   });
 
-  const settlementBarrier = createReplyDispatchSettlementBarrier(options.onIdle);
-
   const { unregister } = registerDispatcher({
     pending: () => pending,
-    waitForIdle: settlementBarrier.waitForIdle,
+    waitForIdle,
   });
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
@@ -345,6 +376,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
     const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
+    const settleCustody = (state: "delivered" | "unknown") =>
+      custody
+        ? settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, ["queued"])
+        : undefined;
     try {
       if (beforeDeliver) {
         try {
@@ -382,7 +417,29 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       }
       deliveryStarted = true;
       const result = await options.deliver(deliverPayload, info);
-      return settlementBarrier.resolve(result, custody);
+      const finalization =
+        isRecord(result) && result.finalization instanceof Promise
+          ? result.finalization
+          : undefined;
+      pendingFinalizations += finalization ? 1 : 0;
+      return {
+        settlement: (async (): Promise<ReplyDispatchDeliveryOutcome> => {
+          try {
+            const finalized = finalization ? await finalization : undefined;
+            await settleCustody("delivered");
+            const outcome =
+              finalization && isRecord(result) && isRecord(finalized)
+                ? { ...result, ...finalized, finalization: undefined }
+                : result;
+            return isExplicitlyNonVisibleDelivery(outcome) ? "delivered-not-visible" : "delivered";
+          } catch {
+            await settleCustody("unknown");
+            return "failed-deliver";
+          } finally {
+            pendingFinalizations -= finalization ? 1 : 0;
+          }
+        })(),
+      };
     } catch (error) {
       const outcome: ReplyDispatchDeliveryOutcome =
         deliveryStarted && !isRetryableNoSendFailure(error)
@@ -411,7 +468,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     info: ReplyDispatchRuntimeInfo,
     shouldDelay: boolean,
   ) =>
-    settlementBarrier.schedule(async () => {
+    scheduleDelivery(async () => {
       if (shouldDelay) {
         const delayMs = getHumanDelay(options.humanDelay);
         if (delayMs > 0) {
@@ -469,7 +526,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     let deliveryOutcome: ReplyDispatchDeliveryOutcome = "failed-before-deliver";
     const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
     const delivery = startSerializedDelivery(normalized, dispatchInfo, shouldDelay);
-    settlementBarrier.enqueueSettlement(async () => {
+    void enqueueSettlement(async () => {
       try {
         const attempt = await delivery;
         deliveryOutcome = await attempt.settlement;
@@ -513,7 +570,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         if (pending === 0) {
           unregister();
-          settlementBarrier.notifyIdle();
+          notifyIdle();
         }
       }
     });
@@ -534,7 +591,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         pending -= 1;
         if (pending === 0) {
           unregister();
-          settlementBarrier.notifyIdle();
+          notifyIdle();
         }
       }
     });
@@ -552,7 +609,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     },
     supportsSettledReceipt: true,
     waitForIdle: async () => {
-      await settlementBarrier.waitForIdle();
+      await waitForIdle();
       return buildReceipt();
     },
     getQueuedCounts: () =>

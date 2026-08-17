@@ -9,9 +9,9 @@ import type { MsgContext } from "../../../auto-reply/templating.js";
 import { normalizeChatType } from "../../chat-type.js";
 import { resolveConversationLabel } from "../../conversation-label.js";
 import {
-  hasFinalChannelTurnDispatchFromReceipt as hasFinalChannelTurnDispatch,
+  hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCountsFromReceipt as resolveChannelTurnDispatchCounts,
+  resolveChannelTurnDispatchCounts,
   type ChannelTurnDispatchResultLike,
 } from "../../turn/dispatch-result.js";
 

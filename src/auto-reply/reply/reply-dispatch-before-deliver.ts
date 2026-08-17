@@ -15,10 +15,8 @@ type ReplyDispatchBeforeDeliverStageInput =
   | { hook: ReplyDispatchBeforeDeliver; options?: ReplyDispatchBeforeDeliverOptions }
   | undefined;
 
-const stagesByHook = new WeakMap<
-  ReplyDispatchBeforeDeliver,
-  readonly ReplyDispatchBeforeDeliverStage[]
->();
+type ReplyDispatchBeforeDeliverStages = readonly ReplyDispatchBeforeDeliverStage[];
+const stagesByHook = new WeakMap<ReplyDispatchBeforeDeliver, ReplyDispatchBeforeDeliverStages>();
 
 function resolveTimeoutMs(options: ReplyDispatchBeforeDeliverOptions | undefined): number {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
@@ -47,9 +45,7 @@ export async function runReplyDispatchBeforeDeliverStage(
   try {
     return await Promise.race([Promise.resolve(stage.hook(payload, info)), timeout]);
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   }
 }
 
@@ -59,14 +55,13 @@ function resolveStages(
   if (!input) {
     return [];
   }
-  if (typeof input === "function") {
-    return (
-      stagesByHook.get(input) ?? [{ hook: input, timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS }]
-    );
-  }
+  const hook = typeof input === "function" ? input : input.hook;
   return (
-    stagesByHook.get(input.hook) ?? [
-      { hook: input.hook, timeoutMs: resolveTimeoutMs(input.options) },
+    stagesByHook.get(hook) ?? [
+      {
+        hook,
+        timeoutMs: resolveTimeoutMs(typeof input === "function" ? undefined : input.options),
+      },
     ]
   );
 }

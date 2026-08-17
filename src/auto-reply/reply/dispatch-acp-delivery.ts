@@ -334,25 +334,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (!receipt) {
       return;
     }
-    const blockCounts = receipt.counts.block;
-    const finalCounts = receipt.counts.final;
-    const failedVisibleCount =
-      blockCounts.failedBeforeSend +
-      blockCounts.failedAfterSend +
-      finalCounts.failedBeforeSend +
-      finalCounts.failedAfterSend;
-    if (failedVisibleCount > 0) {
-      state.failedVisibleTextDelivery = true;
-    }
-    if (
-      blockCounts.delivered +
-        blockCounts.failedAfterSend +
-        finalCounts.delivered +
-        finalCounts.failedAfterSend >
-      0
-    ) {
-      state.deliveredVisibleText = true;
-    }
+    const visibleCounts = [receipt.counts.block, receipt.counts.final];
+    state.failedVisibleTextDelivery ||= visibleCounts.some(
+      (counts) => counts.failedBeforeSend + counts.failedAfterSend > 0,
+    );
+    state.deliveredVisibleText ||= visibleCounts.some(
+      (counts) => counts.delivered + counts.failedAfterSend > 0,
+    );
   };
 
   const startReplyLifecycleOnce = async () => {

@@ -45,18 +45,6 @@ export const EMPTY_CHANNEL_TURN_DISPATCH_COUNTS: Record<ReplyDispatchKind, numbe
   final: 0,
 };
 
-/** Resolves dispatch counts with missing reply kinds filled as zero. */
-export function resolveChannelTurnDispatchCountsFromReceipt(
-  result: ChannelTurnDispatchResultLike,
-): Record<ReplyDispatchKind, number> {
-  const receiptCounts = result?.settledReceipt?.counts;
-  return {
-    tool: receiptCounts?.tool?.delivered ?? 0,
-    block: receiptCounts?.block?.delivered ?? 0,
-    final: receiptCounts?.final?.delivered ?? 0,
-  };
-}
-
 /** Returns whether a turn produced any visible reply delivery signal. */
 export function hasVisibleChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
@@ -65,21 +53,14 @@ export function hasVisibleChannelTurnDispatchFromReceipt(
   return result?.settledReceipt?.anyVisibleDelivered === true || hasVisibleSignal(result, signals);
 }
 
-export function hasFinalChannelTurnDispatchFromReceipt(
-  result: ChannelTurnDispatchResultLike,
-  signals: FinalDeliverySignals = {},
-): boolean {
-  const finalCounts = result?.settledReceipt?.counts.final;
-  return (
-    hasFinalSignal(signals) ||
-    (finalCounts?.delivered ?? 0) > 0 ||
-    (finalCounts?.failedAfterSend ?? 0) > 0
-  );
-}
-
 export function resolveChannelTurnDispatchCounts(result: ChannelTurnDispatchResultLike) {
-  return result?.settledReceipt
-    ? resolveChannelTurnDispatchCountsFromReceipt(result)
+  const counts = result?.settledReceipt?.counts;
+  return counts
+    ? {
+        tool: counts.tool?.delivered ?? 0,
+        block: counts.block?.delivered ?? 0,
+        final: counts.final?.delivered ?? 0,
+      }
     : { ...EMPTY_CHANNEL_TURN_DISPATCH_COUNTS, ...result?.counts };
 }
 
@@ -101,9 +82,11 @@ export function hasFinalChannelTurnDispatch(
   result: ChannelTurnDispatchResultLike,
   signals: FinalDeliverySignals = {},
 ): boolean {
-  return result?.settledReceipt
-    ? hasFinalChannelTurnDispatchFromReceipt(result, signals)
-    : hasFinalSignal(signals) ||
-        result?.queuedFinal === true ||
-        resolveChannelTurnDispatchCounts(result).final > 0;
+  const finalCounts = result?.settledReceipt?.counts.final;
+  return (
+    hasFinalSignal(signals) ||
+    (result?.settledReceipt
+      ? (finalCounts?.delivered ?? 0) > 0 || (finalCounts?.failedAfterSend ?? 0) > 0
+      : result?.queuedFinal === true || resolveChannelTurnDispatchCounts(result).final > 0)
+  );
 }
