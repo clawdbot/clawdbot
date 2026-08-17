@@ -243,12 +243,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "gateway-status" },
   },
-  { commandPath: ["gateway", "call"], exact: true, policy: { networkProxy: "bypass" } },
-  ...["suspend", "resume"].map(
+  ...["call", "restart", "suspend", "resume"].map(
     (subcommand): CliCommandCatalogEntry => ({
       commandPath: ["gateway", subcommand],
       exact: true,
-      policy: { configGuard: "validate", networkProxy: "bypass" },
+      policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
     }),
   ),
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
@@ -263,7 +262,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "stability"],
     exact: true,

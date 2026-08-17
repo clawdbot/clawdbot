@@ -81,6 +81,8 @@ describe("command-startup-policy", () => {
       ["nodes", "remove"],
       ["devices", "approve"],
       ["devices", "remove"],
+      ["gateway", "call"],
+      ["gateway", "restart"],
       ["gateway", "suspend"],
       ["gateway", "resume"],
     ]) {
