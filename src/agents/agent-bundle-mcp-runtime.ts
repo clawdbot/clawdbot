@@ -1015,6 +1015,15 @@ export function createSessionMcpRuntime(params: {
     retryBaseCatalog?: McpToolCatalog,
     options?: Pick<McpRequestOptions, "signal">,
   ): Promise<McpToolCatalog> => {
+    let retriedAfterSupersession = false;
+    const retryAfterSupersession = (cause?: unknown) => {
+      if (retriedAfterSupersession) {
+        throw new Error("bundle-mcp catalog changed repeatedly while refreshing", {
+          ...(cause === undefined ? {} : { cause }),
+        });
+      }
+      retriedAfterSupersession = true;
+    };
     while (true) {
       failIfDisposed();
       options?.signal?.throwIfAborted();
@@ -1028,6 +1037,7 @@ export function createSessionMcpRuntime(params: {
       try {
         const nextCatalog = await waitForSessionMcpRequest(refresh.promise, waitSignal);
         if (refresh.generation !== catalogInvalidationGeneration) {
+          retryAfterSupersession();
           retryBaseCatalog = catalog ?? undefined;
           continue;
         }
@@ -1036,6 +1046,7 @@ export function createSessionMcpRuntime(params: {
         options?.signal?.throwIfAborted();
         failIfDisposed();
         if (refresh.generation !== catalogInvalidationGeneration) {
+          retryAfterSupersession(error);
           retryBaseCatalog = catalog ?? undefined;
           continue;
         }
