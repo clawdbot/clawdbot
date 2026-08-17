@@ -7,7 +7,6 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
-import "../components/session-link-hovercard-registration.ts";
 import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
