@@ -36,6 +36,10 @@ import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
+const fencedMediaLogWarn = vi.hoisted(() => vi.fn());
+vi.mock("../../logger.js", () => ({
+  logWarn: (msg: string) => fencedMediaLogWarn(msg),
+}));
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
     async () => ({
@@ -1058,6 +1062,310 @@ describe("deliverOutboundPayloads", () => {
     expect(onBeforeFirstModifier).not.toHaveBeenCalled();
     expect(hookMocks.runner.runReplyPayloadSending).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for fenced MEDIA during durable preparation alone (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: fenced }, { text: "MEDIA:https://example.com/plain.png" }],
+      deps: { matrix: vi.fn() },
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(2);
+    // Durable custody retains the skip fact; warning still waits for physical send.
+    const fencedEntry = accepted.find((e) => e.sourceIndex === 0);
+    const plainEntry = accepted.find((e) => e.sourceIndex === 1);
+    expect(fencedEntry).toMatchObject({
+      status: "accepted",
+      mediaTokenSkippedInFence: true,
+      fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
+    });
+    expect(plainEntry).toMatchObject({ status: "accepted" });
+    if (plainEntry?.status === "accepted") {
+      expect(plainEntry.mediaTokenSkippedInFence).toBeUndefined();
+    }
+    // Preparation is not a physical send — warn only after transport success.
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns for fenced MEDIA only after durable physical send succeeds (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-fenced-ok" });
+    await deliverMatrix({
+      payloads: [{ text: fenced }],
+      deps: { matrix: sendMatrix },
+    });
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+    expect(fencedMediaLogWarn.mock.calls[0]?.[0]).toMatch(
+      /fenced code block and will not be delivered/,
+    );
+  });
+
+  it("does not warn for fenced MEDIA when durable first send rejects (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    const sendMatrix = vi.fn().mockRejectedValue(new Error("transport rejected"));
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: fenced }],
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toThrow(/transport rejected/);
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when preamble chunk succeeds but fenced MEDIA chunk fails (#41966 latch)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Intro preamble without media.\n```\nMEDIA:/home/user/screenshot.png\n```";
+    // Force separate chunks: preamble first, then fenced identity block.
+    setTestOutbound({
+      ...matrixOutboundForTest,
+      chunker: (value: string) => {
+        const marker = "```";
+        const idx = value.indexOf(marker);
+        if (idx <= 0) {
+          return value ? [value] : [];
+        }
+        return [value.slice(0, idx).trimEnd(), value.slice(idx)];
+      },
+      chunkerMode: "text",
+      textChunkLimit: 4000,
+    });
+    let calls = 0;
+    const sendMatrix = vi.fn().mockImplementation(async (_to: string, text: string) => {
+      calls += 1;
+      if (calls === 1) {
+        // First visible chunk is preamble only — must not latch a false warn.
+        expect(text).not.toMatch(/MEDIA:/i);
+        return { messageId: `m-preamble-${calls}`, roomId: "!room:example" };
+      }
+      throw new Error("fenced media chunk transport rejected");
+    });
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: fenced }],
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toThrow(/fenced media chunk transport rejected/);
+    expect(sendMatrix).toHaveBeenCalled();
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns for fenced MEDIA after first visible send even if a later send rejects (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    // Multi-media payload: first attachment succeeds, second throws — diagnostic must still fire once.
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m-fenced-partial-1" })
+      .mockRejectedValueOnce(new Error("second media transport rejected"));
+    await expect(
+      deliverMatrix({
+        payloads: [
+          {
+            text: fenced,
+            mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          },
+        ],
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toThrow(/second media transport rejected/);
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+    expect(fencedMediaLogWarn.mock.calls[0]?.[0]).toMatch(
+      /fenced code block and will not be delivered/,
+    );
+  });
+
+  it("does not warn for fenced MEDIA when a message hook rewrites final text (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockImplementation(
+      async (_event: unknown, _ctx: unknown) => ({
+        content: "redacted",
+      }),
+    );
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: fenced }],
+      deps: { matrix: vi.fn() },
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(1);
+    if (accepted[0]?.status === "accepted") {
+      expect(accepted[0].payload.text).toBe("redacted");
+      // Post-policy durable custody must not retain pre-redaction MEDIA paths.
+      expect(accepted[0].mediaTokenSkippedInFence).toBeUndefined();
+      expect(accepted[0].fencedSkippedMediaDirectives).toBeUndefined();
+    }
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when hook rewrites fenced MEDIA to ordinary media: prose (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockImplementation(
+      async (_event: unknown, _ctx: unknown) => ({
+        content: "For media: see docs",
+      }),
+    );
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: fenced }],
+      deps: { matrix: vi.fn() },
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(1);
+    if (accepted[0]?.status === "accepted") {
+      expect(accepted[0].payload.text).toBe("For media: see docs");
+      // Rewritten prose drops the exact directive identity from durable custody.
+      expect(accepted[0].mediaTokenSkippedInFence).toBeUndefined();
+      expect(accepted[0].fencedSkippedMediaDirectives).toBeUndefined();
+    }
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("retains fenced MEDIA identity through plain-text sanitizers without prepare-time warn (#41966 SMS)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    // SMS-style adapters strip triple-backtick fences before accepted preparation.
+    setTestOutbound(
+      {
+        sanitizeText: ({ text }) =>
+          text
+            .replace(/```[a-zA-Z]*\n?/g, "")
+            .replace(/```/g, "")
+            .trim(),
+        sendText: async () => ({ channel: "sms", messageId: "sms-1" }),
+      },
+      "sms",
+    );
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "sms",
+      to: "+15551212",
+      payloads: [{ text: fenced }],
+      deps: {},
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(1);
+    if (accepted[0]?.status === "accepted") {
+      expect(accepted[0].payload.text).toMatch(/MEDIA:\/home\/user\/screenshot\.png/);
+      expect(accepted[0].payload.text).not.toMatch(/```/);
+      expect(accepted[0].mediaTokenSkippedInFence).toBe(true);
+      expect(accepted[0].fencedSkippedMediaDirectives).toEqual(["MEDIA:/home/user/screenshot.png"]);
+    }
+    // Durable preparation must stay silent; physical-send warn is covered by matrix cases.
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns for fenced MEDIA after durable queue recovery from prepared-batch facts (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    // Simulate recovery: only durable prepared batch is available (no live handoff map),
+    // and accepted text has already been fence-stripped like SMS adapters do.
+    const preparedBatch = {
+      schemaVersion: 1 as const,
+      sourcePayloadCount: 1,
+      channelNormalized: true as const,
+      entries: [
+        {
+          sourceIndex: 0,
+          status: "accepted" as const,
+          payload: {
+            text: "Here's how to send media:\nMEDIA:/home/user/screenshot.png\nEnd.",
+          },
+          replyHookChanged: false,
+          messageHookChanged: false,
+          preparedMediaCount: 0,
+          mediaTokenSkippedInFence: true,
+          fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
+        },
+      ],
+    };
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-recovered-fenced" });
+    const recoveredEntry = preparedBatch.entries[0];
+    expect(recoveredEntry).toBeDefined();
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [recoveredEntry!.payload],
+      preparedBatch,
+      deps: { matrix: sendMatrix },
+      skipQueue: true,
+    });
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+    expect(fencedMediaLogWarn.mock.calls[0]?.[0]).toMatch(
+      /fenced code block and will not be delivered/,
+    );
+  });
+
+  it("warns for fenced MEDIA after fence-stripping SMS adapter physical send (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    const sendText = vi.fn(async () => ({ channel: "sms", messageId: "sms-fenced-ok" }));
+    setTestOutbound(
+      {
+        sanitizeText: ({ text }) =>
+          text
+            .replace(/```[a-zA-Z]*\n?/g, "")
+            .replace(/```/g, "")
+            .trim(),
+        sendText,
+      },
+      "sms",
+    );
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "sms",
+      to: "+15551212",
+      payloads: [{ text: fenced }],
+      deps: {},
+      skipQueue: true,
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+    // Sanitizer removed fences; source-index plan facts must still fire post-send.
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+    expect(fencedMediaLogWarn.mock.calls[0]?.[0]).toMatch(
+      /fenced code block and will not be delivered/,
+    );
+  });
+
+  it("does not warn for invalid fenced MEDIA examples (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Example only:\n```\nMEDIA:\nMEDIA: example\n```\nEnd.";
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: fenced }],
+      deps: { matrix: vi.fn() },
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(1);
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+    if (accepted[0]?.status === "accepted") {
+      expect(accepted[0].mediaTokenSkippedInFence).toBeUndefined();
+      expect(accepted[0].fencedSkippedMediaDirectives).toBeUndefined();
+    }
   });
 
   it("finalizes owner state only after a chunked batch completes", async () => {

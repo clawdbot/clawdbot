@@ -32,6 +32,10 @@ import type {
   OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import {
+  createFencedMediaPhysicalSendWarner,
+  resolveFencedMediaSkipPlanBySourceIndex,
+} from "./fenced-media-delivery-warn.js";
+import {
   assertStableMediaFanout,
   planOutboundMediaMessageUnits,
   planOutboundTextMessageUnits,
@@ -152,6 +156,7 @@ export async function deliverOutboundPayloadsCore(
     sendHandler: ChannelHandler,
     text: string,
     overrides: OutboundMessageSendOverrides = {},
+    onFirstVisibleSend?: (acceptedChunkText: string) => void,
   ) => {
     const units = planOutboundTextMessageUnits({
       text,
@@ -177,9 +182,27 @@ export async function deliverOutboundPayloadsCore(
         await sendHandler.sendText(unit.text, withPreparedTarget(unit.overrides)),
       );
       adoptSuccessfulResultsSince(resultIndex);
+      // Latch fenced-MEDIA diagnostic only after a chunk that retains identity (#41966).
+      if (results.length > resultIndex) {
+        onFirstVisibleSend?.(unit.text);
+      }
     }
   };
   const acceptedEntries = acceptedPreparedOutboundEntries(preparedBatch);
+  // Fenced-skip facts used only after a confirmed physical send so rejected
+  // transport stays silent (#41966). Prefer process-local handoff, then batch, then replan.
+  const fencedMediaPlanBySourceIndex = resolveFencedMediaSkipPlanBySourceIndex({
+    fencedMediaSkipPlanBySourceIndex: params.fencedMediaSkipPlanBySourceIndex,
+    acceptedEntries,
+    payloads: params.payloads,
+    cfg: params.cfg,
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    surface: params.channel,
+    conversationType: params.session?.conversationType,
+  });
+  const warnFencedMediaAfterPhysicalSend = createFencedMediaPhysicalSendWarner(
+    fencedMediaPlanBySourceIndex,
+  );
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [
     ...preparedOutboundSuppressionOutcomes(preparedBatch),
   ];
@@ -379,6 +402,10 @@ export async function deliverOutboundPayloadsCore(
           results: deliveredResults,
         });
         recordDeliveredPayload(payloadSummary, deliveredResults);
+        warnFencedMediaAfterPhysicalSend(
+          payloadIndex,
+          effectivePayload.text ?? payloadSummary.text,
+        );
         recordMessageSentEvent({
           success: true,
           content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -410,8 +437,16 @@ export async function deliverOutboundPayloadsCore(
             ),
           );
           adoptSuccessfulResultsSince(beforeCount);
+          if (results.length > beforeCount) {
+            warnFencedMediaAfterPhysicalSend(
+              payloadIndex,
+              effectivePayload.text ?? payloadSummary.text,
+            );
+          }
         } else {
-          await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
+          await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides, (chunkText) =>
+            warnFencedMediaAfterPhysicalSend(payloadIndex, chunkText),
+          );
         }
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length > 0) {
@@ -469,7 +504,9 @@ export async function deliverOutboundPayloadsCore(
           );
         }
         const beforeCount = results.length;
-        await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
+        await sendTextChunks(deliveryHandler, fallbackText, sendOverrides, (chunkText) =>
+          warnFencedMediaAfterPhysicalSend(payloadIndex, chunkText),
+        );
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length > 0) {
           recordPayloadOutcome({
@@ -544,6 +581,10 @@ export async function deliverOutboundPayloadsCore(
         if (recorded) {
           firstMessageId ??= delivery.messageId;
           lastMessageId = delivery.messageId;
+          warnFencedMediaAfterPhysicalSend(
+            payloadIndex,
+            effectivePayload.text ?? payloadSummary.text,
+          );
         }
       }
       const deliveredResults = results.slice(beforeCount);

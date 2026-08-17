@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { createOutboundPayloadPlan } from "../infra/outbound/payloads.js";
 import { normalizeOutboundReplyPayloadCore as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
 import {
   countOutboundMedia,
@@ -12,6 +13,7 @@ import {
 } from "../infra/outbound/reply-payload-parts.js";
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "./channel-outbound-fenced-media-runtime.js";
 
 export type { MediaPayloadInput } from "../channels/plugins/media-payload.js";
 /** @deprecated Inbound contexts use `media`; outbound replies use `ReplyPayload.mediaUrl(s)`. */
@@ -131,7 +133,7 @@ export function createNormalizedOutboundDeliverer(
   return async (payload: unknown) => {
     const normalized =
       payload && typeof payload === "object"
-        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>) // SAFETY: deliverer accepts arbitrary caller payloads before normalize
         : {};
     await handler(normalized);
   };
@@ -168,9 +170,64 @@ export function resolveTextChunksWithFallback(text: string, chunks: readonly str
   return [text];
 }
 
+/** Latch fenced-MEDIA diagnostics to accepted visible direct-delivery text (#41966). */
+function createDirectAcceptedFencedMediaWarnLatch(params: {
+  payload: object;
+  cfg?: unknown;
+  surface?: string;
+}) {
+  // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
+  const planEntry = createOutboundPayloadPlan([params.payload as never], {
+    cfg: params.cfg as never, // SAFETY: OpenClawConfig structural match across plugin-sdk/core boundary
+    surface: params.surface,
+  })[0];
+  if (!planEntry?.mediaTokenSkippedInFence) {
+    return {
+      afterAcceptedVisibleText(_chunk: string) {},
+    };
+  }
+  let warned = false;
+  let acceptedVisibleText = "";
+  const identities = planEntry.fencedSkippedMediaDirectives ?? [];
+  return {
+    afterAcceptedVisibleText(visibleChunk: string) {
+      if (warned) {
+        return;
+      }
+      const chunk = visibleChunk.trim();
+      if (chunk) {
+        acceptedVisibleText = acceptedVisibleText
+          ? `${acceptedVisibleText}\n${visibleChunk}`
+          : visibleChunk;
+      }
+      const retained =
+        identities.length > 0
+          ? identities.some((directive) => {
+              const identity = directive.trim();
+              return (
+                identity.length > 0 &&
+                acceptedVisibleText.split("\n").some((line) => line.trim() === identity)
+              );
+            })
+          : /media:/i.test(acceptedVisibleText);
+      if (!retained) {
+        return;
+      }
+      warned = true;
+      warnFencedMediaSkipsForAcceptedOutboundDelivery([
+        {
+          text: acceptedVisibleText,
+          mediaTokenSkippedInFence: true,
+          fencedSkippedMediaDirectives: identities,
+        },
+      ]);
+    },
+  };
+}
+
 /** Send media-first payloads intact, or chunk text-only payloads through the caller's transport hooks. */
 export async function sendPayloadWithChunkedTextAndMedia<
-  TContext extends { payload: object },
+  TContext extends { payload: object; cfg?: unknown },
   TResult,
 >(params: {
   /** Caller context containing the loose outbound payload. */
@@ -187,13 +244,19 @@ export async function sendPayloadWithChunkedTextAndMedia<
   emptyResult: TResult;
   /** Host callback that persists each completed sub-send before the next one starts. */
   onResult?: (result: TResult) => Promise<void> | void;
+  /** Optional surface tag for outbound plan diagnostics (#41966). */
+  surface?: string;
 }): Promise<TResult> {
+  // SAFETY: sendPayload helper only needs text/media fields from the channel payload bag
   const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
   const text = payload.text ?? "";
   const urls = resolveOutboundMediaUrls(payload);
   if (!text && urls.length === 0) {
     return params.emptyResult;
   }
+  // Zalo/Zalouser expose this helper as outbound.sendPayload. Core then owns the
+  // accepted-send fenced-MEDIA diagnostic after identified delivery — do not warn
+  // here or structured/audio payload routes double-log (#41966).
   const [firstUrl, ...remainingUrls] = urls;
   if (firstUrl !== undefined) {
     // Caption-limited transports get text only on the first media item; the
@@ -505,17 +568,40 @@ export async function deliverTextOrMediaReply(params: {
     index: number;
     isFirst: boolean;
   }) => Promise<void> | void;
+  /** Optional config used for outbound plan diagnostics (#41966). */
+  cfg?: unknown;
+  /** Optional surface tag for outbound plan diagnostics (#41966). */
+  surface?: string;
 }): Promise<"empty" | "text" | "media"> {
   const { mediaUrls } = resolveSendableOutboundReplyParts(params.payload, {
     text: params.text,
   });
+  // Shared direct-delivery owner for iMessage/Zalo-family (and peers): warn once
+  // after an accepted visible send when fenced MEDIA: stayed as text (#41966).
+  const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+    payload: params.payload,
+    cfg: params.cfg,
+    surface: params.surface,
+  });
+  // Only latch fenced-MEDIA warn after a successful *caption-bearing* media send.
+  // sendMediaWithLeadingCaption may continue after a handled first-send failure and
+  // later succeed without the original caption (#41966 / ClawSweeper P2).
+  let captionBearingSendAccepted = false;
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls,
     caption: params.text,
-    send: params.sendMedia,
+    send: async (payload) => {
+      await params.sendMedia(payload);
+      if (typeof payload.caption === "string") {
+        captionBearingSendAccepted = true;
+      }
+    },
     onError: params.onMediaError,
   });
   if (sentMedia) {
+    if (captionBearingSendAccepted) {
+      fencedMediaWarn.afterAcceptedVisibleText(params.text);
+    }
     return "media";
   }
   if (!params.text) {
@@ -528,6 +614,7 @@ export async function deliverTextOrMediaReply(params: {
       continue;
     }
     await params.sendText(chunk);
+    fencedMediaWarn.afterAcceptedVisibleText(chunk);
     sentText = true;
   }
   return sentText ? "text" : "empty";

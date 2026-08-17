@@ -1,6 +1,3 @@
-// Outbound payload planning normalizes reply payloads into sendable text,
-// media, presentation, interactive, and mirror projections.
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -25,6 +22,9 @@ import {
 } from "../../interactive/payload.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+// Outbound payload planning normalizes reply payloads into sendable text,
+// media, presentation, interactive, and mirror projections.
+import { resolveSendableOutboundReplyParts } from "./reply-payload-parts.js";
 
 /** Runtime-ready outbound payload after text/media/rich-content normalization. */
 export type NormalizedOutboundPayload = {
@@ -63,6 +63,17 @@ export type OutboundPayloadPlan = {
   hasPresentation: boolean;
   hasInteractive: boolean;
   hasChannelData: boolean;
+  /**
+   * True when planning saw a fenced `MEDIA:` token that remains visible text.
+   * Warning is emitted only for accepted outbound delivery (#41966).
+   */
+  mediaTokenSkippedInFence: boolean;
+  /**
+   * Exact fenced `MEDIA:` directive lines seen at plan time (trimmed).
+   * Used transiently at accepted delivery to avoid false warnings after hooks
+   * rewrite text to unrelated `media:` prose (#41966).
+   */
+  fencedSkippedMediaDirectives: string[];
 };
 
 type OutboundPayloadPlanContext = {
@@ -262,7 +273,32 @@ function createOutboundPayloadPlanEntry(
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
+    // Prefer the first parse (pre-strip); stripped re-parse is only for citation markers.
+    mediaTokenSkippedInFence:
+      parsed.mediaTokenSkippedInFence || strippedParsed.mediaTokenSkippedInFence,
+    fencedSkippedMediaDirectives: mergeFencedSkippedMediaDirectives(
+      parsed.fencedSkippedMediaDirectives,
+      strippedParsed.fencedSkippedMediaDirectives,
+    ),
   };
+}
+
+function mergeFencedSkippedMediaDirectives(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const list of [a, b]) {
+    if (!list) {
+      continue;
+    }
+    for (const item of list) {
+      if (item && !out.includes(item)) {
+        out.push(item);
+      }
+    }
+  }
+  return out;
 }
 
 /** Builds the canonical outbound payload plan shared by delivery projections. */

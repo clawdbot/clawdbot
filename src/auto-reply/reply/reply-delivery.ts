@@ -43,6 +43,10 @@ export function normalizeReplyPayloadDirectives(params: {
       })
     : undefined;
 
+  // Fenced-MEDIA skip stays a pure parse signal. Operator warning is emitted
+  // once for accepted outbound delivery (outbound payload path), not here —
+  // this helper also runs for recovery/final-text analysis (#41966).
+
   let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
   if (params.trimLeadingWhitespace && text) {
     text = text.trimStart() || undefined;

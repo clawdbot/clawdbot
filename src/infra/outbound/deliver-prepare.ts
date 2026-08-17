@@ -245,6 +245,45 @@ export async function prepareOutboundPayloadBatch(
       continue;
     }
     const compactPayload = compactPreparedPayload(preparedPayload);
+    // Durable custody may only retain post-policy fenced-skip facts. Never copy
+    // pre-hook directive identities into the accepted batch after redaction/rewrite
+    // (queue recovery would otherwise keep raw MEDIA paths). Fence-stripping
+    // adapters may still keep the exact directive line as plain text — those
+    // retained identities are safe and needed for post-send diagnostics (#41966).
+    const sourcePlan = plan.find((entry) => entry.sourceIndex === sourceIndex);
+    const acceptedText = compactPayload.text;
+    const retainedDirectives = (sourcePlan?.fencedSkippedMediaDirectives ?? []).filter(
+      (directive) => {
+        const identity = directive.trim();
+        if (!identity || !acceptedText) {
+          return false;
+        }
+        return acceptedText.split("\n").some((line) => line.trim() === identity);
+      },
+    );
+    const acceptedPlan = acceptedText
+      ? createOutboundPayloadPlan([{ text: acceptedText }], {
+          cfg: params.cfg,
+          sessionKey: params.session?.policyKey ?? params.session?.key,
+          surface: params.channel,
+          conversationType: params.session?.conversationType,
+        })[0]
+      : undefined;
+    const durableDirectives =
+      retainedDirectives.length > 0
+        ? retainedDirectives
+        : acceptedPlan?.mediaTokenSkippedInFence
+          ? [...(acceptedPlan.fencedSkippedMediaDirectives ?? [])]
+          : [];
+    const fencedSkip =
+      durableDirectives.length > 0 || acceptedPlan?.mediaTokenSkippedInFence === true
+        ? {
+            mediaTokenSkippedInFence: true as const,
+            ...(durableDirectives.length > 0
+              ? { fencedSkippedMediaDirectives: durableDirectives }
+              : {}),
+          }
+        : {};
     entries.push({
       sourceIndex,
       status: "accepted",
@@ -252,6 +291,7 @@ export async function prepareOutboundPayloadBatch(
       replyHookChanged: replyHookResult.changed,
       messageHookChanged: messageHookResult.contentRewritten,
       preparedMediaCount: buildPayloadSummary(compactPayload).mediaUrls.length,
+      ...fencedSkip,
     });
   }
 

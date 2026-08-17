@@ -160,6 +160,19 @@ export type DeliverOutboundPayloadsCoreParams = {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** @internal Canonical post-policy batch used by queue recovery and physical delivery. */
   preparedBatch?: PreparedOutboundBatch;
+  /**
+   * @internal Optional live-handoff fenced-MEDIA skip facts keyed by sourceIndex.
+   * Captured from pre-normalization source payloads so fence-stripping adapters
+   * still warn after a physical send (#41966). Durable recovery prefers facts
+   * stored on prepared-batch accepted entries when this map is absent.
+   */
+  fencedMediaSkipPlanBySourceIndex?: ReadonlyMap<
+    number,
+    {
+      mediaTokenSkippedInFence: boolean;
+      fencedSkippedMediaDirectives: readonly string[];
+    }
+  >;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;

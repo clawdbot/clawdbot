@@ -107,6 +107,11 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: replyParsed.audioAsVoice,
     isSilent,
+    // Streaming chunks do not carry the fenced-code-block MEDIA: skip signal;
+    // that detection runs in the full reply-directives parse at the delivery
+    // boundary. Default false so chunks satisfy ReplyDirectiveParseResult.
+    mediaTokenSkippedInFence: false,
+    fencedSkippedMediaDirectives: [],
   };
 };
 
