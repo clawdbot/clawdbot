@@ -248,6 +248,38 @@ describe("ModelProvidersPage usage convergence", () => {
     );
   });
 
+  it("reports a stalled provider refresh once the retry budget is spent", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+
+    // Nothing is visible while retries are still in flight: a converging load is
+    // not a failure and must not warn.
+    expect(page.textContent ?? "").not.toContain("did not finish loading");
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await page.updateComplete;
+
+    // Budget spent and the payload is still incomplete. Rendering the ordinary
+    // cards with no usage and no notice is indistinguishable from a provider
+    // that simply reports none.
+    expect(page.textContent ?? "").toContain("did not finish loading");
+
+    // The notice says "Refresh to retry", so a manual refresh has to hand back a
+    // budget — otherwise the button is a dead end and nothing ever converges.
+    const callsBeforeManual = harness.request.mock.calls.filter(
+      ([method]) => method === "usage.status",
+    ).length;
+    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(
+      harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
+    ).toBeGreaterThan(callsBeforeManual + 1);
+  });
+
   it("replaces a pending pre-disconnect load before it can publish", async () => {
     const harness = createHarness("main");
     harness.setUsageStatus({ updatedAt: 1, providers: [] });
