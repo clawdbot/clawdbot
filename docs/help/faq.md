@@ -611,7 +611,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Ollama Web Search | Yes (needs `ollama signin`) | - |
     | Perplexity | No | `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` |
     | SearXNG | Yes (self-hosted) | `SEARXNG_BASE_URL` |
-    | Tavily | No | `TAVILY_API_KEY` |
+    | Tavily | Yes (rate-limited keyless; pin `provider: "tavily"`) | Optional `TAVILY_API_KEY` |
 
     Grok can also reuse xAI OAuth from model auth (`openclaw onboard --auth-choice xai-oauth`).
 

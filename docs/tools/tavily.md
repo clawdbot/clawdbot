@@ -2,7 +2,7 @@
 summary: "Tavily search and extract tools"
 read_when:
   - You want Tavily-backed web search
-  - You need a Tavily API key
+  - You want Tavily keyless search without an API key
   - You want Tavily as a web_search provider
   - You want content extraction from URLs
 title: "Tavily"
@@ -15,14 +15,14 @@ title: "Tavily"
 
 Tavily returns structured results optimized for LLM consumption, with configurable search depth, topic filtering, domain filters, AI-generated answer summaries, and content extraction from URLs (including JavaScript-rendered pages).
 
-| Property  | Value                                                                                         |
-| --------- | --------------------------------------------------------------------------------------------- |
-| Plugin id | `tavily`                                                                                      |
-| Package   | `@openclaw/tavily-plugin`                                                                     |
-| Auth      | `TAVILY_API_KEY` env var or config `apiKey`                                                   |
-| Base URL  | `https://api.tavily.com` (default); `TAVILY_BASE_URL` env var or config `baseUrl` to override |
-| Timeouts  | 30s search, 60s extract (default)                                                             |
-| Tools     | `tavily_search`, `tavily_extract`                                                             |
+| Property  | Value                                                                                                |
+| --------- | ---------------------------------------------------------------------------------------------------- |
+| Plugin id | `tavily`                                                                                             |
+| Package   | `@openclaw/tavily-plugin`                                                                            |
+| Auth      | Optional. Keyless on `https://api.tavily.com`; `TAVILY_API_KEY` or config `apiKey` for higher limits |
+| Base URL  | `https://api.tavily.com` (default); `TAVILY_BASE_URL` env var or config `baseUrl` to override        |
+| Timeouts  | 30s search, 60s extract (default)                                                                    |
+| Tools     | `tavily_search`, `tavily_extract`                                                                    |
 
 ## Getting started
 
@@ -32,10 +32,12 @@ Tavily returns structured results optimized for LLM consumption, with configurab
     openclaw plugins install @openclaw/tavily-plugin
     ```
   </Step>
-  <Step title="Get an API key">
-    Create a Tavily account at [tavily.com](https://tavily.com), then generate an API key in the dashboard.
+  <Step title="Use search without a key">
+    Enable the plugin, then call `tavily_search` / `tavily_extract`. Pin `tools.web.search.provider` to `"tavily"` if you want generic `web_search` to use Tavily. With no API key, OpenClaw sends Tavily's keyless header to `https://api.tavily.com`. Auto-detect still requires a key and will not pick Tavily just because keyless exists.
   </Step>
-  <Step title="Configure the plugin and provider">
+  <Step title="Optional: add an API key">
+    For higher rate limits, create a key at [tavily.com](https://tavily.com) and set `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`. A present key uses Bearer auth and omits the keyless header.
+
     ```json5
     {
       plugins: {
@@ -45,7 +47,6 @@ Tavily returns structured results optimized for LLM consumption, with configurab
             config: {
               webSearch: {
                 apiKey: "tvly-...", // optional if TAVILY_API_KEY is set
-                baseUrl: "https://api.tavily.com",
               },
             },
           },
@@ -60,9 +61,10 @@ Tavily returns structured results optimized for LLM consumption, with configurab
       },
     }
     ```
+
   </Step>
   <Step title="Verify search runs">
-    Trigger a `web_search` from any agent, or call `tavily_search` directly.
+    Trigger a `web_search` from any agent with provider `"tavily"`, or call `tavily_search` directly.
   </Step>
 </Steps>
 
@@ -138,12 +140,12 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
     1. `plugins.entries.tavily.config.webSearch.apiKey` (resolved through SecretRefs).
     2. `TAVILY_API_KEY` from the gateway environment.
 
-    `tavily_search` and `tavily_extract` both raise a setup error if neither is present.
+    If neither is present and the base URL is `https://api.tavily.com`, search and extract use Tavily's rate-limited keyless access (`X-Tavily-Access-Mode: keyless`, no Bearer header). A blocked SecretRef fails closed and does not fall through to keyless. A custom `baseUrl` still requires a key.
 
   </Accordion>
 
   <Accordion title="Custom base URL">
-    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`.
+    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`. Keyless access is only used for that default origin; a custom host requires an API key.
   </Accordion>
 
   <Accordion title="`chunks_per_source` requires `query`">

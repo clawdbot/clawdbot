@@ -15,7 +15,7 @@
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Tavily API Key",
-      "help": "Tavily API key for web search and extraction (fallback: TAVILY_API_KEY env var).",
+      "help": "Optional Tavily API key. Without a key, search and extract use Tavily's rate-limited keyless access on api.tavily.com (fallback: TAVILY_API_KEY env var).",
       "sensitive": true,
       "placeholder": "tvly-..."
     },

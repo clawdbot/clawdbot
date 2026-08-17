@@ -6,7 +6,9 @@ import {
   normalizeCacheKey,
   postTrustedWebToolsJson,
   readCache,
+  readResponseText,
   resolveCacheTtlMs,
+  withTrustedWebSearchEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
@@ -17,9 +19,9 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_TAVILY_BASE_URL,
-  resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
+  resolveTavilyRequestAuth,
   resolveTavilySearchTimeoutSeconds,
 } from "./config.js";
 
@@ -39,6 +41,8 @@ const TAVILY_EXTRACT_MAX_ERROR_CHARS = 4_000;
 const TAVILY_EXTRACT_MAX_RESULTS = 20;
 const TAVILY_RESULT_URL_MAX_CHARS = 2_048;
 const TAVILY_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
+const TAVILY_CLIENT_SOURCE_HEADER = { "X-Client-Source": "openclaw" } as const;
+const TAVILY_KEYLESS_ACCESS_HEADER = { "X-Tavily-Access-Mode": "keyless" } as const;
 
 export type TavilySearchParams = {
   cfg?: OpenClawConfig;
@@ -103,26 +107,57 @@ async function postTavilyJson(params: {
   baseUrl: string;
   pathname: "/extract" | "/search";
   timeoutSeconds: number;
-  apiKey: string;
+  apiKey?: string;
   body: Record<string, unknown>;
   errorLabel: string;
   responseMaxBytes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
-  return postTrustedWebToolsJson(
+  const url = resolveEndpoint(params.baseUrl, params.pathname);
+  const parseResponse = async (response: Response) =>
+    readTavilyJsonResponse(response, params.errorLabel, {
+      maxBytes: params.responseMaxBytes,
+    });
+  if (params.apiKey) {
+    return postTrustedWebToolsJson(
+      {
+        url,
+        timeoutSeconds: params.timeoutSeconds,
+        apiKey: params.apiKey,
+        body: params.body,
+        errorLabel: params.errorLabel,
+        extraHeaders: { ...TAVILY_CLIENT_SOURCE_HEADER },
+        ...(params.signal ? { signal: params.signal } : {}),
+      },
+      parseResponse,
+    );
+  }
+  // Keyless XOR: Tavily ignores X-Tavily-Access-Mode when Authorization is present.
+  return withTrustedWebSearchEndpoint(
     {
-      url: resolveEndpoint(params.baseUrl, params.pathname),
+      url,
       timeoutSeconds: params.timeoutSeconds,
-      apiKey: params.apiKey,
-      body: params.body,
-      errorLabel: params.errorLabel,
-      extraHeaders: { "X-Client-Source": "openclaw" },
       ...(params.signal ? { signal: params.signal } : {}),
+      init: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...TAVILY_CLIENT_SOURCE_HEADER,
+          ...TAVILY_KEYLESS_ACCESS_HEADER,
+        },
+        body: JSON.stringify(params.body),
+      },
     },
-    async (response) =>
-      readTavilyJsonResponse(response, params.errorLabel, {
-        maxBytes: params.responseMaxBytes,
-      }),
+    async (response) => {
+      if (!response.ok) {
+        const detail = await readResponseText(response, { maxBytes: 64_000 });
+        throw new Error(
+          `${params.errorLabel} API error (${response.status}): ${detail.text || response.statusText}`,
+        );
+      }
+      return parseResponse(response);
+    },
   );
 }
 
@@ -138,12 +173,7 @@ export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  const apiKey = resolveTavilyApiKey(params.cfg);
-  if (!apiKey) {
-    throw new Error(
-      "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
-    );
-  }
+  const auth = resolveTavilyRequestAuth(params.cfg, "search");
   const count =
     typeof params.maxResults === "number" && Number.isFinite(params.maxResults)
       ? Math.max(1, Math.min(20, Math.floor(params.maxResults)))
@@ -157,6 +187,7 @@ export async function runTavilySearch(
       q: params.query,
       count,
       baseUrl,
+      keyless: auth.mode === "keyless",
       searchDepth: params.searchDepth,
       topic: params.topic,
       includeAnswer: params.includeAnswer,
@@ -198,7 +229,7 @@ export async function runTavilySearch(
     baseUrl,
     pathname: "/search",
     timeoutSeconds,
-    apiKey,
+    ...(auth.mode === "keyed" ? { apiKey: auth.apiKey } : {}),
     body,
     errorLabel: "Tavily Search",
     ...(params.signal ? { signal: params.signal } : {}),
@@ -271,12 +302,7 @@ export async function runTavilyExtract(
   params: TavilyExtractParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  const apiKey = resolveTavilyApiKey(params.cfg);
-  if (!apiKey) {
-    throw new Error(
-      "tavily_extract needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
-    );
-  }
+  const auth = resolveTavilyRequestAuth(params.cfg, "extract");
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
   const timeoutSeconds = resolveTavilyExtractTimeoutSeconds(params.timeoutSeconds);
 
@@ -285,6 +311,7 @@ export async function runTavilyExtract(
       type: "tavily-extract",
       urls: params.urls,
       baseUrl,
+      keyless: auth.mode === "keyless",
       query: params.query,
       extractDepth: params.extractDepth,
       chunksPerSource: params.chunksPerSource,
@@ -315,7 +342,7 @@ export async function runTavilyExtract(
     baseUrl,
     pathname: "/extract",
     timeoutSeconds,
-    apiKey,
+    ...(auth.mode === "keyed" ? { apiKey: auth.apiKey } : {}),
     body,
     errorLabel: "Tavily Extract",
     // Extract can include raw page content and image lists, unlike search metadata.

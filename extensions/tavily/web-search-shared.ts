@@ -27,7 +27,7 @@ export function buildTavilyWebSearchProviderBase(): Omit<WebSearchProviderPlugin
   return {
     id: "tavily",
     label: "Tavily Search",
-    hint: "Structured results with domain filters and AI answer summaries",
+    hint: "Structured results with domain filters and AI answer summaries; API key optional (rate-limited keyless)",
     onboardingScopes: ["text-inference"],
     credentialLabel: "Tavily API key",
     envVars: ["TAVILY_API_KEY"],
