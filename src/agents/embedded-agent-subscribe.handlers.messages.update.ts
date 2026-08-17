@@ -282,6 +282,12 @@ export function handleMessageUpdate(
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
+  // A completions stream cannot classify text interrupted by later reasoning
+  // until terminal. Keep that text out of live reply lanes until its phase resolves.
+  if (isPhasePendingReasoningCompletionsText) {
+    return;
+  }
+
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
@@ -291,9 +297,7 @@ export function handleMessageUpdate(
     }
   }
 
-  // A completions stream cannot classify text interrupted by later reasoning
-  // until terminal. Keep that text out of live reply lanes until its phase resolves.
-  if (skipLiveStream || isPhasePendingReasoningCompletionsText) {
+  if (skipLiveStream) {
     return;
   }
 

@@ -315,13 +315,16 @@ function postedText(onBlockReply: ReturnType<typeof vi.fn>): string {
 }
 
 describe("Chat Completions pre-tool narration", () => {
-  it("withholds reasoning-associated unphased text from live partial replies", () => {
+  it("withholds reasoning-associated unphased text until terminal phase resolution", () => {
     const { session, emit } = createStubSessionHarness();
     const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
     subscribeEmbeddedAgentSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
       runId: "run-completions-reasoning-pending",
       onPartialReply,
+      onBlockReply,
+      blockReplyBreak: "message_end",
     });
 
     const message = {
@@ -338,6 +341,28 @@ describe("Chat Completions pre-tool narration", () => {
     });
 
     expect(onPartialReply).not.toHaveBeenCalled();
+
+    emit({
+      type: "message_end",
+      message: {
+        ...message,
+        content: [
+          {
+            type: "text",
+            text: "Interim text.",
+            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Final text.",
+            textSignature: JSON.stringify({ v: 1, id: "final-0", phase: "final_answer" }),
+          },
+        ],
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(postedText(onBlockReply)).toBe("Final text.");
   });
 
   it("withholds pre-tool narration from durable text_end block replies", () => {
