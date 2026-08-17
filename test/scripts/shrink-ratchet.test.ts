@@ -44,7 +44,7 @@ describe("shrink-ratchet", () => {
     const root = tempDirs.make("openclaw-shrink-ratchet-");
     fs.writeFileSync(path.join(root, file), source);
 
-    expect(loadRatchetSnapshot(root, file, false, parse)).toEqual(expected);
+    expect(loadRatchetSnapshot<unknown>(root, file, false, parse)).toEqual(expected);
   });
 
   it("loads worktree, index, and reference snapshots", () => {
