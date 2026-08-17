@@ -63,11 +63,28 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
-  it("emits one audit lifecycle when runtime normalization clones a wrapped tool", async () => {
+  it("emits one eager audit lifecycle when runtime normalization clones a wrapped tool", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    let startPresentAtImplementation = false;
     const tool = createRuntimeDynamicTool("echo");
+    const execute = vi.fn(async () => {
+      startPresentAtImplementation =
+        diagnosticEvents.some(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
+        ) ||
+        hasPendingInternalDiagnosticEvent(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
+        );
+      return {
+        content: [{ type: "text" as const, text: "echo done" }],
+        details: {},
+      };
+    });
+    tool.execute = execute;
     dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
     const harness = createStartedThreadHarness();
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
     let closeHostCapabilities: (() => void) | undefined;
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
       if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
@@ -105,71 +122,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         },
       })) as { success?: boolean };
       expect(toolResult.success).toBe(true);
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      await flushDiagnosticEvents();
-    } finally {
-      closeHostCapabilities?.();
-      unsubscribeDiagnostics();
-    }
-
-    expect(diagnosticEvents.map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
-  });
-
-  it("emits the bridge audit start before dynamic tool implementation begins", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    let startPresentAtImplementation = false;
-    const tool = createRuntimeDynamicTool("echo");
-    const execute = vi.fn(async () => {
-      startPresentAtImplementation =
-        diagnosticEvents.some(
-          (event) =>
-            event.type === "tool.execution.started" && event.toolCallId === "call-echo-in-flight",
-        ) ||
-        hasPendingInternalDiagnosticEvent(
-          (event) =>
-            event.type === "tool.execution.started" && event.toolCallId === "call-echo-in-flight",
-        );
-      return {
-        content: [{ type: "text" as const, text: "echo done" }],
-        details: {},
-      };
-    });
-    tool.execute = execute;
-    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
-    const harness = createStartedThreadHarness();
-    let closeHostCapabilities: (() => void) | undefined;
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
-      if ("toolCallId" in event && event.toolCallId === "call-echo-in-flight") {
-        diagnosticEvents.push(event);
-      }
-    });
-    try {
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
-      setCodexTestModelSupportsTools(params, true);
-      closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
-
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      const toolResult = await harness.handleServerRequest({
-        id: "request-echo-in-flight",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-echo-in-flight",
-          namespace: null,
-          tool: "echo",
-          arguments: {},
-        },
-      });
-      expect(toolResult).toMatchObject({ success: true });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       await flushDiagnosticEvents();
