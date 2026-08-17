@@ -39,7 +39,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - The Control UI ships from and with its Gateway: one install, one version (product decision, 2026-08-16). UI code never carries gateway-version compatibility — no fallbacks to older methods when a current core method is missing, no version-conditional behavior for older gateways.
 - Method-advertisement checks (`isGatewayMethodAdvertised`) remain only as feature gates for config/plugin-dependent surfaces, never as version compat.
-- Skew paths (`pnpm ui:dev` against a different install, custom `gateway.controlUi.root`, dialing another gateway via connection settings) are unsupported for version mismatch; the connect handshake is the only gate.
+- The handshake rejects gateway-served same-origin skew. The admission-exempt paths (`pnpm ui:dev`, custom `gateway.controlUi.root`, cross-origin/connection-settings dialing) are unsupported for version mismatch without enforcement: they carry no compat code and fail visibly at the first missing method, by design. Tightening admission to reject them at connect is a server-side product change owned separately.
 
 ## Live Verification
 
