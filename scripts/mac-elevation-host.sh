@@ -8,6 +8,8 @@ EXPECTED_BUNDLE_ID="ai.openclaw.mac"
 EXPECTED_TEAM_ID="FWJYW4S8P8"
 EXPECTED_AUTHORITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"
 DEFAULT_APP="/Applications/OpenClaw.app"
+RECOVERY_APP_PLAN_XATTR="com.openclaw.elevation.recovery-app-plan"
+RECOVERY_MIGRATION_IDENTITY_XATTR="com.openclaw.elevation.recovery-migration-identity"
 
 COMMAND="${1:-}"
 [[ -n "$COMMAND" ]] && shift || true
@@ -59,6 +61,7 @@ ROLLBACK_INSTALL_RECEIPT=""
 ROLLBACK_INSTALL_RECEIPT_SHA=""
 ROLLBACK_FAILED_SOURCE=""
 RECOVERED_FAILED_APP_PATH=""
+RECOVERY_FAILED_APP_PLANNED_PATH=""
 ROLLBACK_MIGRATION_PLIST=""
 ROLLBACK_MIGRATION_PLIST_SHA=""
 ROLLBACK_MIGRATION_SOURCE=""
@@ -77,12 +80,16 @@ UPGRADE_EXPECTED_NODE_ID=""
 UPGRADE_EXPECTED_NODE_PROFILE=""
 RECOVERY_CURRENT_APP_CDHASH_ARM64=""
 RECOVERY_CURRENT_APP_CDHASH_X86_64=""
+RECOVERY_CURRENT_APP_IDENTITY=""
+RECOVERY_CURRENT_APP_STATE=""
 RECOVERY_CURRENT_PLIST=""
 RECOVERY_CURRENT_PLIST_SHA=""
 RECOVERY_CURRENT_PLIST_WAS_LOADED=0
 RECOVERY_CURRENT_RECEIPT=""
 RECOVERY_CURRENT_RECEIPT_SHA=""
+RECOVERY_RESTORED_MIGRATION_IDENTITY=""
 RECOVERY_RELAUNCHED_ADOPTED_PID=""
+RECOVERY_RESUMED=0
 OPENCLAW_CLI=()
 
 fail() {
@@ -268,7 +275,7 @@ case "$COMMAND" in
     required_tools=(codesign file jq launchctl lipo plutil spctl xcrun)
     ;;
   recover)
-    required_tools=(codesign ditto file jq launchctl lipo lsof open pgrep plutil shasum spctl xcrun)
+    required_tools=(codesign df diskutil ditto file jq launchctl lipo lsof open pgrep plutil shasum spctl xattr xcrun)
     ;;
   uninstall)
     required_tools=(launchctl)
@@ -395,6 +402,95 @@ backup_file_matches() {
     "$(shasum -a 256 "$path" | awk '{print $1}')" == "$expected_sha" ]]
 }
 
+path_identity() {
+  local target="$1"
+  [[ -e "$target" || -L "$target" ]] || return 1
+  stat -f '%d:%i' -- "$target" 2>/dev/null
+}
+
+durable_path_identity() {
+  local target="$1" device file_identity volume_uuid
+  [[ -e "$target" || -L "$target" ]] || return 1
+  file_identity="$(stat -f '%i:%v' -- "$target" 2>/dev/null)" || return 1
+  device="$(df -P "$target" 2>/dev/null | awk 'NR == 2 {print $1}')" || return 1
+  [[ "$device" == /dev/* ]] || return 1
+  volume_uuid="$(diskutil info -plist "$device" 2>/dev/null |
+    plutil -extract VolumeUUID raw -o - - 2>/dev/null |
+    tr '[:lower:]' '[:upper:]')" || return 1
+  [[ "$volume_uuid" =~ ^[0-9A-Fa-f-]{36}$ && "$file_identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  printf '%s:%s' "$volume_uuid" "$file_identity"
+}
+
+path_matches_identity() {
+  local target="$1" expected_identity="$2"
+  if [[ "$expected_identity" =~ ^[0-9]+:[0-9]+$ ]]; then
+    [[ "$(path_identity "$target")" == "$expected_identity" ]]
+  elif [[ "$expected_identity" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]]; then
+    [[ "$(durable_path_identity "$target")" == "$expected_identity" ]]
+  else
+    return 1
+  fi
+}
+
+read_optional_receipt_xattr() {
+  local output_variable="$1" attribute="$2" value attributes
+  if value="$(xattr -p "$attribute" "$RECEIPT_PATH" 2>/dev/null)"; then
+    printf -v "$output_variable" '%s' "$value"
+    return 0
+  fi
+  attributes="$(xattr "$RECEIPT_PATH" 2>/dev/null)" || return 1
+  grep -Fqx "$attribute" <<<"$attributes" && return 1
+  printf -v "$output_variable" ''
+}
+
+write_receipt_xattr() {
+  local attribute="$1" value="$2"
+  xattr -w "$attribute" "$value" "$RECEIPT_PATH" || return 1
+  [[ "$(xattr -p "$attribute" "$RECEIPT_PATH" 2>/dev/null)" == "$value" ]]
+}
+
+record_recovery_app_plan() {
+  local value="${RECOVERY_CURRENT_APP_STATE}|${RECOVERY_CURRENT_APP_IDENTITY}"
+  [[ "$value" =~ ^(absent[|]|valid[|][0-9A-F-]{36}:[0-9]+:[0-9]+|damaged[|][0-9A-F-]{36}:[0-9]+:[0-9]+)$ ]] || return 1
+  write_receipt_xattr "$RECOVERY_APP_PLAN_XATTR" "$value"
+}
+
+record_recovery_migration_identity() {
+  local identity="$1"
+  [[ "$identity" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]] || return 1
+  write_receipt_xattr "$RECOVERY_MIGRATION_IDENTITY_XATTR" "$identity"
+}
+
+preserve_file_by_exclusive_custody() {
+  local source="$1" expected_sha="$2" expected_identity="$3" custody
+  custody="$(mktemp -u "${source}.reversal-custody.${ROLLBACK_FAILED_SOURCE}.XXXXXX")" || return 1
+  [[ ! -e "$custody" && ! -L "$custody" ]] || return 1
+  rename_app_exclusively "$source" "$custody" || return 1
+  if [[ -f "$custody" && ! -L "$custody" ]] &&
+    path_matches_identity "$custody" "$expected_identity" &&
+    backup_file_matches "$custody" "$expected_sha"
+  then
+    if [[ ! -e "$source" && ! -L "$source" ]]; then
+      printf 'Preserved reversed migration plist at %s\n' "$custody" >&2
+      return 0
+    fi
+    printf 'Preserved reversed migration plist at %s; replacement remains at %s\n' \
+      "$custody" "$source" >&2
+    return 1
+  fi
+  # Preserve an unexpected replacement: restore it exclusively when possible, otherwise
+  # leave it in the private custody path for operator inspection. Never unlink it.
+  if [[ ! -e "$source" && ! -L "$source" ]]; then
+    rename_app_exclusively "$custody" "$source" || true
+  fi
+  if [[ -e "$custody" || -L "$custody" ]]; then
+    printf 'Preserved unexpected reversal custody at %s\n' "$custody" >&2
+  elif [[ -e "$source" || -L "$source" ]]; then
+    printf 'Restored unexpected reversal entry at %s\n' "$source" >&2
+  fi
+  return 1
+}
+
 restore_file_atomically() {
   local source="$1" destination="$2" expected_sha="$3" mode="$4" staged=""
   backup_file_matches "$source" "$expected_sha" || return 1
@@ -446,17 +542,41 @@ state_backup_path_is_canonical() {
 }
 
 restore_file_without_overwrite() {
-  local source="$1" destination="$2" expected_sha="$3" restore_tmp
+  local source="$1" destination="$2" expected_sha="$3" output_variable="$4"
+  local restore_tmp restored_identity
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
   restore_tmp="$(mktemp "${destination}.restore.XXXXXX")" || return 1
   if ! cp -p "$source" "$restore_tmp" ||
-    [[ "$(shasum -a 256 "$restore_tmp" | awk '{print $1}')" != "$expected_sha" ]] ||
-    ! /bin/link "$restore_tmp" "$destination"
+    [[ "$(shasum -a 256 "$restore_tmp" | awk '{print $1}')" != "$expected_sha" ]]
   then
     rm -f "$restore_tmp"
     return 1
   fi
+  if [[ "$CUTOVER_RECOVERY_ATTEMPTED" == "1" ]]; then
+    restored_identity="$(durable_path_identity "$restore_tmp")" || {
+      rm -f "$restore_tmp"
+      return 1
+    }
+    if ! record_recovery_migration_identity "$restored_identity"; then
+      rm -f "$restore_tmp"
+      return 1
+    fi
+  else
+    restored_identity="$(path_identity "$restore_tmp")" || {
+      rm -f "$restore_tmp"
+      return 1
+    }
+  fi
+  if ! /bin/link "$restore_tmp" "$destination"; then
+    rm -f "$restore_tmp"
+    return 1
+  fi
+  if ! path_matches_identity "$destination" "$restored_identity"; then
+    rm -f "$restore_tmp"
+    return 1
+  fi
   rm -f "$restore_tmp"
+  printf -v "$output_variable" '%s' "$restored_identity"
 }
 
 finish_custody_signal_deferral() {
@@ -684,6 +804,50 @@ rename_app_exclusively() {
   done
   [[ -n "$helper" ]] || return 1
   "$helper" --elevation-rename-exclusive "$source" "$destination"
+}
+
+preserve_current_app_for_recovery() {
+  local custody_label="$1" failed_container failed_path
+  [[ -n "$RECOVERY_CURRENT_APP_IDENTITY" ]] || return 1
+  if [[ -n "$RECOVERY_FAILED_APP_PLANNED_PATH" ]]; then
+    failed_path="$RECOVERY_FAILED_APP_PLANNED_PATH"
+    failed_container="$(dirname "$failed_path")"
+    if [[ ! -e "$failed_container" && ! -L "$failed_container" ]]; then
+      mkdir "$failed_container" || return 1
+    elif [[ ! -d "$failed_container" || -L "$failed_container" ||
+      -n "$(find "$failed_container" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+    then
+      return 1
+    fi
+  else
+    failed_container="$(mktemp -d "${APP_PATH}.failed-elevation-host-${ROLLBACK_FAILED_SOURCE}.XXXXXX")" ||
+      return 1
+    failed_path="$failed_container/OpenClaw.app"
+  fi
+  if ! rename_app_exclusively "$APP_PATH" "$failed_path"; then
+    rmdir "$failed_container" 2>/dev/null || true
+    return 1
+  fi
+  if [[ ! -d "$failed_path" || -L "$failed_path" ]] ||
+    ! path_matches_identity "$failed_path" "$RECOVERY_CURRENT_APP_IDENTITY"
+  then
+    if [[ (-e "$failed_path" || -L "$failed_path") && ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]; then
+      rename_app_exclusively "$failed_path" "$APP_PATH" || true
+    fi
+    if [[ -e "$failed_path" || -L "$failed_path" ]]; then
+      printf 'Preserved unexpected app custody at %s\n' "$failed_path" >&2
+    elif [[ -e "$APP_PATH" || -L "$APP_PATH" ]]; then
+      printf 'Restored replacement app entry at %s\n' "$APP_PATH" >&2
+    fi
+    rmdir "$failed_container" 2>/dev/null || true
+    return 1
+  fi
+  RECOVERED_FAILED_APP_PATH="$failed_path"
+  if [[ -e "$APP_PATH" || -L "$APP_PATH" ]]; then
+    printf 'Preserved %s at %s; replacement remains at %s\n' \
+      "$custody_label" "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" >&2
+    return 1
+  fi
 }
 
 render_plist() {
@@ -1492,7 +1656,7 @@ install_host() {
   [[ -n "$ARCHIVE" ]] || fail 'install requires --archive <zip>'
   [[ -n "$ARTIFACT_RECEIPT" ]] || fail 'install requires --receipt <json>'
   ensure_no_normal_owner
-  local staged_app source_commit peekaboo_commit old_pid migration_pid plist_tmp
+  local staged_app source_commit peekaboo_commit old_pid migration_pid plist_tmp staged_install_identity
   local current_migration_state elevation_state adoption_signal="" commit_signal=""
   prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
   extract_archive "$AUTHENTICATED_ARCHIVE_PATH" staged_app
@@ -1519,10 +1683,9 @@ install_host() {
     local installed_commit
     installed_commit="$(plist_value "$APP_PATH" OpenClawGitCommit)"
     [[ "$installed_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'installed OpenClaw app has no exact source receipt'
-    ROLLBACK_APP_PATH="$(mktemp -d "${APP_PATH}.rollback-elevation-host-${installed_commit}.XXXXXX")"
-    # The native rename helper uses renamex_np(RENAME_EXCL), so releasing this empty name
-    # cannot turn a later collision into nesting or overwrite; any recreated entry refuses.
-    rmdir "$ROLLBACK_APP_PATH"
+    ROLLBACK_APP_PATH="$(mktemp -u "${APP_PATH}.rollback-elevation-host-${installed_commit}.XXXXXX")"
+    # The unpredictable name is consumed only by renamex_np(RENAME_EXCL); any entry that
+    # appears before custody atomically refuses without nesting or overwrite.
     [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
       fail "could not reserve a unique elevation backup path: $ROLLBACK_APP_PATH"
     ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
@@ -1657,7 +1820,12 @@ install_host() {
     [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] ||
       fail 'installed OpenClaw app path was recreated during rollback custody'
   fi
+  staged_install_identity="$(path_identity "$STAGED_INSTALL_APP_PATH")" ||
+    fail 'same-filesystem staged app identity could not be inspected before install'
   rename_app_exclusively "$STAGED_INSTALL_APP_PATH" "$APP_PATH" || true
+  path_matches_identity "$APP_PATH" "$staged_install_identity" ||
+    fail 'same-filesystem staged app identity changed during install'
+  RECOVERY_CURRENT_APP_IDENTITY="$staged_install_identity"
   verify_elevation_app "$APP_PATH"
   verify_artifact_receipt \
     "$AUTHENTICATED_RECEIPT_PATH" \
@@ -1735,7 +1903,7 @@ install_host() {
 }
 
 recover_install() {
-  local recovery_failed=0 elevation_state failed_container failed_path restored_state
+  local recovery_failed=0 elevation_state restored_state
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
     verify_recorded_rollback_app "$APP_PATH" ||
       verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || return 1
@@ -1759,19 +1927,14 @@ recover_install() {
     verify_recorded_rollback_app "$APP_PATH"
   then
     : # The pre-armed move failed before displacing the already-restored prior app.
+  elif [[ "$CUTOVER_APP_MUTATED" == "1" && "$CUTOVER_RECOVERY_ATTEMPTED" == "1" &&
+    "$RECOVERY_CURRENT_APP_STATE" == "damaged" && -d "$APP_PATH" && ! -L "$APP_PATH" ]]
+  then
+    preserve_current_app_for_recovery 'damaged current app' || return 1
   elif [[ "$CUTOVER_APP_MUTATED" == "1" && -d "$APP_PATH" &&
     "$(plist_value "$APP_PATH" OpenClawGitCommit)" == "$ROLLBACK_FAILED_SOURCE" ]]
   then
-    failed_container="$(mktemp -d "${APP_PATH}.failed-elevation-host-${ROLLBACK_FAILED_SOURCE}.XXXXXX")" ||
-      return 1
-    failed_path="$failed_container/OpenClaw.app"
-    rename_app_exclusively "$APP_PATH" "$failed_path" || true
-    if [[ ! -d "$failed_path" || -L "$failed_path" || -e "$APP_PATH" || -L "$APP_PATH" ]]
-    then
-      rmdir "$failed_container" 2>/dev/null || true
-      return 1
-    fi
-    RECOVERED_FAILED_APP_PATH="$failed_path"
+    preserve_current_app_for_recovery 'failed elevation app' || return 1
   elif [[ "$CUTOVER_APP_MUTATED" == "1" && -d "$APP_PATH" ]]; then
     [[ -n "$ROLLBACK_APP_PATH" ]] &&
       verify_recorded_rollback_app "$APP_PATH" || return 1
@@ -1804,20 +1967,31 @@ recover_install() {
   fi
   if [[ -n "$ROLLBACK_MIGRATION_SOURCE" && -f "$ROLLBACK_MIGRATION_PLIST" ]]; then
     if [[ "$CUTOVER_MIGRATION_REMOVED" == "1" ]]; then
-      if [[ -f "$ROLLBACK_MIGRATION_SOURCE" && ! -L "$ROLLBACK_MIGRATION_SOURCE" &&
-        "$(shasum -a 256 "$ROLLBACK_MIGRATION_SOURCE" | awk '{print $1}')" == "$ROLLBACK_MIGRATION_PLIST_SHA" ]]
-      then
-        CUTOVER_MIGRATION_REMOVED=0
-      elif [[ -e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]]; then
-        recovery_failed=1
+      if [[ -e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]]; then
+        if [[ ! -f "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
+          ! path_matches_identity \
+            "$ROLLBACK_MIGRATION_SOURCE" \
+            "$RECOVERY_RESTORED_MIGRATION_IDENTITY" ||
+          ! backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
+        then
+          recovery_failed=1
+        fi
       else
         restore_file_without_overwrite \
           "$ROLLBACK_MIGRATION_PLIST" \
           "$ROLLBACK_MIGRATION_SOURCE" \
-          "$ROLLBACK_MIGRATION_PLIST_SHA" || recovery_failed=1
+          "$ROLLBACK_MIGRATION_PLIST_SHA" \
+          RECOVERY_RESTORED_MIGRATION_IDENTITY || recovery_failed=1
       fi
     elif [[ ! -f "$ROLLBACK_MIGRATION_SOURCE" ||
       "$(shasum -a 256 "$ROLLBACK_MIGRATION_SOURCE" | awk '{print $1}')" != "$ROLLBACK_MIGRATION_PLIST_SHA" ]]
+    then
+      recovery_failed=1
+    fi
+    if [[ "$recovery_failed" == "0" ]] &&
+      ! path_matches_identity \
+        "$ROLLBACK_MIGRATION_SOURCE" \
+        "$RECOVERY_RESTORED_MIGRATION_IDENTITY"
     then
       recovery_failed=1
     fi
@@ -1829,6 +2003,13 @@ recover_install() {
       launchctl bootstrap "$launch_domain" "$ROLLBACK_MIGRATION_SOURCE" >/dev/null 2>&1 ||
         recovery_failed=1
     elif [[ "$ROLLBACK_MIGRATION_WAS_LOADED" == "0" && "$restored_state" != 'absent' ]]; then
+      recovery_failed=1
+    fi
+    if [[ "$recovery_failed" == "0" ]] &&
+      ! path_matches_identity \
+        "$ROLLBACK_MIGRATION_SOURCE" \
+        "$RECOVERY_RESTORED_MIGRATION_IDENTITY"
+    then
       recovery_failed=1
     fi
   fi
@@ -1887,9 +2068,13 @@ restore_current_generation_after_recovery_failure() {
   if [[ -n "$ROLLBACK_MIGRATION_SOURCE" &&
     (-e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE") ]]
   then
-    if backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"; then
-      rm "$ROLLBACK_MIGRATION_SOURCE" || restore_failed=1
+    if [[ -n "$RECOVERY_RESTORED_MIGRATION_IDENTITY" ]]; then
+      preserve_file_by_exclusive_custody \
+        "$ROLLBACK_MIGRATION_SOURCE" \
+        "$ROLLBACK_MIGRATION_PLIST_SHA" \
+        "$RECOVERY_RESTORED_MIGRATION_IDENTITY" || restore_failed=1
     else
+      printf 'Preserved unrelated migration source at %s\n' "$ROLLBACK_MIGRATION_SOURCE" >&2
       restore_failed=1
     fi
   fi
@@ -1906,7 +2091,20 @@ restore_current_generation_after_recovery_failure() {
     [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] || return 1
   fi
 
-  if [[ -n "$RECOVERED_FAILED_APP_PATH" ]]; then
+  if [[ "$RECOVERY_CURRENT_APP_STATE" == "absent" ]]; then
+    if [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]; then
+      [[ -z "$ROLLBACK_APP_PATH" ]] ||
+        verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || app_restore_failed=1
+    elif [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] &&
+      verify_recorded_rollback_app "$APP_PATH"
+    then
+      rename_app_exclusively "$APP_PATH" "$ROLLBACK_APP_PATH" || true
+      verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || app_restore_failed=1
+      [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1
+    else
+      app_restore_failed=1
+    fi
+  elif [[ -n "$RECOVERED_FAILED_APP_PATH" ]]; then
     if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
       app_restore_failed=1
     elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]]; then
@@ -1915,10 +2113,14 @@ restore_current_generation_after_recovery_failure() {
       [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1
     fi
     if [[ "$app_restore_failed" == "0" && -d "$RECOVERED_FAILED_APP_PATH" &&
-      ! -L "$RECOVERED_FAILED_APP_PATH" ]]
+      ! -L "$RECOVERED_FAILED_APP_PATH" ]] &&
+      path_matches_identity "$RECOVERED_FAILED_APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY"
     then
       rename_app_exclusively "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" || true
-      verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+      path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" || app_restore_failed=1
+      if [[ "$app_restore_failed" == "0" && "$RECOVERY_CURRENT_APP_STATE" == "valid" ]]; then
+        verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+      fi
       [[ ! -e "$RECOVERED_FAILED_APP_PATH" && ! -L "$RECOVERED_FAILED_APP_PATH" ]] ||
         app_restore_failed=1
       rmdir "$(dirname "$RECOVERED_FAILED_APP_PATH")" 2>/dev/null || true
@@ -1926,7 +2128,18 @@ restore_current_generation_after_recovery_failure() {
       app_restore_failed=1
     fi
   fi
-  verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+  case "$RECOVERY_CURRENT_APP_STATE" in
+    absent) [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1 ;;
+    damaged)
+      [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] &&
+        path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" || app_restore_failed=1
+      ;;
+    valid)
+      path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" &&
+        verify_recorded_current_app "$APP_PATH" || app_restore_failed=1
+      ;;
+    *) app_restore_failed=1 ;;
+  esac
   [[ "$app_restore_failed" == "0" ]] || return 1
 
   if [[ -n "$RECOVERY_CURRENT_PLIST" ]]; then
@@ -1947,6 +2160,12 @@ restore_current_generation_after_recovery_failure() {
 
   if [[ "$restore_failed" == "0" && "$RECOVERY_CURRENT_PLIST_WAS_LOADED" == "1" ]]; then
     launchctl bootstrap "$launch_domain" "$PLIST_PATH" >/dev/null 2>&1 || restore_failed=1
+  fi
+  if [[ -n "$ROLLBACK_MIGRATION_SOURCE" &&
+    (-e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE") ]]
+  then
+    printf 'Preserved unexpected migration source at %s\n' "$ROLLBACK_MIGRATION_SOURCE" >&2
+    restore_failed=1
   fi
   if [[ "$restore_failed" == "0" ]]; then
     CUTOVER_ACTIVE=0
@@ -1997,15 +2216,96 @@ status_host() {
 }
 
 recover_host() {
-  local current_app_valid=0
-  if (verify_elevation_app "$APP_PATH") >/dev/null 2>&1; then
-    current_app_valid=1
+  local current_app_valid=0 current_receipt_sha plan_value plan_state plan_identity
+  local migration_identity recovery_helper_app
+  if [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]; then
+    RECOVERY_CURRENT_APP_STATE="absent"
+  elif [[ -L "$APP_PATH" || ! -d "$APP_PATH" ]]; then
+    fail 'current OpenClaw app has an unsupported entry type; inspect it before recovery'
+  else
+    RECOVERY_CURRENT_APP_IDENTITY="$(durable_path_identity "$APP_PATH")" ||
+      fail 'current OpenClaw app identity could not be inspected before recovery'
+    if (verify_elevation_app "$APP_PATH") >/dev/null 2>&1; then
+      RECOVERY_CURRENT_APP_STATE="valid"
+      current_app_valid=1
+    else
+      RECOVERY_CURRENT_APP_STATE="damaged"
+    fi
+    path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" ||
+      fail 'current OpenClaw app changed during recovery planning'
   fi
-  verify_install_receipt "$current_app_valid"
-  if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' || "$current_app_valid" == "0" ]]; then
+  verify_install_receipt 0
+  ROLLBACK_APP_PATH="$(jq -r '.backupPath // empty' "$RECEIPT_PATH")"
+  ROLLBACK_APP_CDHASH_ARM64="$(jq -r '.backupCDHashes.arm64 // empty' "$RECEIPT_PATH")"
+  ROLLBACK_APP_CDHASH_X86_64="$(jq -r '.backupCDHashes.x86_64 // empty' "$RECEIPT_PATH")"
+  ROLLBACK_ELEVATION_PLIST="$(jq -r '.previousPlist // empty' "$RECEIPT_PATH")"
+  ROLLBACK_ELEVATION_PLIST_SHA="$(jq -r '.previousPlistSha256 // empty' "$RECEIPT_PATH")"
+  ROLLBACK_ELEVATION_WAS_LOADED="$(jq -r 'if .previousPlistWasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
+  ROLLBACK_INSTALL_RECEIPT="$(jq -r '.previousReceipt // empty' "$RECEIPT_PATH")"
+  ROLLBACK_INSTALL_RECEIPT_SHA="$(jq -r '.previousReceiptSha256 // empty' "$RECEIPT_PATH")"
+  ROLLBACK_FAILED_SOURCE="$(jq -r '.sourceCommit' "$RECEIPT_PATH")"
+  ROLLBACK_MIGRATION_SOURCE="$(jq -r '.migration.sourcePlist // empty' "$RECEIPT_PATH")"
+  ROLLBACK_MIGRATION_PLIST="$(jq -r '.migration.backupPlist // empty' "$RECEIPT_PATH")"
+  ROLLBACK_MIGRATION_PLIST_SHA="$(jq -r '.migration.backupSha256 // empty' "$RECEIPT_PATH")"
+  ROLLBACK_MIGRATION_LABEL="$(jq -r '.migration.label // empty' "$RECEIPT_PATH")"
+  ROLLBACK_MIGRATION_WAS_LOADED="$(jq -r 'if .migration.wasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
+  ROLLBACK_ADOPTED_APP_WAS_RUNNING="$(jq -r 'if .adoptedApp.wasRunning then 1 else 0 end' "$RECEIPT_PATH")"
+  ROLLBACK_ADOPTED_APP_ATTACH_ONLY="$(jq -r 'if .adoptedApp.attachOnly then 1 else 0 end' "$RECEIPT_PATH")"
+  current_receipt_sha="$(shasum -a 256 "$RECEIPT_PATH" | awk '{print $1}')"
+  RECOVERY_FAILED_APP_PLANNED_PATH="${APP_PATH}.failed-elevation-host-${ROLLBACK_FAILED_SOURCE}.${current_receipt_sha:0:12}/OpenClaw.app"
+  read_optional_receipt_xattr plan_value "$RECOVERY_APP_PLAN_XATTR" ||
+    fail 'could not inspect the recovery app transaction binding'
+  if [[ -n "$plan_value" ]]; then
+    [[ "$plan_value" =~ ^(absent[|]|valid[|][0-9A-F-]{36}:[0-9]+:[0-9]+|damaged[|][0-9A-F-]{36}:[0-9]+:[0-9]+)$ ]] ||
+      fail 'recovery app transaction binding is invalid'
+    plan_state="${plan_value%%|*}"
+    plan_identity="${plan_value#*|}"
+    if [[ -e "$RECOVERY_FAILED_APP_PLANNED_PATH" || -L "$RECOVERY_FAILED_APP_PLANNED_PATH" ]]; then
+      if [[ "$plan_state" == "absent" || ! -d "$RECOVERY_FAILED_APP_PLANNED_PATH" ||
+        -L "$RECOVERY_FAILED_APP_PLANNED_PATH" ]] ||
+        ! path_matches_identity "$RECOVERY_FAILED_APP_PLANNED_PATH" "$plan_identity"
+      then
+        fail 'recovery app custody no longer matches its durable transaction binding'
+      fi
+      RECOVERY_CURRENT_APP_STATE="$plan_state"
+      RECOVERY_CURRENT_APP_IDENTITY="$plan_identity"
+      RECOVERED_FAILED_APP_PATH="$RECOVERY_FAILED_APP_PLANNED_PATH"
+      RECOVERY_RESUMED=1
+    else
+      if [[ "$plan_state" == "absent" ]]; then
+        if [[ "$RECOVERY_CURRENT_APP_STATE" == "absent" ]]; then
+          :
+        elif [[ "$INSTALL_RECEIPT_SCHEMA" != "legacy" && -n "$ROLLBACK_APP_PATH" &&
+          ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] &&
+          verify_recorded_rollback_app "$APP_PATH"
+        then
+          RECOVERY_RESUMED=1
+        else
+          fail 'current app state no longer matches the durable recovery transaction'
+        fi
+      elif [[ "$RECOVERY_CURRENT_APP_STATE" != "$plan_state" ]]; then
+        fail 'current app state no longer matches the durable recovery transaction'
+      else
+        path_matches_identity "$APP_PATH" "$plan_identity" ||
+          fail 'current app no longer matches the durable recovery transaction'
+      fi
+      RECOVERY_CURRENT_APP_STATE="$plan_state"
+      RECOVERY_CURRENT_APP_IDENTITY="$plan_identity"
+    fi
+  elif [[ "$current_app_valid" == "1" ]]; then
+    (verify_install_receipt 1) >/dev/null 2>&1 ||
+      fail 'installed app source does not match the elevation install receipt'
+  fi
+  read_optional_receipt_xattr migration_identity "$RECOVERY_MIGRATION_IDENTITY_XATTR" ||
+    fail 'could not inspect the recovery migration transaction binding'
+  if [[ -n "$migration_identity" ]]; then
+    [[ "$migration_identity" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]] ||
+      fail 'recovery migration transaction binding is invalid'
+    RECOVERY_RESTORED_MIGRATION_IDENTITY="$migration_identity"
+  fi
+  if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' || "$RECOVERY_CURRENT_APP_STATE" != "valid" ]]; then
     [[ -n "$ARCHIVE" && -n "$ARTIFACT_RECEIPT" && -n "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
       fail 'recovery requires the authenticated elevation archive, receipt, and receipt digest when the current app cannot supply a trusted rename helper'
-    local recovery_helper_app
     prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
     extract_archive "$AUTHENTICATED_ARCHIVE_PATH" recovery_helper_app
     verify_artifact_receipt \
@@ -2023,25 +2323,7 @@ recover_host() {
       fail 'artifact helper inputs are valid only for legacy recovery'
     CONFIG_PATH="$(jq -r '.configPath' "$RECEIPT_PATH")"
   fi
-  ROLLBACK_APP_PATH="$(jq -r '.backupPath // empty' "$RECEIPT_PATH")"
-  ROLLBACK_APP_CDHASH_ARM64="$(jq -r '.backupCDHashes.arm64 // empty' "$RECEIPT_PATH")"
-  ROLLBACK_APP_CDHASH_X86_64="$(jq -r '.backupCDHashes.x86_64 // empty' "$RECEIPT_PATH")"
-  ROLLBACK_ELEVATION_PLIST="$(jq -r '.previousPlist // empty' "$RECEIPT_PATH")"
-  ROLLBACK_ELEVATION_PLIST_SHA="$(jq -r '.previousPlistSha256 // empty' "$RECEIPT_PATH")"
-  ROLLBACK_ELEVATION_WAS_LOADED="$(jq -r 'if .previousPlistWasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
-  ROLLBACK_INSTALL_RECEIPT="$(jq -r '.previousReceipt // empty' "$RECEIPT_PATH")"
-  ROLLBACK_INSTALL_RECEIPT_SHA="$(jq -r '.previousReceiptSha256 // empty' "$RECEIPT_PATH")"
-  ROLLBACK_FAILED_SOURCE="$(jq -r '.sourceCommit' "$RECEIPT_PATH")"
-  ROLLBACK_MIGRATION_SOURCE="$(jq -r '.migration.sourcePlist // empty' "$RECEIPT_PATH")"
-  ROLLBACK_MIGRATION_PLIST="$(jq -r '.migration.backupPlist // empty' "$RECEIPT_PATH")"
-  ROLLBACK_MIGRATION_PLIST_SHA="$(jq -r '.migration.backupSha256 // empty' "$RECEIPT_PATH")"
-  ROLLBACK_MIGRATION_LABEL="$(jq -r '.migration.label // empty' "$RECEIPT_PATH")"
-  ROLLBACK_MIGRATION_WAS_LOADED="$(jq -r 'if .migration.wasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
-  ROLLBACK_ADOPTED_APP_WAS_RUNNING="$(jq -r 'if .adoptedApp.wasRunning then 1 else 0 end' "$RECEIPT_PATH")"
-  ROLLBACK_ADOPTED_APP_ATTACH_ONLY="$(jq -r 'if .adoptedApp.attachOnly then 1 else 0 end' "$RECEIPT_PATH")"
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
-    [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
-      fail 'receipt app backup is missing, symlinked, or not a bundle directory'
     local backup_generation="${ROLLBACK_APP_PATH#"$APP_PATH.rollback-elevation-host-"}"
     if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
       [[ "$backup_generation" =~ ^[0-9a-f]{40}$ ]] ||
@@ -2053,13 +2335,25 @@ recover_host() {
         fail 'receipt app backup path is outside the canonical rollback namespace'
     fi
     if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
+      [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
+        fail 'legacy recovery cannot resume after its unauthenticated backup path moved'
       ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$ROLLBACK_APP_PATH" CDHash arm64)"
       ROLLBACK_APP_CDHASH_X86_64="$(codesign_value_for_arch "$ROLLBACK_APP_PATH" CDHash x86_64)"
     fi
     [[ -n "$ROLLBACK_APP_CDHASH_ARM64" && -n "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
       fail 'receipt has no recoverable per-architecture app CDHashes'
-    verify_recorded_rollback_app "$ROLLBACK_APP_PATH" ||
-      fail 'receipt app backup does not pass strict signature and identity validation'
+    if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
+      if [[ ! -d "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]] ||
+        ! verify_recorded_rollback_app "$ROLLBACK_APP_PATH"
+      then
+        fail 'receipt app backup does not pass strict signature and identity validation'
+      fi
+    elif [[ "$RECOVERY_RESUMED" == "1" ]]; then
+      verify_recorded_rollback_app "$APP_PATH" ||
+        fail 'resumed recovery has no authenticated prior app at the canonical path'
+    else
+      fail 'receipt app backup is missing, symlinked, or not a bundle directory'
+    fi
   else
     [[ -z "$ROLLBACK_APP_CDHASH_ARM64" && -z "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
       fail 'receipt has per-architecture CDHashes without an app backup'
@@ -2107,13 +2401,25 @@ recover_host() {
       fail 'receipt migration plist backup digest is invalid'
     backup_file_matches "$ROLLBACK_MIGRATION_PLIST" "$ROLLBACK_MIGRATION_PLIST_SHA" ||
       fail 'receipt migration plist backup failed digest validation'
-    [[ ! -e "$ROLLBACK_MIGRATION_SOURCE" && ! -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
-      fail 'could not restore the previous OpenClaw installation completely'
-    [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] ||
+    if [[ -e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]]; then
+      if [[ ! -f "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
+        ! path_matches_identity \
+          "$ROLLBACK_MIGRATION_SOURCE" \
+          "$RECOVERY_RESTORED_MIGRATION_IDENTITY" ||
+        ! backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
+      then
+        fail 'could not restore the previous OpenClaw installation completely: migration source no longer matches its durable recovery transaction'
+      fi
+      RECOVERY_RESUMED=1
+    fi
+    local recovery_migration_state
+    recovery_migration_state="$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")"
+    [[ "$recovery_migration_state" == "absent" ]] ||
+      [[ "$RECOVERY_RESUMED" == "1" && "$ROLLBACK_MIGRATION_WAS_LOADED" == "1" &&
+        "$recovery_migration_state" == "loaded" ]] ||
       fail 'migration LaunchAgent is already loaded before recovery'
   fi
-  local current_receipt_sha recovered_receipt receipt_restore_tmp="" current_job_state recovery_signal=""
-  current_receipt_sha="$(shasum -a 256 "$RECEIPT_PATH" | awk '{print $1}')"
+  local recovered_receipt receipt_restore_tmp="" current_job_state recovery_signal=""
   recovered_receipt="$(mktemp "$STATE_DIR/elevation-host.recovered-receipt.${ROLLBACK_FAILED_SOURCE}.XXXXXX")"
   cp -p "$RECEIPT_PATH" "$recovered_receipt"
   [[ "$(shasum -a 256 "$recovered_receipt" | awk '{print $1}')" == "$current_receipt_sha" ]] ||
@@ -2121,15 +2427,22 @@ recover_host() {
   PREMUTATION_BACKUPS+=("$recovered_receipt")
   RECOVERY_CURRENT_RECEIPT="$recovered_receipt"
   RECOVERY_CURRENT_RECEIPT_SHA="$current_receipt_sha"
-  if [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" && "$current_app_valid" == "1" ]]; then
-    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
-    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
+  if [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" && "$RECOVERY_CURRENT_APP_STATE" == "valid" ]]; then
+    local recovery_current_app_candidate="$APP_PATH"
+    [[ -z "$RECOVERED_FAILED_APP_PATH" ]] ||
+      recovery_current_app_candidate="$RECOVERED_FAILED_APP_PATH"
+    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$recovery_current_app_candidate" CDHash arm64)"
+    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$recovery_current_app_candidate" CDHash x86_64)"
   elif [[ "$INSTALL_RECEIPT_SCHEMA" != "legacy" ]]; then
     RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
     RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
   else
     RECOVERY_CURRENT_APP_CDHASH_ARM64=""
     RECOVERY_CURRENT_APP_CDHASH_X86_64=""
+  fi
+  if [[ -n "$RECOVERED_FAILED_APP_PATH" && "$RECOVERY_CURRENT_APP_STATE" == "valid" ]]; then
+    verify_recorded_current_app "$RECOVERED_FAILED_APP_PATH" ||
+      fail 'resumed recovery app custody no longer matches the install receipt'
   fi
   current_job_state="$(job_loaded_state "$job_domain")"
   case "$current_job_state" in
@@ -2154,6 +2467,9 @@ recover_host() {
       fail 'copied previous install receipt failed digest verification'
     PREMUTATION_BACKUPS+=("$receipt_restore_tmp")
   fi
+  if [[ -z "$plan_value" ]]; then
+    record_recovery_app_plan || fail 'could not durably bind the recovery app transaction'
+  fi
   CUTOVER_APP_MUTATED=1
   [[ -z "$ROLLBACK_MIGRATION_SOURCE" ]] || CUTOVER_MIGRATION_REMOVED=1
   CUTOVER_ADOPTION_STOPPED="$ROLLBACK_ADOPTED_APP_WAS_RUNNING"
@@ -2164,6 +2480,10 @@ recover_host() {
   trap 'recovery_signal=TERM' TERM
   trap 'recovery_signal=HUP' HUP
   if ! recover_install; then
+    if [[ "$RECOVERY_RESUMED" == "1" ]]; then
+      finish_custody_signal_deferral "$recovery_signal"
+      fail 'resumed recovery remains incomplete; retry using the preserved transaction state'
+    fi
     if restore_current_generation_after_recovery_failure; then
       finish_custody_signal_deferral "$recovery_signal"
       fail 'could not restore the previous OpenClaw installation completely'
