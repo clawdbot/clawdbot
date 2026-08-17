@@ -6105,6 +6105,11 @@ class ChatController internal constructor(
       !sameOutboxSession(eventSessionKey, _sessionKey.value) &&
       eventSessionKey != progressCardScopeKey
     ) {
+      // Pokes carry the server-derived observer scope key (e.g. agent:<id>:global), which the
+      // client only learns from a get response carrying a card. Until then attribution is
+      // unknown, so refetch — the get is authoritative and self-corrects — instead of
+      // silently dropping the session's first poke.
+      if (progressCardScopeKey == null) refreshProgressCard()
       return
     }
     val revisionElement = payload["revision"]

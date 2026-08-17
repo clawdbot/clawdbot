@@ -112,6 +112,21 @@ class ChatControllerProgressCardTest {
     }
 
   @Test
+  fun unknownScopePokeRefetchesInsteadOfDropping() =
+    runTest {
+      val gateway = ScriptedGateway(chatControllerTestJson)
+      gateway.respondWith("progressCard.get", cardResponse(sessionKey = "agent:main:main", markdown = "First poke"))
+      val controller = newController(gateway)
+
+      // Canonical scope key (e.g. global scope) with no learned mapping yet: the poke must
+      // trigger an authoritative refetch rather than being dropped as foreign.
+      controller.handleGatewayEvent("progressCard.changed", changedEvent("agent:main:main", "1"))
+      runCurrent()
+
+      assertEquals("First poke", controller.progressCard.value?.markdown)
+    }
+
+  @Test
   fun learnedCanonicalSessionKeyAcceptsLaterPoke() =
     runTest {
       val gateway = ScriptedGateway(chatControllerTestJson)
