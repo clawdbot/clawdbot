@@ -201,6 +201,26 @@ describe("security audit trust model findings", () => {
         },
       },
       {
+        name: "does not warn for a direct-only binding group scope",
+        cfg: {
+          bindings: [
+            {
+              agentId: "support",
+              match: {
+                channel: "whatsapp",
+                peer: { kind: "direct", id: "user-a" },
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some((finding) => finding.checkId === "security.trust_model.group_scope_main"),
+          ).toBe(false);
+        },
+      },
+      {
         name: "flags open dmPolicy when tools.elevated is enabled",
         cfg: {
           tools: { elevated: { enabled: true, allowFrom: { feishu: ["ou_123"] } } },

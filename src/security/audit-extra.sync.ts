@@ -1244,7 +1244,9 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const mainGroupScopes = listRouteBindings(cfg)
-    .filter((binding) => binding.session?.groupScope === "main")
+    .filter(
+      (binding) => binding.session?.groupScope === "main" && binding.match.peer?.kind !== "direct",
+    )
     .map(
       (binding) =>
         `- bindings[].session.groupScope="main": ${describeBinding(binding)} (agent=${binding.agentId})`,
