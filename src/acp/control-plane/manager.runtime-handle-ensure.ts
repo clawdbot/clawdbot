@@ -106,8 +106,13 @@ export async function ensureManagerRuntimeHandle(params: {
     ? persistedAcpRuntimeHandle(params, previousMeta)
     : undefined;
   let identityForEnsure = previousIdentity;
-  const persistedResumeSessionId =
-    mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
+  // acpx's one-shot ensureSession intentionally opens a fresh backend session on every
+  // independent call (openclaw/acpx#504); it does not offer a "reuse if unchanged" contract
+  // for oneshot the way persistent mode does. So this caller must retain and resume the
+  // identity from its own earlier ensure (e.g. spawn-init) whenever one exists, regardless of
+  // mode, or a cache-miss re-ensure (cross-process turn dispatch, evicted cache) opens a second
+  // backend session per spawn and orphans the first.
+  const persistedResumeSessionId = resolveRuntimeResumeSessionId(previousIdentity);
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
     previousIdentity != null &&
