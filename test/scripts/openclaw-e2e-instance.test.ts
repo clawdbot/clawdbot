@@ -355,6 +355,187 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("keeps three, four, and five argument gateway readiness calls compatible", () => {
+    withTempDir("openclaw-e2e-readyz-compatible-args-", (tempDir) => {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = runBashWithHelper(
+        [
+          "openclaw_e2e_probe_http() { return 0; }",
+          "sleep 30 &",
+          'gateway_pid="$!"',
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" 2>/dev/null || true\' EXIT',
+          `printf '[gateway] ready ws://127.0.0.1:23456\\n' >${shellQuote(logPath)}`,
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2`,
+          `printf '[gateway] ready\\n' >${shellQuote(logPath)}`,
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456`,
+          `printf '[gateway] ready\\n' >${shellQuote(logPath)}`,
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456 legacy-ready-log-ok`,
+        ],
+        {},
+        5_000,
+      );
+
+      expectShellSuccess(result);
+    });
+  });
+
+  it("ignores gateway ready markers before the extended scan offset", () => {
+    withTempDir("openclaw-e2e-readyz-stale-offset-", (tempDir) => {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = runBashWithHelper(
+        [
+          "openclaw_e2e_probe_http() { return 0; }",
+          `printf '[gateway] ready ws://127.0.0.1:23456\\n' >${shellQuote(logPath)}`,
+          `scan_offset="$(wc -c <${shellQuote(logPath)})"`,
+          `scan_offset="\${scan_offset//[[:space:]]/}"`,
+          "sleep 30 &",
+          'gateway_pid="$!"',
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" 2>/dev/null || true\' EXIT',
+          'child_status="unchanged"',
+          "set +e",
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456 legacy-ready-log-ok child_status "$((SECONDS + 2))" "$scan_offset"`,
+          'readiness_status="$?"',
+          "set -e",
+          '[ "$readiness_status" -eq 1 ]',
+          '[ -z "$child_status" ]',
+        ],
+        {},
+        5_000,
+      );
+
+      expectShellSuccess(result);
+    });
+  });
+
+  it("reports numeric child statuses for exited and signaled gateways", () => {
+    withTempDir("openclaw-e2e-readyz-child-status-", (tempDir) => {
+      const logPath = path.join(tempDir, "gateway.log");
+      const signalReadyPath = path.join(tempDir, "signal-ready");
+      const result = runBashWithHelper(
+        [
+          `: >${shellQuote(logPath)}`,
+          "wait_for_job_exit() {",
+          '  local pid="$1"',
+          "  # Observe Bash job completion without consuming the status the helper must read.",
+          '  while [[ " $(jobs -rp) " == *" $pid "* ]]; do :; done',
+          "}",
+          "(exit 7) &",
+          'gateway_pid="$!"',
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" 2>/dev/null || true\' EXIT',
+          'wait_for_job_exit "$gateway_pid"',
+          'child_status=""',
+          "set +e",
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 "" strict child_status "$((SECONDS + 2))" 0`,
+          'readiness_status="$?"',
+          "set -e",
+          '[ "$readiness_status" -eq 1 ]',
+          '[ "$child_status" -eq 7 ]',
+          `${shellQuote(process.execPath)} -e ${shellQuote(
+            'require("node:fs").writeFileSync(process.argv[1], "ready"); setInterval(() => {}, 1_000);',
+          )} ${shellQuote(signalReadyPath)} &`,
+          'gateway_pid="$!"',
+          `until [ -f ${shellQuote(signalReadyPath)} ]; do :; done`,
+          'kill -TERM "$gateway_pid"',
+          'wait_for_job_exit "$gateway_pid"',
+          'child_status=""',
+          "set +e",
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 "" strict child_status "$((SECONDS + 2))" 0`,
+          'readiness_status="$?"',
+          "set -e",
+          '[ "$readiness_status" -eq 1 ]',
+          '[[ "$child_status" =~ ^[0-9]+$ ]]',
+          '[ "$child_status" -ge 128 ]',
+        ],
+        {},
+        5_000,
+      );
+
+      expectShellSuccess(result);
+    });
+  });
+
+  it("leaves child status empty when a live gateway reaches its deadline", () => {
+    withTempDir("openclaw-e2e-readyz-deadline-", (tempDir) => {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = runBashWithHelper(
+        [
+          `: >${shellQuote(logPath)}`,
+          "sleep 30 &",
+          'gateway_pid="$!"',
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" 2>/dev/null || true\' EXIT',
+          'child_status="unchanged"',
+          "set +e",
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 "" strict child_status "$SECONDS" 0`,
+          'readiness_status="$?"',
+          "set -e",
+          '[ "$readiness_status" -eq 1 ]',
+          '[ -z "$child_status" ]',
+        ],
+        {},
+        5_000,
+      );
+
+      expectShellSuccess(result);
+    });
+  });
+
+  it("rejects invalid extended gateway readiness arguments without mutating status", () => {
+    withTempDir("openclaw-e2e-readyz-invalid-args-", (tempDir) => {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = runBashWithHelper(
+        [
+          `: >${shellQuote(logPath)}`,
+          "sleep 30 &",
+          'gateway_pid="$!"',
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" 2>/dev/null || true\' EXIT',
+          "assert_invalid() {",
+          '  child_status="sentinel"',
+          "  set +e",
+          '  openclaw_e2e_wait_gateway_ready "$@"',
+          '  invalid_status="$?"',
+          "  set -e",
+          '  [ "$invalid_status" -eq 2 ]',
+          '  [ "$child_status" = "sentinel" ]',
+          "}",
+          `assert_invalid "$gateway_pid" ${shellQuote(logPath)} 1 "" strict bad-name 1 0`,
+          `assert_invalid "$gateway_pid" ${shellQuote(logPath)} 1 "" strict child_status nope 0`,
+          `assert_invalid "$gateway_pid" ${shellQuote(logPath)} 1 "" strict child_status 1 nope`,
+          `assert_invalid "$gateway_pid" ${shellQuote(logPath)} 1 "" invalid child_status 1 0`,
+          `assert_invalid "$gateway_pid" ${shellQuote(logPath)} 1 "" strict child_status 1 0 extra`,
+        ],
+        {},
+        5_000,
+      );
+
+      expectShellSuccess(result);
+    });
+  });
+
+  it("leaves child status empty when extended gateway readiness succeeds", () => {
+    withTempDir("openclaw-e2e-readyz-success-status-", (tempDir) => {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = runBashWithHelper(
+        [
+          "openclaw_e2e_probe_http() { return 0; }",
+          `printf 'old log line\\n' >${shellQuote(logPath)}`,
+          `scan_offset="$(wc -c <${shellQuote(logPath)})"`,
+          `scan_offset="\${scan_offset//[[:space:]]/}"`,
+          `printf '[gateway] ready ws://127.0.0.1:23456\\n' >>${shellQuote(logPath)}`,
+          "sleep 30 &",
+          'gateway_pid="$!"',
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" 2>/dev/null || true\' EXIT',
+          'child_status="unchanged"',
+          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 "" strict child_status "$((SECONDS + 2))" "$scan_offset"`,
+          '[ -z "$child_status" ]',
+        ],
+        {},
+        5_000,
+      );
+
+      expectShellSuccess(result);
+    });
+  });
+
   it("wraps package installs with the configured timeout", () => {
     withTempDir("openclaw-e2e-instance-", (tempDir) => {
       const fixture = createPackageInstallFixture(tempDir);

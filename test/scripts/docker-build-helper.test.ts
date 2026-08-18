@@ -97,8 +97,11 @@ const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
 const RELEASE_USER_JOURNEY_DOCKER_E2E_PATH = "scripts/e2e/release-user-journey-docker.sh";
 const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
+const UPGRADE_SURVIVOR_GATEWAY_START_PATH = "scripts/e2e/lib/upgrade-survivor/gateway-start.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
+const UPGRADE_SURVIVOR_PACKAGE_SELF_UPGRADE_PATH =
+  "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh";
 const GATEWAY_NETWORK_DOCKER_E2E_PATH = "scripts/e2e/gateway-network-docker.sh";
 const BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH = "scripts/e2e/browser-cdp-snapshot-docker.sh";
 const SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH = "scripts/e2e/sandbox-browser-sidecar-docker.sh";
@@ -3001,8 +3004,10 @@ fi
     );
     expect(publishedRunner).toContain('openclaw gateway --port "$port" --bind loopback');
     expect(publishedRunner).toContain("start_gateway legacy-ready-log-ok");
+    expect(publishedRunner).toContain("gateway_ownership --");
+    expect(publishedRunner).toContain("upgrade_survivor_start_gateway_with_convergence_retry");
     expect(publishedRunner).toContain(
-      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"',
+      'openclaw gateway --port "$port" --bind loopback --allow-unconfigured',
     );
 
     expect(updateRestartAuth).toContain(
@@ -3013,8 +3018,109 @@ fi
     );
     expect(updateRestartAuth).toContain('openclaw gateway --port "$port" --bind loopback');
     expect(updateRestartAuth).toContain(
-      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"',
+      'gateway_pid "$log_file" 360 "$port" strict "$absolute_deadline" gateway_ownership --',
     );
+    expect(updateRestartAuth).toContain("upgrade_survivor_start_gateway_with_convergence_retry");
+    expect(updateRestartAuth).toContain(
+      'openclaw gateway --port "$port" --bind loopback --allow-unconfigured',
+    );
+    expect(runner).toContain(
+      'gateway_pid "$GATEWAY_LOG" 360 "$PORT" strict "$absolute_deadline" --',
+    );
+    expect(runner).toContain("upgrade_survivor_start_gateway_with_convergence_retry");
+    expect(runner).toContain(
+      'openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured',
+    );
+  });
+
+  it("keeps upgrade survivor convergence ownership structural", () => {
+    const wrapper = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const inlinePayload = extractUpgradeSurvivorPayload(wrapper);
+    const processHelpers = readFileSync(UPGRADE_SURVIVOR_GATEWAY_START_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
+    const packageSelfUpgrade = readFileSync(UPGRADE_SURVIVOR_PACKAGE_SELF_UPGRADE_PATH, "utf8");
+    const convergenceCall = /upgrade_survivor_start_gateway_with_convergence_retry/gu;
+    const instanceMount =
+      '-v "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh:/app/scripts/lib/openclaw-e2e-instance.sh:ro"';
+    const gatewayStartMount =
+      '-v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/gateway-start.sh:/app/scripts/e2e/lib/upgrade-survivor/gateway-start.sh:ro"';
+
+    expect(publishedRunner.indexOf("source scripts/lib/openclaw-e2e-instance.sh")).toBeLessThan(
+      publishedRunner.indexOf("source scripts/e2e/lib/upgrade-survivor/gateway-start.sh"),
+    );
+    expectTextToIncludeAll(inlinePayload, [
+      "source scripts/lib/openclaw-e2e-instance.sh",
+      "source scripts/e2e/lib/upgrade-survivor/gateway-start.sh",
+    ]);
+    expect(
+      wrapper.match(new RegExp(instanceMount.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "gu")),
+    ).toHaveLength(1);
+    expect(
+      wrapper.match(new RegExp(gatewayStartMount.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "gu")),
+    ).toHaveLength(1);
+    expect(wrapper).not.toContain("OPENCLAW_UPGRADE_SURVIVOR_GATEWAY_START");
+
+    const directConvergenceCalls = [publishedRunner, updateRestartAuth, inlinePayload].flatMap(
+      (script) => script.match(convergenceCall) ?? [],
+    );
+    expect(directConvergenceCalls).toHaveLength(3);
+    expect(updateRestartAuth).toContain("source scripts/e2e/lib/upgrade-survivor/gateway-start.sh");
+    for (const script of [publishedRunner, updateRestartAuth]) {
+      expect(
+        script.match(/upgrade_survivor_append_systemctl_process_helpers "\$shim_path"/gu),
+      ).toHaveLength(1);
+      expect(script).not.toContain("\nread_ownership() {");
+      expect(script).not.toContain("\nstop_gateway() {");
+      expectTextToIncludeAll(script, [
+        'printf \'%s\\n\' "pid" >"$ownership_file"',
+        'printf \'%s\\n\' "$!" >"$pid_file"',
+        "printf '%s\\n' \"$gateway_ownership\"",
+        "printf '%s\\n' \"$gateway_pid\"",
+      ]);
+      expect(script.indexOf('printf \'%s\\n\' "pid" >"$ownership_file"')).toBeLessThan(
+        script.indexOf('printf \'%s\\n\' "$!" >"$pid_file"'),
+      );
+      expect(script.lastIndexOf("printf '%s\\n' \"$gateway_ownership\"")).toBeLessThan(
+        script.lastIndexOf("printf '%s\\n' \"$gateway_pid\""),
+      );
+    }
+    expectTextToIncludeAll(processHelpers, [
+      "pid | process-group",
+      "for stat_file in /proc/[0-9]*/stat",
+      'stat_fields="${stat_line##*) }"',
+      '[ "$process_group" != "$pid" ] || case "$state" in Z | X)',
+      'kill -TERM -- "$target"',
+      'kill -KILL -- "$target"',
+      "stop_deadline=$((SECONDS + 35))",
+      "kill_deadline=$((stop_deadline - 5))",
+    ]);
+    expect(
+      updateRestartAuth.indexOf("upgrade_survivor_start_gateway_with_convergence_retry"),
+    ).toBeLessThan(
+      updateRestartAuth.indexOf(
+        'printf \'%s\\n\' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"',
+      ),
+    );
+
+    expect(packageSelfUpgrade).toContain(
+      "source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh",
+    );
+    expect(packageSelfUpgrade).not.toContain(
+      "source scripts/e2e/lib/upgrade-survivor/gateway-start.sh",
+    );
+    expect(packageSelfUpgrade).not.toContain(
+      "upgrade_survivor_start_gateway_with_convergence_retry",
+    );
+    expect(packageSelfUpgrade).toContain(
+      'printf \'%s\\n\' "$gateway_pid" >"$SYSTEMCTL_SHIM_PID_FILE"',
+    );
+    expect(packageSelfUpgrade).not.toContain("SYSTEMCTL_SHIM_PID_FILE}.ownership");
+    expectTextToIncludeAll(packageSelfUpgrade, [
+      "restart mode: update process respawn (supervisor restart)",
+      "OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service",
+      'SUPERVISOR_MONITOR_LOG="$ARTIFACT_DIR/supervisor-monitor.log"',
+    ]);
   });
 
   it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
@@ -3044,7 +3150,8 @@ fi
     for (const script of [publishedRunner, updateRestartAuth]) {
       expectTextToIncludeAll(script, [
         'supervisor_script="${pid_file}.supervisor.mjs"',
-        'process_state="$(awk \'{ print $3 }\' "/proc/$pid/stat" 2>/dev/null || true)"',
+        'ownership_file="${pid_file}.ownership"',
+        'upgrade_survivor_append_systemctl_process_helpers "$shim_path"',
         'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
         'nohup node "$supervisor_script"',
         'if (key.startsWith("OPENCLAW_UPDATE_")) {',
@@ -3062,13 +3169,152 @@ fi
         "const restartBurst = 5;",
         "if (starts.length >= restartBurst) {",
         "setTimeout(start, restartDelayMs);",
-        "for _ in $(seq 1 350)",
       ]);
     }
     for (const script of [runner, publishedRunner]) {
       expect(script).toContain("systemctl --user stop openclaw-gateway.service");
     }
   });
+
+  it.skipIf(process.platform !== "linux")(
+    "executes generated systemctl ownership helpers across pid and process-group lifecycles",
+    () => {
+      const workDir = tempDirs.make("openclaw-systemctl-process-ownership-");
+      const fixturePath = join(workDir, "process-group.mjs");
+      const zombieShimPath = join(workDir, "zombie-stop.sh");
+      writeFileSync(
+        zombieShimPath,
+        `#!/usr/bin/env bash
+set -euo pipefail
+source "$1"
+pid_file="$2"; ownership_file="\${pid_file}.ownership"
+supervisor_script="\${pid_file}.supervisor.mjs"; signal_log="$3"; : >"$signal_log"
+fail() { echo "$*" >&2; exit 1; }
+kill() { case "\${1:-}" in -TERM|-KILL) printf '%s\n' "$*" >>"$signal_log" ;; esac; builtin kill "$@"; }
+sleep() { SECONDS=$((SECONDS + 1)); command sleep 0.01; }
+pid="$(cat "$pid_file")"; state=""; parent_pid=""
+for _ in {1..200}; do
+  stat_line="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+  stat_fields="\${stat_line##*) }"
+  read -r state parent_pid _ <<<"$stat_fields"
+  [ "$state" = "Z" ] && break
+  command sleep 0.01
+done
+[ "$state" = "Z" ] || fail "process group did not become zombie-only"
+[ "$parent_pid" = "$ZOMBIE_PARENT_PID" ] || fail "zombie was reparented before nested stop"
+builtin kill -0 "$ZOMBIE_PARENT_PID" || fail "zombie parent was not blocked in nested stop"
+printf '%s\n' process-group >"$ownership_file"
+stop_gateway
+[ ! -e "$pid_file" ] || fail "zombie-only group retained its pid file"
+[ "$(cat "$signal_log")" = "-TERM -- -$pid" ] || fail "zombie-only group reached KILL"
+`,
+      );
+      writeFileSync(
+        fixturePath,
+        `import fs from "node:fs"; import net from "node:net"; import { spawn, spawnSync } from "node:child_process";
+if (process.argv[2] === "zombie-parent") {
+  const child = spawn(process.execPath, ["-e", ""], { detached: true, stdio: "ignore" });
+  fs.writeFileSync(process.env.ZOMBIE_PID_FILE, String(child.pid));
+  const nested = spawnSync("bash", [
+    process.env.ZOMBIE_SHIM,
+    process.env.PROCESS_HELPERS,
+    process.env.ZOMBIE_PID_FILE,
+    process.env.ZOMBIE_SIGNAL_LOG,
+  ], { env: { ...process.env, ZOMBIE_PARENT_PID: String(process.pid) }, encoding: "utf8" });
+  process.stdout.write(nested.stdout ?? "");
+  process.stderr.write(nested.stderr ?? "");
+  process.exit(nested.status ?? 1);
+} else if (process.argv[2] === "leader") {
+  spawn(process.execPath, [process.argv[1], "descendant"], { env: process.env, stdio: "ignore" });
+  const ready = setInterval(() => {
+    if (fs.existsSync(process.env.DESCENDANT_PID_FILE)) { clearInterval(ready); process.exit(0); }
+  }, 5);
+} else {
+  process.on("SIGTERM", () => {});
+  net.createServer().listen(18789, "127.0.0.1", () => fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid)));
+}
+`,
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+source "$1"
+work_dir="$2"; fixture="$3"; zombie_shim="$4"; descendant_pid_file="$work_dir/descendant.pid"
+helper_file="$work_dir/process-helpers.sh"
+upgrade_survivor_append_systemctl_process_helpers "$helper_file"
+source "$helper_file"
+owned_pids=""; group_pid=""
+cleanup() { [ -z "$group_pid" ] || builtin kill -KILL -- "-$group_pid" >/dev/null 2>&1 || true; for pid in $owned_pids; do builtin kill -KILL "$pid" >/dev/null 2>&1 || true; done; }
+trap cleanup EXIT
+fail() { echo "$*" >&2; exit 1; }
+process_alive() { builtin kill -0 "$1" >/dev/null 2>&1; }
+probe_port() { node -e 'const s=require("node:net").createServer(); s.once("error",()=>process.exit(1)); s.listen(18789,"127.0.0.1",()=>s.close(()=>process.exit(0)))'; }
+kill() { case "\${1:-}" in -TERM|-KILL) printf '%s\n' "$*" >>"$signal_log" ;; esac; builtin kill "$@"; }
+sleep() { SECONDS=$((SECONDS + 1)); command sleep 0.01; }
+set_files() {
+  pid_file="$work_dir/$1.pid"; ownership_file="\${pid_file}.ownership"
+  supervisor_script="\${pid_file}.supervisor.mjs"; signal_log="$work_dir/$1.signals"; : >"$signal_log"
+}
+spawn_pid() {
+  node -e 'setInterval(()=>{},1000)' &
+  pid="$!"; owned_pids="$owned_pids $pid"; set_files "$1"; printf '%s\n' "$pid" >"$pid_file"
+}
+for marker in missing pid; do
+  spawn_pid "$marker"
+  [ "$marker" = "missing" ] || printf '%s\n' pid >"$ownership_file"
+  stop_gateway; wait "$pid" 2>/dev/null || true
+  process_alive "$pid" && fail "$marker pid survived"
+  grep -Fqx -- "-TERM -- $pid" "$signal_log" || fail "$marker pid was not signaled"
+done
+for marker in empty malformed; do
+  spawn_pid "$marker"
+  [ "$marker" = "empty" ] && : >"$ownership_file" || printf '%s\n' invalid >"$ownership_file"
+  status=0; stop_gateway || status="$?"
+  [ "$status" -eq 2 ] || fail "$marker ownership status was $status"
+  [ ! -s "$signal_log" ] || fail "$marker ownership emitted a signal"
+  process_alive "$pid" || fail "$marker ownership killed its pid"
+  builtin kill -KILL "$pid"; wait "$pid" 2>/dev/null || true
+done
+ZOMBIE_SHIM="$zombie_shim" PROCESS_HELPERS="$helper_file" \
+  ZOMBIE_PID_FILE="$work_dir/zombie.pid" ZOMBIE_SIGNAL_LOG="$work_dir/zombie.signals" \
+  node "$fixture" zombie-parent
+probe_port || fail "port 18789 was occupied before the process-group fixture"
+group_pid="$(
+  DESCENDANT_PID_FILE="$descendant_pid_file" FIXTURE="$fixture" node -e '
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.execPath, [process.env.FIXTURE, "leader"], { detached: true, env: process.env, stdio: "ignore" });
+    process.stdout.write(String(child.pid)); child.unref();
+  '
+)"
+for _ in {1..200}; do [ -s "$descendant_pid_file" ] && break; command sleep 0.01; done
+[ -s "$descendant_pid_file" ] || fail "process-group descendant did not listen"
+descendant_pid="$(cat "$descendant_pid_file")"; owned_pids="$owned_pids $descendant_pid"
+for _ in {1..200}; do process_alive "$group_pid" || break; command sleep 0.01; done
+process_alive "$group_pid" && fail "process-group leader did not exit"
+process_alive "$descendant_pid" || fail "process-group descendant exited with its leader"
+set_files process-group
+printf '%s\n' "$group_pid" >"$pid_file"; printf '%s\n' process-group >"$ownership_file"
+stop_gateway
+expected="$(printf '%s\n%s' "-TERM -- -$group_pid" "-KILL -- -$group_pid")"
+[ "$(cat "$signal_log")" = "$expected" ] || fail "TERM and KILL targeted different ownership units"
+process_alive "$descendant_pid" && fail "TERM-resistant descendant survived KILL"
+probe_port || fail "replacement could not bind port 18789 after stop"
+`,
+          "bash",
+          UPGRADE_SURVIVOR_GATEWAY_START_PATH,
+          workDir,
+          fixturePath,
+          zombieShimPath,
+        ],
+        { encoding: "utf8", timeout: 15_000 },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+    },
+  );
 
   it("stops supervised gateway restarts after the systemd burst limit", async () => {
     const workDir = tempDirs.make("openclaw-update-restart-supervisor-");

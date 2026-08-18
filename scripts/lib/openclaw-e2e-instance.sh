@@ -406,57 +406,88 @@ openclaw_e2e_gateway_log_port_from_text() {
   sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
 }
 openclaw_e2e_wait_gateway_ready() {
-  local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
-  local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
-  for _ in $(seq 1 "$attempts"); do
-    ! kill -0 "$pid" >/dev/null 2>&1 && {
+  if [ "$#" -lt 2 ] || [ "$#" -gt 8 ]; then
+    return 2
+  fi
+  local wait_ready_pid="$1" wait_ready_log="$2" wait_ready_attempts="${3:-300}"
+  local wait_ready_port="${4:-}" wait_ready_mode="${5:-strict}"
+  local wait_ready_child_status_var="${6:-}" wait_ready_deadline="${7:-}"
+  local wait_ready_scan_offset="${8:-0}" wait_ready_scan_carry=""
+  local wait_ready_scan_carry_chars=256 wait_ready_saw_log=false attempt_index
+  if ! [[ "$wait_ready_pid" =~ ^[0-9]+$ ]] ||
+    [ "$wait_ready_pid" -lt 1 ] ||
+    [ -z "$wait_ready_log" ] ||
+    ! [[ "$wait_ready_attempts" =~ ^[0-9]+$ ]] ||
+    [ "$wait_ready_attempts" -lt 1 ] ||
+    { [ -n "$wait_ready_port" ] && { ! [[ "$wait_ready_port" =~ ^[0-9]+$ ]] || [ "$wait_ready_port" -lt 1 ]; }; } ||
+    { [ "$wait_ready_mode" != "strict" ] && [ "$wait_ready_mode" != "legacy-ready-log-ok" ]; } ||
+    { [ -n "$wait_ready_child_status_var" ] && ! [[ "$wait_ready_child_status_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; } ||
+    { [ -n "$wait_ready_deadline" ] && ! [[ "$wait_ready_deadline" =~ ^[0-9]+$ ]]; } ||
+    ! [[ "$wait_ready_scan_offset" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+  [ -z "$wait_ready_child_status_var" ] ||
+    printf -v "$wait_ready_child_status_var" '%s' ""
+  for ((attempt_index = 0; attempt_index < wait_ready_attempts; attempt_index++)); do
+    ! kill -0 "$wait_ready_pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
-      wait "$pid" || true
-      tail -n 120 "$log" 2>/dev/null || true
+      if wait "$wait_ready_pid"; then
+        [ -z "$wait_ready_child_status_var" ] ||
+          printf -v "$wait_ready_child_status_var" '%s' "0"
+      else
+        set -- "$?"
+        [ -z "$wait_ready_child_status_var" ] ||
+          printf -v "$wait_ready_child_status_var" '%s' "$1"
+      fi
+      tail -n 120 "$wait_ready_log" 2>/dev/null || true
       return 1
     }
-    if [ "$saw_ready_log" != "true" ] && [ -f "$log" ]; then
+    if [ -n "$wait_ready_deadline" ] && [ "$SECONDS" -ge "$wait_ready_deadline" ]; then
+      return 1
+    fi
+    if [ "$wait_ready_saw_log" != "true" ] && [ -f "$wait_ready_log" ]; then
       local log_bytes="0"
-      log_bytes="$(wc -c <"$log" 2>/dev/null || echo 0)"
+      log_bytes="$(wc -c <"$wait_ready_log" 2>/dev/null || echo 0)"
       log_bytes="${log_bytes//[[:space:]]/}"
       if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
         log_bytes="0"
       fi
-      if [ "$log_bytes" -lt "$ready_scan_offset" ]; then
-        ready_scan_offset=0
-        ready_scan_carry=""
+      if [ "$log_bytes" -lt "$wait_ready_scan_offset" ]; then
+        return 1
       fi
-      if [ "$log_bytes" -gt "$ready_scan_offset" ]; then
+      if [ "$log_bytes" -gt "$wait_ready_scan_offset" ]; then
         local new_log_text scan_text
-        new_log_text="$(tail -c +"$((ready_scan_offset + 1))" "$log" 2>/dev/null || true)"
-        ready_scan_offset="$log_bytes"
-        scan_text="${ready_scan_carry}${new_log_text}"
-        if [ "${#scan_text}" -gt "$ready_scan_carry_chars" ]; then
-          ready_scan_carry="${scan_text: -$ready_scan_carry_chars}"
+        new_log_text="$(tail -c +"$((wait_ready_scan_offset + 1))" "$wait_ready_log" 2>/dev/null || true)"
+        wait_ready_scan_offset="$log_bytes"
+        scan_text="${wait_ready_scan_carry}${new_log_text}"
+        if [ "${#scan_text}" -gt "$wait_ready_scan_carry_chars" ]; then
+          wait_ready_scan_carry="${scan_text: -$wait_ready_scan_carry_chars}"
         else
-          ready_scan_carry="$scan_text"
+          wait_ready_scan_carry="$scan_text"
         fi
         local ready_log_lines
         ready_log_lines="$(printf "%s" "$scan_text" | grep '\[gateway\] ready' || true)"
         if [ -n "$ready_log_lines" ]; then
-          saw_ready_log=true
-          [ -n "$ready_port" ] || ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
+          wait_ready_saw_log=true
+          [ -n "$wait_ready_port" ] ||
+            wait_ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
         fi
       fi
     fi
-    if [ "$saw_ready_log" = "true" ]; then
-      [ "$readiness_mode" = "legacy-ready-log-ok" ] && return 0
-      [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
-      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+    if [ "$wait_ready_saw_log" = "true" ]; then
+      [ "$wait_ready_mode" = "legacy-ready-log-ok" ] && return 0
+      [ -n "$wait_ready_port" ] ||
+        wait_ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
+      openclaw_e2e_probe_http "http://127.0.0.1:${wait_ready_port}/readyz" ok 400 && return 0
     fi
     sleep 0.25
   done
-  if [ "$saw_ready_log" = "true" ]; then
+  if [ "$wait_ready_saw_log" = "true" ]; then
     echo "Gateway log reported ready, but /readyz probe never succeeded"
   else
     echo "Gateway did not become ready"
   fi
-  tail -n 120 "$log" 2>/dev/null || true
+  tail -n 120 "$wait_ready_log" 2>/dev/null || true
   return 1
 }
 openclaw_e2e_probe_tcp() {

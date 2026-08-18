@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 
+source scripts/e2e/lib/upgrade-survivor/gateway-start.sh
+
 install_update_restart_systemctl_shim() {
   local shim_dir="$npm_config_prefix/bin"
+  local shim_path="$shim_dir/systemctl"
   mkdir -p "$shim_dir"
-  cat >"$shim_dir/systemctl" <<'SHIM'
+  cat >"$shim_path" <<'SHIM'
 #!/usr/bin/env bash
 set -euo pipefail
 
 log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+ownership_file="${pid_file}.ownership"
 supervisor_script="${pid_file}.supervisor.mjs"
 printf '%s\n' "$*" >>"$log_file"
 
@@ -39,32 +43,9 @@ done
 
 command="${filtered[0]:-status}"
 
-is_running() {
-  [ -s "$pid_file" ] || return 1
-  local pid
-  local process_state
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1 || return 1
-  process_state="$(awk '{ print $3 }' "/proc/$pid/stat" 2>/dev/null || true)"
-  [ "$process_state" != "Z" ]
-}
-
-stop_gateway() {
-  local pid=""
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
-    kill "$pid" >/dev/null 2>&1 || true
-    # The supervisor gives its child 30s, so keep this outer deadline comfortably longer.
-    for _ in $(seq 1 350); do
-      is_running || break
-      sleep 0.1
-    done
-    kill -9 "$pid" >/dev/null 2>&1 || true
-  fi
-  rm -f "$pid_file" "$supervisor_script"
-}
-
+SHIM
+  upgrade_survivor_append_systemctl_process_helpers "$shim_path"
+  cat >>"$shim_path" <<'SHIM'
 unit_path() {
   printf '%s/.config/systemd/user/openclaw-gateway.service\n' "${HOME:?missing HOME}"
 }
@@ -103,7 +84,7 @@ start_gateway() {
     echo "systemctl shim could not find ExecStart in $unit" >&2
     return 1
   }
-  rm -f "$pid_file" "$supervisor_script"
+  rm -f "$pid_file" "$ownership_file" "$supervisor_script"
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -246,6 +227,7 @@ SUPERVISOR
     OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
       OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
       nohup node "$supervisor_script" </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "pid" >"$ownership_file"
     printf '%s\n' "$!" >"$pid_file"
   )
 }
@@ -303,7 +285,7 @@ case "$command" in
     ;;
 esac
 SHIM
-  chmod +x "$shim_dir/systemctl"
+  chmod +x "$shim_path"
   export PATH="$shim_dir:$PATH"
 }
 
@@ -413,6 +395,9 @@ prepare_update_restart_probe_current_install() {
   local doctor_log="${log_file}.doctor"
   local start_epoch
   local ready_epoch
+  local start_budget
+  local absolute_deadline
+  local gateway_ownership
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
@@ -423,10 +408,15 @@ prepare_update_restart_probe_current_install() {
     return 1
   fi
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
-  gateway_pid="$!"
+  start_budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
+  absolute_deadline=$((SECONDS + start_budget))
+  upgrade_survivor_start_gateway_with_convergence_retry \
+    gateway_pid "$log_file" 360 "$port" strict "$absolute_deadline" gateway_ownership -- \
+    env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD \
+    openclaw gateway --port "$port" --bind loopback --allow-unconfigured
+  printf '%s\n' "$gateway_ownership" \
+    >"${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE}.ownership"
   printf '%s\n' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   write_update_restart_service_auth_env
