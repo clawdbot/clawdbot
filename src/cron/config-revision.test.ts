@@ -44,6 +44,19 @@ describe("resolveCronJobConfigRevision", () => {
     );
   });
 
+  it("ignores delivery writeback and enabled toggles (mid-run fences)", () => {
+    const original = makeJob();
+    expect(
+      resolveCronJobConfigRevision({
+        ...original,
+        delivery: { mode: "announce", channel: "telegram", to: "rewritten-target" },
+      }),
+    ).toBe(resolveCronJobConfigRevision(original));
+    expect(resolveCronJobConfigRevision({ ...original, enabled: false })).toBe(
+      resolveCronJobConfigRevision(original),
+    );
+  });
+
   it("changes for definition updates and same-id recreation", () => {
     const original = makeJob();
 

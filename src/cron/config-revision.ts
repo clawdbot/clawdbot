@@ -5,7 +5,19 @@ import { projectCronJobThroughStorageCodec } from "./store/row-codec.js";
 import type { CronJob } from "./types.js";
 
 function configRevisionDefinition(projected: CronJob) {
-  const { updatedAtMs: _updatedAtMs, state: _state, ...definition } = projected;
+  // Exclude scheduler-maintained / mid-run writeback fields:
+  // - state, updatedAtMs: runtime
+  // - delivery: announce target writeback during isolated runs
+  // - enabled: operator disable/enable has its own cancellation path; fencing it
+  //   turns disable-mid-run into "configuration changed" supersede instead of
+  //   the operator-disabled error path (ops.regression).
+  const {
+    updatedAtMs: _updatedAtMs,
+    state: _state,
+    delivery: _delivery,
+    enabled: _enabled,
+    ...definition
+  } = projected;
   if (definition.payload.kind !== "command" || !definition.payload.env) {
     return definition;
   }
