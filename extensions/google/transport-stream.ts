@@ -1042,9 +1042,42 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
 function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   const controller = new AbortController();
   let timedOut = false;
+  let remainingMs = timeoutMs;
+  let deadlineStartedAt: number | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const abortFromParent = () => {
     controller.abort(parent?.reason);
+  };
+  const abortForTimeout = () => {
+    timedOut = true;
+    timeout = undefined;
+    deadlineStartedAt = undefined;
+    controller.abort(new Error("Google Gemini first response retry deadline reached"));
+  };
+  const startDeadline = () => {
+    if (timeout || controller.signal.aborted || timeoutMs <= 0) {
+      return;
+    }
+    if (remainingMs <= 0) {
+      abortForTimeout();
+      return;
+    }
+    deadlineStartedAt = Date.now();
+    timeout = setTimeout(abortForTimeout, remainingMs);
+    timeout.unref?.();
+  };
+  const clearDeadline = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
+    deadlineStartedAt = undefined;
+  };
+  const pauseDeadline = () => {
+    if (deadlineStartedAt !== undefined) {
+      remainingMs = Math.max(0, remainingMs - (Date.now() - deadlineStartedAt));
+    }
+    clearDeadline();
   };
   if (parent) {
     if (parent.aborted) {
@@ -1053,22 +1086,12 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
       parent.addEventListener("abort", abortFromParent, { once: true });
     }
   }
-  if (timeoutMs > 0) {
-    timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort(new Error("Google Gemini first response retry deadline reached"));
-    }, timeoutMs);
-    timeout.unref?.();
-  }
-  const clearDeadline = () => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
-    }
-  };
+  startDeadline();
   return {
     signal: controller.signal,
     timedOut: () => timedOut,
+    pauseDeadline,
+    resumeDeadline: startDeadline,
     clearDeadline,
     cleanup: () => {
       clearDeadline();
@@ -1152,12 +1175,14 @@ async function openGoogleSseAttempt(params: {
     attemptSignal?.cleanup();
     throw await createProviderHttpError(response, params.errorPrefix);
   }
+  attemptSignal?.pauseDeadline();
   try {
     await notifyGoogleTransportHttpResponse(params.model, params.options, response);
   } catch (error) {
     attemptSignal?.cleanup();
     throw error;
   }
+  attemptSignal?.resumeDeadline();
   const chunks = parseGoogleSseChunks(response, signal);
   const iterator = chunks[Symbol.asyncIterator]();
   let first: IteratorResult<GoogleSseChunk>;

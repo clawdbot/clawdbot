@@ -1476,6 +1476,26 @@ describe("google transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
+  it("does not count provider acceptance callback time against the retry deadline", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    mockGoogleTextResponse("accepted");
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: {
+        reasoning: "high",
+        onProviderAccepted: async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 25);
+          });
+        },
+      },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "accepted" }]);
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
