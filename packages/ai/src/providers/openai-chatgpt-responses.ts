@@ -38,6 +38,7 @@ import {
   createOpenAIResponseHook,
 } from "../transports/openai-transport-shared.js";
 import {
+  notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -363,8 +364,10 @@ export const streamOpenAICodexResponses: StreamFunction<
               stream,
               model,
               () => {
-                commitSemanticAttempt(activeAttempt);
                 websocketStarted = true;
+              },
+              () => {
+                commitSemanticAttempt(activeAttempt);
               },
               requestOptions,
               firstEventAbort.abort,
@@ -1456,12 +1459,16 @@ async function* startWebSocketOutputOnFirstEvent(
   events: AsyncIterable<ResponseStreamEvent>,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
+  onFirstProviderEvent: () => void,
+  onProviderAccepted: () => Promise<void>,
   onStart: () => void,
 ): AsyncGenerator<ResponseStreamEvent> {
   let started = false;
   for await (const event of events) {
     if (!started) {
       started = true;
+      onFirstProviderEvent();
+      await onProviderAccepted();
       onStart();
       stream.push({ type: "start", partial: output });
     }
@@ -1476,6 +1483,7 @@ async function processWebSocketStream(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<"openai-chatgpt-responses">,
+  onFirstProviderEvent: () => void,
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
@@ -1512,6 +1520,8 @@ async function processWebSocketStream(
         mapCodexEvents(parseWebSocket(socket, options?.signal)),
         output,
         stream,
+        onFirstProviderEvent,
+        () => notifyProviderStreamOpened({ options, model }),
         onStart,
       ),
       output,
