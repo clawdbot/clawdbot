@@ -53,22 +53,21 @@ When the issue does not exist, become the campaign creator:
    rely on its stronger quality promise. Keep the ranking qualitative; do not
    expose a fake-precision score.
 5. Generate one section for every live scorecard surface. Put the five selected
-   surfaces under **Priority for this release** and all remaining surfaces under
-   **Other surfaces**. Format every section exactly like this:
+   surfaces under **Priority surfaces to test** and all remaining surfaces under
+   **Other surfaces to test**. Format every section exactly like this:
 
    ```md
    ### [surface](taxonomy-url)
 
-   |                         |                       |
-   | ----------------------- | --------------------- |
    | **Maturity score**      | <maturity-label>      |
+   | ----------------------- | --------------------- |
    | **What changed**        | <release-theme>       |
    | **Recommended testing** | <exercise-or-em-dash> |
-
-   #### Notes
+   | **Testing notes**       |                       |
    ```
 
-   Keep `#### Notes` truly empty: add no placeholder text or hidden comment.
+   Keep the **Testing notes** value cell truly empty: add no placeholder text or
+   hidden comment.
    Use `No notable changes in this release.` and an em dash in the last two
    table rows when no release item is relevant. Escape table pipes and keep each
    cell concise. Every priority surface must have a real recommended exercise.
@@ -88,19 +87,27 @@ When the issue does not exist, become the campaign creator:
    full release surface. Each **Recommended testing** is one concise human-driven
    exercise.
 
-6. Make a working copy of the worksheet asset and fill it with the exact
+6. Resolve the campaign creator's GitHub login with `gh api user`; ask for a
+   login only when authentication cannot identify it. Enumerate every PR authored
+   by that login whose merge commit is included between the previous release tag
+   and the candidate tag. Add the complete linked list under **Your changes in
+   this release**, or `- None in this release.` when empty. This explicit author
+   list is separate from surface summaries and may contain PR links.
+7. Make a working copy of the worksheet asset and fill it with the exact
    candidate identity, release-notes URL, live scorecard and taxonomy URLs,
    score-band guidance, and generated surface sections. The issue callout must
    say that its catalog and labels come from the live maturity taxonomy and that
    priority reflects release change volume, size, impact, upgrade risk, and
    maturity expectations. Remove the campaign-creator comment and ensure no
    template placeholder remains.
-7. Create the issue with the stable marker, a short participation note, and the
+8. Create the issue with the stable marker, a short participation note, and the
    completed worksheet verbatim between the worksheet markers. Re-query open
    issues for the marker after creation and fail on duplicates.
 
 Only the campaign creator performs release-note analysis or generates the
-canonical template. Later runs consume the issue body without rewriting it.
+canonical template. Later runs consume the issue body without rewriting it, but
+replace **Your changes in this release** in their private worksheet with the
+current tester's complete authored-PR list for the same tag range.
 
 ## 2. Choose and copy a real gateway
 
@@ -129,8 +136,8 @@ stop the current credential owner and restore it when validation ends.
 Copy the canonical worksheet between the shared issue's markers to
 `.artifacts/openclaw-release-validation/<tag>-<timestamp>.md`. Fill in the
 source, shared issue URL, and local upgrade result without changing the campaign
-priorities. Give the tester a clickable link and briefly point out the five
-priority surfaces.
+priorities. Refresh **Your changes in this release** for the current tester, give
+them a clickable link, and briefly point out the five priority surfaces.
 
 This worksheet is the only checklist and note store. The tester may edit it in
 their editor or tell the agent what to record.
@@ -167,19 +174,20 @@ upgrade or gateway readiness is unresolved.
 
 Ask: **What do you want to test first?** Recommend starting with a release
 priority, but let the tester choose one surface at a time in any order. After
-each item, add their notes under that surface's `#### Notes`, then ask what
-they want to test next.
+each item, add their notes to that surface's **Testing notes** table cell, then
+ask what they want to test next.
 
 The tester drives interactive surfaces such as the TUI, Control UI, onboarding,
 channels, pairing, and approvals. Provide the command or URL and explain what
 to look for, then wait for their result. Take control only when explicitly
 asked. Do not turn the checklist into an automated scenario runner.
 
-A surface counts as tested only when tester-authored text appears beneath its
-`#### Notes`. The **Maturity score**, **What changed**, and **Recommended
-testing** table rows are campaign guidance, never test evidence. An empty Notes
-section means untouched. Add candidate problems found during surface testing to
-that surface's notes.
+A surface counts as tested only when tester-authored text appears in its
+**Testing notes** row. The **Maturity score**, **What changed**, and
+**Recommended testing** rows are campaign guidance, never test evidence. An
+empty Testing notes value means untouched. Escape table pipes and use `<br>`
+between multiple notes. Add candidate problems found during surface testing to
+that cell.
 
 ## 6. Finish and publish
 
@@ -191,8 +199,8 @@ When the tester says `finish validation`:
    ownership. Ask before destroying the disposable environment.
 3. Synthesize one final release-analysis comment from candidate identity, source
    version/commit, upgrade findings, tester feedback, the yes/no promotion vote,
-   and only the surfaces with non-empty Notes sections. Use the tester's Notes as
-   the source of observed results; do not report the guidance table as evidence.
+   and only the surfaces with non-empty Testing notes cells. Use those cells as
+   the source of observed results; do not report the other table rows as evidence.
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.
 5. Post the comment once with `gh` and show the tester its URL.
