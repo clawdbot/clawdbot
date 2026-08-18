@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -50,6 +51,7 @@ suite.define(() => {
       await firstMessage.fill(text);
       await waitForCommittedNewSessionDraft(firstPage, text, 0);
       await firstPage.reload();
+      await waitForControlUiGatewayReady(firstPage);
       await expect.poll(() => firstMessage.inputValue()).toBe(text);
       await firstPage.close();
 
