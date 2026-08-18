@@ -520,9 +520,6 @@
   -webkit-mask: var(--github-mark) center / contain no-repeat;
 }
 
-/* The glyph already marks these as links; a resting underline doubles the
-   signal and clutters dense URL text. Hover restores it as the affordance,
-   like the file-link convention below. */
 .chat-text :where(a.markdown-github-link) {
   /* The mark is painted out of flow with its space reserved here, so nothing
      inside the anchor precedes the label: an in-flow atomic mark carries a soft
@@ -531,10 +528,6 @@
      starts on; the file-link chip's `display: inline-block` could not. */
   position: relative;
   padding-inline-start: 1.3em; /* the mark's 1em box plus the 0.3em gap it had */
-  text-decoration: none;
-}
-
-.chat-text :where(a.markdown-github-link:hover) {
   text-decoration: underline;
 }
 

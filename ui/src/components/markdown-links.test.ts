@@ -174,7 +174,7 @@ describe("toSanitizedMarkdownHtml links", () => {
     it("links http:// URLs", () => {
       const html = toSanitizedMarkdownHtml("Visit http://github.com/openclaw");
       expect(html).toBe(
-        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" rel="noreferrer noopener" target="_blank">http://github.com/openclaw</a></p>\n',
+        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw" rel="noreferrer noopener" target="_blank">github.com/openclaw</a></p>\n',
       );
     });
 
@@ -596,11 +596,14 @@ describe("toSanitizedMarkdownHtml links", () => {
 
   describe("github link marks", () => {
     it.each([
-      ["bare autolink", "https://github.com/openclaw/openclaw/pull/3434", "openclaw/openclaw#3434"],
+      ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434"],
+      ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435"],
+      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw"],
+      ["repository file", "https://github.com/blader/humanizer/blob/main/SKILL.md", "SKILL.md"],
       [
-        "bare issue autolink",
-        "https://github.com/openclaw/openclaw/issues/3435",
-        "openclaw/openclaw#3435",
+        "other path",
+        "https://github.com/openclaw/openclaw/actions/runs/123",
+        "github.com/actions/runs/123",
       ],
       ["issue shorthand", "[#3434](https://github.com/openclaw/openclaw/pull/3434)", "#3434"],
       ["labelled link", "[the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
@@ -621,27 +624,18 @@ describe("toSanitizedMarkdownHtml links", () => {
         ),
       );
       const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.textContent).toBe(
-        "a-very-long-organization-name/a-very-long-repository-name#3434",
-      );
+      expect(link?.textContent).toBe("#3434");
       expect(link?.classList.contains("markdown-bare-url")).toBe(true);
     });
 
-    it.each([
-      ["a files-tab path", "https://github.com/openclaw/openclaw/pull/3434/files"],
-      ["a commits path", "https://github.com/openclaw/openclaw/pull/3434/commits"],
-      [
-        "an issue comment fragment",
-        "https://github.com/openclaw/openclaw/issues/3434#issuecomment-1",
-      ],
-      ["a review comment query", "https://github.com/openclaw/openclaw/pull/3434?tab=files"],
-      ["a diff anchor", "https://github.com/openclaw/openclaw/pull/3434/files#diff-abc123"],
-    ])("keeps the specific destination visible for %s", (_kind, input) => {
+    it("keeps the specific destination addressable after shortening its label", () => {
+      const input = "https://github.com/blader/humanizer/blob/main/SKILL.md";
       const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
       const link = fragment.querySelector<HTMLAnchorElement>("a");
       expect(link?.classList.contains("markdown-github-link")).toBe(true);
-      expect(link?.textContent).toBe(input);
+      expect(link?.textContent).toBe("SKILL.md");
       expect(link?.getAttribute("href")).toBe(input);
+      expect(link?.getAttribute("title")).toBe(input);
     });
 
     it.each([
