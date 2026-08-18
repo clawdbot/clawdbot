@@ -276,6 +276,37 @@ describe("resolveMatrixMonitorConfig", () => {
     );
   });
 
+  it("keeps case-distinct qualified user ids in startup allowlists", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => []);
+    const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
+
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      allowFrom: caseDistinctIds,
+      groupAllowFrom: caseDistinctIds,
+      roomsConfig: {
+        "!ops:example.org": {
+          enabled: true,
+          users: caseDistinctIds,
+        },
+      },
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result.allowFrom).toEqual(caseDistinctIds);
+    expect(result.groupAllowFrom).toEqual(caseDistinctIds);
+    expect(result.roomsConfig).toEqual({
+      "!ops:example.org": {
+        enabled: true,
+        users: caseDistinctIds,
+      },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
   it("does not resolve mutable live allowlist entries by default", async () => {
     const runtime = createRuntime();
     const resolveTargets = vi.fn(async () => [
@@ -292,6 +323,23 @@ describe("resolveMatrixMonitorConfig", () => {
     });
 
     expect(result).toEqual(["@Bob:Example.org", "*"]);
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
+  it("keeps case-distinct qualified user ids in live allowlists", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => []);
+    const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
+
+    const result = await resolveMatrixMonitorLiveUserAllowlist({
+      cfg: createConfig(),
+      accountId: "ops",
+      entries: caseDistinctIds,
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result).toEqual(caseDistinctIds);
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
