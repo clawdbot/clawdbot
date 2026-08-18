@@ -53,7 +53,7 @@ describe("listControlUiPluginTabs", () => {
   it("projects only tab descriptors", () => {
     activateDescriptors([
       {
-        pluginId: "logbook",
+        pluginId: "workboard",
         descriptor: tabDescriptor({ placement: "route:workboard" }),
       },
       { pluginId: "other", descriptor: tabDescriptor({ id: "run-panel", surface: "run" }) },
@@ -63,7 +63,7 @@ describe("listControlUiPluginTabs", () => {
     expect(tabs.map((tab) => tab.id)).toEqual(["logbook"]);
     expect(expectDefined(tabs[0], "tabs[0] test invariant")).toMatchObject({
       placement: "route:workboard",
-      pluginId: "logbook",
+      pluginId: "workboard",
     });
   });
 

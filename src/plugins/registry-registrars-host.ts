@@ -391,6 +391,18 @@ export function createHostRegistrars(state: PluginRegistryState) {
         return;
       }
     }
+    if (
+      placement?.startsWith("route:") &&
+      (record.origin !== "bundled" || placement !== `route:${record.id}`)
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `native Control UI route placement must be owned by its bundled plugin: ${placement}`,
+      });
+      return;
+    }
     if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
       pushDiagnostic({
         level: "error",
