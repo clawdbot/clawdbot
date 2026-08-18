@@ -659,14 +659,8 @@ export function resolveProfilesUnavailableReason(params: {
       continue;
     }
 
-    const whamUnavailableReason =
-      stats.cooldownClassification === "wham_token_expired"
-        ? "auth"
-        : stats.cooldownClassification === "wham_account_dead"
-          ? "auth_permanent"
-          : null;
-    if (whamUnavailableReason) {
-      addScore(whamUnavailableReason, 1_000);
+    if (stats.cooldownReason && FAILURE_REASON_SET.has(stats.cooldownReason)) {
+      addScore(stats.cooldownReason, 1_000);
       continue;
     }
 

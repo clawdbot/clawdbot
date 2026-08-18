@@ -110,6 +110,11 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
   if (!isRecord(raw)) {
     return undefined;
   }
+  const cooldownReason = normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS);
+  const cooldownClassification = normalizeEnumValue(
+    raw.cooldownClassification,
+    AUTH_COOLDOWN_CLASSIFICATIONS,
+  );
   const stats: ProfileUsageStats = {
     lastUsed: asFiniteNumber(raw.lastUsed),
     blockedUntil: asFiniteNumber(raw.blockedUntil),
@@ -118,11 +123,12 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: asFiniteNumber(raw.cooldownUntil),
-    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
-    cooldownClassification: normalizeEnumValue(
-      raw.cooldownClassification,
-      AUTH_COOLDOWN_CLASSIFICATIONS,
-    ),
+    cooldownReason,
+    cooldownClassification:
+      (cooldownClassification === "wham_token_expired" && cooldownReason === "auth") ||
+      (cooldownClassification === "wham_account_dead" && cooldownReason === "auth_permanent")
+        ? cooldownClassification
+        : undefined,
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
     disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),

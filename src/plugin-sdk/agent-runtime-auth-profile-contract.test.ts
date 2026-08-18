@@ -16,6 +16,11 @@ const cases = [
     cooldownClassification: "wham_account_dead",
     expected: "auth_permanent",
   },
+  {
+    cooldownReason: "rate_limit",
+    cooldownClassification: "wham_account_dead",
+    expected: "rate_limit",
+  },
 ] satisfies Array<{
   cooldownReason: AuthProfileFailureReason;
   cooldownClassification: NonNullable<

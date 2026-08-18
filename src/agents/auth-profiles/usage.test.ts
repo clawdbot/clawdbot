@@ -409,12 +409,13 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("auth_permanent");
   });
 
-  it("uses recorded non-rate-limit failure counts for active cooldown windows", () => {
+  it("prefers an explicit cooldown reason over stale failure counts", () => {
     const now = Date.now();
     const store = makeStore({
       "anthropic:default": {
         cooldownUntil: now + 60_000,
-        failureCounts: { auth: 3, rate_limit: 1 },
+        cooldownReason: "auth",
+        failureCounts: { rate_limit: 99 },
       },
     });
 
