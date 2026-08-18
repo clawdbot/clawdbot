@@ -414,25 +414,22 @@ function resolveSessionMutationTargets(params: {
     return target ? [target] : undefined;
   }
   const requestedAgentId = readStringParam(params.requestParams, "agentId");
-  const directTargets = SESSION_TARGET_FIELDS_BY_METHOD.get(params.method)?.flatMap(
-    (field): SessionMutationTarget[] => {
-      const sessionKey = readStringParam(params.requestParams, field);
-      if (!sessionKey) {
-        return [];
-      }
-      // sessions.create applies its selected agent to the parent only for the
-      // unqualified global sentinels; other parents resolve their own store.
-      const parentUsesRequestedAgent =
-        field !== "parentSessionKey" || ["global", "unknown"].includes(sessionKey.toLowerCase());
-      return [
-        {
-          sessionKey,
-          ...(requestedAgentId && parentUsesRequestedAgent ? { agentId: requestedAgentId } : {}),
-        },
-      ];
-    },
-  );
-  if (directTargets?.length) {
+  const directTargets: SessionMutationTarget[] = [];
+  for (const field of SESSION_TARGET_FIELDS_BY_METHOD.get(params.method) ?? []) {
+    const sessionKey = readStringParam(params.requestParams, field);
+    if (!sessionKey) {
+      continue;
+    }
+    // sessions.create applies its selected agent to the parent only for the
+    // unqualified global sentinels; other parents resolve their own store.
+    const parentUsesRequestedAgent =
+      field !== "parentSessionKey" || ["global", "unknown"].includes(sessionKey.toLowerCase());
+    directTargets.push({
+      sessionKey,
+      ...(requestedAgentId && parentUsesRequestedAgent ? { agentId: requestedAgentId } : {}),
+    });
+  }
+  if (directTargets.length) {
     return directTargets;
   }
   if (params.method === "board.event" || params.method === "board.action") {

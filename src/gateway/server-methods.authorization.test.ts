@@ -394,7 +394,7 @@ describe("gateway method authorization", () => {
         },
       );
 
-      const dispatch = async (
+      const dispatchRequest = async (
         method: "sessions.create" | "sessions.fork" | "sessions.recover",
         requestParams: Record<string, unknown>,
         profileId: string,
@@ -446,11 +446,11 @@ describe("gateway method authorization", () => {
         { method: "sessions.recover" as const, params: { key: sessionKey } },
       ];
       for (const testCase of cases) {
-        const owner = await dispatch(testCase.method, testCase.params, "owner");
+        const owner = await dispatchRequest(testCase.method, testCase.params, "owner");
         expect(owner.handler, testCase.method).toHaveBeenCalledOnce();
         expect(owner.respond, testCase.method).toHaveBeenCalledWith(true, { authorized: true });
 
-        const outsider = await dispatch(testCase.method, testCase.params, "outsider");
+        const outsider = await dispatchRequest(testCase.method, testCase.params, "outsider");
         expect(outsider.handler, testCase.method).not.toHaveBeenCalled();
         expect(outsider.respond, testCase.method).toHaveBeenCalledWith(
           false,
