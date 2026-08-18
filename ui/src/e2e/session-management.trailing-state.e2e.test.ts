@@ -3,6 +3,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   actionOpacity,
+  captureUiProof,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
@@ -13,6 +14,56 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("vertically centers session actions in a two-line row", async () => {
+    const context = await suite.browser.newContext({
+      hasTouch: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.now()),
+          Object.assign(
+            sessionRow("agent:main:two-line", "Two-line session", Date.now() - 1, {
+              pinned: true,
+            }),
+            { lastMessagePreview: "Finishing repository setup review" },
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:two-line",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator('[data-session-key="agent:main:two-line"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      const pin = row.getByRole("button", { name: "Unpin session" });
+      const menu = row.getByRole("button", { name: "Open session menu" });
+      await expect.poll(() => actionOpacity(pin)).toBe("1");
+      await captureUiProof(page, "sidebar-session-actions-centered.png");
+
+      const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
+        row.boundingBox(),
+        row.locator(".sidebar-recent-session__subtitle").boundingBox(),
+        pin.boundingBox(),
+        menu.boundingBox(),
+      ]);
+      if (!rowBounds || !subtitleBounds || !pinBounds || !menuBounds) {
+        throw new Error("Expected visible two-line session action geometry");
+      }
+      const rowCenter = rowBounds.y + rowBounds.height / 2;
+      expect(subtitleBounds.y).toBeGreaterThan(rowCenter);
+      expect(Math.abs(pinBounds.y + pinBounds.height / 2 - rowCenter)).toBeLessThanOrEqual(1);
+      expect(Math.abs(menuBounds.y + menuBounds.height / 2 - rowCenter)).toBeLessThanOrEqual(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps action-only text widest at rest and swaps active state for actions", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -44,7 +95,6 @@ suite.define(() => {
       await actionOnlyRow.waitFor({ state: "visible", timeout: 10_000 });
       const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
       const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
-      const actionOnlyDetails = actionOnlyRow.locator(".sidebar-recent-session__details");
       const actionOnlyPin = actionOnlyRow.getByRole("button", { name: "Pin session" });
       await expect
         .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
@@ -54,7 +104,7 @@ suite.define(() => {
       await actionOnlyRow.hover();
       await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
       await expect
-        .poll(() => actionOnlyDetails.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => actionOnlyText.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
       const hoveredTextBounds = await actionOnlyText.boundingBox();
 
@@ -62,7 +112,7 @@ suite.define(() => {
       await actionOnlyPin.focus();
       await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
       await expect
-        .poll(() => actionOnlyDetails.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => actionOnlyText.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
       const focusedTextBounds = await actionOnlyText.boundingBox();
       if (!restingTextBounds || !hoveredTextBounds || !focusedTextBounds) {
@@ -168,6 +218,7 @@ suite.define(() => {
         Math.abs(forkBounds.y + forkBounds.height / 2 - (nameBounds.y + nameBounds.height / 2)),
       ).toBeLessThanOrEqual(2);
       expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
+      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
     } finally {
       await context.close();
@@ -322,7 +373,7 @@ suite.define(() => {
         );
       }
       const link = row.locator(".sidebar-recent-session__link");
-      const details = row.locator(".sidebar-recent-session__details");
+      const rowText = row.locator(".sidebar-recent-session__text");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect
@@ -355,7 +406,7 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
-        .poll(() => details.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => rowText.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
 
       const [textBounds, nameBounds, pinBounds, menuBounds] = await Promise.all([
@@ -369,6 +420,7 @@ suite.define(() => {
       }
       expect(textBounds.width).toBeCloseTo(restingTextBounds.width, 1);
       expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
+      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
       await page.mouse.move(0, 0);
       await pin.focus();
@@ -376,7 +428,7 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
-        .poll(() => details.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => rowText.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
 
       const [focusedTextBounds, focusedNameBounds, focusedPinBounds, focusedMenuBounds] =
@@ -392,6 +444,9 @@ suite.define(() => {
       expect(focusedTextBounds.width).toBeCloseTo(restingTextBounds.width, 1);
       expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeLessThan(
         focusedPinBounds.y + focusedPinBounds.height / 2,
+      );
+      expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(
+        focusedPinBounds.x + 1,
       );
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
