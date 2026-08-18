@@ -15,9 +15,10 @@ describe.skipIf(process.platform === "win32")("OpenClaw stdio process-group owne
       const root = tempDirs.make("mcp-stdio-descendant-");
       const serverPath = path.join(root, "leader.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
+      const exitMarkerPath = path.join(root, "exit.marker");
       await fs.writeFile(
         serverPath,
-        `import {spawn} from "node:child_process"; import fs from "node:fs"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(child.pid)); setTimeout(()=>process.exit(1),25);`,
+        `import {spawn} from "node:child_process"; import fs from "node:fs"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(child.pid)); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitMarkerPath)})){clearInterval(timer);process.exit(1)}},10);`,
         "utf8",
       );
       const transport = new OpenClawStdioClientTransport({
@@ -37,6 +38,7 @@ describe.skipIf(process.platform === "win32")("OpenClaw stdio process-group owne
           descendantPid = Number(await fs.readFile(descendantPidPath, "utf8"));
           expect(isPidAlive(descendantPid)).toBe(true);
         });
+        await fs.writeFile(exitMarkerPath, "exit", "utf8");
         await closed;
         await vi.waitFor(() => expect(isPidAlive(descendantPid)).toBe(false));
 
