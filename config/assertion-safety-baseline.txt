@@ -2661,7 +2661,7 @@ src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
-src/commands/onboard-helpers.ts	3
+src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	3
 src/commands/onboard-non-interactive/local/auth-choice-inference.ts	2
 src/commands/onboard-non-interactive/local/auth-choice.plugin-providers.ts	1
