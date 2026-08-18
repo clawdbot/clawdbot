@@ -41,6 +41,7 @@ type CliOptions = {
   allowedHosts: string[];
   fixture?: "approval" | "board" | "swarm" | "workboard";
   host: string;
+  operatorScopes?: string[];
   port: number;
 };
 
@@ -155,6 +156,10 @@ function parseArgs(args: string[]): CliOptions {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), options.port);
+    } else if (arg === "--operator-scopes") {
+      options.operatorScopes = parseOperatorScopes(args[++i]);
+    } else if (arg.startsWith("--operator-scopes=")) {
+      options.operatorScopes = parseOperatorScopes(arg.slice("--operator-scopes=".length));
     }
   }
   return options;
@@ -173,6 +178,14 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
 function parsePort(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : fallback;
+}
+
+function parseOperatorScopes(value: string | undefined): string[] | undefined {
+  const scopes = (value ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+  return scopes.length > 0 ? scopes : undefined;
 }
 
 function sessionRow(
@@ -2850,6 +2863,9 @@ async function waitForShutdown(): Promise<void> {
 
 const options = parseArgs(process.argv.slice(2));
 const scenario = await createChatPickerScenario(options.fixture);
+if (options.operatorScopes) {
+  scenario.operatorScopes = options.operatorScopes;
+}
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
