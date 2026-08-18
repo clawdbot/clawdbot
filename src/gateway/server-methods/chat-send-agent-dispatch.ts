@@ -13,15 +13,13 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gatewa
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import {
-  discardPreparedChatSendAttachments,
-  type prepareChatSendAttachments,
-} from "./chat-send-attachments.js";
+import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
   scheduleChatDashboardSessionTitle,
@@ -517,7 +515,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         // markers — so the prepared inbound media stays unreferenced forever
         // (sweep is off by default). Same custody rule as the pre-ACK owner
         // in chat-send-admission.ts: unreferenced staged media is discarded.
-        void discardPreparedChatSendAttachments(attachments.offloadedRefs);
+        void discardPreparedInboundMedia(attachments.offloadedRefs);
       }
     });
   // Title work starts at turn admission, concurrently with the launched run. It must never run
