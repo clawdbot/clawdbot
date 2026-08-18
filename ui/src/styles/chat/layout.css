@@ -2365,6 +2365,10 @@ button.chat-reply-preview--message:disabled {
   text-decoration: none;
 }
 
+.chat-pr__link--static {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
 .chat-pr__link:hover .chat-pr__number {
   text-decoration: underline;
 }
