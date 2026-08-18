@@ -176,7 +176,10 @@ describe("Markdown table interactions", () => {
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
 
-    expand.click();
+    // Reopen through the handler like every other interaction here: the file
+    // runs in the isolated lane, so no shared-graph document listener exists
+    // to service a raw click().
+    handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
     const reopenedDialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
 
     reopenedDialog.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
