@@ -8,7 +8,7 @@
 //   node taskmarket.js track                     # public, no spend
 //   node taskmarket.js review <taskId>           # public, no spend
 //   node taskmarket.js create "<description>" <rewardUsdc> <durationHours> [tags] [--confirm]
-//   node taskmarket.js submit <taskId> "<message>" <file>... [--confirm]
+//   node taskmarket.js submit <taskId> <file>... [--confirm]
 //
 // Write actions (create/submit) require an explicit --confirm flag; the
 // authorization gate is enforced in code, not just prose. Exit codes:
