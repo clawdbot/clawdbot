@@ -264,12 +264,14 @@ describe("AcpSessionManager runtime config", () => {
       backendSessionId: "acpx-oneshot",
       agentSessionId: "agent-oneshot",
     });
+    // The oneshot session is terminated: the persisted resume identity must be cleared
+    // (not left "resolved") so a later cache-miss ensure for this sessionKey cannot
+    // resume the already-completed backend session (#124852 follow-up).
     expectRecordFields(currentMeta?.identity, {
-      state: "resolved",
-      acpxSessionId: "acpx-oneshot",
-      agentSessionId: "agent-oneshot",
-      source: "status",
+      state: "pending",
     });
+    expect(currentMeta?.identity?.acpxSessionId).toBeUndefined();
+    expect(currentMeta?.identity?.agentSessionId).toBeUndefined();
   });
 
   it("reconciles prompt-learned agent session IDs even when runtime status omits them", async () => {

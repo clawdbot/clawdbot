@@ -27,7 +27,10 @@ import {
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
+import {
+  discardPersistedManagerRuntimeState,
+  prepareFreshManagerRuntimeHandleRetry,
+} from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
   awaitTurnWithTimeout,
@@ -491,6 +494,21 @@ export async function runManagerTurn(params: {
               );
             } finally {
               params.runtimeHandles.clear(params);
+            }
+            // The backend session is terminated either way; clear the persisted resume
+            // identity so a later cache-miss ensure for this sessionKey (e.g. after restart)
+            // cannot resume an already-completed oneshot session (#124852 follow-up).
+            try {
+              await discardPersistedManagerRuntimeState({
+                cfg: input.cfg,
+                sessionKey,
+                agentId,
+                writeSessionMeta: params.writeSessionMeta,
+              });
+            } catch (error) {
+              logVerbose(
+                `acp-manager: failed to clear persisted ACP identity after oneshot close for ${sessionKey}: ${String(error)}`,
+              );
             }
           }
         }
