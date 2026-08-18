@@ -120,14 +120,37 @@ test("projects a channel avatar route without exposing its media-store reference
     entry,
   });
 
-  expect(row.channelAvatarUrl).toBe(
-    "/control/__openclaw__/channel-avatar/agent%3Amain%3Adiscord%3Adirect%3Auser-1",
+  expect(row.channelAvatarUrl).toMatch(
+    /^\/control\/__openclaw__\/channel-avatar\/agent%3Amain%3Adiscord%3Adirect%3Auser-1\?v=[A-Za-z0-9_-]{12}$/,
   );
   expect(row.origin).toEqual({ provider: "discord", to: "user:user-1" });
   expect(JSON.stringify(row)).not.toContain(localReference);
   expect(buildGatewaySessionEventFields({ sessionRow: row })).toMatchObject({
     channelAvatarUrl: row.channelAvatarUrl,
   });
+
+  // A replaced backing image (new media reference) must change the URL, or
+  // client-side blob/404 caches keyed by URL keep serving the stale avatar.
+  const replacedEntry = {
+    ...entry,
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "discord", to: "user:user-1" },
+      origin: {
+        provider: "discord",
+        to: "user:user-1",
+        avatar: "/private/state/media/inbound/avatar-2.png",
+      },
+    }),
+  } satisfies SessionEntry;
+  const replacedRow = buildGatewaySessionRowOwner({
+    cfg,
+    storePath: "",
+    store: { [key]: replacedEntry },
+    key,
+    entry: replacedEntry,
+  });
+  expect(replacedRow.channelAvatarUrl).toBeDefined();
+  expect(replacedRow.channelAvatarUrl).not.toBe(row.channelAvatarUrl);
 });
 
 async function withStateDirEnv<T>(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -83,6 +84,11 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 /** Adds current actor display data without persisting rename-prone metadata. */
+/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
+function channelAvatarRevision(reference: string): string {
+  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
+}
+
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
@@ -241,7 +247,7 @@ export function buildGatewaySessionRow(params: {
   const originLabel = origin?.label;
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
   const channelAvatarUrl = avatar
-    ? buildControlUiChannelAvatarUrl(controlUiBasePath, key)
+    ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
     : undefined;
   const parsedAgent = parseAgentSessionKey(key);
   const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;

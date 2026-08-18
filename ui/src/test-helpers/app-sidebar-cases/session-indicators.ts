@@ -120,6 +120,69 @@ describe("AppSidebar session indicators", () => {
     );
   });
 
+  it("refetches a mounted channel avatar when its route revision changes", async () => {
+    const avatarKey = "agent:main:avatar-revision";
+    const missingUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}?v=old`;
+    const restoredUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}?v=new`;
+    const sessions = createSessionsHarness("main", [avatarKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const row = result.sessions.find((sessionRow) => sessionRow.key === avatarKey);
+    if (!row) {
+      throw new Error("expected avatar row");
+    }
+    row.channelAvatarUrl = missingUrl;
+
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("?v=old")) {
+        return { ok: false, status: 404, blob: async () => new Blob([]) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        blob: async () => new Blob(["avatar"], { type: "image/png" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:channel-avatar-restored");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    gatewayHarness.gateway.connection.token = "avatar-token";
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+
+    // The pruned avatar 404s and its absence is cached under the old URL.
+    await waitForFast(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    expect(sidebar.querySelector(`[data-session-key="${avatarKey}"] .channel-avatar`)).toBeNull();
+
+    // A restored/replaced backing image arrives as a new route revision; the
+    // mounted row must fetch the new URL instead of reusing the sticky 404.
+    row.channelAvatarUrl = restoredUrl;
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${avatarKey}"] .channel-avatar`)
+          ?.getAttribute("src"),
+      ).toBe("blob:channel-avatar-restored");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      restoredUrl,
+      expect.objectContaining({ headers: { Authorization: "Bearer avatar-token" } }),
+    );
+  });
+
   it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
     const mainKey = "agent:main:main";
     const workingKey = "agent:main:working";
