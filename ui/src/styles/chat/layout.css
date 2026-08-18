@@ -4956,10 +4956,12 @@ button.chat-pr__diff {
   text-transform: uppercase;
 }
 
+/* Left padding is 9px, not the rows' 8px: option buttons add a 1px transparent
+   border, so 9 + 18 + 8 puts this label on the same stem as the model names. */
 .chat-controls__provider-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 8px 9px 3px;
   color: var(--muted);
   font-size: 11px;
@@ -5039,17 +5041,17 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-option-provider {
-  display: none;
-}
-
-.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__model-option-provider {
+  /* The invisible stem keeps grouped rows aligned with the provider heading label.
+     Search results reveal the icon in the same reserved slot. */
   display: inline-flex;
-}
-
-.chat-controls__model-option-provider.chat-controls__target-icon {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
+  visibility: hidden;
+}
+
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__model-option-provider {
+  visibility: visible;
 }
 
 .chat-controls__model-option-action {
@@ -5174,10 +5176,6 @@ button.chat-pr__diff {
   font-size: 12px;
 }
 
-.chat-controls__model-provenance-value--inherit {
-  color: var(--muted);
-}
-
 .chat-controls__model-catalog-state {
   display: flex;
   align-items: center;
@@ -5203,13 +5201,13 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-catalog-state-label svg,
-.chat-controls__model-catalog-retry svg {
+.chat-controls__model-catalog-action svg {
   width: 14px;
   height: 14px;
   flex: 0 0 14px;
 }
 
-.chat-controls__model-catalog-retry {
+.chat-controls__model-catalog-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5225,8 +5223,8 @@ button.chat-pr__diff {
   font-weight: 600;
 }
 
-.chat-controls__model-catalog-retry:hover,
-.chat-controls__model-catalog-retry:focus-visible {
+.chat-controls__model-catalog-action:hover,
+.chat-controls__model-catalog-action:focus-visible {
   border-color: color-mix(in srgb, var(--text) 28%, var(--border));
   background: var(--bg-hover);
   outline: none;

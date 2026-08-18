@@ -54,7 +54,7 @@ export function resolveChatModelCatalogState(
     ChatPageHost,
     "chatModelCatalog" | "chatModelCatalogError" | "chatModelsLoading" | "connected"
   >,
-): Omit<ChatModelCatalogState, "onRetry"> {
+): ChatModelCatalogState {
   const hasSnapshot =
     state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
   return {
@@ -105,10 +105,7 @@ export function renderChatPaneComposerControls(params: {
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
-          modelCatalogState: {
-            ...modelCatalogState,
-            onRetry: () => void refreshChatModelCatalogOnDemand(state, { refresh: true }),
-          },
+          modelCatalogState,
           modelOverrides: state.sessions.state.modelOverrides,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
           modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,

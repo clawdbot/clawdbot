@@ -475,7 +475,7 @@ suite.define(() => {
     }
   });
 
-  it("shows metadata failure truthfully and recovers the full catalog on retry", async () => {
+  it("shows metadata failure truthfully and recovers when the picker opens", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -526,17 +526,17 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await expect.poll(() => modelSelect.textContent()).toContain("Models unavailable");
-      await modelSelect.click();
-      await expect
-        .poll(() => page.locator('[data-chat-model-catalog-state="error"]').isVisible())
-        .toBe(true);
+      expect(await page.locator('[data-chat-model-catalog-state="error"]').count()).toBe(1);
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
-      await page.locator('[data-chat-model-catalog-retry="true"]').click();
+      await modelSelect.click();
 
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      expect((await gateway.getRequests("chat.metadata"))[1]?.params).toMatchObject({
+        agentId: "main",
+      });
       await expect.poll(() => page.locator("[data-chat-model-option]").count()).toBe(3);
-      expect(await page.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
+      expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -588,6 +588,7 @@ suite.define(() => {
         .toContain(recoveredModel.name);
 
       expect(await gateway.getRequests("chat.metadata")).toEqual([
+        expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
       ]);

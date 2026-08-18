@@ -35,12 +35,6 @@ type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
 };
-type NewSessionMetadataLoad = {
-  agentId: string;
-  context: ApplicationContext;
-  options: NewSessionMetadataLoadOptions;
-  selectionGeneration: number;
-};
 
 type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
 type ReconciledNewSessionSelection = {
@@ -105,7 +99,7 @@ export class NewSessionModelControl {
         id: number;
       }
     | undefined;
-  private lastMetadataLoad: NewSessionMetadataLoad | undefined;
+  private metadataClient: NewSessionMetadataClient | undefined;
   private restoringPreference = false;
   private pendingPreference: NewSessionPreference | null | undefined;
   private pendingAgent: GatewayAgentRow | undefined;
@@ -292,18 +286,13 @@ export class NewSessionModelControl {
     );
   }
 
-  private readonly retryMetadata = () => {
-    const pending = this.lastMetadataLoad;
-    if (!pending) {
+  refreshMetadataOnPickerOpen() {
+    if (!this.metadataClient || !this.agentId) {
       return;
     }
-    this.load(pending.context, pending.agentId, true, {
-      ...pending.options,
-      ...(pending.selectionGeneration === this.selectionGeneration
-        ? {}
-        : { preference: undefined }),
-    });
-  };
+    // Picker open is the retry; start directly so preference restoration is not re-armed.
+    this.startMetadataRequest(this.metadataClient, this.agentId);
+  }
 
   invalidate(resetSelection = false) {
     this.cancelMetadataRequest();
@@ -311,9 +300,9 @@ export class NewSessionModelControl {
     this.restoringPreference = false;
     if (resetSelection) {
       this.agentId = "";
+      this.metadataClient = undefined;
       this.selected = "";
       this.thinkingLevel = "";
-      this.lastMetadataLoad = undefined;
       this.updateMetadataState({
         catalog: [],
         hasSnapshot: false,
@@ -345,9 +334,9 @@ export class NewSessionModelControl {
       // the snapshot; same-agent refreshes retain it until replacement.
       this.cancelMetadataRequest();
       this.agentId = normalizedAgentId;
+      this.metadataClient = undefined;
       this.selected = "";
       this.thinkingLevel = "";
-      this.lastMetadataLoad = undefined;
       this.metadataState = {
         catalog: [],
         hasSnapshot: false,
@@ -357,6 +346,7 @@ export class NewSessionModelControl {
     const selectionGeneration = this.selectionGeneration;
     if (!context || snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.cancelMetadataRequest();
+      this.metadataClient = undefined;
       this.restoringPreference = false;
       if (context && snapshot?.phase !== "connected") {
         this.metadataState = {
@@ -367,12 +357,7 @@ export class NewSessionModelControl {
       this.notify();
       return;
     }
-    this.lastMetadataLoad = {
-      agentId: normalizedAgentId,
-      context,
-      options,
-      selectionGeneration,
-    };
+    this.metadataClient = client;
     this.pendingPreference = options.preference;
     this.pendingAgent = options.agent;
     this.pendingContext = context;
@@ -537,7 +522,6 @@ export class NewSessionModelControl {
         // chat.metadata and agents.list hydrate independently. Do not expose a
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
-        ...(this.metadataState.status === "error" ? { onRetry: this.retryMetadata } : {}),
         status:
           !agentDefaultsAvailable && this.metadataState.status !== "error"
             ? "loading"
@@ -582,6 +566,7 @@ export class NewSessionModelControl {
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
       onModelSetup: () => options.context?.navigate("model-setup"),
+      onModelPickerOpen: () => this.refreshMetadataOnPickerOpen(),
       onRequestUpdate: this.notify,
     });
   }

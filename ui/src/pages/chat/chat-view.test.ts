@@ -5297,33 +5297,42 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    ["offline", "Offline"],
-    ["error", "Couldn’t refresh models"],
-  ] as const)("gives %s precedence over a stale all-cold catalog", (status, expected) => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          available: false,
+    { status: "offline", catalogState: "offline", triggerLabel: "Offline" },
+    { status: "error", catalogState: null, triggerLabel: "GPT-5.6 Sol" },
+  ] as const)(
+    "renders $status over a stale all-cold catalog",
+    ({ status, catalogState, triggerLabel }) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            provider: "openai",
+            available: false,
+          },
+        ],
+      });
+      const container = renderModelControls(state, {
+        modelCatalogState: {
+          hasSnapshot: true,
+          status,
         },
-      ],
-    });
-    const container = renderModelControls(state, {
-      modelCatalogState: {
-        hasSnapshot: true,
-        status,
-        ...(status === "error" ? { onRetry: vi.fn() } : {}),
-      },
-    });
+      });
 
-    expect(container.textContent).toContain(expected);
-    expect(container.textContent).not.toContain("Authentication failed");
-    expect(container.querySelector('[data-chat-model-setup="true"]')).toBeNull();
-  });
+      expect(
+        container
+          .querySelector("[data-chat-model-catalog-state]")
+          ?.getAttribute("data-chat-model-catalog-state") ?? null,
+      ).toBe(catalogState);
+      expect(container.querySelector(".chat-controls__inline-select-label")?.textContent).toContain(
+        triggerLabel,
+      );
+      expect(container.textContent).not.toContain("Authentication failed");
+      expect(container.querySelector('[data-chat-model-setup="true"]')).toBeNull();
+    },
+  );
 
   it("applies a model selection immediately", () => {
     const { state } = createOpenAiHeaderState();
@@ -5379,16 +5388,14 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("marks the inherited default muted and resets an override from the provenance row", () => {
+  it("omits inherited provenance and resets an override from the provenance row", () => {
     const { state } = createChatHeaderState({
       model: null,
       models: createOpenAiModelCatalog(),
     });
     const container = renderModelControls(state);
 
-    expect(
-      container.querySelector(".chat-controls__model-provenance-value--inherit"),
-    ).not.toBeNull();
+    expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
     expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
 
     const onModelSelect = vi.fn(async () => true);
@@ -5398,7 +5405,7 @@ describe("chat model controls", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
+    expect(container.querySelector(".chat-controls__model-provenance")).not.toBeNull();
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     const modelSelect = getChatModelSelect(container);
     const details = modelSelect.closest<HTMLDetailsElement>("details");
@@ -5593,6 +5600,34 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");
     expect(details?.open).toBe(false);
     container.remove();
+  });
+
+  it("matches the default model by its localized marker", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+    });
+    const container = renderModelControls(state);
+    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
+
+    search!.value = "default";
+    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    const visibleOptions = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).filter((option) => !option.hidden);
+    expect(visibleOptions).toHaveLength(1);
+    expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
   });
 
   it("groups legacy Codex model references under OpenAI", () => {
