@@ -9,7 +9,6 @@ import type {
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
@@ -42,17 +41,6 @@ const waitForAbort = (signal: AbortSignal): Promise<void> =>
       return;
     }
     signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-
-const nextWsMessage = (ws: WebSocket): Promise<Record<string, unknown>> =>
-  new Promise((resolve, reject) => {
-    ws.once("message", (data) => {
-      try {
-        resolve(requireRecord(JSON.parse(rawDataToString(data)), "WebSocket message"));
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
   });
 
 const startWsServer = async (
