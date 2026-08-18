@@ -9,7 +9,7 @@ import {
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -33,6 +33,7 @@ import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 type ConnectCommandOptions = {
   service?: boolean;
   ephemeral?: boolean;
+  sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
 };
@@ -165,6 +166,9 @@ async function runConnectCommand(
   target: string | undefined,
   opts: ConnectCommandOptions,
 ): Promise<void> {
+  if (opts.ephemeral && opts.sessionHost) {
+    throw new Error("--ephemeral cannot be combined with --session-host.");
+  }
   if (opts.ephemeral && opts.service) {
     throw new Error("--ephemeral cannot be combined with --service.");
   }
@@ -202,6 +206,7 @@ async function runConnectCommand(
       : index === 0;
     return boundToAccessOrigin && cloudflareAccess ? { ...candidate, cloudflareAccess } : candidate;
   });
+  const forceWorkerRuns = opts.ephemeral === true || (opts.sessionHost === true && !opts.service);
   const nodeRunOptions = {
     gatewayHost: pair.host,
     gatewayPort: pair.port,
@@ -216,7 +221,7 @@ async function runConnectCommand(
     // Environment-managed nodes reuse their persisted device token when a provider
     // replays setup after the one-shot bootstrap credential has been consumed.
     preferGatewayBootstrapToken: opts.ephemeral !== true,
-    ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
+    ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
     displayName: opts.displayName,
   };
 
@@ -228,6 +233,20 @@ async function runConnectCommand(
   // The first hello stores durable device auth and the winning endpoint before
   // installation, so the service never persists the one-shot bootstrap bearer.
   await runNodeHost({ ...nodeRunOptions, stopAfterFirstConnect: true });
+  if (opts.sessionHost) {
+    await mutateConfigFileWithRetry({
+      writeOptions: {
+        auditOrigin: "cli",
+        explicitSetPaths: [["nodeHost", "workerRuns", "enabled"]],
+      },
+      mutate: (draft) => {
+        draft.nodeHost = {
+          ...draft.nodeHost,
+          workerRuns: { ...draft.nodeHost?.workerRuns, enabled: true },
+        };
+      },
+    });
+  }
   await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
 }
 
@@ -238,6 +257,11 @@ export function registerConnectCli(program: Command): void {
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)
+    .option(
+      "--session-host",
+      "Host worker sessions (process-scoped unless installed as a service)",
+      false,
+    )
     .addOption(new Option("--target-file <path>").hideHelp())
     .option("--display-name <name>", "Override the node display name")
     .addHelpText(
@@ -248,6 +272,10 @@ export function registerConnectCli(program: Command): void {
           [
             "openclaw connect https://gateway.example/j/<code> --service",
             "Install the node host service.",
+          ],
+          [
+            "openclaw connect https://gateway.example/j/<code> --service --session-host",
+            "Install a worker-session host service.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
     )
