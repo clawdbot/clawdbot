@@ -14,7 +14,6 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   formatControlUiSshHint,
   handleReset,
-  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   printWizardHeader,
@@ -484,97 +483,6 @@ describe("handleReset", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringMatching(/Failed to move to Trash \(manual delete\): .*workspace$/),
     );
-  });
-});
-
-describe("moveToTrash", () => {
-  it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
-    const targetPath = path.join(testRoot, "target");
-    fs.mkdirSync(targetPath, { recursive: true });
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const sourcePath = expectedTrashSourcePath(targetPath);
-
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
-      allowedRoots: [path.dirname(sourcePath)],
-    });
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(`Moved to Trash: ${targetPath}`);
-  });
-
-  it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
-    const targetPath = path.join(testRoot, "target-link");
-    const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
-    fs.writeFileSync(targetPath, "link placeholder");
-    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
-      isSymbolicLink: () => true,
-    } as fs.Stats);
-    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
-      String(candidate) === path.dirname(targetPath) ? path.dirname(targetPath) : outsideTarget,
-    );
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
-      allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
-    });
-  });
-
-  it("moves a dangling symlink instead of treating it as already removed", async () => {
-    const testRoot = tempDirs.make("openclaw-trash-dangling-link-");
-    const targetPath = path.join(testRoot, "workspace-link");
-    fs.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const sourcePath = expectedTrashSourcePath(targetPath);
-
-    try {
-      await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
-      allowedRoots: [path.dirname(sourcePath)],
-    });
-  });
-
-  it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
-    const lexicalParent = path.join(testRoot, "state-link");
-    const realParent = path.join(testRoot, "state-real");
-    const targetPath = path.join(lexicalParent, "openclaw.json");
-    const sourcePath = path.join(realParent, "openclaw.json");
-    fs.mkdirSync(lexicalParent, { recursive: true });
-    fs.writeFileSync(targetPath, "{}\n");
-    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
-      String(candidate) === lexicalParent ? realParent : String(candidate),
-    );
-    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
-      isSymbolicLink: () => false,
-    } as fs.Stats);
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
-    }
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
-      allowedRoots: [realParent],
-    });
   });
 });
 

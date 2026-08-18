@@ -114,7 +114,7 @@ describe("openclaw-tooltip", () => {
     );
   });
 
-  it("skins the body and arrow through shared Web Awesome tokens", async () => {
+  it("skins the body and removes the arrow through shared overlay tokens", async () => {
     const { tooltip } = createTooltip("Styled tooltip");
     document.body.append(tooltip);
     await tooltip.updateComplete;
@@ -126,7 +126,9 @@ describe("openclaw-tooltip", () => {
     expect(styles).toContain("--wa-tooltip-border-color:");
     expect(styles).toContain("--wa-tooltip-border-width: 1px");
     expect(styles).toContain("--wa-tooltip-border-style: solid");
-    expect(styles).toContain("--wa-tooltip-arrow-size: 6px");
+    expect(styles).toContain("--wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px)");
+    expect(styles).toContain("var(--overlay-border, var(--border-strong))");
+    expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
   });
 
   it("projects rich content into the Web Awesome tooltip", async () => {
@@ -275,6 +277,28 @@ describe("openclaw-tooltip", () => {
     const descriptionId = trigger.getAttribute("aria-describedby");
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
+  });
+
+  it("describes the focusable element inside a wrapper trigger", async () => {
+    const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
+    const row = document.createElement("div");
+    const link = document.createElement("a");
+    link.href = "#session";
+    link.textContent = "Release notes";
+    row.append(link);
+    const card = document.createElement("div");
+    card.slot = "content";
+    card.textContent = "Branch feature/sidebar";
+    tooltip.append(row, card);
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+
+    expect(row.hasAttribute("aria-describedby")).toBe(false);
+    const descriptionId = link.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
+      "Branch feature/sidebar",
+    );
   });
 
   it("describes rich content with its text content", async () => {
