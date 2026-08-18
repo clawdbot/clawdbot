@@ -201,11 +201,7 @@ async function postOpenAIResponsesCompaction(params: {
           isRecord(candidate) && candidate.type === "message" && candidate.role === "user",
       ).length
     : 0;
-  const retainedMessagePrefixSupported = supportsNativeOpenAIResponsesEndpoint({
-    provider: params.model.provider,
-    api: params.model.api,
-    baseUrl: params.model.baseUrl,
-  });
+  const retainedMessagePrefixSupported = supportsNativeOpenAIResponsesEndpoint(params.model);
   const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
   if (
     !isRecord(response) ||
