@@ -1173,6 +1173,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config: context.config,
     value: edgeAuthConfig,
+    targetUrl: url,
     env: process.env,
   });
   if (useStoredDeviceAuth) {

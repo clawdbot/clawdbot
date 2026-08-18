@@ -469,6 +469,29 @@ describe("runConfigureWizard", () => {
       "ownedConfigPathForWrite",
     ]);
   });
+
+  it("persists edge auth returned by the shared remote Gateway prompt", async () => {
+    const remoteConfig: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    setupBaseWizardState(remoteConfig);
+    queueWizardPrompts({ select: ["remote"], confirm: [] });
+    mocks.promptRemoteGatewayConfig.mockResolvedValueOnce(remoteConfig);
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    const remote = requireRecord(getGateway(requireWriteConfig()).remote, "remote config");
+    expect(remote.edgeAuth).toEqual({
+      "X-Edge-Auth": "test-secret",
+    });
+  });
+
   it("keeps startup gateway hint probes bounded", async () => {
     setupBaseWizardState({
       gateway: {

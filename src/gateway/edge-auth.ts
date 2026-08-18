@@ -47,10 +47,20 @@ export function normalizeEdgeAuthHeadersConfig(value: unknown): EdgeAuthHeadersC
 export async function resolveEdgeAuthHeaders(params: {
   config: OpenClawConfig;
   value?: EdgeAuthHeadersConfig;
+  targetUrl: string;
   env: NodeJS.ProcessEnv;
 }): Promise<Readonly<Record<string, string>> | undefined> {
   if (!params.value) {
     return undefined;
+  }
+  let protocol: string;
+  try {
+    protocol = new URL(params.targetUrl).protocol;
+  } catch {
+    throw new Error("gateway.remote.edgeAuth requires a wss:// connection target");
+  }
+  if (protocol !== "wss:") {
+    throw new Error("gateway.remote.edgeAuth requires a wss:// connection target");
   }
   const resolvedEntries = await Promise.all(
     Object.entries(params.value).map(async ([headerName, input]) => {

@@ -565,6 +565,7 @@ async function resolveBoundGatewayConnection(
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config: opts.config,
     value: edgeAuthConfig,
+    targetUrl: url,
     env: process.env,
   });
   return {
@@ -642,6 +643,7 @@ async function resolveGatewayConnection(
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config,
     value: edgeAuthConfig,
+    targetUrl: bootstrap.url,
     env,
   });
   return {

@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+
+const materializeSecretInput = vi.hoisted(() => vi.fn());
+
+vi.mock("../secrets/resolve-secret-input-string.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/resolve-secret-input-string.js")>();
+  materializeSecretInput.mockImplementation(actual.materializeSecretInput);
+  return { ...actual, materializeSecretInput };
+});
+
 import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
@@ -9,6 +18,7 @@ import {
 
 describe("gateway edge auth headers", () => {
   afterEach(() => {
+    materializeSecretInput.mockClear();
     resetSecretRedactionRegistryForTest();
   });
 
@@ -68,6 +78,7 @@ describe("gateway edge auth headers", () => {
       resolveEdgeAuthHeaders({
         config: {},
         value,
+        targetUrl: "wss://gateway.example/rpc",
         env: { EDGE_AUTH_TOKEN: first, EDGE_AUTH_SECRET: second },
       }),
     ).resolves.toEqual({ "X-Edge-Token": first, "X-Edge-Secret": second });
@@ -80,6 +91,7 @@ describe("gateway edge auth headers", () => {
       resolveEdgeAuthHeaders({
         config: {},
         value: { "X-Empty-Edge-Auth": " " },
+        targetUrl: "wss://gateway.example/rpc",
         env: {},
       }),
     ).rejects.toThrow('gateway.remote.edgeAuth header "X-Empty-Edge-Auth" resolved empty');
@@ -104,10 +116,31 @@ describe("gateway edge auth headers", () => {
     );
     expect(matchingConfig).toEqual({ "X-Edge-Auth": "test-secret" });
     await expect(
-      resolveEdgeAuthHeaders({ config, value: matchingConfig, env: {} }),
+      resolveEdgeAuthHeaders({
+        config,
+        value: matchingConfig,
+        targetUrl: "wss://gateway.example/rpc",
+        env: {},
+      }),
     ).resolves.toEqual({ "X-Edge-Auth": "test-secret" });
     expect(
       gatewayEdgeAuthValueForTarget({ config, targetUrl: "wss://other.example/rpc" }),
     ).toBeUndefined();
+  });
+
+  it("rejects non-WSS targets before materializing edge-auth secrets", async () => {
+    const value = normalizeEdgeAuthHeadersConfig({
+      "X-Edge-Auth": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
+    });
+
+    await expect(
+      resolveEdgeAuthHeaders({
+        config: {},
+        value,
+        targetUrl: "ws://gateway.example/rpc",
+        env: { EDGE_AUTH_TOKEN: "test-token" },
+      }),
+    ).rejects.toThrow(/gateway\.remote\.edgeAuth.*wss:\/\//u);
+    expect(materializeSecretInput).not.toHaveBeenCalled();
   });
 });

@@ -90,6 +90,32 @@ describe("promptRemoteGatewayConfig", () => {
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
+  it.each([
+    ["preserves", "wss://gateway.example/rpc", { "X-Edge-Auth": "test-secret" }],
+    ["clears", "wss://other.example/rpc", undefined],
+  ])("%s edge auth based on the remote Gateway scope", async (_label, nextUrl, expected) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/rpc/",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    const prompter = createPrompter({
+      confirm: vi.fn(async () => false),
+      select: createSelectPrompter({ "Gateway auth": "off" }),
+      text: vi.fn(async (params) =>
+        params.message === "Gateway WebSocket URL" ? nextUrl : "",
+      ) as WizardPrompter["text"],
+    });
+
+    const next = await promptRemoteGatewayConfig(cfg, prompter);
+
+    expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
+  });
+
   it("defaults discovered direct remote URLs to wss://", async () => {
     detectBinary.mockResolvedValue(true);
     discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);

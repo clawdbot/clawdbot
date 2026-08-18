@@ -332,6 +332,7 @@ export async function probeGateway(opts: {
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config: opts.config ?? {},
     value: edgeAuthConfig,
+    targetUrl: opts.url,
     env: opts.env ?? process.env,
   });
 
