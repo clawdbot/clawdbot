@@ -76,8 +76,11 @@ export function inspectConfiguredModelReferences(
   params: ModelReferenceInspectionParams,
 ): Array<ModelReferenceInspection & { active: boolean }> {
   const { inspect, snapshot } = createModelReferenceInspector(params);
-  return resolveConfiguredEntries(params.cfg, snapshot).entries.map((entry) => ({
-    ...inspect(entry.ref),
-    active: [...entry.tags].some((tag) => tag !== "configured"),
-  }));
+  // `inspect` returns a fresh object per call, so tagging it in place avoids a
+  // per-entry spread copy without sharing state between entries.
+  return resolveConfiguredEntries(params.cfg, snapshot).entries.map((entry) =>
+    Object.assign(inspect(entry.ref), {
+      active: [...entry.tags].some((tag) => tag !== "configured"),
+    }),
+  );
 }

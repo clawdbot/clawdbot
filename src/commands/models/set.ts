@@ -8,9 +8,12 @@ import { updateDefaultModelPrimaryConfig } from "./shared.js";
 
 /** Sets agents.defaults.model.primary and repairs provider runtime plugin installs when needed. */
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
-  const { updated, warning } = await updateDefaultModelPrimaryConfig({ modelRaw, field: "model" });
-  if (warning) {
-    runtime.error?.(warning);
+  const { updated, warning: catalogWarning } = await updateDefaultModelPrimaryConfig({
+    modelRaw,
+    field: "model",
+  });
+  if (catalogWarning) {
+    runtime.error?.(catalogWarning);
   }
   const selectedModel = resolveAgentModelPrimaryValue(updated.agents?.defaults?.model) ?? modelRaw;
   const repaired = await repairCodexRuntimePluginInstallForModelSelection({
