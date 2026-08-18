@@ -3,6 +3,7 @@ import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -10,6 +11,7 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  uiProofArtifactDir,
   waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -285,11 +287,14 @@ suite.define(() => {
     }
   });
 
-  it("keeps the selected session through archive refreshes and restores the composer", async () => {
+  it("removes the selected session from the sidebar while keeping archive recovery", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
@@ -332,6 +337,8 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath(selected.key));
+    };
+    const assertSelectedSidebarRow = async () => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${selected.key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await expect
@@ -348,7 +355,9 @@ suite.define(() => {
       await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
+      await assertSelectedSidebarRow();
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await captureUiProof(page, "selected-archive-before.png");
       await page.evaluate((sessionKey) => {
         const titleHistory: string[] = [];
         const paneTitleHistory: string[] = [];
@@ -447,6 +456,7 @@ suite.define(() => {
           sessionKey: row.key,
         });
         await assertSelectedRoute();
+        await assertSelectedSidebarRow();
       }
 
       const selectedRow = rowFor(selected.key);
@@ -466,17 +476,16 @@ suite.define(() => {
       );
       const archiveToast = page.locator("openclaw-toast-host .app-toast");
       await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      await selectedRow.waitFor({ state: "detached", timeout: 10_000 });
+      await assertSelectedRoute();
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
         archived: true,
         reason: "update",
         sessionKey: selected.key,
       });
-      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
-
       await assertSelectedRoute();
-      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
-      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
+      await selectedRow.waitFor({ state: "detached" });
       expect(
         await page.evaluate(
           () => (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory ?? [],
@@ -524,6 +533,7 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
+      await captureUiProof(page, "selected-archive-after.png");
 
       await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archiveToast.waitFor({ state: "detached" });
@@ -540,6 +550,7 @@ suite.define(() => {
       });
 
       await assertSelectedRoute();
+      await assertSelectedSidebarRow();
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await expect
@@ -549,6 +560,7 @@ suite.define(() => {
           ),
         )
         .toBe(selected.key);
+      await captureUiProof(page, "selected-archive-restored.png");
     } finally {
       await context.close();
     }
@@ -653,7 +665,7 @@ suite.define(() => {
         .toBe(controlUiSessionPath(archived.key));
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await archivedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await context.close();
     }
@@ -691,12 +703,8 @@ suite.define(() => {
       const selectedRow = page.locator(
         `.sidebar-recent-session[data-session-key="${archived.key}"]`,
       );
-      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => selectedRow.getAttribute("class"))
-        .toContain("sidebar-recent-session--active");
-      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
-      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(2);
+      await selectedRow.waitFor({ state: "detached", timeout: 10_000 });
+      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(1);
 
       const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
@@ -719,6 +727,10 @@ suite.define(() => {
       });
 
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => selectedRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await expect
         .poll(() =>
