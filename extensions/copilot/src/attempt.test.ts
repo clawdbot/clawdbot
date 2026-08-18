@@ -4539,8 +4539,27 @@ describe("runCopilotAttempt", () => {
         ]),
       );
       const sdk = makeFakeSdk({
-        onResumeSession: (session) => {
-          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("final answer"));
+        onResumeSession: (session, _sessionId, config) => {
+          session.sendAndWait.mockImplementationOnce(async () => {
+            if (config.suppressResumeEvent !== true) {
+              session.emit("assistant.message", {
+                __eventId: "prior-tool-assistant",
+                content: "",
+                messageId: "prior-tool-message",
+                toolRequests: [{ arguments: {}, name: "read", toolCallId: "prior-tool-call" }],
+              });
+              session.emit("tool.execution_start", {
+                toolCallId: "prior-tool-call",
+                toolName: "read",
+              });
+              session.emit("tool.execution_complete", {
+                result: { content: "prior tool result" },
+                success: true,
+                toolCallId: "prior-tool-call",
+              });
+            }
+            return makeAssistantMessageEvent("final answer");
+          });
         },
       });
       const permissivePolicy = vi.fn(async () => ({ kind: "approved" }) as never);
@@ -4584,7 +4603,17 @@ describe("runCopilotAttempt", () => {
         content: [{ type: "text", text: "final answer" }],
         stopReason: "stop",
       });
-      expect(result.toolMetas).toEqual([]);
+      expect({
+        itemLifecycle: result.itemLifecycle,
+        toolMetas: result.toolMetas,
+      }).toEqual({
+        itemLifecycle: {
+          activeCount: 0,
+          completedCount: 0,
+          startedCount: 0,
+        },
+        toolMetas: [],
+      });
       expect(sdk.createSession).not.toHaveBeenCalled();
       expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
       expect(pool.acquire).toHaveBeenCalledWith(
@@ -4597,6 +4626,7 @@ describe("runCopilotAttempt", () => {
         coauthorEnabled: false,
         continuePendingWork: false,
         customAgents: [],
+        suppressResumeEvent: true,
         customAgentsLocalOnly: true,
         embeddingCacheStorage: "in-memory",
         enableConfigDiscovery: false,
