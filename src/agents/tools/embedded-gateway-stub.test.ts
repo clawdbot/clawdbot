@@ -283,7 +283,7 @@ describe("embedded gateway stub", () => {
       responseOffset: 2,
       pagination: { offset: 2, totalMessages: 10, rawPageMessages: 2 },
     });
-    runtime.enforceChatHistoryFinalBudget.mockReturnValueOnce({ messages: boundedMessages });
+    runtime.capArrayByJsonBytes.mockReturnValueOnce({ items: boundedMessages });
     runtime.shouldReplayOldestChatHistoryRecord.mockReturnValueOnce(true);
     runtime.resolveChatHistoryNextOffset.mockReturnValueOnce(4);
 

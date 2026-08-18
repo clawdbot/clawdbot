@@ -283,19 +283,18 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const bounded = rt.enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined
       ? undefined
       : rt.resolveChatHistoryNextOffset({
-          messages: bounded.messages,
+          messages: capped,
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
           replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
             projected: historyPage.messages,
-            bounded: bounded.messages,
+            bounded: capped,
           }),
         });
   const hasMore =
@@ -307,7 +306,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   return {
     sessionKey,
     sessionId,
-    messages: bounded.messages,
+    messages: capped,
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
