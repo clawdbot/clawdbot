@@ -753,6 +753,15 @@ describe("TerminalSessionManager agent ownership", () => {
           owner: "agent:agent:main:main",
         }),
       ]);
+      expect(manager.close("stranger", outcome.sessionId, { terminateAgentOwned: true })).toBe(
+        false,
+      );
+      expect(manager.attach("viewer-2", outcome.sessionId)).toBeDefined();
+      expect(manager.close("viewer-2", outcome.sessionId, { terminateAgentOwned: true })).toBe(
+        true,
+      );
+      expect(manager.size).toBe(0);
+      expect(fake.killed).toBe(true);
     } finally {
       vi.useRealTimers();
     }

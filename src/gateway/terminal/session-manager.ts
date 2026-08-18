@@ -405,15 +405,23 @@ export class TerminalSessionManager {
   }
 
   /** Closes one session on operator request. */
-  close(connId: string, sessionId: string): boolean {
+  close(connId: string, sessionId: string, options?: { terminateAgentOwned?: boolean }): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return false;
     }
-    if (session.owner?.kind === "agent" && session.viewers.has(connId)) {
-      // Closing an agent-owned browser tab detaches only that view. The agent
-      // retains lifecycle ownership and may close the PTY through its tool.
-      return this.removeViewer(session, connId);
+    if (session.owner?.kind === "agent") {
+      if (!session.viewers.has(connId)) {
+        return false;
+      }
+      // Closing an agent-owned browser tab normally detaches only that view.
+      // Termination is reserved for discarding a fresh shared PTY that this
+      // initiating viewer could not adopt after the open response.
+      if (!options?.terminateAgentOwned) {
+        return this.removeViewer(session, connId);
+      }
+      this.finalize(session, "closed", {});
+      return true;
     }
     if (session.owner?.kind !== "conn" || session.owner.connId !== connId || session.closed) {
       return false;

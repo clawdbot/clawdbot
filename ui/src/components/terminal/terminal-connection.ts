@@ -240,7 +240,7 @@ export class TerminalConnection {
       // guarantees it cannot be driven, so release it here instead of leaving a
       // live server session that nothing owns and nothing can close.
       if (nonEmptyStringField(result.sessionId)) {
-        void this.close(result.sessionId);
+        void this.close(result.sessionId, { terminate: Boolean(params.sessionKey) });
       }
       throw new TerminalOpenUnusableSessionError(missingField);
     }
@@ -626,10 +626,15 @@ export class TerminalConnection {
   }
 
   /** Closes a session server-side and drops its local stream state. */
-  async close(sessionId: string): Promise<void> {
+  async close(sessionId: string, options: { terminate?: boolean } = {}): Promise<void> {
     this.removeStream(sessionId);
     this.pending.delete(sessionId);
-    await this.client.request("terminal.close", { sessionId }).catch(() => undefined);
+    await this.client
+      .request("terminal.close", {
+        sessionId,
+        ...(options.terminate ? { terminate: true } : {}),
+      })
+      .catch(() => undefined);
     // terminal.exit precedes the close response and can otherwise be buffered.
     this.pending.delete(sessionId);
     this.maybeUnsubscribe();

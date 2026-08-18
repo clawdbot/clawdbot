@@ -16990,15 +16990,19 @@ public struct TerminalResizeParams: Codable, Sendable {
 
 public struct TerminalCloseParams: Codable, Sendable {
     public let sessionid: String
+    public let terminate: Bool?
 
     public init(
-        sessionid: String)
+        sessionid: String,
+        terminate: Bool? = nil)
     {
         self.sessionid = sessionid
+        self.terminate = terminate
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
+        case terminate
     }
 }
 

@@ -10,6 +10,7 @@ import {
 import {
   ErrorCodes,
   errorShape,
+  type TerminalCloseParams,
   type TerminalOpenParams,
   type TerminalUploadResult,
   validateTerminalAttachParams,
@@ -588,8 +589,13 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!connId) {
       return;
     }
-    const p = params as { sessionId: string };
-    const ok = context.terminalSessions?.close(connId, p.sessionId) ?? false;
+    const p = params as TerminalCloseParams;
+    const ok =
+      context.terminalSessions?.close(
+        connId,
+        p.sessionId,
+        p.terminate ? { terminateAgentOwned: true } : undefined,
+      ) ?? false;
     respond(true, { ok });
   },
 

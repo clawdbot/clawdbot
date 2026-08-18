@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateTerminalOpenParams, validateTerminalUploadParams } from "../index.js";
+import {
+  validateTerminalCloseParams,
+  validateTerminalOpenParams,
+  validateTerminalUploadParams,
+} from "../index.js";
 import { MAX_TERMINAL_UPLOAD_BASE64_LENGTH } from "./terminal-constants.js";
 
 describe("terminal protocol", () => {
@@ -56,5 +60,9 @@ describe("terminal protocol", () => {
         destination: "/etc",
       }),
     ).toBe(false);
+  });
+
+  it("accepts an explicit close termination request", () => {
+    expect(validateTerminalCloseParams({ sessionId: "terminal-1", terminate: true })).toBe(true);
   });
 });

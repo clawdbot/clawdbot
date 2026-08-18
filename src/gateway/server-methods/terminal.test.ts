@@ -202,6 +202,20 @@ describe("terminal gateway policy", () => {
     );
   });
 
+  it("forwards explicit shared-terminal termination to the session manager", async () => {
+    const { opts, sessions, respond } = makeOpts(
+      { sessionId: "terminal-1", terminate: true },
+      { enabled: true },
+    );
+
+    await expectDefined(terminalHandlers["terminal.close"], "terminal.close")(opts);
+
+    expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-1", {
+      terminateAgentOwned: true,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+
   it("keeps legacy protocol-4 attach replies within their closed schema", async () => {
     const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
 
