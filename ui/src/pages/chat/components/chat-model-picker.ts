@@ -33,6 +33,7 @@ type ChatModelPickerParams = {
   onModelSetup?: () => void;
   onOpen?: () => unknown;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
+  onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
 };
@@ -229,6 +230,7 @@ function renderCatalogState(
   hasOptions: boolean,
   hasSelectableOptions: boolean,
   onModelSetup?: () => void,
+  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
 ) {
   if (!state || (state.status === "ready" && hasSelectableOptions)) {
     return nothing;
@@ -260,6 +262,22 @@ function renderCatalogState(
         ${state.status === "error" ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
+      ${state.status === "error" && retryTarget
+        ? html`
+            <button
+              class="chat-controls__model-catalog-action"
+              data-chat-model-target-retry=${retryTarget.groupId}
+              type="button"
+              ?disabled=${retryTarget.disabled}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                retryTarget.onRetry(retryTarget.groupId);
+              }}
+            >
+              ${t("common.retry")}
+            </button>
+          `
+        : nothing}
       ${state.status === "ready" && !hasSelectableOptions && onModelSetup
         ? html`
             <button
@@ -315,7 +333,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   const optionIndex = new Map(orderedOptions.map((option, index) => [option.value, index]));
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
-  const hasOptions = params.modelOptions.length + targetOptionCount > 0;
+  const hasOptions =
+    params.modelOptions.length + targetOptionCount > 0 ||
+    targetGroups.some((group) => group.status !== "ready");
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
   const commitModel = (value: string) => {
     if (params.modelSelectionLocked) {
@@ -515,6 +535,21 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 >
                                 <span>${group.label}</span>
                               </div>
+                              ${group.status === "ready"
+                                ? nothing
+                                : renderCatalogState(
+                                    { hasSnapshot: false, status: group.status },
+                                    false,
+                                    false,
+                                    undefined,
+                                    params.onTargetRetry
+                                      ? {
+                                          disabled: params.disabled,
+                                          groupId: group.id,
+                                          onRetry: params.onTargetRetry,
+                                        }
+                                      : undefined,
+                                  )}
                               ${repeat(
                                 group.options,
                                 (entry) => entry.value,
