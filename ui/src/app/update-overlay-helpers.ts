@@ -88,7 +88,7 @@ export type UpdateRestartStatusResponse = {
   schedule?: UpdateScheduleState;
 };
 
-export type UpdateFailureCause = { step: string; detail: string };
+type UpdateFailureCause = { step: string; detail: string };
 
 function readRecordedUpdateAttempt(
   sentinel: UpdateRestartStatusResponse["sentinel"],
