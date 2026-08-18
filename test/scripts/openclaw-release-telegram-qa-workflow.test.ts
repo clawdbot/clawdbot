@@ -901,9 +901,7 @@ describe("release Telegram QA workflow", () => {
 
     expect(launcher).toContain('for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do');
     expect(launcher).toContain("set_launcher_stage mount-private-tmp");
-    expect(launcher).toContain(
-      '-o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec"',
-    );
+    expect(launcher).toContain('-o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec"');
     expect(launcher).toContain("openclaw-telegram-sut-tmp");
     expect(launcher).toContain(
       '"$(stat -c \'%F:%a:%u:%g\' /tmp)" == "directory:700:${SUT_UID}:${SUT_GID}"',
