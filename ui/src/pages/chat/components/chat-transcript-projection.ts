@@ -140,6 +140,14 @@ function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown
   return [item];
 }
 
+function isConversationTurn(item: ChatRenderItem): boolean {
+  if (item.kind === "group") {
+    const role = item.role.toLowerCase();
+    return role === "user" || role === "assistant";
+  }
+  return item.kind === "stream-run" && item.parts.some((part) => part.kind === "stream");
+}
+
 function trackTranscriptRenderDependencies(
   state: ChatThreadState,
   dependencies: unknown[],
@@ -577,6 +585,15 @@ export function projectChatTranscript(
     key: item.key,
     item,
   }));
+  const typingIndicator = renderChatTypingIndicator(props.typingActors);
+  if (typingIndicator) {
+    const lastTurnIndex = transcriptItems.findLastIndex(isConversationTurn);
+    transcriptRows.splice(lastTurnIndex + 1, 0, {
+      kind: "content",
+      key: "presence:typing",
+      content: typingIndicator,
+    });
+  }
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -602,10 +619,6 @@ export function projectChatTranscript(
       key: "background-tasks",
       content: backgroundTasks,
     });
-  }
-  const typingIndicator = renderChatTypingIndicator(props.typingActors);
-  if (typingIndicator) {
-    transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   trackTranscriptRenderDependencies(state, [
     chatItems,

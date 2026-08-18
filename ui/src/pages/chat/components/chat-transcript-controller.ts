@@ -544,6 +544,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     ) {
       return;
     }
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const typingAdded = !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
+    const followTyping = typingAdded && virtualizer.isAtEnd();
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     for (const key of this.measureRowRefs.keys()) {
@@ -552,15 +555,17 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       }
     }
     const keys = this.rowKeys;
-    const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({
       ...virtualizer.options,
       count: keys.length,
       getItemKey: (index) => keys[index] ?? `missing:${index}`,
-      // Presence is an ordinary measured tail row, but it follows an append
-      // only when TanStack observed the reader already at the transcript end.
-      followOnAppend: keys.at(-1) === "presence:typing" ? "auto" : false,
+      followOnAppend: false,
     });
+    if (followTyping) {
+      virtualizer.scrollToIndex(this.rowIndexesByKey.get("presence:typing") ?? keys.length - 1, {
+        align: "end",
+      });
+    }
   }
 
   private syncScrollMargin(scrollElement: HTMLDivElement | null): void {
