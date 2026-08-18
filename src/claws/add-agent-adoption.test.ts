@@ -1,5 +1,7 @@
 // Apply-time compare-and-swap coverage for adopting a configured agent.
-import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,6 +13,24 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawAddPlan, ClawSourceIdentity } from "./types.js";
+import {
+  CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+  type PersistedClawWorkspaceFile,
+} from "./workspace.js";
+
+function managedWorkspaceFile(plan: ClawAddPlan, content: string): PersistedClawWorkspaceFile {
+  return {
+    schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+    agentId: plan.agent.finalId,
+    workspace: plan.agent.workspace,
+    path: "SKILL.md",
+    sourcePath: "SKILL.md",
+    contentDigest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
+    status: "complete",
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -122,7 +142,7 @@ describe("applyClawAddPlan agent adoption", () => {
     expect(readClawInstallRecord("worker", { env })).toBeUndefined();
   });
 
-  it("keeps durable v3 provenance when the final compare-and-swap loses a race", async () => {
+  it("releases the unclaimed adoption when the final compare-and-swap loses a race", async () => {
     const { root, plan, config } = await fixture();
     const env = { OPENCLAW_STATE_DIR: join(root, "state") };
 
@@ -138,14 +158,88 @@ describe("applyClawAddPlan agent adoption", () => {
       },
     });
 
-    expect(result).toMatchObject({
-      status: "partial",
-      error: { code: "agent_config_conflict" },
-      installRecord: { agentOrigin: "adopted" },
+    expect(result).toMatchObject({ status: "partial", error: { code: "agent_config_conflict" } });
+    expect(result.error?.message).toContain("released its unclaimed adoption");
+    // The result must not report ownership the state database no longer holds.
+    expect(result.installRecord).toBeUndefined();
+    // The claim never landed, so no record may survive to block resume or authorize a remove
+    // that would delete the operator's own agent.
+    expect(readClawInstallRecord("worker", { env })).toBeUndefined();
+  });
+
+  it("releases when the write retries and the second transform loses", async () => {
+    const { root, plan, config } = await fixture();
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const raced = {
+      ...config,
+      agents: { entries: { worker: { ...config.agents?.entries?.worker, name: "Raced" } } },
+    };
+
+    const result = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      // A config write that hash-conflicts re-runs the transform against the newer file, so a
+      // first transform that would have committed proves nothing about what landed.
+      commitConfig: async (transform) => {
+        transform(config);
+        transform(raced);
+      },
     });
+
+    expect(result).toMatchObject({ status: "partial", error: { code: "agent_config_conflict" } });
+    expect(result.installRecord).toBeUndefined();
+    expect(readClawInstallRecord("worker", { env })).toBeUndefined();
+  });
+
+  it("rolls back the files this attempt wrote before releasing the claim", async () => {
+    const { root, plan, config } = await fixture();
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const managedPath = join(plan.agent.workspace, "SKILL.md");
+    await writeFile(managedPath, "managed");
+
+    const result = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      createWorkspaceFiles: async () => [managedWorkspaceFile(plan, "managed")],
+      commitConfig: async (transform) => {
+        transform({
+          ...config,
+          agents: { entries: { worker: { ...config.agents?.entries?.worker, name: "Raced" } } },
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ status: "partial", workspaceFiles: [] });
+    expect(existsSync(managedPath)).toBe(false);
+    expect(readClawInstallRecord("worker", { env })).toBeUndefined();
+  });
+
+  it("keeps the record when an operator-modified managed file survives rollback", async () => {
+    const { root, plan, config } = await fixture();
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const managedPath = join(plan.agent.workspace, "SKILL.md");
+    await writeFile(managedPath, "edited by the operator");
+
+    const result = await applyClawAddPlan(plan, {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      readConfig: () => config,
+      createWorkspaceFiles: async () => [managedWorkspaceFile(plan, "managed")],
+      commitConfig: async (transform) => {
+        transform({
+          ...config,
+          agents: { entries: { worker: { ...config.agents?.entries?.worker, name: "Raced" } } },
+        });
+      },
+    });
+
+    expect(result.error?.message).toContain("SKILL.md");
+    expect(existsSync(managedPath)).toBe(true);
     expect(readClawInstallRecord("worker", { env })).toMatchObject({
-      schemaVersion: "openclaw.clawInstallRecord.v3",
       agentOrigin: "adopted",
+      status: "partial",
     });
   });
 
@@ -176,8 +270,9 @@ describe("applyClawAddPlan agent adoption", () => {
       status: "partial",
       configCommitted: false,
       error: { code: "agent_workspace_conflict" },
-      installRecord: { agentOrigin: "adopted" },
     });
+    // A workspace conflict loses the same claim as a digest conflict, so it releases the same way.
+    expect(result.installRecord).toBeUndefined();
     expect(committedConfig).toBeUndefined();
   });
 

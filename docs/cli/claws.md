@@ -406,12 +406,20 @@ declared workspace files, and other managed package resources. Status exposes
 `agentOrigin: "adopted"`. Update retains the adopted agent's recorded
 `default` marker and still treats any later full-configuration change as drift.
 
+Adoption owns nothing until the final configuration write lands. If that write
+loses to a concurrent config change, `claws add` rolls back the files it wrote
+during the attempt and releases the ownership record, leaving the agent and its
+workspace as the operator left them; rerun `claws add --dry-run` to preview
+again. Managed state that cannot be rolled back keeps the record so
+`claws remove` can release it, and the error names what remains.
+
 Removal deletes the managed agent configuration, derived bindings and allow
 references, unchanged managed workspace files, and eligible package, MCP, and
 cron resources. It never deletes an adopted agent's pre-existing agent
-directory or database, session index, session transcripts, workspace
-directory, or undeclared workspace files. Those historical artifacts remain
-on disk after the Claw install record is removed.
+directory or database, its durable database registration, session index,
+session transcripts, workspace directory, or undeclared workspace files. Those
+historical artifacts remain on disk, and discoverable, after the Claw install
+record is removed.
 
 Adopted-agent ownership uses a newer install-record format as a downgrade
 fence. Builds that predate configured-agent adoption reject that record before

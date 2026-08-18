@@ -675,7 +675,13 @@ export async function applyClawRemovePlan(
   if (!complete) {
     updateClawInstallRecordStatus(agentId, "partial", options);
   }
-  releaseClawRemoveRows(plan.agentId, workspaceFiles, complete, options);
+  releaseClawRemoveRows(
+    plan.agentId,
+    workspaceFiles,
+    complete,
+    options,
+    retainHistoricalAgentState,
+  );
   return {
     schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,

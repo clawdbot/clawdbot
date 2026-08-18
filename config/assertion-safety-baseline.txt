@@ -2380,7 +2380,6 @@ src/channels/turn/history-window.ts	1
 src/channels/turn/lifecycle.ts	3
 src/channels/turn/route-dm-scope.ts	1
 src/channels/turn/run-channel-turn.ts	6
-src/claws/add.ts	7
 src/claws/cron.ts	15
 src/claws/doctor.ts	2
 src/claws/export.ts	8
@@ -2392,7 +2391,7 @@ src/claws/packages.ts	1
 src/claws/project-build.ts	4
 src/claws/project.ts	4
 src/claws/provenance-runtime-read.ts	1
-src/claws/provenance.ts	6
+src/claws/provenance.ts	5
 src/claws/reader.ts	8
 src/claws/schema.ts	3
 src/claws/update-capability-changes.ts	11
@@ -2411,7 +2410,7 @@ src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	7
 src/cli/claws-cli.gateway-readiness.ts	1
-src/cli/claws-cli.runtime.ts	2
+src/cli/claws-cli.runtime.ts	1
 src/cli/command-config-resolution.ts	2
 src/cli/command-format.ts	1
 src/cli/command-options.ts	1

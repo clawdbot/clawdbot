@@ -36,7 +36,7 @@ export function resolveClawAgentRosterKey(
   return resolveAgentEntry(config, agentId)?.id;
 }
 
-export function resolveClawPlanningAgentRoster(
+function resolveClawPlanningAgentRoster(
   config: OpenClawConfig,
   sourceConfig: OpenClawConfig = config,
 ) {

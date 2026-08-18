@@ -70,7 +70,9 @@ export type ClawAddResult = {
 // failure happened before the workspace, after the config commit, or anywhere between.
 export function partialResult(params: {
   plan: ClawAddPlan;
-  installRecord: PersistedClawInstall;
+  // Absent once an attempt has released its record: the result must not report ownership
+  // that no longer exists in the state database.
+  installRecord: PersistedClawInstall | undefined;
   workspaceCreated: boolean;
   configCommitted: boolean;
   workspaceFiles?: PersistedClawWorkspaceFile[];
@@ -96,11 +98,15 @@ export function partialResult(params: {
     packages: params.packages ?? [],
     mcpServers: params.mcpServers ?? [],
     cronJobs: params.cronJobs ?? [],
-    installRecord: {
-      ...params.installRecord,
-      status: params.installStatus ?? "partial",
-      updatedAtMs: params.nowMs ?? Date.now(),
-    },
+    ...(params.installRecord
+      ? {
+          installRecord: {
+            ...params.installRecord,
+            status: params.installStatus ?? "partial",
+            updatedAtMs: params.nowMs ?? Date.now(),
+          },
+        }
+      : {}),
     error: params.error,
   };
 }

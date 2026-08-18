@@ -54,7 +54,7 @@ export type PersistedClawInstall = {
   agentId: string;
   workspace: string;
   agentConfigDigest: string;
-  agentOrigin: "created" | "adopted";
+  agentOrigin: installRecordSchema.ClawAgentOrigin;
   agentOwnedPaths: string[];
   bootstrap?: { sourcePath: string; contentDigest: string };
   status: ClawInstallStatus;
