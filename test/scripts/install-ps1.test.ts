@@ -211,6 +211,44 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "npm-candidate-validation",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-missing-candidate-" + [guid]::NewGuid().ToString("N"))',
+          "New-Item -ItemType Directory -Path $root | Out-Null",
+          "function Check-ExistingOpenClaw { return $true }",
+          "function Check-Node { return $true }",
+          "function Ensure-Git { return $true }",
+          "function Test-PreviousGitWrapper { return $false }",
+          "function Get-NpmCommandPath { return 'npm.cmd' }",
+          "function Get-WindowsCommandSafeDirectory { return $root }",
+          "function Resolve-NpmOpenClawInstallSpec { return 'openclaw@latest' }",
+          "function Test-NpmConfigRawKey { return $true }",
+          "function Get-NpmDebugLogRootCandidates { return @() }",
+          "function Invoke-NpmCommand {",
+          "  param([string[]]$Arguments = @(), [string]$CommandPath, [string]$WorkingDirectory)",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($Arguments[0] -eq '--version') { return '12.0.0' }",
+          "  if ($Arguments[0] -eq 'root') { return $root }",
+          "  if ($Arguments[0] -eq 'config') { return $root }",
+          "  if ($Arguments[0] -eq 'install') { return }",
+          "  throw \"unexpected npm command: $($Arguments -join ' ')\"",
+          "}",
+          "function Ensure-OpenClawOnPath { throw 'old PATH command was accepted after missing candidate' }",
+          "$InstallMethod = 'npm'",
+          "$NoOnboard = $true",
+          "$Tag = 'latest'",
+          "try {",
+          "  $null = Main",
+          '  if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
+          "} finally {",
+          "  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "method-switch-preservation",
         source: [
           scriptWithoutEntryPoint,
@@ -896,6 +934,10 @@ describe("install.ps1 failure handling", () => {
 
   runIfPowerShell("applies the canonical npm lifecycle version policy", () => {
     expectBatchedPowerShellCase("npm-lifecycle-policy");
+  });
+
+  runIfPowerShell("rejects npm success without a usable candidate package", () => {
+    expectBatchedPowerShellCase("npm-candidate-validation");
   });
 
   runIfPowerShell("preserves the npm owner when a git replacement fails", () => {

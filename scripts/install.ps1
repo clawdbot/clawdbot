@@ -1512,8 +1512,13 @@ function Test-NpmLifecycleCompleted {
     if ($LASTEXITCODE -ne 0 -or $rootOutput.Count -eq 0) {
         return $false
     }
-    $guardPath = Join-Path $rootOutput[-1].ToString().Trim() "openclaw\dist\openclaw-install-guard"
-    return -not (Test-Path -LiteralPath $guardPath)
+    $npmRoot = $rootOutput[-1].ToString().Trim()
+    if ([string]::IsNullOrWhiteSpace($npmRoot)) {
+        return $false
+    }
+    $entryPath = Join-Path $npmRoot "openclaw\dist\entry.js"
+    $guardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
+    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $guardPath)
 }
 
 function Format-OpenClawGitWrapper {
@@ -1616,7 +1621,7 @@ function Install-OpenClaw {
             return $false
         }
         if (-not (Test-NpmLifecycleCompleted -NpmCommand $npmCommand -NpmCwd $npmCwd)) {
-            Write-Host "[!] OpenClaw lifecycle scripts did not complete; refusing installer success." -ForegroundColor Red
+            Write-Host "[!] npm install did not produce a usable OpenClaw package; lifecycle scripts may not have completed." -ForegroundColor Red
             return $false
         }
     } finally {
