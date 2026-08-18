@@ -61,7 +61,7 @@ export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> 
   }
 }
 
-export async function getTailscaleDnsName(): Promise<string | null> {
+async function getTailscaleDnsName(): Promise<string | null> {
   const info = await getTailscaleSelfInfo();
   return info?.dnsName ?? null;
 }

@@ -10,7 +10,6 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
 import {
   cleanupTailscaleExposure,
   cleanupTailscaleExposureRoute,
-  getTailscaleDnsName,
   getTailscaleSelfInfo,
   setupTailscaleExposure,
   setupTailscaleExposureRoutes,
@@ -44,7 +43,6 @@ describe("voice-call tailscale helpers", () => {
       dnsName: "bot.example.ts.net",
       nodeId: "node-123",
     });
-    await expect(getTailscaleDnsName()).resolves.toBe("bot.example.ts.net");
     expect(runCommandMock).toHaveBeenCalledWith(
       ["tailscale", "status", "--json", "--peers=false"],
       expect.objectContaining({
