@@ -130,6 +130,7 @@ export function loadConfigFromContext(
           hash,
           issues: validated.issues,
           warnings: validated.warnings,
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues: [],
         }),
       );
@@ -185,6 +186,7 @@ export function loadConfigFromContext(
         hash,
         issues: [],
         warnings: validated.warnings,
+        resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       }),
     );

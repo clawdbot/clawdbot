@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -11,6 +10,7 @@ import {
   successfulSessionPatch,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -170,10 +170,7 @@ describe("AppSidebar session mutation feedback", () => {
     } as unknown as GatewayBrowserClient);
     gateway.publish({
       selfUser: { id: "profile-ada", name: "Ada" },
-      hello: {
-        features: { methods: ["sessions.assignOwner"] },
-        auth: { role: "operator", scopes: ["operator.write"] },
-      } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
     });
     const result = harness.sessions.state.result;
     const row = result?.sessions.find((session) => session.key === "agent:main:a");
@@ -181,9 +178,10 @@ describe("AppSidebar session mutation feedback", () => {
       throw new Error("expected session owner fixture");
     }
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
@@ -219,7 +217,7 @@ describe("AppSidebar session mutation feedback", () => {
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: { features: { methods: ["sessions.reclaim"] } } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
@@ -266,9 +264,7 @@ describe("AppSidebar session mutation feedback", () => {
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: {
-        features: { methods: ["environments.destroy"] },
-      } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["environments.destroy"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");

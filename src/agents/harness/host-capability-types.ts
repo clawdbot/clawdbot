@@ -2,11 +2,34 @@ import type { AnyAgentTool } from "../tools/common.js";
 
 type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+type AgentHarnessHostApprovalTerminalReason =
+  | "user"
+  | "timeout"
+  | "malformed-verdict"
+  | "no-route"
+  | "run-aborted"
+  | "gateway-restart"
+  | "storage-corrupt";
+
+type AgentHarnessHostApprovalResult = Readonly<{
+  decision: AgentHarnessHostApprovalDecision | null | undefined;
+  terminalReason: AgentHarnessHostApprovalTerminalReason | null | undefined;
+}>;
+
+type AgentHarnessPreparedEnvironment = Readonly<{
+  credentialScrubEnv: Readonly<Record<string, string>>;
+  localIdentityEnv: Readonly<Record<string, string>>;
+  /** Non-secret fact used to select the local GitHub identity overlay. */
+  managedLocalIdentity: boolean;
+}>;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Closure-bound non-secret maps prepared before harness placement. */
+  preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
@@ -45,5 +68,5 @@ export type AgentHarnessHostCapabilities = Readonly<{
     timeoutMs: number;
     transportTimeoutMs?: number;
     signal?: AbortSignal;
-  }) => Promise<AgentHarnessHostApprovalDecision | null | undefined>;
+  }) => Promise<AgentHarnessHostApprovalResult | undefined>;
 }>;

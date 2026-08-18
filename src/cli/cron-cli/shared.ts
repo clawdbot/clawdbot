@@ -23,6 +23,7 @@ import {
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatLookupMiss } from "../error-format.js";
+import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
@@ -205,10 +206,11 @@ function formatCronStatusForDisplay(job: CronJob): string {
 }
 
 export function handleCronCliError(err: unknown) {
+  rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
   const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
   if (isJsonOutputModeActive(process.argv)) {
-    throw new Error(message);
+    throw missingJob ? new Error(message) : err;
   }
   defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);

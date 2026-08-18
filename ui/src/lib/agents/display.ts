@@ -205,6 +205,11 @@ type ToolPolicy = {
   deny?: string[];
 };
 
+type GitHubIdentityConfigValue = {
+  profileId?: string;
+  gitAuthor?: { name?: string; email?: string };
+};
+
 type AgentConfigEntry = {
   name?: string;
   workspace?: string;
@@ -217,6 +222,7 @@ type AgentConfigEntry = {
     allow?: string[];
     alsoAllow?: string[];
     deny?: string[];
+    github?: GitHubIdentityConfigValue;
   };
 };
 
@@ -230,6 +236,7 @@ type ConfigSnapshot = {
     allow?: string[];
     alsoAllow?: string[];
     deny?: string[];
+    github?: GitHubIdentityConfigValue;
   };
 };
 

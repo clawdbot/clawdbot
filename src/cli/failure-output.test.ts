@@ -1,6 +1,15 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { ExpectedCliError, formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
+import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
+import {
+  ExpectedCliError,
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  isExpectedCliError,
+} from "./failure-output.js";
+
+const PLUGIN_POLICY_MESSAGE =
+  'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
 
 describe("formatCliJsonFailure", () => {
   it("uses the canonical typed envelope and redacts the message", () => {
@@ -55,20 +64,34 @@ describe("formatCliJsonFailure", () => {
     });
     expect(payload.error.message).not.toContain("internal parse cause");
   });
-
   it("keeps plugin policy messages in the canonical JSON envelope", () => {
-    const message =
-      'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
-
     const error = new ExpectedCliError({
-      message,
-      humanOutput: message,
-      machineOutput: message,
+      message: PLUGIN_POLICY_MESSAGE,
+      humanOutput: PLUGIN_POLICY_MESSAGE,
+      machineOutput: PLUGIN_POLICY_MESSAGE,
     });
 
     expect(formatCliJsonFailure(error)).toEqual({
       ok: false,
-      error: { type: "cli_error", message },
+      error: { type: "cli_error", message: PLUGIN_POLICY_MESSAGE },
+    });
+  });
+
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("keeps gateway credential guidance unchanged in $label", ({ env }) => {
+    const error = new GatewayCredentialsRequiredError({
+      method: "device.pair.list",
+      configPath: "/tmp/openclaw.json",
+    });
+
+    expect(formatCliJsonFailure(error, { env })).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: error.message,
+      },
     });
   });
 });
@@ -115,6 +138,60 @@ describe("formatCliFailureLines", () => {
       "[openclaw] Help: openclaw --help",
     ]);
   });
+
+  it.each([
+    {
+      label: "plugin policy refusal",
+      createError: () =>
+        new ExpectedCliError({
+          message: PLUGIN_POLICY_MESSAGE,
+          humanOutput: PLUGIN_POLICY_MESSAGE,
+          machineOutput: PLUGIN_POLICY_MESSAGE,
+        }),
+    },
+    {
+      label: "missing gateway credentials",
+      createError: () =>
+        new GatewayCredentialsRequiredError({
+          method: "device.pair.list",
+          configPath: "/tmp/openclaw.json",
+        }),
+    },
+    {
+      label: "unreachable gateway",
+      createError: () =>
+        new GatewayTransportError({
+          kind: "closed",
+          message:
+            "Gateway not reachable at ws://127.0.0.1:51078 (ECONNREFUSED).\nStart it with `openclaw gateway run` or check `openclaw gateway status`.",
+          connectionDetails: {
+            url: "ws://127.0.0.1:51078",
+            urlSource: "local loopback",
+            message: "Gateway target: ws://127.0.0.1:51078",
+          },
+        }),
+    },
+  ])(
+    "routes $label through the shared expected-condition predicate without crash framing",
+    ({ createError }) => {
+      const error = createError();
+
+      expect(isExpectedCliError(error)).toBe(true);
+      const lines = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        env: { OPENCLAW_DEBUG: "1" },
+      });
+
+      expect(lines).toEqual(error.message.split("\n"));
+      const output = lines.join("\n");
+      expect(output).not.toContain("[openclaw] The CLI command failed.");
+      expect(output).not.toContain("[openclaw] Reason:");
+      expect(output).not.toContain("OPENCLAW_DEBUG");
+      expect(output).not.toContain("Stack:");
+      expect(output).not.toContain("openclaw doctor");
+    },
+  );
 
   it("prints stack details when debug output is requested", () => {
     const lines = formatCliFailureLines({

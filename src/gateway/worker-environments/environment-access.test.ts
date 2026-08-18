@@ -13,7 +13,7 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
+  it("projects live workspace transport status and fences it before provider teardown", async () => {
     support.seedReady("worker-tunnel", undefined, true);
     const order: string[] = [];
     let tunnelStatus: "stopped" | "connected" = "stopped";
@@ -24,7 +24,6 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
           stop: async () => {},
@@ -55,7 +54,6 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         bundleHash: support.BUNDLE_HASH,
-        gateway: { host: "127.0.0.1", port: 18_789 },
         sharedHost: true,
       }),
     );
@@ -136,6 +134,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "crabbox",
         provision: async () => ({
           leaseId: "cloud-lease",
@@ -203,6 +202,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "device",
         provision: async () => ({
           leaseId: "device-lease",

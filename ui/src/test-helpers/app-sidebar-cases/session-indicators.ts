@@ -42,7 +42,7 @@ describe("AppSidebar session indicators", () => {
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
-  it("places Home activity in the same trailing endcap as session activity", async () => {
+  it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
     const mainKey = "agent:main:main";
     const workingKey = "agent:main:working";
     const sessions = createSessionsHarness("main", [mainKey, workingKey]);
@@ -58,6 +58,8 @@ describe("AppSidebar session indicators", () => {
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = mainKey;
     sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();
@@ -302,10 +304,9 @@ describe("AppSidebar session indicators", () => {
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked session");
-    expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
+    for (const row of [forked, unread, runningUnread]) {
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
+    }
     expect(runningUnread?.querySelector(".session-row-state")?.getAttribute("aria-label")).toBe(
       "Active run · Unread",
     );
@@ -324,9 +325,7 @@ describe("AppSidebar session indicators", () => {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
       expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
-      expect(row?.querySelector("a")?.getAttribute("title")).toContain(
-        key === keys.openPullRequest ? "Open PR" : "Merged",
-      );
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
       expect(row?.querySelector("[data-session-pr-state]")?.hasAttribute("title")).toBe(false);
     }
 

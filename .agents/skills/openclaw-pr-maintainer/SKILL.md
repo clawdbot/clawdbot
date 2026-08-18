@@ -62,7 +62,7 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 
 When a maintainer asks Codex to review, triage, fix, or land a specific OpenClaw issue/PR, have the lead or assigned collaboration worker inspect live assignment before deep work. Assignment itself is a public GitHub write.
 
-- Identify the requesting maintainer's GitHub login. In this environment, default Peter to `steipete`; if another maintainer is clearly the requester, use that maintainer's bare login.
+- Resolve the assignment login from the GitHub account authenticated for the mutation: use `gh api user --jq .login` for direct commands or `gh_plain api user --jq .login` inside `scripts/pr`. Never infer a GitHub login from the chat user's name or identity. If the requester differs from the authenticated account or that relationship cannot be established safely, leave the target unassigned or require an explicit bare login.
 - Read current assignees with live `gh issue view` / `gh pr view`; `gitcrawl` is not enough for assignment state.
 - If unassigned, assign the requester only when an explicit land, fix-and-land, autonomous-resolution, or assignment request authorizes that mutation. For fix-only, review-only, triage-only, listing, or shortlist requests, report `unassigned` without assigning unless assignment is separately requested. Never auto-assign broad discovery candidates or shortlists.
 - If assigned to someone else, say so clearly before analysis and include assignment age:

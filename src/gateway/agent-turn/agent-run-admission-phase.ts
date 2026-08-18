@@ -111,6 +111,7 @@ export async function prepareAgentRunDispatch(params: {
   effectiveTranscriptInputText: string;
   images: ChatImageContent[];
   offloadedRefs: OffloadedRef[];
+  onUserTurnMediaPersisted: () => void;
   requestedPromptPersistenceSuppression: boolean;
   runId: string;
   agentDedupeKeys: readonly string[];
@@ -477,6 +478,11 @@ export async function prepareAgentRunDispatch(params: {
       client: params.client,
       context: params.context,
     });
+    if (userTurn.recorder) {
+      // The recorder already persisted the media references, so later admission
+      // rejection must preserve the files now owned by durable history.
+      params.onUserTurnMediaPersisted();
+    }
   } catch (err) {
     activeRunAbort.cleanup({ force: true });
     activeGatewayWorkAdmission.release();

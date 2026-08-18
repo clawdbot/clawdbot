@@ -8,12 +8,14 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -44,6 +46,7 @@ import { healthCommand } from "./health.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -608,7 +611,12 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    // Configure keeps legacy default-owner semantics; only explicit fleets opt into
+    // the System Agent target used unconditionally by setup and recovery callers.
+    const resolveSetupTarget = () =>
+      nextConfig.agents?.ownership === "explicit"
+        ? resolveSystemAgentOnboardingTarget(nextConfig)
+        : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
     let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
@@ -665,16 +673,24 @@ export async function runConfigureWizard(
         }
       }
       const target = resolveSetupTarget();
-      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
+        (key) => normalizeAgentId(key) === target.agentId,
+      );
+      const targetEntry = authoredEntryKey
+        ? nextConfig.agents?.entries?.[authoredEntryKey]
+        : undefined;
+      // Explicit fleets own workspace at the selected entry even when it inherited
+      // the global default; legacy owners stay global until they author an override.
       nextConfig =
-        targetEntry?.workspace !== undefined
+        targetEntry?.workspace !== undefined ||
+        (nextConfig.agents?.ownership === "explicit" && targetEntry !== undefined)
           ? {
               ...nextConfig,
               agents: {
                 ...nextConfig.agents,
                 entries: {
                   ...nextConfig.agents?.entries,
-                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                  [authoredEntryKey ?? target.agentId]: { ...targetEntry, workspace: workspaceDir },
                 },
               },
             }

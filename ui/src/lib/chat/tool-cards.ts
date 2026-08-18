@@ -59,6 +59,18 @@ function coerceArgs(value: unknown): unknown {
   }
 }
 
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    return readRecord(JSON.parse(trimmed));
+  } catch {
+    return null;
+  }
+}
+
 function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.text === "string") {
     return item.text;
@@ -84,6 +96,17 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
 function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined {
   const raw = value.isError ?? value.is_error;
   return typeof raw === "boolean" ? raw : undefined;
+}
+
+function readToolExitCode(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const record = readRecord(value);
+    const exitCode = record?.exitCode ?? record?.exit_code;
+    if (typeof exitCode === "number" && Number.isInteger(exitCode)) {
+      return exitCode;
+    }
+  }
+  return undefined;
 }
 
 const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
@@ -356,6 +379,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       const details = item.details ?? m.details;
       const preview = extractCanvasFromDetails(details) ?? extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
+      const exitCode = readToolExitCode(item, details, text ? parseJsonRecord(text) : undefined, m);
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
@@ -374,6 +398,9 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
         if (isError !== undefined) {
           existing.isError = isError;
         }
+        if (exitCode !== undefined) {
+          existing.exitCode = exitCode;
+        }
         continue;
       }
       cards.push({
@@ -385,6 +412,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
         ...(details !== undefined ? { details } : {}),
         messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
         preview,
       });
     }
@@ -405,6 +433,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       "tool";
     const text = extractTextCached(message) ?? undefined;
     const callId = resolveToolCallId({}, m);
+    const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
     cards.push({
       id: resolveToolCardId({}, m, 0, prefix),
       ...(callId ? { callId } : {}),
@@ -414,6 +443,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
       preview: extractCanvasFromDetails(m.details) ?? extractToolPreview(text, name),
     });
   }

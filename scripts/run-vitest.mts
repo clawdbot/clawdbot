@@ -20,6 +20,11 @@ import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
+import {
+  createVitestUnhandledErrorDetector,
+  stripVitestAnsi,
+  writeVitestUnhandledErrorSummary,
+} from "./lib/vitest-unhandled-errors.mts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   createVitestProcessCompletion,
@@ -48,8 +53,6 @@ type VitestOutputTarget = {
   write(chunk: string): unknown;
 };
 
-const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
-const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
 /** Default watchdog timeout for Vitest runs that stop producing output. */
 const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
@@ -634,10 +637,7 @@ export function resolveVitestSpawnParams(
  * Filters known noisy Vitest stderr lines after stripping ANSI escapes.
  */
 export function shouldSuppressVitestStderrLine(line: string): boolean {
-  const normalizedLine = line
-    .split(ANSI_CSI_PREFIX)
-    .map((segment, index) => (index === 0 ? segment : segment.replace(ANSI_CSI_SUFFIX_RE, "")))
-    .join("");
+  const normalizedLine = stripVitestAnsi(line);
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => normalizedLine.includes(pattern));
 }
 
@@ -1185,12 +1185,20 @@ function forwardVitestOutput(
   stream: VitestOutputStream | null,
   target: VitestOutputTarget,
   shouldSuppressLine: (line: string) => boolean = () => false,
-): void {
+  observeLine: (line: string) => void = () => {},
+): Promise<void> {
   if (!stream) {
-    return;
+    return Promise.resolve();
   }
 
   let buffered = "";
+  const forwardLine = (line: string) => {
+    if (shouldSuppressLine(line)) {
+      return;
+    }
+    observeLine(line);
+    target.write(line);
+  };
   stream.setEncoding("utf8");
   stream.on("data", (chunk) => {
     buffered += chunk;
@@ -1201,15 +1209,16 @@ function forwardVitestOutput(
       }
       const line = buffered.slice(0, newlineIndex + 1);
       buffered = buffered.slice(newlineIndex + 1);
-      if (!shouldSuppressLine(line)) {
-        target.write(line);
-      }
+      forwardLine(line);
     }
   });
-  stream.on("end", () => {
-    if (buffered.length > 0 && !shouldSuppressLine(buffered)) {
-      target.write(buffered);
-    }
+  return new Promise((resolve) => {
+    stream.on("end", () => {
+      if (buffered.length > 0) {
+        forwardLine(buffered);
+      }
+      resolve();
+    });
   });
 }
 
@@ -1266,18 +1275,35 @@ export function spawnWatchedVitestProcess({
       });
     },
   });
-  forwardVitestOutput(child.stdout, process.stdout);
-  forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
+  const unhandledErrors = createVitestUnhandledErrorDetector();
+  const forwardedOutput = Promise.all([
+    forwardVitestOutput(child.stdout, process.stdout, undefined, unhandledErrors.observe),
+    forwardVitestOutput(
+      child.stderr,
+      process.stderr,
+      shouldSuppressVitestStderrLine,
+      unhandledErrors.observe,
+    ),
+  ]);
 
   const teardown = () => {
     teardownChildCleanup();
     teardownNoOutputWatchdog();
   };
-  const completion = createVitestProcessCompletion({
-    child,
-    detached: spawnParams.detached === true,
-  })
-    .then(({ code, signal }) => ({ code, signal: normalizeNodeSignal(signal) }))
+  const completion = Promise.all([
+    createVitestProcessCompletion({
+      child,
+      detached: spawnParams.detached === true,
+    }),
+    forwardedOutput,
+  ])
+    .then(([{ code, signal }]) => {
+      const result = unhandledErrors.finish();
+      if (result) {
+        writeVitestUnhandledErrorSummary(result, env);
+      }
+      return { code, signal: normalizeNodeSignal(signal) };
+    })
     .finally(teardown);
 
   return {

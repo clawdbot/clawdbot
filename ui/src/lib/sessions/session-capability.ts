@@ -57,6 +57,7 @@ export type SessionListOptions = {
   activeMinutes?: number;
   search?: string;
   creatorId?: string;
+  ownerId?: string;
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
@@ -155,6 +156,10 @@ export type SessionCapability = {
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Captures the current Gateway connection generation for read-only requests. */
+  captureConnectionScope: () => SessionConnectionScope | null;
+  /** Whether a captured read-only request still belongs to the active connection. */
+  isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (

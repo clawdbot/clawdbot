@@ -655,7 +655,7 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
   if (await pathExists(params.bootstrapPath)) {
     return true;
   }
-  if (await hasWorkspaceUserContentEvidence(params.dir)) {
+  if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
     return true;
   }
   const currentState = readCanonicalWorkspaceStateSnapshot(params.dir);

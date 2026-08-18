@@ -8,7 +8,6 @@ import {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -19,6 +18,7 @@ import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
+  resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
   validateProviderConfig,
@@ -27,6 +27,7 @@ import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
+import { resolveVoiceCallRealtimeTools } from "./realtime-call-control.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -351,10 +352,7 @@ export async function createVoiceCallRuntime(params: {
     });
     const realtimeConfig = {
       ...config.realtime,
-      tools: resolveRealtimeVoiceAgentConsultTools(
-        config.realtime.toolPolicy,
-        config.realtime.tools,
-      ),
+      tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
     };
     const resolveCallRegistration = (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
@@ -379,6 +377,7 @@ export async function createVoiceCallRuntime(params: {
       provider,
       resolveCallRegistration,
       config.serve.path,
+      webhookServer.getStreamDisconnectLifecycle(),
       cfg,
     );
     if (config.realtime.toolPolicy !== "none") {
@@ -484,7 +483,12 @@ export async function createVoiceCallRuntime(params: {
         const nextTunnelResult = await startTunnel({
           provider: config.tunnel.provider,
           port: config.serve.port,
+          tailscalePort: config.tailscale.port,
           path: config.serve.path,
+          streamPaths: resolveVoiceCallStreamExposurePaths(config, {
+            publicWebhookPath: config.serve.path,
+            localWebhookPath: config.serve.path,
+          }),
           ngrokAuthToken: config.tunnel.ngrokAuthToken,
           ngrokDomain: config.tunnel.ngrokDomain,
         });

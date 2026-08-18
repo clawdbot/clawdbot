@@ -957,6 +957,18 @@ function buildWorkboardMocks(baseTime: number) {
         tabs: [{ tabId: "main", title: "Workboard", position: 0, chatDock: "hidden" }],
         widgets: [
           {
+            name: "session-progress",
+            tabId: "main",
+            title: "Session progress",
+            contentKind: "plugin",
+            pluginKind: "session:progress",
+            sizeW: 6,
+            sizeH: 5,
+            position: 0,
+            grantState: "none",
+            revision: 1,
+          },
+          {
             name: "workboard-product-operations",
             tabId: "main",
             title: "Product Operations",
@@ -966,7 +978,7 @@ function buildWorkboardMocks(baseTime: number) {
             heightMode: "fixed",
             sizeW: 12,
             sizeH: 16,
-            position: 0,
+            position: 1,
             grantState: "none",
             revision: 1,
           },
@@ -976,6 +988,19 @@ function buildWorkboardMocks(baseTime: number) {
       "workboard.cards.list": { boards: [board], cards, statuses },
       "workboard.cards.stats": { ...board, byAgent: {} },
       "workboard.cards.move": { card: cards[0] },
+      "progressCard.get": {
+        card: {
+          sessionKey,
+          revision: 2,
+          updatedAt: baseTime,
+          markdown: "**Product launch** is moving through final checks.",
+          steps: [
+            { step: "Confirm release scope", status: "completed" },
+            { step: "Validate onboarding flow", status: "in_progress" },
+            { step: "Publish support handoff", status: "pending" },
+          ],
+        },
+      },
     },
   };
 }
@@ -1608,6 +1633,7 @@ async function createChatPickerScenario(
       "openclaw.changes.list",
       "openclaw.chat",
       "openclaw.chat.history",
+      "progressCard.get",
       "sessions.delete",
       "sessions.diff",
       "sessions.files.set",
@@ -1633,15 +1659,29 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
-    ...(fixture === "workboard"
-      ? {
-          controlUiWidgetKinds: [
+    controlUiTabs:
+      fixture === "workboard"
+        ? [
+            {
+              group: "control",
+              icon: "kanban",
+              id: "workboard",
+              label: "Workboard",
+              placement: "route:workboard",
+              pluginId: "workboard",
+            },
+          ]
+        : [],
+    controlUiWidgetKinds: [
+      { pluginId: "session", kind: "session:progress", label: "Session progress" },
+      ...(fixture === "workboard"
+        ? [
             { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
             { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
             { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
-          ],
-        }
-      : {}),
+          ]
+        : []),
+    ],
     // Terminal has a second gate beyond the advertised method (see
     // ui/src/lib/terminal-availability.ts).
     terminalEnabled: true,
@@ -1689,6 +1729,7 @@ async function createChatPickerScenario(
           },
         ],
       },
+      "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
       // Talk settings page pickers: realtime catalog with the model/voice
       // suggestion lists the gateway emits for provider entries.

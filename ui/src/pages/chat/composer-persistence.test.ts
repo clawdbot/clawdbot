@@ -16,7 +16,9 @@ import {
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 
-type ComposerState = Parameters<typeof persistChatComposerState>[0];
+type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
+  selectedChatSessionIncognito: boolean;
+};
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
@@ -39,6 +41,7 @@ function createState(overrides: Partial<ComposerState> = {}): ComposerState {
     sessionKey: "agent:lily:main",
     chatMessage: "",
     chatQueue: [],
+    selectedChatSessionIncognito: false,
     ...overrides,
   };
 }

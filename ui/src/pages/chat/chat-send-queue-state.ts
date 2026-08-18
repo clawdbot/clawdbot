@@ -19,7 +19,7 @@ import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-sen
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import { controlUiNowMs } from "./performance.ts";
-import { hasAbortableSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR, surfaceChatDeliveryFailure } from "./steer-lifecycle.ts";
 
@@ -192,7 +192,7 @@ export function finishChatDeliveryAdmission(
     }
     return "pending";
   }
-  if (routeVisible(current.agentId) && (isChatBusy(host) || hasAbortableSessionRun(host))) {
+  if (routeVisible(current.agentId) && (isChatBusy(host) || hasDirectSessionRun(host))) {
     const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
     if (!parked) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);

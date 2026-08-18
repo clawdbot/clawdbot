@@ -77,6 +77,8 @@ suite.define(() => {
       await page.getByRole("button", { name: "Add profile" }).click();
       await page.getByLabel("Profile ID").fill("build-fleet");
       await page.getByLabel("Crabbox backend").fill("hetzner");
+      await expect.poll(() => page.getByLabel("Profile ID").inputValue()).toBe("build-fleet");
+      await expect.poll(() => page.getByLabel("Crabbox backend").inputValue()).toBe("hetzner");
       await gateway.deferNext("config.patch");
       const addRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
@@ -110,11 +112,22 @@ suite.define(() => {
           idleTimeout: "45m",
         },
       };
+      // Keep the mocked config.get consistent with the patch response: the
+      // config store may reconcile with a refetch, and a stale empty config
+      // would flap the snapshot and silently drop the next save.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
+          "cloud-workers-2",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-2",
         config: { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
       });
+
       await page.getByText("Advertised", { exact: true }).waitFor();
       await page.getByText("Gateway restart required.", { exact: true }).waitFor();
 
@@ -128,6 +141,19 @@ suite.define(() => {
         .locator("wa-switch")
         .click();
       await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox");
+      await expect
+        .poll(() => page.getByLabel("Machine class", { exact: true }).inputValue())
+        .toBe("custom");
+      await expect.poll(() => page.getByLabel("Custom machine class").inputValue()).toBe("ccx53");
+      await expect.poll(() => page.getByLabel("Max lifetime").inputValue()).toBe("12h");
+      await expect
+        .poll(() =>
+          page.getByRole("switch", { name: "Desktop", exact: true }).getAttribute("aria-checked"),
+        )
+        .toBe("true");
+      await expect
+        .poll(() => page.getByLabel("Crabbox binary").inputValue())
+        .toBe("/opt/bin/crabbox");
       await gateway.deferNext("config.patch");
       const editRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
@@ -163,16 +189,29 @@ suite.define(() => {
           binary: "/opt/bin/crabbox",
         },
       };
+      // Keep the mocked config.get consistent with the patch response: the
+      // config store may reconcile with a refetch, and a stale empty config
+      // would flap the snapshot and silently drop the next save.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
+          "cloud-workers-3",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-3",
         config: { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
       });
+
       await page.getByText(/Class: ccx53/).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
       await page.getByLabel("Profile ID").fill("pending");
       await page.getByLabel("Crabbox backend").fill("aws");
+      await expect.poll(() => page.getByLabel("Profile ID").inputValue()).toBe("pending");
+      await expect.poll(() => page.getByLabel("Crabbox backend").inputValue()).toBe("aws");
       await gateway.deferNext("config.patch");
       const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
@@ -199,6 +238,13 @@ suite.define(() => {
           idleTimeout: "45m",
         },
       };
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "build-fleet": editedFleet, pending } } },
+          "cloud-workers-4",
+        ),
+      );
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-4",

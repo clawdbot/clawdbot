@@ -49,8 +49,8 @@ successful core update; a direct
 `npm install -g openclaw@extended-stable --allow-scripts=openclaw` does not
 update `update.channel`, but a final extended-stable package version still
 checks only the verified `extended-stable` selector for update availability.
-That direct command is for npm 12 or npm 11.16+. On npm 11.12 and earlier,
-omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+That direct command is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
@@ -157,8 +157,8 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 
 ## Alternative: manual npm, pnpm, or bun
 
-The npm command below is for npm 12 or npm 11.16+. On npm 11.12 and earlier,
-omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
 
 ```bash
 npm i -g openclaw@latest --allow-scripts=openclaw
@@ -178,7 +178,7 @@ that Gateway. Replace `/usr/bin/npm` with the system npm that owns the
 root-owned global prefix on your host:
 
 The npm command below follows the same version contract: use the flag on npm 12
-or npm 11.16+, omit it on npm 11.12 and earlier, and upgrade npm 11.13–11.15.
+or npm 11.16+, and omit it on npm 11.15 and earlier.
 
 ```bash
 openclaw gateway stop
@@ -203,10 +203,10 @@ Node version during `preinstall`; only then does OpenClaw verify the packaged
 `dist` inventory and swap the clean package tree into the real global prefix. A
 packed completion guard is omitted from the expected inventory and removed only
 after `preinstall` succeeds, so skipped lifecycle scripts also fail before the
-swap. The updater probes the owning npm before mutation. On npm 11.12 and
-earlier it omits the unsupported lifecycle-policy flag; on npm 11.13–11.15 it
-stops with upgrade guidance. On npm 12 and npm 11.16+, it approves only the
-candidate OpenClaw lifecycle; transitive dependency scripts remain unapproved.
+swap. The updater probes the owning npm before mutation. On npm 11.15 and
+earlier it omits the unsupported lifecycle-policy flag. On npm 12 and npm
+11.16+, it approves only the candidate OpenClaw lifecycle; transitive
+dependency scripts remain unapproved.
 This avoids npm overlaying a new package onto stale files from the old one. If
 the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
@@ -445,8 +445,8 @@ automatically replacing the package again.
 If the CLI update path is unavailable, use the same package manager and install
 scope that own the current Gateway:
 
-The npm command below is for npm 12 or npm 11.16+. On npm 11.12 and earlier,
-omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
 
 ```bash
 openclaw gateway stop

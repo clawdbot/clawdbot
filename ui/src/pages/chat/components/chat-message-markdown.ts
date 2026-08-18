@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -192,29 +193,45 @@ export function renderReplyButton(
   `;
 }
 
-const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 12;
+const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 5;
 const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
 
-function collapsedUserMessagePreview(markdown: string): string | null {
-  let end = Math.min(markdown.length, USER_MESSAGE_COLLAPSED_CHAR_LIMIT);
-  let lineCount = 1;
-  for (let index = 0; index < end; index += 1) {
-    if (markdown[index] !== "\n") {
-      continue;
+function shouldCollapseUserMessage(markdown: string): boolean {
+  return (
+    markdown.length > USER_MESSAGE_COLLAPSED_CHAR_LIMIT ||
+    markdown.split("\n", USER_MESSAGE_COLLAPSED_LINE_LIMIT + 1).length >
+      USER_MESSAGE_COLLAPSED_LINE_LIMIT
+  );
+}
+
+function userMessageOverflowRef(expanded: boolean) {
+  let resizeObserver: ResizeObserver | null = null;
+  return (element: Element | undefined) => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (!(element instanceof HTMLElement)) {
+      return;
     }
-    if (lineCount === USER_MESSAGE_COLLAPSED_LINE_LIMIT) {
-      end = index;
-      break;
+    const update = () => {
+      const disclosure = element.parentElement;
+      const toggle = disclosure?.querySelector<HTMLButtonElement>(
+        ":scope > .chat-message-disclosure__toggle",
+      );
+      if (!disclosure || !toggle) {
+        return;
+      }
+      const overflowing = expanded || element.scrollHeight > element.clientHeight + 1;
+      disclosure.classList.toggle("has-overflow", overflowing);
+      toggle.hidden = !overflowing;
+    };
+    // Lit resolves refs while siblings are still committing. Measure after the
+    // toggle exists so wrapped text can reveal its own disclosure control.
+    queueMicrotask(update);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(update);
+      resizeObserver.observe(element);
     }
-    lineCount += 1;
-  }
-  if (end === markdown.length) {
-    return null;
-  }
-  const sliced = markdown.slice(0, end);
-  const lastCodeUnit = sliced.charCodeAt(sliced.length - 1);
-  const preview = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? sliced.slice(0, -1) : sliced;
-  return `${preview.trimEnd()}…`;
+  };
 }
 
 export function renderUserMessageMarkdown(
@@ -227,26 +244,33 @@ export function renderUserMessageMarkdown(
   },
   markdownRenderOptions: MarkdownRenderOptions,
 ) {
-  const preview = collapsedUserMessagePreview(markdown);
-  if (!opts.onToggleUserMessageExpanded || preview === null) {
+  if (!opts.onToggleUserMessageExpanded) {
     return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions);
   }
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
-  const visibleMarkdown = expanded ? markdown : preview;
+  const likelyOverflow = shouldCollapseUserMessage(markdown);
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content">
-        ${renderMarkdownText(visibleMarkdown, opts.isStreaming, markdownRenderOptions)}
+    <div
+      class="chat-message-disclosure ${expanded
+        ? "is-expanded has-overflow"
+        : likelyOverflow
+          ? "has-overflow"
+          : ""}"
+    >
+      <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
+        ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
+        ?hidden=${!expanded && !likelyOverflow}
+        aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
       >
-        ${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
+        ${expanded ? icons.chevronUp : icons.chevronDown}
       </button>
     </div>
   `;

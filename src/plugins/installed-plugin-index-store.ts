@@ -13,6 +13,7 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
@@ -355,7 +356,10 @@ function readPersistedInstalledPluginIndexFromSqlite(
         resolveInstalledPluginIndexStateDatabaseOptions(options),
       ) ?? null
     );
-  } catch {
+  } catch (error) {
+    if (isSqliteSchemaVersionError(error)) {
+      throw error;
+    }
     return null;
   }
 }

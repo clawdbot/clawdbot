@@ -58,6 +58,7 @@ export async function loadModels(
     cached?.models,
     agentId,
     opts.preparedOnly === true,
+    opts.refresh === true,
     rejectOnFailure,
   )
     .then((result) => {
@@ -97,6 +98,7 @@ async function requestModels(
   fallback: ModelCatalogEntry[] | undefined,
   agentId: string,
   preparedOnly: boolean,
+  refresh: boolean,
   rejectOnFailure: boolean,
 ): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
   try {
@@ -104,6 +106,7 @@ async function requestModels(
       view: "configured",
       agentId,
       ...(preparedOnly ? { preparedOnly: true } : {}),
+      ...(refresh ? { refresh: true } : {}),
     });
     return { models: result?.models ?? [], fresh: true };
   } catch (error) {

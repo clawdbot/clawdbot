@@ -18,6 +18,7 @@ describe("worker environment node provisioning", () => {
     const placementGate = createWorkerSessionPlacementGate(placements);
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         provision: async () => ({
           leaseId: "device-lease-1",

@@ -101,6 +101,7 @@ export type ChatThreadProps = {
   allowExternalEmbedUrls?: boolean;
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  typingActors?: readonly { id: string; label: string }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;

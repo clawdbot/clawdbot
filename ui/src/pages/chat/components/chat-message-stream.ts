@@ -11,7 +11,7 @@ import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import { shouldToggleSelectableDisclosure } from "./chat-tool-cards.ts";
+import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
@@ -156,25 +156,26 @@ export function renderWorkGroupSummary(
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
     <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
-      <span class="chat-work-group__gutter" aria-hidden="true"></span>
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
           <button
             class="chat-inline-disclosure chat-activity-group__summary"
             type="button"
             aria-expanded=${String(opts.expanded)}
+            @pointerenter=${syncToolDisclosureOverflow}
+            @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggle();
               }
             }}
           >
-            <span class="chat-activity-group__icon">${icons.check}</span>
-            <span class="chat-activity-group__label" title=${label}>${label}</span>
-            <span class="chat-inline-disclosure__chevron" aria-hidden="true"
-              >${icons.chevronDown}</span
-            >
+            <span class="chat-tool-disclosure__content">
+              <span class="chat-activity-group__label" title=${label}>${label}</span>
+            </span>
+            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
+          <div class="chat-work-group__separator" aria-hidden="true"></div>
         </div>
       </div>
     </div>

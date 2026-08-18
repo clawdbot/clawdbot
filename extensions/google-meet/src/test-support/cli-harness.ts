@@ -231,7 +231,11 @@ export function setupCli(params: {
     callGatewayFromCli:
       params.callGatewayFromCli ??
       (vi.fn(async () => {
-        throw new Error("connect ECONNREFUSED 127.0.0.1:18789");
+        throw Object.assign(new Error("gateway transport failed"), {
+          name: "GatewayTransportError",
+          kind: "closed",
+          connectionDetails: { url: "ws://127.0.0.1:18789" },
+        });
       }) as NonNullable<Parameters<typeof registerGoogleMeetCli>[0]["callGatewayFromCli"]>),
   });
   return program;

@@ -44,7 +44,7 @@ import {
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
   OFFLINE_QUEUE_STORAGE_ERROR,
   steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
@@ -240,7 +240,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
       setChatError(host, t("chat.sendErrors.steerRunNoLongerActive"));
       return;
     }
-    if (hasAbortableSessionRun(host)) {
+    if (hasDirectSessionRun(host)) {
       const retry = updateQueuedMessage(host, id, (entry) => ({
         ...entry,
         sendAttempts: 0,

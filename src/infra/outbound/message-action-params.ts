@@ -147,7 +147,6 @@ export function collectAttachmentSources(
           readToolStringParam(item, "contentType") ?? readToolStringParam(item, "mimeType"),
         filename: readToolStringParam(item, "filename") ?? readToolStringParam(item, "name"),
       });
-      break;
     }
   }
   return sources;

@@ -164,8 +164,8 @@ export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => readonly WorkerMachineOption[];
-  /** Omission advertises no session-placement modes; placement providers opt in explicitly. */
-  supportedExecutionModes?: readonly WorkerExecutionMode[];
+  /** Omission advertises no placement support; placement providers declare one transport mode. */
+  supportedExecutionModes?: readonly [WorkerExecutionMode];
   /**
    * Provision before preparing an installation when the lease transport decides whether an
    * installation is needed. Defaults to false so SSH providers retain prepare-before-allocation.

@@ -3,6 +3,8 @@
  * Verifies plugin manifest suppression rules, cache reuse, and lifecycle clears.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   buildManifestBuiltInModelSuppressionResolver: vi.fn(),
@@ -12,8 +14,12 @@ vi.mock("../plugins/manifest-model-suppression.js", () => ({
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
 }));
 
-import { setCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   buildShouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelCore,
@@ -28,6 +34,7 @@ describe("model suppression", () => {
   });
 
   afterEach(() => {
+    setCurrentPluginMetadataSnapshot(undefined);
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     } else {
@@ -101,12 +108,20 @@ describe("model suppression", () => {
       .mockReturnValueOnce(firstResolver)
       .mockReturnValueOnce(secondResolver);
 
-    setCurrentPluginMetadataSnapshotState({ id: "first" }, undefined);
+    const firstSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const secondSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    setCurrentPluginMetadataSnapshot(firstSnapshot, { config });
     expect(shouldSuppressBuiltInModelCore({ provider: "openai", id: "gpt-5.3", config })).toBe(
       false,
     );
 
-    setCurrentPluginMetadataSnapshotState({ id: "second" }, undefined);
+    setCurrentPluginMetadataSnapshot(secondSnapshot, { config });
     expect(shouldSuppressBuiltInModelCore({ provider: "openai", id: "gpt-5.3", config })).toBe(
       false,
     );
@@ -114,6 +129,60 @@ describe("model suppression", () => {
     expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledTimes(2);
     expect(firstResolver).toHaveBeenCalledOnce();
     expect(secondResolver).toHaveBeenCalledOnce();
+  });
+
+  it("keeps concurrent scoped suppression resolvers isolated from process-current metadata", async () => {
+    const config = {} satisfies OpenClawConfig;
+    const snapshotA = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const snapshotB = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    setCurrentPluginMetadataSnapshot(snapshotB, { config });
+    mocks.buildManifestBuiltInModelSuppressionResolver.mockImplementation(() => {
+      const snapshot = getCurrentPluginMetadataSnapshot({ config, env: process.env });
+      return () =>
+        snapshot === snapshotA ? { suppress: true, errorMessage: "generation A" } : undefined;
+    });
+    let releaseA!: () => void;
+    let markAReady!: () => void;
+    const holdA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const aReady = new Promise<void>((resolve) => {
+      markAReady = resolve;
+    });
+    const resultA = withPluginRuntimeGenerationScope(
+      { config, metadataSnapshot: snapshotA },
+      async () => {
+        const result = shouldSuppressBuiltInModelCore({
+          provider: "openai",
+          id: "generation-model",
+          config,
+        });
+        markAReady();
+        await holdA;
+        return result;
+      },
+    );
+    await aReady;
+
+    const resultB = await withPluginRuntimeGenerationScope(
+      { config, metadataSnapshot: snapshotB },
+      async () =>
+        shouldSuppressBuiltInModelCore({
+          provider: "openai",
+          id: "generation-model",
+          config,
+        }),
+    );
+    releaseA();
+
+    await expect(resultA).resolves.toBe(true);
+    expect(resultB).toBe(false);
   });
 
   it("refreshes manifest suppression resolver when process env plugin metadata inputs change", () => {

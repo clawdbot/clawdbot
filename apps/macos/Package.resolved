@@ -60,7 +60,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "6ba9ade8e76a3743e6c9a0ddd915a62fc59f4605"
+        "revision" : "d1217a9fdf02d882b7c170f294e1e75e20039320"
       }
     },
     {

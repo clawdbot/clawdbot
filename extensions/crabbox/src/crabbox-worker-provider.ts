@@ -1,4 +1,3 @@
-import path from "node:path";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   WorkerProviderError,
@@ -24,7 +23,7 @@ import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   buildCrabboxWarmupArgs,
-  identityRefId,
+  CRABBOX_WORKER_PROVIDER_ID,
   listCrabboxMachineOptions,
   nonEmptyString,
   operationLeaseId,
@@ -43,9 +42,6 @@ import {
 } from "./crabbox-worker-timeouts.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
-
-const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
-const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 
 const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_ERROR_DETAIL_CHARS = 512;
@@ -660,33 +656,6 @@ export function createCrabboxWorkerProvider(
       }
       heartbeats.start(context);
       return { status: "active" };
-    },
-    async resolveSshIdentity(request) {
-      const context = resolveLeaseContext(request);
-      if (
-        request.keyRef.source !== "file" ||
-        request.keyRef.provider !== CRABBOX_KEY_REF_PROVIDER ||
-        request.keyRef.id !== identityRefId(context.id)
-      ) {
-        throw new Error("Crabbox worker identity reference does not match its lease");
-      }
-      const inspected = await inspectWithContext({
-        context,
-        expectedLeaseId: context.id,
-        id: context.id,
-        runCommand,
-      });
-      if (
-        inspected.status === "unknown" ||
-        isTerminalState(inspected.inspect.state) ||
-        !inspected.inspect.sshKey
-      ) {
-        throw new Error("Crabbox inspect did not return the worker identity path");
-      }
-      if (!path.isAbsolute(inspected.inspect.sshKey)) {
-        throw new Error("Crabbox inspect returned a non-absolute worker identity path");
-      }
-      return { kind: "path", path: inspected.inspect.sshKey };
     },
     async destroy(lease): Promise<void> {
       const context = resolveLeaseContext(lease);

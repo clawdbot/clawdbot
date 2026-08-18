@@ -14,22 +14,23 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
           releaseHandlerClose = resolve;
         }),
     );
+    const delayedHangup = vi.fn(async () => ({ success: true }));
     const server = new VoiceCallWebhookServer(
       createVoiceCallBaseConfig({ tunnelProvider: "none" }),
-      {} as CallManager,
+      {
+        getCallByProviderCallId: vi.fn(() => ({ callId: "call-1" })),
+        endCall: delayedHangup,
+      } as unknown as CallManager,
       {} as VoiceCallProvider,
     );
     server.setRealtimeHandler({
       close: handlerClose,
     } as unknown as RealtimeCallHandler);
     await server.start();
-    const delayedHangup = vi.fn();
-    const pendingDisconnectHangups = (
-      server as unknown as {
-        pendingDisconnectHangups: Map<string, unknown>;
-      }
-    ).pendingDisconnectHangups;
-    pendingDisconnectHangups.set("provider-call", setTimeout(delayedHangup, 5));
+    vi.useFakeTimers();
+    const streamLifecycle = server.getStreamDisconnectLifecycle();
+    streamLifecycle.connect("provider-call", "stream-1");
+    streamLifecycle.disconnect("provider-call", "stream-1");
 
     const firstStop = server.stop();
     const secondStop = server.stop();
@@ -41,14 +42,13 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     try {
       expect(secondStop).toBe(firstStop);
       expect(handlerClose).toHaveBeenCalledTimes(1);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 10);
-      });
+      await vi.advanceTimersByTimeAsync(2_100);
       expect(stopped).toBe(false);
       expect(delayedHangup).not.toHaveBeenCalled();
     } finally {
       releaseHandlerClose?.();
       await firstStop;
+      vi.useRealTimers();
     }
     expect(stopped).toBe(true);
   });

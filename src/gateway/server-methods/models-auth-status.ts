@@ -59,7 +59,6 @@ import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-au
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import {
   clearModelAuthStatusUsageCache,
-  fingerprintProviderUsageCredentials,
   type ProviderUsageStatus,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
@@ -70,6 +69,7 @@ import type {
   ModelAuthStatusResult,
   ModelProviderCapability,
 } from "./models-auth-status.types.js";
+import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export type {
@@ -688,15 +688,18 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ),
       ];
 
+      const providerUsageRuntime = getProviderUsageRuntimeSnapshot({
+        config: cfg,
+        agentId,
+        agentDir,
+        store,
+      });
       const usageByProvider = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
+        authStore: providerUsageRuntime.store,
         configRef: cfg,
-        credentialKey: fingerprintProviderUsageCredentials({
-          cfg,
-          directApiKeys: apiKeys,
-          store,
-        }),
+        credentialKey: providerUsageRuntime.credentialKey,
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,

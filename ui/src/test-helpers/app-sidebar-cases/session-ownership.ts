@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGateway,
@@ -58,6 +59,14 @@ function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {
     .map((row) => row.dataset.sessionKey ?? "");
 }
 
+function setEffectiveOwner(
+  row: GatewaySessionRow,
+  actor: NonNullable<GatewaySessionRow["createdActor"]>,
+) {
+  row.createdActor = actor;
+  row.owner = { actor };
+}
+
 describe("AppSidebar session ownership", () => {
   it("renders durable actor avatars identically regardless of live presence", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -84,23 +93,23 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob || !carol) {
       throw new Error("expected creator rows");
     }
-    ada.createdActor = {
+    setEffectiveOwner(ada, {
       type: "human",
       id: "profile-ada",
       label: "Ada",
       avatarUrl: "/api/users/profile-ada/avatar?v=1",
-    };
-    bob.createdActor = {
+    });
+    setEffectiveOwner(bob, {
       type: "human",
       id: "profile-bob",
       label: "Bob",
       avatarUrl: "/api/users/profile-bob/avatar?v=2",
-    };
-    carol.createdActor = { type: "human", id: "profile-carol", label: "Carol" };
+    });
+    setEffectiveOwner(carol, { type: "human", id: "profile-carol", label: "Carol" });
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
-      { id: "profile-carol", label: "Carol" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-carol", label: "Carol" },
     ];
 
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
@@ -180,10 +189,10 @@ describe("AppSidebar session ownership", () => {
       if (!lobster) {
         throw new Error("expected creator row");
       }
-      lobster.createdActor = { type, id: "profile-lobster", label };
+      setEffectiveOwner(lobster, { type, id: "profile-lobster", label });
       result.creators = [
-        { id: "profile-lobster", label },
-        { id: "profile-ada", label: "Ada" },
+        { type, id: "profile-lobster", label },
+        { type: "human", id: "profile-ada", label: "Ada" },
       ];
 
       const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -208,10 +217,10 @@ describe("AppSidebar session ownership", () => {
     if (!ada) {
       throw new Error("expected creator row");
     }
-    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    setEffectiveOwner(ada, { type: "human", id: "profile-ada", label: "Ada" });
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
 
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -235,7 +244,7 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     expect(harness.setCreatorFilter).toHaveBeenCalledWith("profile-bob");
 
-    result.creators = [{ id: "profile-bob", label: "Bob" }];
+    result.creators = [{ type: "human", id: "profile-bob", label: "Bob" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     await sidebar.updateComplete;
@@ -252,10 +261,10 @@ describe("AppSidebar session ownership", () => {
     if (!result || !collab) {
       throw new Error("expected participant row");
     }
-    collab.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    setEffectiveOwner(collab, { type: "human", id: "profile-bob", label: "Bob" });
     collab.participants = [{ type: "human", id: "profile-ada", label: "Ada" }];
     collab.participantCount = 1;
-    result.creators = [{ id: "profile-bob", label: "Bob" }];
+    result.creators = [{ type: "human", id: "profile-bob", label: "Bob" }];
 
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
@@ -295,7 +304,7 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected session list");
     }
     for (const row of result.sessions) {
-      row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+      setEffectiveOwner(row, { type: "human", id: "profile-ada", label: "Ada" });
     }
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
@@ -327,10 +336,11 @@ describe("AppSidebar session ownership", () => {
     ] as const) {
       Object.assign(result.sessions[index]!, {
         createdActor: { type: "human", id, label },
+        owner: { actor: { type: "human", id, label } },
         updatedAt,
       });
     }
-    result.creators = [{ id: "profile-bob", label: "Bob" }];
+    result.creators = [{ type: "human", id: "profile-bob", label: "Bob" }];
     const createdOrder = keys.slice(1);
     // b1 and a1 tie at updatedAt 40; the ascending-key tie-break (mirroring
     // the gateway list order) puts a1 first.
@@ -367,8 +377,8 @@ describe("AppSidebar session ownership", () => {
     await expectSort(sidebar, "created", createdOrder);
     await expectSort(sidebar, "people", peopleOrder);
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
     harness.publishList({ result, agentId: "main" });
     gateway.publish({ hello: sessionSharingHello(false) });
@@ -404,11 +414,11 @@ describe("AppSidebar session ownership", () => {
     }
     archived.archived = true;
     archived.archivedBy = { type: "human", id: "profile-bob", label: "Bob" };
-    archived.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    collaborator.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    setEffectiveOwner(archived, { type: "human", id: "profile-ada", label: "Ada" });
+    setEffectiveOwner(collaborator, { type: "human", id: "profile-bob", label: "Bob" });
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
 
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -427,8 +437,8 @@ describe("AppSidebar session ownership", () => {
     ) as (HTMLElement & { excludeUserId?: string }) | null;
     expect(archivedFacepile?.excludeUserId).toBe("profile-bob");
 
-    collaborator.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    result.creators = [{ id: "profile-ada", label: "Ada" }];
+    setEffectiveOwner(collaborator, { type: "human", id: "profile-ada", label: "Ada" });
+    result.creators = [{ type: "human", id: "profile-ada", label: "Ada" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 

@@ -71,6 +71,15 @@ Agents start background sub-agents with the `sessions_spawn` tool.
 Completions return as internal parent-session events; the parent/requester
 agent decides whether a user-facing update is needed.
 
+When [execution identity auditing](/gateway/audit#run-identity-inspection) is
+enabled, each native or ACP child receives a new immutable identity context.
+Its lineage links the exact parent context/run when available and records
+bounded references for the parent grant, local policy, runtime assurance, and
+target policy that constrained the spawn. Neither the private identity token
+nor task text appears in the tool schema, result, transcript-derived evidence,
+or public plugin API. External ACP-native actions without a callback remain
+explicitly unsupported even though the ACP spawn and child are observable.
+
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
     - `sessions_spawn` is non-blocking; it returns a run id immediately.

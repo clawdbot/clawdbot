@@ -14,6 +14,7 @@ import {
   resetMemoryToolMockState,
   setMemoryReadFileImpl,
   setMemorySearchImpl,
+  setMemorySearchManagerImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager.test-mocks.js";
@@ -652,6 +653,35 @@ describe("memory tools", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {
+    setMemorySearchManagerImpl(async () => ({ error: "sqlite support missing" }));
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_manager_error", { query: "alpha", corpus: "all" });
+    const details = result.details as {
+      results: Array<{ corpus: string }>;
+      warning?: string;
+    };
+
+    // Wiki supplements still serve, but the omitted memory corpus is recorded.
+    expect(details.results.map((entry) => entry.corpus)).toEqual(["wiki"]);
+    expect(details.warning).toContain("Memory corpus unavailable");
+    expect(details.warning).toContain("sqlite support missing");
   });
 
   it("cooldowns primary memory when corpus=all memory search stalls", async () => {

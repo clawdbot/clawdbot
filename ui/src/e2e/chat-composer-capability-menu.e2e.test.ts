@@ -776,9 +776,14 @@ suite.define(() => {
       await everywhereDialog.getByLabel("URL or command").fill("docs-mcp --stdio");
       await everywhereDialog.getByLabel("Transport").selectOption("stdio");
       const sessionPatchCount = (await gateway.getRequests("sessions.patch")).length;
+      // Pin past the session-scoped config.patch above so a slow runner can't
+      // return it stale for the everywhere-scoped save.
+      const configPatchesBeforeEverywhereAdd = (await gateway.getRequests("config.patch")).length;
       await gateway.deferNext("config.patch");
       await everywhereDialog.getByRole("button", { name: "Add server" }).click();
-      const everywhereConfigPatch = await gateway.waitForRequest("config.patch");
+      const everywhereConfigPatch = await gateway.waitForRequest("config.patch", {
+        after: configPatchesBeforeEverywhereAdd,
+      });
       expect(configPatchRaw(everywhereConfigPatch)).toEqual({
         mcp: {
           servers: {
