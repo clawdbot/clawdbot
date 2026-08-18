@@ -123,7 +123,13 @@ suite.define(() => {
 
       await expect.poll(() => button.getAttribute("aria-label")).toBe("Copy failed");
       await expect.poll(() => button.getAttribute("class")).toContain("copy-failed");
-      await expect(button.locator(".code-block-copy__failed")).toBeVisible();
+      await expect
+        .poll(() =>
+          button
+            .locator(".code-block-copy__failed")
+            .evaluate((element) => getComputedStyle(element).display),
+        )
+        .not.toBe("none");
       expect(await readClipboardFailureProof(page)).toEqual({
         asyncAttempts: 1,
         legacyAttempts: 1,
