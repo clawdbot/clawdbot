@@ -67,7 +67,7 @@ extensions/browser/src/browser/chrome-mcp-tabs.ts	1
 extensions/browser/src/browser/chrome.diagnostics.ts	2
 extensions/browser/src/browser/chrome.executables.ts	1
 extensions/browser/src/browser/chrome.profile-decoration.ts	1
-extensions/browser/src/browser/chrome.ts	5
+extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
 extensions/browser/src/browser/config-mutations.ts	1
 extensions/browser/src/browser/config.ts	1
