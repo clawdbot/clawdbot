@@ -1089,6 +1089,7 @@ describe("dispatchReplyFromConfig", () => {
           config: runtimeCfg,
           modelCatalog: { entries: [], routeVariants: [] },
           inboundPluginRegistry: createTestRegistry([]),
+          pluginGeneration: {} as never,
         }),
       );
 
@@ -1230,6 +1231,7 @@ describe("dispatchReplyFromConfig", () => {
           config: runtimeCfg,
           modelCatalog: { entries: [], routeVariants: [] },
           inboundPluginRegistry: createTestRegistry([]),
+          pluginGeneration: {} as never,
         }),
       );
     const dispatcher = createDispatcher();
