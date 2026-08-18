@@ -270,6 +270,45 @@ describe("llama-server setup", () => {
     expect(provider?.headers).toBeUndefined();
   });
 
+  it("preserves explicit Authorization instead of selecting an ambient API key", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const prompter = {
+      text: vi.fn(async () => "http://localhost:8080"),
+      confirm: vi.fn(async () => false),
+    };
+
+    const result = await runLlamaServerSetup({
+      config: {
+        models: {
+          providers: {
+            "llama-server": {
+              baseUrl: "http://localhost:8080/v1",
+              headers: { Authorization: "Bearer proxy-key", "X-Tenant": "one" },
+              models: [],
+            },
+          },
+        },
+      },
+      env: { LLAMA_SERVER_API_KEY: "ambient-key" },
+      prompter,
+      runtime: runtime(),
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as unknown as ProviderAuthContext);
+
+    expect(prompter.confirm).toHaveBeenCalledOnce();
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: undefined,
+        headers: { Authorization: "Bearer proxy-key", "X-Tenant": "one" },
+      }),
+    );
+    const provider = result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+    expect(provider?.headers).toEqual({ Authorization: "Bearer proxy-key", "X-Tenant": "one" });
+    expect(result.profiles).toEqual([]);
+  });
+
   it("prompts for a new API key when a replacement endpoint needs auth", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     const prompter = {

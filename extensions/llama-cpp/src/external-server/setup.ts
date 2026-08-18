@@ -381,10 +381,13 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
   const endpointChanged = hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
 
+  const hasExplicitAuthorization =
+    !endpointChanged && hasLlamaServerAuthorizationHeader(existing?.headers);
   let credentialInput: SecretInput | undefined;
-  let apiKey = endpointChanged
-    ? undefined
-    : ctx.env?.[LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR]?.trim();
+  let apiKey =
+    endpointChanged || hasExplicitAuthorization
+      ? undefined
+      : ctx.env?.[LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR]?.trim();
   const usesApiKey =
     Boolean(apiKey) ||
     (await ctx.prompter.confirm({
