@@ -55,7 +55,9 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     };
 
     expectDefined(host.querySelector<HTMLElement>(".settings-page"), "settings page").remove();
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
 
     const after = {
       paddingInlineStart: getComputedStyle(header).paddingInlineStart,
@@ -106,7 +108,9 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
       "Memory panel",
     );
     panel.style.height = "1200px";
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
 
     const after = {
       clientWidth: content.clientWidth,
