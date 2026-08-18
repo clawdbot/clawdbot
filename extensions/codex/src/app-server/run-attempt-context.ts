@@ -22,6 +22,7 @@ import {
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -149,9 +150,18 @@ export async function prepareCodexAttemptContext(
     memoryToolNames,
     sandboxed: sandbox?.enabled === true,
   });
-  const baseDeveloperInstructions = buildDeveloperInstructions(runtimeParams, {
-    dynamicTools: toolBridge.availableSpecs,
-  });
+  // A thread keeps the bounded agent-workspace snapshot captured at creation.
+  // Workspace edits take effect only in the next session.
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.inheritsAgentWorkspace
+    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
+      workspaceBootstrapContext.threadDeveloperInstructions)
+    : undefined;
+  const baseDeveloperInstructions = joinPresentSections(
+    buildDeveloperInstructions(runtimeParams, {
+      dynamicTools: toolBridge.availableSpecs,
+    }),
+    agentWorkspaceDeveloperInstructions,
+  );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -199,6 +209,7 @@ export async function prepareCodexAttemptContext(
     hookRunner,
     buildActiveContextEngineRuntimeContext,
     workspaceBootstrapContext,
+    agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     openClawPromptContext,
     skillsCollaborationInstructions,

@@ -93,6 +93,7 @@ describe("Codex app-server attempt context", () => {
       workspaceBootstrapContext: {
         bootstrapFiles: [],
         contextFiles: [],
+        inheritsAgentWorkspace: false,
         promptContextFiles: [],
       },
       skillsPrompt: "",
@@ -220,17 +221,18 @@ describe("Codex app-server attempt context", () => {
         memoryToolNames: ["memory_search", "memory_get"],
       });
 
-      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent instructions");
-      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
-      expect(context.turnScopedDeveloperInstructions).toContain(
-        path.join(workspaceDir, "AGENTS.md"),
+      expect(context.threadDeveloperInstructions).toContain("Canonical agent instructions");
+      expect(context.threadDeveloperInstructions).toContain(
+        "OpenClaw Agent Workspace Instructions",
       );
-      expect(context.turnScopedDeveloperInstructions).not.toContain(
-        "Execution project instructions",
-      );
-      expect(context.turnScopedDeveloperInstructions).not.toContain(
+      expect(context.threadDeveloperInstructions).toContain(path.join(workspaceDir, "AGENTS.md"));
+      expect(context.threadDeveloperInstructions).not.toContain("Canonical agent soul");
+      expect(context.threadDeveloperInstructions).not.toContain("Execution project instructions");
+      expect(context.threadDeveloperInstructions).not.toContain(
         path.join(executionDir, "AGENTS.md"),
       );
+      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
+      expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
       expect(context.memoryToolRouted).toBe(true);
       expect(context.promptContext).toBeUndefined();
     } finally {
