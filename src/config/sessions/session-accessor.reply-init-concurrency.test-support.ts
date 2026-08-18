@@ -45,6 +45,17 @@ type SyncAppendRaceChildResult =
 
 type SyncRewriteRaceChildResult = SyncAppendRaceChildResult;
 
+// Drives the real SessionManager first-record path on an empty transcript and
+// reports whether the deferred-header fold rejected the append when a foreign
+// row raced the handshake gap.
+type SyncInitialHeaderRaceChildResult =
+  | { appendRejected: boolean; ok: true }
+  | {
+      message: string;
+      name: string;
+      ok: false;
+    };
+
 type ConcurrencyWorkerRequest =
   | {
       kind: "reply-init";
@@ -74,6 +85,11 @@ type ConcurrencyWorkerRequest =
       sessionId: string;
       storePath: string;
       useAtomicSnapshot: boolean;
+    }
+  | {
+      kind: "sync-initial-header-race";
+      sessionId: string;
+      storePath: string;
     };
 
 type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
@@ -90,7 +106,9 @@ type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> = TReque
     ? SyncAppendRaceChildResult
     : TRequest extends { kind: "sync-rewrite-race" }
       ? SyncRewriteRaceChildResult
-      : TranscriptRewriteChildResult;
+      : TRequest extends { kind: "sync-initial-header-race" }
+        ? SyncInitialHeaderRaceChildResult
+        : TranscriptRewriteChildResult;
 
 type ConcurrencyWorkerMessage =
   | { phase: "booted" }
@@ -119,7 +137,7 @@ const {
   appendTranscriptMessageWithSnapshotSync,
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
-  loadTranscriptRowSnapshotSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   replaceTranscriptEventsSync,
   replaceTranscriptEventsWithSnapshotSync,
   SqliteTranscriptMutationConflictError,
@@ -306,7 +324,7 @@ async function runSyncAppendRace(request) {
     } else {
       appendTranscriptMessageSync(scope, appendOptions);
     }
-    const preHandshakeRows = loadTranscriptRowSnapshotSync(scope);
+    const preHandshakeRows = loadTranscriptEventsWithRowSnapshotSync(scope).rows;
     const nextEntries = preHandshakeRows.map((row) => JSON.parse(row.eventJson));
 
     const proceed = waitForProceed(request.requestId);
@@ -327,7 +345,7 @@ async function runSyncAppendRace(request) {
     // the foreign commit either.
     const snapshotForRewrite = request.useAtomicSnapshot
       ? atomicSnapshot
-      : loadTranscriptRowSnapshotSync(scope);
+      : loadTranscriptEventsWithRowSnapshotSync(scope).rows;
 
     let rewriteRejected = false;
     try {
@@ -398,7 +416,7 @@ async function runSyncRewriteRace(request) {
     // cannot have observed the foreign commit either.
     const snapshotForRewrite = request.useAtomicSnapshot
       ? atomicSnapshot
-      : loadTranscriptRowSnapshotSync(scope);
+      : loadTranscriptEventsWithRowSnapshotSync(scope).rows;
 
     let rewriteRejected = false;
     try {
@@ -411,6 +429,50 @@ async function runSyncRewriteRace(request) {
       }
     }
     result = { ok: true, rewriteRejected };
+  } catch (error) {
+    result = {
+      ok: false,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return result;
+}
+
+async function runSyncInitialHeaderRace(request) {
+  let result;
+  try {
+    // Open a genuinely empty transcript through the real production factory:
+    // the session header is deferred until the first record append, exactly the
+    // header-then-first-record path ClawSweeper flagged. getEntries() is empty.
+    const manager = SessionManager.open({
+      agentId: AGENT_ID,
+      sessionId: request.sessionId,
+      sessionKey: SESSION_KEY,
+      storePath: request.storePath,
+    });
+    const proceed = waitForProceed(request.requestId);
+    send({
+      phase: "ready",
+      requestId: request.requestId,
+      value: { eventCount: manager.getEntries().length },
+    });
+    await proceed;
+    // First real appendMessage folds the deferred header into the same
+    // transaction and revalidates the manager's tracked (empty) snapshot. A
+    // foreign row committed during the handshake gap must make that fold fail
+    // closed instead of being silently absorbed and later deleted.
+    let appendRejected = false;
+    try {
+      manager.appendMessage({ role: "user", content: "manager first", timestamp: 1 });
+    } catch (error) {
+      if (error instanceof SqliteTranscriptMutationConflictError) {
+        appendRejected = true;
+      } else {
+        throw error;
+      }
+    }
+    result = { ok: true, appendRejected };
   } catch (error) {
     result = {
       ok: false,
@@ -447,7 +509,9 @@ process.on("message", (request) => {
             ? await runSyncAppendRace(request)
             : request.kind === "sync-rewrite-race"
               ? await runSyncRewriteRace(request)
-              : await runTranscriptRewrite(request);
+              : request.kind === "sync-initial-header-race"
+                ? await runSyncInitialHeaderRace(request)
+                : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
     send({

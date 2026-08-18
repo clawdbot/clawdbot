@@ -11,7 +11,6 @@ import {
   loadTranscriptEventsSync,
   loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
-  loadTranscriptRowSnapshotSync,
   loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
   readTranscriptEventAtSeqSync,
@@ -27,6 +26,7 @@ import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   appendTranscriptMessageWithSnapshotSync,
+  type PendingTranscriptHeader,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   replaceTranscriptEventsWithSnapshotSync,
@@ -61,7 +61,6 @@ export {
   loadTranscriptEventsSync,
   loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
-  loadTranscriptRowSnapshotSync,
   loadTranscriptTailEventsSync,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
@@ -78,6 +77,7 @@ export {
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 };
+export type { PendingTranscriptHeader };
 export type { SqliteTranscriptSnapshotRow };
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 

@@ -32,6 +32,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
+  type ResolvedTranscriptScope,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -44,6 +45,7 @@ import {
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  appendTranscriptEventInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
@@ -215,7 +217,7 @@ export function replaceTranscriptEventsSync(
  * Fully replaces rows for one transcript synchronously and atomically captures the
  * post-replace row snapshot in the same write transaction. Callers that track their own
  * last-known-good snapshot (e.g. SessionManagerCore) must use this instead of
- * replaceTranscriptEventsSync plus a separate loadTranscriptRowSnapshotSync call: a foreign
+ * replaceTranscriptEventsSync plus a separate out-of-transaction snapshot read: a foreign
  * process committing between this transaction's commit and that later read would otherwise
  * be silently folded into the tracked snapshot without ever appearing in the caller's
  * in-memory entries.
@@ -471,6 +473,7 @@ function appendTranscriptMessageSyncCore<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
   afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
+  pendingHeader?: PendingTranscriptHeader,
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   // Every sync message append inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
@@ -487,6 +490,9 @@ function appendTranscriptMessageSyncCore<TMessage>(
         (fresh.entry as InternalSessionEntry).activeWriterRunId !== fencedScope.expectedWriterRunId)
     ) {
       return;
+    }
+    if (pendingHeader) {
+      foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader);
     }
     result = appendTranscriptMessageInTransaction(database, resolved, options);
     if (result) {
@@ -510,19 +516,25 @@ export function appendTranscriptMessageSync<TMessage>(
 /**
  * Appends one transcript message and atomically captures the post-append row snapshot in
  * the same write transaction. See appendTranscriptEventWithSnapshotSync for why a separate
- * post-commit loadTranscriptRowSnapshotSync read cannot substitute for this.
+ * post-commit snapshot read cannot substitute for this.
  */
 export function appendTranscriptMessageWithSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
+  pendingHeader?: PendingTranscriptHeader,
 ): {
   result: TranscriptMessageAppendResult<TMessage> | undefined;
   snapshot?: SqliteTranscriptSnapshotRow[];
 } {
   let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
-  const result = appendTranscriptMessageSyncCore(scope, options, (database, resolved) => {
-    snapshot = readTranscriptEventRows(database, resolved.sessionId);
-  });
+  const result = appendTranscriptMessageSyncCore(
+    scope,
+    options,
+    (database, resolved) => {
+      snapshot = readTranscriptEventRows(database, resolved.sessionId);
+    },
+    pendingHeader,
+  );
   return { result, ...(snapshot ? { snapshot } : {}) };
 }
 
@@ -658,4 +670,34 @@ function assertSqliteTranscriptSnapshotUnchanged(
   if (!isSqliteTranscriptSnapshotUnchanged(database, sessionId, expected)) {
     throw new SqliteTranscriptMutationConflictError(sessionId);
   }
+}
+
+/**
+ * A session header that a manager deferred until its first record append, paired with the
+ * (empty) row snapshot it tracked when the transcript was opened. The two travel together so
+ * the fold below can revalidate the exact snapshot the header was deferred against.
+ */
+export type PendingTranscriptHeader = {
+  event: TranscriptEvent;
+  expectedSnapshot: readonly SqliteTranscriptSnapshotRow[];
+};
+
+/**
+ * Folds a deferred session header into an in-progress first-record write transaction. Runs
+ * inside the caller's BEGIN IMMEDIATE: it first revalidates the caller's tracked (empty)
+ * snapshot so a foreign row committed before this transaction cannot be silently absorbed into
+ * the post-write snapshot -- which a later rewrite would then delete -- and only then appends
+ * the header, so the header and first record commit atomically in one transaction.
+ */
+export function foldPendingTranscriptHeaderInTransaction(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedTranscriptScope,
+  pendingHeader: PendingTranscriptHeader,
+): void {
+  assertSqliteTranscriptSnapshotUnchanged(
+    database,
+    resolved.sessionId,
+    pendingHeader.expectedSnapshot,
+  );
+  appendTranscriptEventInTransaction(database, resolved, pendingHeader.event);
 }

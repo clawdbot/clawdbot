@@ -240,7 +240,6 @@ export {
   loadTranscriptEventsSync,
   loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
-  loadTranscriptRowSnapshotSync,
   loadTranscriptTailEventsSync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
@@ -259,6 +258,7 @@ export {
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
+export type { PendingTranscriptHeader } from "./session-accessor.transcript.js";
 export type { SqliteTranscriptSnapshotRow } from "./session-accessor.transcript.js";
 export {
   appendTranscriptMessages,

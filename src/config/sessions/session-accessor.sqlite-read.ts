@@ -95,15 +95,6 @@ export function loadTranscriptEventsWithRowSnapshotSync(scope: SessionTranscript
   );
 }
 
-/** Reads the current row snapshot only, for refreshing a caller-tracked snapshot after a write. */
-export function loadTranscriptRowSnapshotSync(
-  scope: SessionTranscriptReadScope,
-): SqliteTranscriptSnapshotRow[] {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readTranscriptEventRows(database, resolved.sessionId);
-}
-
 /** Reads a complete transcript and its lifecycle snapshot from one SQLite read transaction. */
 export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): {
   events: TranscriptEvent[];

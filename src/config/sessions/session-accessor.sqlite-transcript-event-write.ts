@@ -23,6 +23,10 @@ import {
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
+  foldPendingTranscriptHeaderInTransaction,
+  type PendingTranscriptHeader,
+} from "./session-accessor.sqlite-transcript-write.js";
+import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
@@ -63,6 +67,7 @@ function appendTranscriptEventSyncCore(
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions,
   afterAppend?: (database: OpenClawAgentDatabase, resolved: { sessionId: string }) => void,
+  pendingHeader?: PendingTranscriptHeader,
 ): Result<boolean, TranscriptEventAppendError> {
   assertNonMessageTranscriptEvent(event);
   // Every sync event append inherits and enforces the admitted writer claim.
@@ -103,6 +108,14 @@ function appendTranscriptEventSyncCore(
       });
       return;
     }
+    // Fold a still-pending session header into this same write transaction so the
+    // header row and the first record commit atomically. Appending the header in a
+    // separate prior transaction leaves a gap where a foreign commit lands after the
+    // header but before this append, is folded into the snapshot below, yet never
+    // appears in the caller's in-memory entries -- so a later rewrite deletes it.
+    if (pendingHeader) {
+      foldPendingTranscriptHeaderInTransaction(database, resolved, pendingHeader);
+    }
     const appended = appendTranscriptEventInTransaction(
       database,
       resolved,
@@ -132,7 +145,7 @@ export function appendTranscriptEventSync(
  * Appends one raw non-message transcript event and atomically captures the post-append
  * row snapshot in the same write transaction. Callers that track their own last-known-good
  * snapshot (e.g. SessionManagerCore) must use this instead of appendTranscriptEventSync plus
- * a separate loadTranscriptRowSnapshotSync call: a foreign process committing between this
+ * a separate out-of-transaction snapshot read: a foreign process committing between this
  * transaction's commit and that later read would otherwise be silently folded into the
  * tracked snapshot without ever appearing in the caller's in-memory entries.
  */
@@ -140,14 +153,21 @@ export function appendTranscriptEventWithSnapshotSync(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
+  pendingHeader?: PendingTranscriptHeader,
 ): {
   result: Result<boolean, TranscriptEventAppendError>;
   snapshot?: SqliteTranscriptSnapshotRow[];
 } {
   let snapshot: SqliteTranscriptSnapshotRow[] | undefined;
-  const result = appendTranscriptEventSyncCore(scope, event, options, (database, resolved) => {
-    snapshot = readTranscriptEventRows(database, resolved.sessionId);
-  });
+  const result = appendTranscriptEventSyncCore(
+    scope,
+    event,
+    options,
+    (database, resolved) => {
+      snapshot = readTranscriptEventRows(database, resolved.sessionId);
+    },
+    pendingHeader,
+  );
   return { result, ...(snapshot ? { snapshot } : {}) };
 }
 

@@ -644,4 +644,68 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("rejects the first record and preserves a foreign append when the deferred header folds atomically", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-initial-header-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-initial-header-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-initial-header-race",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          // SessionManager.open on an empty transcript defers the header, so it
+          // starts with zero entries and its tracked snapshot is empty.
+          expect(ready).toEqual({ eventCount: 0 });
+          // Foreign row lands in the gap between open() and the manager's first
+          // appendMessage; appendTranscriptMessage auto-creates the canonical
+          // header for the still-empty transcript. Pre-fix, the manager's first
+          // record ran the header append in a separate prior transaction that
+          // collided with that foreign-created header and threw an unclean
+          // transcript-event-not-appended error. The fold now revalidates the
+          // tracked empty snapshot inside the first record's own transaction,
+          // sees the foreign row, and rejects closed with the conflict error.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true });
+      // Fix verified: the manager's deferred header never commits because its
+      // first record fails closed atomically instead of racing the header into
+      // a separate transaction, so the foreign append's row (and the header it
+      // auto-created) survive untouched.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

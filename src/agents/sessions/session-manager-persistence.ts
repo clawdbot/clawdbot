@@ -4,6 +4,7 @@ import {
   appendTranscriptEventWithSnapshotSync,
   appendTranscriptMessageWithSnapshotSync,
   ensureSessionEntrySync,
+  type PendingTranscriptHeader,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -153,6 +154,26 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return this.persistRecord(entry, options);
   }
 
+  private resolvePendingTranscriptHeader(
+    scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
+  ): PendingTranscriptHeader | undefined {
+    if (!this.persistenceHeaderPending) {
+      return undefined;
+    }
+    // The session_entries row (separate table from transcript_events, so outside the
+    // folded snapshot guard) must exist before the append cores, which no-op when it
+    // is missing. The header transcript row itself is folded into the first record's
+    // transaction below, revalidating this manager's tracked (empty) snapshot first.
+    if (!ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() })) {
+      throw new Error("Session transcript header was not persisted");
+    }
+    const header = this.fileEntries[0];
+    if (!header || header.type !== "session") {
+      throw new Error("Session transcript header was not persisted");
+    }
+    return { event: header, expectedSnapshot: this.persistedRowSnapshot ?? [] };
+  }
+
   private persistSqliteRecord(
     entry: unknown,
     options?: AppendPersistenceOptions,
@@ -161,32 +182,20 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     const scope = this.persistenceTarget;
-    if (this.persistenceHeaderPending) {
-      if (
-        !ensureSessionEntrySync(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-        })
-      ) {
-        throw new Error("Session transcript header was not persisted");
-      }
-      const header = this.fileEntries[0];
-      if (!header || header.type !== "session") {
-        throw new Error("Session transcript header was not persisted");
-      }
-      requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, header),
-        "Session transcript header was not persisted",
-      );
-      this.persistenceHeaderPending = false;
-      // No applyPersistedRowSnapshot() here: this branch always falls through to
-      // exactly one of the *WithSnapshotSync append branches below, whose own atomic
-      // snapshot capture includes the full current row set (including the header row
-      // just appended above) in one pass.
-    }
+    // A deferred header rides into the first record's transaction instead of a
+    // separate prior append: folding it here closes the cross-process gap where a
+    // foreign commit lands after a standalone header append but before the first
+    // record, is captured into this manager's snapshot, yet never appears in
+    // `fileEntries` -- so a later replacePersistedTranscript would delete it.
+    const pendingHeader = this.resolvePendingTranscriptHeader(scope);
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
-      const { result, snapshot } = appendTranscriptEventWithSnapshotSync(scope, entry);
+      const { result, snapshot } = appendTranscriptEventWithSnapshotSync(
+        scope,
+        entry,
+        undefined,
+        pendingHeader,
+      );
       requireTranscriptEventAppend(
         result,
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
@@ -204,6 +213,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         options?.appendIntent === "active-branch"
           ? { appendIntent: options.appendIntent }
           : undefined,
+        pendingHeader,
       );
       requireTranscriptEventAppend(
         result,
@@ -222,7 +232,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageWithSnapshotSync>[1];
-    const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(scope, appendOptions);
+    const { result, snapshot } = appendTranscriptMessageWithSnapshotSync(
+      scope,
+      appendOptions,
+      pendingHeader,
+    );
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
