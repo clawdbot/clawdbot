@@ -5,6 +5,7 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/ap
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
@@ -26,10 +27,15 @@ import {
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
+import { resolveTelegramSessionConversation } from "./session-conversation.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type TelegramOriginTarget = { to: string; threadId?: number };
+type TelegramOriginTarget = {
+  to: string;
+  accountId?: string;
+  threadId?: number;
+};
 
 function resolveTurnSourceTelegramOriginTarget(
   request: ApprovalRequest,
@@ -41,21 +47,50 @@ function resolveTurnSourceTelegramOriginTarget(
   if (turnSourceChannel !== "telegram" || !turnSourceTo) {
     return null;
   }
+  const sessionConversation = resolveApprovalRequestSessionConversation({
+    request,
+    channel: "telegram",
+  });
+  const telegramSessionConversation = sessionConversation
+    ? resolveTelegramSessionConversation({
+        kind: sessionConversation.kind,
+        rawId: sessionConversation.rawId,
+      })
+    : null;
+
+  if (
+    telegramSessionConversation?.threadId !== undefined &&
+    normalizeTelegramChatId(telegramSessionConversation.id) !== turnSourceTo
+  ) {
+    return null;
+  }
+
+  const sessionThreadId = sessionConversation?.threadId ?? telegramSessionConversation?.threadId;
   const rawThreadId =
-    request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
+    request.request.turnSourceThreadId ??
+    parsedTurnSourceTarget?.messageThreadId ??
+    sessionThreadId ??
+    undefined;
   return {
     to: turnSourceTo,
+    accountId: normalizeOptionalString(request.request.turnSourceAccountId),
     threadId: parseTelegramThreadId(rawThreadId),
   };
 }
 
 function resolveSessionTelegramOriginTarget(sessionTarget: {
   to: string;
+  accountId?: string | null;
   threadId?: string | number | null;
 }): TelegramOriginTarget {
+  const parsedTarget = parseTelegramTarget(sessionTarget.to);
   return {
-    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: parseTelegramThreadId(sessionTarget.threadId),
+    to:
+      parsedTarget.directMessagesTopicId !== undefined
+        ? sessionTarget.to
+        : (normalizeTelegramChatId(parsedTarget.chatId) ?? parsedTarget.chatId),
+    accountId: normalizeOptionalString(sessionTarget.accountId),
+    threadId: parseTelegramThreadId(sessionTarget.threadId ?? parsedTarget.messageThreadId),
   };
 }
 
