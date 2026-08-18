@@ -377,6 +377,7 @@ export async function prepareAgentCommandExecution(
           agentId: sessionAgentId,
           sessionEntry: sessionEntryRaw,
           sessionKey,
+          ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
           ...(skillFilter ? { skillFilter } : {}),
         };
         const skillCommands = listSkillCommandsForWorkspace(commandParams);

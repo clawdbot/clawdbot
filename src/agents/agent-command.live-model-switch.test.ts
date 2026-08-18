@@ -114,6 +114,7 @@ const state = vi.hoisted(() => ({
   loadManifestModelCatalogMock: vi.fn(() => []),
   manifestMetadataSnapshot: { plugins: [] },
   resolvePluginMetadataSnapshotMock: vi.fn(),
+  listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
   loadProviderScopedThinkingCatalogMock: vi.fn(
     async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
   ),
@@ -378,6 +379,14 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => false,
   resolvePluginMetadataSnapshot: (...args: unknown[]) =>
     state.resolvePluginMetadataSnapshotMock(...args),
+}));
+
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
+  expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
+  hasSkillReferenceCandidate: () => true,
+  listSkillCommandsForWorkspace: (params: unknown) =>
+    state.listSkillCommandsForWorkspaceMock(params),
+  resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({
@@ -1131,13 +1140,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     } as never;
 
     const prepared = await prepareAgentCommandExecution(
-      { message: "hello", to: "+1234567890" },
+      { message: "/demo", to: "+1234567890" },
       {} as never,
       { config: {}, pluginGeneration },
     );
 
     expect(prepared.manifestMetadataSnapshot).toBe(state.manifestMetadataSnapshot);
     expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
+    expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot: state.manifestMetadataSnapshot }),
+    );
     expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 

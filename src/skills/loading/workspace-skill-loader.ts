@@ -568,6 +568,7 @@ export function loadVisibleSkills(
     skillOverrides?: Record<string, boolean>;
     agentId?: string;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
   const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
