@@ -37,10 +37,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream.ts";
-import {
-  extractGroupMeta,
-  renderMessageMeta,
-} from "./chat-message-timestamp.ts";
+import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -278,8 +275,7 @@ export function renderActivityGroup(
                 >${groupSummaryLabel}</span
               >
             </span>
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span
-            >
+            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
           <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
             ${activityExpanded

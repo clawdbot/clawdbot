@@ -175,8 +175,7 @@
   transform: rotate(90deg);
 }
 
-.chat-tool-row--file:has(.chat-tool-row__toggle[aria-expanded="true"])
-  .chat-tool-row__chevron {
+.chat-tool-row--file:has(.chat-tool-row__toggle[aria-expanded="true"]) .chat-tool-row__chevron {
   transform: rotate(90deg);
 }
 
@@ -194,9 +193,7 @@
 .chat-activity-group__body
   .chat-tool-msg-summary:has([aria-expanded="true"])
   .chat-tool-row__chevron,
-.chat-activity-group__body
-  .chat-tool-msg-summary[aria-expanded="true"]
-  .chat-tool-row__chevron {
+.chat-activity-group__body .chat-tool-msg-summary[aria-expanded="true"] .chat-tool-row__chevron {
   opacity: 1;
 }
 

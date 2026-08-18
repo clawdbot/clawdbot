@@ -631,7 +631,12 @@ function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): strin
     }
   }
   const fallback = `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`;
-  return fallback.trim() || null;
+  const fallbackPath = fallback.trim();
+  if (view.fileOperations) {
+    const operation = view.fileOperations.length === 1 ? view.fileOperations[0] : undefined;
+    return operation?.path === fallbackPath ? operation.path : null;
+  }
+  return fallbackPath || null;
 }
 
 function renderToolWorkspaceFilePath(

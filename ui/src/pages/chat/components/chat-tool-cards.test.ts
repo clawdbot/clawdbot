@@ -159,9 +159,7 @@ describe("tool-cards", () => {
       "https://example.com",
     );
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
-    expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool output"]);
+    expect(blocks[0]?.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
@@ -225,6 +223,7 @@ describe("tool-cards", () => {
 
   it("labels a completed Codex file creation from its recorded operation", () => {
     const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
     render(
       renderToolCard(
         {
@@ -241,13 +240,69 @@ describe("tool-cards", () => {
           },
           completed: true,
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { expanded: false, onOpenWorkspaceFile, onToggleExpanded: vi.fn() },
       ),
       container,
     );
 
     expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Created");
-    expect(container.querySelector(".chat-tool-row__target")?.textContent).toBe("new.ts");
+    expect(container.querySelector(".chat-tool-row__file-link")?.textContent?.trim()).toBe(
+      "new.ts",
+    );
+    container.querySelector<HTMLButtonElement>(".chat-tool-row__file-link")?.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
+  });
+
+  it.each([
+    {
+      label: "multi-file",
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "@@",
+        "-old",
+        "+new",
+        "*** Add File: src/b.ts",
+        "+added",
+        "*** End Patch",
+      ].join("\n"),
+      target: "2 files",
+    },
+    {
+      label: "moved",
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: src/old.ts",
+        "*** Move to: src/new.ts",
+        "@@",
+        "-old",
+        "+new",
+        "*** End Patch",
+      ].join("\n"),
+      target: "old.ts → new.ts",
+    },
+  ])("keeps $label patch summaries non-navigable", ({ patch, target }) => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    const onToggleExpanded = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: `msg:patch:${target}`,
+          name: "apply_patch",
+          args: { patch },
+          completed: true,
+        },
+        { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row--file")).toBeNull();
+    expect(container.querySelector(".chat-tool-row__target")?.textContent).toBe(target);
+    container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")?.click();
+    expect(onToggleExpanded).toHaveBeenCalledOnce();
+    expect(onOpenWorkspaceFile).not.toHaveBeenCalled();
   });
 
   it("renders edit and write rows from their result outcome", () => {
@@ -336,9 +391,10 @@ describe("tool-cards", () => {
         );
         expect(container.querySelector(".chat-diff")?.getAttribute("aria-label")).toBe(state.label);
         expect(container.querySelector(".chat-diffstat") !== null).toBe(state.hasStat);
-        expect(container.querySelector(".chat-tool-row__badge")?.textContent === "failed").toBe(
-          state.failed,
-        );
+        expect(container.querySelector(".chat-tool-row__badge")).toBeNull();
+        if (state.failed) {
+          expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
+        }
         expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
       }
     }
@@ -702,7 +758,7 @@ describe("tool-cards", () => {
 
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody!.hidden).toBe(false);
-    expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
+    expect(rawBody!.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(rawBody!.querySelector("code.markdown-block-art")).toBeNull();
     expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toEqual({
       kind: "canvas",
@@ -799,7 +855,7 @@ describe("tool-cards", () => {
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 
-  it("renders error details with only a failed summary badge", () => {
+  it("renders error details with the failure outcome in the expanded body", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -823,10 +879,11 @@ describe("tool-cards", () => {
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
       "Web Search",
     );
-    expect(summaryButton?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(summaryButton?.querySelector(".chat-tool-row__badge")).toBeNull();
     const expandedCard = container.querySelector(".chat-tool-card");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
     expect(
       Array.from(container.querySelectorAll(".chat-tool-card__block-label")).map(
         (label) => label.textContent,
@@ -850,9 +907,10 @@ describe("tool-cards", () => {
 
     const summary = container.querySelector(".chat-tool-msg-summary");
     expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Sub-agent");
-    expect(summary?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(summary?.querySelector(".chat-tool-row__badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
   });
 
   it("renders a neutral summary when output is the literal 'Tool not found'", () => {
@@ -874,7 +932,8 @@ describe("tool-cards", () => {
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
       "Unknown",
     );
-    expect(summaryButton?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(summaryButton?.querySelector(".chat-tool-row__badge")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
   it("renders a neutral summary when the tool card has an explicit error flag", () => {
@@ -894,9 +953,10 @@ describe("tool-cards", () => {
 
     const summary = container.querySelector(".chat-tool-msg-summary");
     expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Lookup");
-    expect(summary?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(summary?.querySelector(".chat-tool-row__badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
   });
 
   it("renders a plain error detail when a failed tool has no output", () => {
@@ -943,7 +1003,7 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
-  it("keeps Tool output labelling for successful results", () => {
+  it("renders successful output without redundant Tool output labelling", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -957,7 +1017,8 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("Opened page");
+    expect(container.textContent).not.toContain("Tool output");
     expect(container.textContent).not.toContain("Tool error");
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
