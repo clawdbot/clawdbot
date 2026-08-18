@@ -389,7 +389,7 @@ export function projectChatTranscript(
       loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
       getAssistantMessageExpansion: (messageId: string) => expandedAssistantMessages.get(messageId),
       onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
-      isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId),
+      isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
