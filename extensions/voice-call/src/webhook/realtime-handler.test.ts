@@ -1916,8 +1916,7 @@ describe("RealtimeCallHandler path routing", () => {
         });
         expect(clearAudio).toHaveBeenCalledTimes(2);
         expect(oldSendUserMessage).not.toHaveBeenCalled();
-        expect(oldCoordinator.handles()).toContainEqual(oldForcedHandle);
-        expect(oldCoordinator.isCancelled(oldForcedHandle)).toBe(true);
+        expect(oldCoordinator.handles()).not.toContainEqual(oldForcedHandle);
 
         const oldClosed = waitForClose(oldWs);
         oldWs.close();
@@ -1953,7 +1952,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("isolates replacement transcripts and late old bridge events", async () => {
+  it("retires predecessor audio and isolates late bridge events from its replacement", async () => {
     const callbacks: RealtimeBridgeRequest[] = [];
     const oldCloseBridge = vi.fn();
     const replacementCloseBridge = vi.fn();
@@ -2003,6 +2002,10 @@ describe("RealtimeCallHandler path routing", () => {
 
       replacementServer = await startRealtimeServer(handler);
       const replacementWs = await connectWs(replacementServer.url);
+      const replacementOutboundMessages: Array<Record<string, unknown>> = [];
+      replacementWs.on("message", (data) => {
+        replacementOutboundMessages.push(parseWebSocketMessage(data));
+      });
       try {
         replacementWs.send(
           JSON.stringify({
@@ -2015,6 +2018,23 @@ describe("RealtimeCallHandler path routing", () => {
         );
         await waitForRealtimeTest(() => {
           expect(callbacks).toHaveLength(2);
+          expect(oldCloseBridge).toHaveBeenCalledOnce();
+        });
+
+        callbacks[0]?.onAudio(Buffer.from([0x01]));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(replacementOutboundMessages).toHaveLength(0);
+
+        callbacks[1]?.onAudio(Buffer.from([0x02]));
+        await waitForRealtimeTest(() => {
+          expect(replacementOutboundMessages).toEqual([
+            expect.objectContaining({
+              event: "media",
+              media: { payload: Buffer.from([0x02]).toString("base64") },
+            }),
+          ]);
         });
 
         callbacks[0]?.onTranscript?.("user", "stale partial", false);

@@ -1507,7 +1507,7 @@ export async function runMemoryFlushIfNeeded(params: {
             }
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              if (phase === "end" && evt.data.completed === true) {
                 memoryCompactionCompleted = true;
               }
             }

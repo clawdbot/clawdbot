@@ -1621,7 +1621,6 @@ packages/memory-host-sdk/src/host/batch-http.ts	2
 packages/memory-host-sdk/src/host/batch-output.ts	2
 packages/memory-host-sdk/src/host/batch-upload.ts	1
 packages/memory-host-sdk/src/host/config-utils.ts	2
-packages/memory-host-sdk/src/host/fs-utils.ts	3
 packages/memory-host-sdk/src/host/internal.ts	1
 packages/memory-host-sdk/src/host/memory-schema-fts.ts	2
 packages/memory-host-sdk/src/host/memory-schema-migration.ts	1
@@ -1913,7 +1912,6 @@ src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
 src/agents/embedded-agent-runner/tool-result-truncation.ts	23
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
-src/agents/embedded-agent-subscribe.handlers.compaction.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
