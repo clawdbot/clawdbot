@@ -35,9 +35,11 @@ import {
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
+  isOpenClawSourcePackageInstallSpec,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
+  SOURCE_PACKAGE_TARGET_ERROR,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
@@ -370,6 +372,24 @@ async function updateCommandInternal(
     packageInstallCwd = tryResolveInvocationCwd();
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
+      if (channel !== "extended-stable") {
+        packageInstallSpec = resolveGlobalInstallSpec({
+          packageName: installedPackageName,
+          tag,
+          env: packageInstallEnv,
+        });
+        if (isOpenClawSourcePackageInstallSpec(packageInstallSpec)) {
+          await reportPreMutationUpdateFailure({
+            root,
+            installKind: updateInstallKind,
+            reason: "unsupported-package-target",
+            message: SOURCE_PACKAGE_TARGET_ERROR,
+            opts,
+            controlPlaneUpdateSentinelMeta,
+          });
+          return;
+        }
+      }
       const manager = await resolveGlobalManager({
         root,
         installKind,
@@ -420,11 +440,13 @@ async function updateCommandInternal(
       tag = extendedStable.version;
       packageInstallSpec = extendedStable.packageSpec;
     } else if (explicitTag) {
-      const explicitSpec = resolveGlobalInstallSpec({
-        packageName: DEFAULT_PACKAGE_NAME,
-        tag,
-        env: packageInstallEnv,
-      });
+      const explicitSpec =
+        packageInstallSpec ??
+        resolveGlobalInstallSpec({
+          packageName: DEFAULT_PACKAGE_NAME,
+          tag,
+          env: packageInstallEnv,
+        });
       targetVersion = await resolveTargetVersion(tag, timeoutMs, {
         spec: explicitSpec,
         command: npmMetadataCommand,

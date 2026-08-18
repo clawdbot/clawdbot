@@ -4356,54 +4356,6 @@ describe("update-cli", () => {
       expectedSpec: "openclaw@9999.0.0",
     },
     {
-      name: "main shorthand",
-      options: { yes: true, tag: "main" },
-      packageSpec: undefined,
-      expectedSpec: "github:openclaw/openclaw#main",
-    },
-    {
-      name: "explicit git package spec",
-      options: { yes: true, tag: "github:openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "github:openclaw/openclaw#main",
-    },
-    {
-      name: "aliased git package spec",
-      options: { yes: true, tag: "OpenClaw@github:openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "OpenClaw@github:openclaw/openclaw#main",
-    },
-    {
-      name: "full git URL package spec",
-      options: { yes: true, tag: "https://github.com/openclaw/openclaw.git#main" },
-      packageSpec: undefined,
-      expectedSpec: "https://github.com/openclaw/openclaw.git#main",
-    },
-    {
-      name: "hosted GitHub URL package spec without git suffix",
-      options: { yes: true, tag: "https://github.com/openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "https://github.com/openclaw/openclaw#main",
-    },
-    {
-      name: "aliased hosted GitHub URL package spec without git suffix",
-      options: { yes: true, tag: "openclaw@https://github.com/openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "https://github.com/openclaw/openclaw#main",
-    },
-    {
-      name: "GitHub shorthand package spec",
-      options: { yes: true, tag: "openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "openclaw/openclaw#main",
-    },
-    {
-      name: "SCP-style SSH package spec",
-      options: { yes: true, tag: "git@github.com:openclaw/openclaw.git#main" },
-      packageSpec: undefined,
-      expectedSpec: "git@github.com:openclaw/openclaw.git#main",
-    },
-    {
       name: "OPENCLAW_UPDATE_PACKAGE_SPEC override",
       options: { yes: true, tag: "latest" },
       packageSpec: "http://10.211.55.2:8138/openclaw-next.tgz",
@@ -4428,6 +4380,41 @@ describe("update-cli", () => {
       expectPackageInstallSpec(expectedSpec);
     },
   );
+
+  it.each([
+    "main",
+    "github:openclaw/openclaw#main",
+    "OpenClaw@github:openclaw/openclaw#main",
+    "https://github.com/openclaw/openclaw.git#main",
+    "openclaw/openclaw#main",
+    "git@github.com:openclaw/openclaw.git#main",
+  ])("refuses official OpenClaw source package target %s", async (tag) => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update-source-refusal"));
+
+    await updateCommand({ yes: true, tag });
+
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(replaceConfigFile, runGatewayUpdate);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getErrorOutput()).toContain("openclaw update --channel dev");
+  });
+
+  it("refuses --tag main in JSON dry-run without advertising a package action", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update-main-dry-run"));
+
+    await updateCommand({ dryRun: true, json: true, tag: "main", yes: true });
+
+    const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result?.status).toBe("error");
+    expect(result?.reason).toBe("unsupported-package-target");
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      replaceConfigFile,
+      runGatewayUpdate,
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 
   it("fails package updates when the installed correction version does not match the requested target", async () => {
     const tempDir = createCaseDir("openclaw-update");

@@ -64,8 +64,10 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
-/** npm-compatible spec used when the user asks to install the moving main branch. */
+/** npm-compatible spec used to recognize the unsupported moving-main package target. */
 const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+export const SOURCE_PACKAGE_TARGET_ERROR =
+  "OpenClaw package updates cannot install Git source directly because the main checkout is not a self-contained package artifact. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow.";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
@@ -245,6 +247,24 @@ function stripPrimaryPackageAlias(spec: string): string {
   return normalized.toLowerCase().startsWith(prefix)
     ? normalized.slice(prefix.length).trim()
     : normalized;
+}
+
+/** Returns true for official OpenClaw source targets that require the Git update flow. */
+export function isOpenClawSourcePackageInstallSpec(value: string): boolean {
+  if (isMainPackageTarget(value)) {
+    return true;
+  }
+  const target = normalizeLowercaseStringOrEmpty(stripPrimaryPackageAlias(value));
+  if (/^(?:github:)?openclaw\/openclaw(?:$|#)/u.test(target)) {
+    return true;
+  }
+  const gitUrl = target.replace(/^git\+/u, "");
+  return (
+    /^https?:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^ssh:\/\/git@github\.com[:/]openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^git:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^git@github\.com:openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl)
+  );
 }
 
 /**

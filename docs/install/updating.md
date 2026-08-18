@@ -60,9 +60,11 @@ OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
 `openclaw plugins update @openclaw/name` once on the extended-stable channel
 to opt that plugin back into exact-core tracking.
 
-`--channel dev` gives a persistent moving GitHub `main` checkout. For a one-off
-package update, `--tag main` maps to the `github:openclaw/openclaw#main` package
-spec and installs it directly through the target package manager (npm/pnpm/bun).
+`--channel dev` gives a persistent moving GitHub `main` checkout. Package
+installs reject `--tag main` and equivalent official OpenClaw Git source specs
+because the workspace checkout is not a self-contained package artifact. Use
+`openclaw update --channel dev` to switch to the supported checkout and build
+flow.
 
 For managed plugins, a missing beta release is a warning, not a failure: the
 core update can still succeed while a plugin falls back to its recorded

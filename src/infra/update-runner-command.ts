@@ -72,6 +72,8 @@ export function normalizeFallbackFailureReason(
     case "global install verify":
     case "global install swap":
       return "global-install-failed";
+    case "package target validation":
+      return "unsupported-package-target";
     case "openclaw doctor":
       return "doctor-failed";
     case "ui:build (post-doctor repair)":

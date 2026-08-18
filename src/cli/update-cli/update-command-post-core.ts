@@ -106,7 +106,8 @@ export async function reportPreMutationUpdateFailure(params: {
   reason:
     | ExtendedStableFailureReason
     | typeof EXTENDED_STABLE_TAG_UNSUPPORTED_REASON
-    | "npm lifecycle policy preflight";
+    | "npm lifecycle policy preflight"
+    | "unsupported-package-target";
   message?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
