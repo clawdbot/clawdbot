@@ -18,7 +18,6 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
-import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   rowDemandsVisibility,
   sidebarSessionMetaId,
@@ -184,7 +183,7 @@ export function renderRecentSession(params: {
   const ownerActor = host.sessionOwnershipVisible
     ? host.sessionsStatusFilter === "archived"
       ? session.archivedBy
-      : (session.owner?.actor ?? session.createdActor)
+      : session.owner?.actor
     : undefined;
   const ownerId = ownerActor?.id?.trim();
   const ownerViewing = ownerId
@@ -207,8 +206,6 @@ export function renderRecentSession(params: {
   const trailingDescription = session.isChild
     ? ""
     : describeSessionTrailingState(session, pullRequestState);
-  const meta = display?.meta ?? formatSidebarTimestamp(session.updatedAt);
-  const rowMeta = session.pinned ? "" : meta;
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
@@ -218,12 +215,6 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
-  const title = [
-    display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · "),
-    trailingDescription,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
   const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
   const rowClass = [
@@ -265,7 +256,6 @@ export function renderRecentSession(params: {
       data-session-key=${session.key}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
-      title=${!session.isChild && !groupWriteAccess.allowed ? groupWriteAccess.reason : nothing}
       @dragstart=${!rowDraggable
         ? nothing
         : (event: DragEvent) => {
@@ -288,7 +278,6 @@ export function renderRecentSession(params: {
         href=${session.href}
         class="sidebar-recent-session__link"
         draggable="false"
-        title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
         aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}

@@ -7,12 +7,16 @@ import { describe, expect, it, vi } from "vitest";
 
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
+const runCodexAppServerAttempt = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
   completeWithPreparedSimpleCompletionModel,
 }));
 vi.mock("./src/app-server/isolated-completion.js", () => ({
   runCodexIsolatedCompletion,
+}));
+vi.mock("./src/app-server/run-attempt.js", () => ({
+  runCodexAppServerAttempt,
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -181,6 +185,33 @@ describe("Codex agent harness supports()", () => {
       supported: true,
       priority: 100,
     });
+  });
+
+  it("uses the attempt-scoped Codex config before the live Gateway config", async () => {
+    runCodexAppServerAttempt.mockResolvedValueOnce({ stopReason: "stop" });
+    const attemptHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: { homeScope: "agent" } },
+      resolvePluginConfig: () => ({ appServer: { homeScope: "agent" } }),
+    });
+    const params = {
+      config: {
+        plugins: {
+          entries: {
+            codex: { config: { appServer: { transport: "stdio", homeScope: "user" } } },
+          },
+        },
+      },
+    } as unknown as Parameters<NonNullable<typeof attemptHarness.runAttempt>>[0];
+
+    await attemptHarness.runAttempt?.(params);
+
+    expect(runCodexAppServerAttempt).toHaveBeenCalledWith(
+      params,
+      expect.objectContaining({
+        pluginConfig: { appServer: { transport: "stdio", homeScope: "user" } },
+      }),
+    );
   });
 
   it("supports an official route declared compatible with Codex", () => {

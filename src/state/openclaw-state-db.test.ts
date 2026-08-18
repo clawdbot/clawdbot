@@ -4444,7 +4444,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
-  it("repairs target machine class in a pre-column placement move table", () => {
+  it("keeps placement-owned target machine class absent during generic repair and open", () => {
     const stateDir = createTempStateDir();
     const databasePath = materializeCurrentStateDatabase(stateDir);
     const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
@@ -4468,12 +4468,22 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+    const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const repairedColumns = repairedDb
+        .prepare("PRAGMA table_info(worker_session_placement_moves)")
+        .all() as Array<{ name?: string }>;
+      expect(repairedColumns.map((column) => column.name)).not.toContain("target_machine_class");
+    } finally {
+      repairedDb.close();
+    }
+
     const reopened = openOpenClawStateDatabase(options);
     const columns = reopened.db
       .prepare("PRAGMA table_info(worker_session_placement_moves)")
       .all() as Array<{ name?: string }>;
 
-    expect(columns.map((column) => column.name)).toContain("target_machine_class");
+    expect(columns.map((column) => column.name)).not.toContain("target_machine_class");
   });
 
   it("adds staged worker-result refs during the v5 state migration", () => {

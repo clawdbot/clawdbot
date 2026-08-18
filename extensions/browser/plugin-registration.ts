@@ -277,6 +277,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       res.end("Upgrade Required: connect the OpenClaw Chrome extension over WebSocket.");
     },
     handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      // Direct relay activity prepares the teardown module consumed by lazy service shutdown.
+      await loadBrowserRegistrationRuntimeModule();
       const { handleGatewayExtensionUpgrade } =
         await import("./src/browser/extension-relay/gateway-relay-route.js");
       return await handleGatewayExtensionUpgrade(req, socket, head);

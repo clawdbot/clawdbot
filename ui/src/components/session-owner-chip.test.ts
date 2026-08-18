@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
-import "./session-owner-chip.ts";
+import { listAssignableSessionOwners, type SessionCreatedActor } from "./session-owner-chip.ts";
 
 type OwnerChipElement = HTMLElement & {
   createdActor: SessionCreatedActor | null;
@@ -66,4 +65,32 @@ it("renders the total participant count in the back slot for three identities", 
   expect(chip.querySelector(".session-owner-stack")?.getAttribute("aria-label")).toBe(
     "Owned by Ada · +2 more",
   );
+});
+
+it("treats a present owner facet as authoritative before adding self and configured agents", () => {
+  const facet = [
+    { type: "human" as const, id: "profile:channel:opaque", label: "Opaque Person" },
+    { type: "agent" as const, id: "facet-agent", label: "Facet Agent" },
+  ];
+
+  expect(
+    listAssignableSessionOwners({
+      facet,
+      agents: [{ id: "configured-agent", name: "Configured Agent" }],
+      self: { id: "profile-self", name: "Self" },
+    }),
+  ).toEqual([
+    { type: "agent", id: "configured-agent", label: "Configured Agent" },
+    { type: "agent", id: "facet-agent", label: "Facet Agent" },
+    { type: "human", id: "profile:channel:opaque", label: "Opaque Person" },
+    { type: "human", id: "profile-self", label: "Self" },
+  ]);
+});
+
+it("does not reconstruct assignment candidates when the owner facet is absent", () => {
+  expect(
+    listAssignableSessionOwners({
+      facet: undefined,
+    }),
+  ).toEqual([]);
 });

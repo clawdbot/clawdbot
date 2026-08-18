@@ -355,6 +355,11 @@
     corner-shape: superellipse(1.5);
   }
 
+  .code-block-wrapper.code-block-wrapper {
+    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
   .option-card.option-card {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);

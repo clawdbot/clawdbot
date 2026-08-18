@@ -94,6 +94,35 @@ describe("managed llama-server", () => {
     }
   });
 
+  it("writes an embedding-only preset without requiring a chat model", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
+    const presetPath = path.join(tempRoot, "models.ini");
+    const asset = selectLlamaServerAsset("darwin", "arm64");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
+      command: path.join(tempRoot, "llama-server"),
+      asset,
+    });
+    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+      installDir: tempRoot,
+      command: path.join(tempRoot, "llama-server"),
+      presetPath,
+    });
+
+    try {
+      await prepareManagedLlamaServer({
+        embeddingModelPath: "/models/custom-embedding.gguf",
+        port: 19_432,
+      });
+      const preset = await fs.readFile(presetPath, "utf8");
+      expect(preset).toBe(
+        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+      );
+      expect(preset).not.toContain("jinja");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reports a missing local GGUF with the setup repair path", async () => {
     await expect(
       ensureLlamaCppModel({

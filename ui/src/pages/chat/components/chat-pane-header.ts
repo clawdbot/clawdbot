@@ -446,9 +446,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
       ${renderSessionOwnerChip(
-        props.showOwnerChip
-          ? (props.session?.owner?.actor ?? props.session?.createdActor)
-          : undefined,
+        props.showOwnerChip ? props.session?.owner?.actor : undefined,
         "header",
         props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
         props.ownerViewing,
