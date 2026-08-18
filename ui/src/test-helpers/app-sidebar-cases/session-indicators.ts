@@ -68,7 +68,7 @@ describe("AppSidebar session indicators", () => {
       throw new Error("expected icon row");
     }
     iconRow.icon = "🦞";
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];
