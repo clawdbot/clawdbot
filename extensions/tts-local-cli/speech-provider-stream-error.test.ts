@@ -104,7 +104,7 @@ describe("CLI TTS process wrapper", () => {
     await expect(synthesize()).rejects.toThrow("CLI TTS failed: stdout stream failed");
 
     runCommandBufferedMock.mockImplementationOnce(async (argv: string[]) => {
-      writeFileSync(argv[1]!, Buffer.from("file-audio"));
+      writeFileSync(argv[1]!, WAV_AUDIO);
       return commandResult({
         code: 0,
         error: streamError,
@@ -113,7 +113,7 @@ describe("CLI TTS process wrapper", () => {
       });
     });
     await expect(synthesize(["{{OutputPath}}"])).resolves.toMatchObject({
-      audioBuffer: Buffer.from("file-audio"),
+      audioBuffer: WAV_AUDIO,
     });
 
     runCommandBufferedMock.mockResolvedValueOnce(

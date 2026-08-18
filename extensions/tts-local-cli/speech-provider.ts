@@ -136,23 +136,49 @@ function findAudioFile(dir: string, baseName: string): string | null {
 }
 
 function detectFormatFromExtension(filePath: string): SourceFormat | null {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".opus") {
-    return "opus";
+  return path.extname(filePath).toLowerCase() === ".m4a" ? "m4a" : null;
+}
+
+function hasMpegFrameHeader(buffer: Buffer, offset: number): boolean {
+  const mpegHeader = buffer[offset + 1] ?? 0;
+  const mpegFormat = buffer[offset + 2] ?? 0;
+  return (
+    buffer.length >= offset + 4 &&
+    buffer[offset] === 0xff &&
+    (mpegHeader & 0xe0) === 0xe0 &&
+    (mpegHeader & 0x18) !== 0x08 &&
+    (mpegHeader & 0x06) !== 0 &&
+    (mpegFormat & 0xf0) !== 0 &&
+    (mpegFormat & 0xf0) !== 0xf0 &&
+    (mpegFormat & 0x0c) !== 0x0c
+  );
+}
+
+function hasId3v2MpegFrame(buffer: Buffer): boolean {
+  if (buffer.length < 10) {
+    return false;
   }
-  if (ext === ".ogg") {
-    return "ogg";
+  const majorVersion = buffer[3] ?? 0;
+  const revision = buffer[4] ?? 0;
+  const flags = buffer[5] ?? 0;
+  if (majorVersion < 2 || majorVersion > 4 || revision === 0xff) {
+    return false;
   }
-  if (ext === ".wav") {
-    return "wav";
+  const allowedFlags = majorVersion === 2 ? 0xc0 : majorVersion === 3 ? 0xe0 : 0xf0;
+  if ((flags & (0xff ^ allowedFlags)) !== 0) {
+    return false;
   }
-  if (ext === ".mp3") {
-    return "mp3";
+  const size0 = buffer[6] ?? 0;
+  const size1 = buffer[7] ?? 0;
+  const size2 = buffer[8] ?? 0;
+  const size3 = buffer[9] ?? 0;
+  if ((size0 | size1 | size2 | size3) & 0x80) {
+    return false;
   }
-  if (ext === ".m4a") {
-    return "m4a";
-  }
-  return null;
+  const tagSize = (size0 << 21) | (size1 << 14) | (size2 << 7) | size3;
+  const footerSize = majorVersion === 4 && (flags & 0x10) !== 0 ? 10 : 0;
+  const audioOffset = 10 + tagSize + footerSize;
+  return audioOffset < buffer.length && hasMpegFrameHeader(buffer, audioOffset);
 }
 
 function detectAudioFormat(buffer: Buffer): SourceFormat | null {
@@ -160,18 +186,7 @@ function detectAudioFormat(buffer: Buffer): SourceFormat | null {
   if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WAVE") {
     return "wav";
   }
-  const mpegHeader = buffer[1] ?? 0;
-  const mpegFormat = buffer[2] ?? 0;
-  const hasMp3FrameHeader =
-    buffer.length >= 4 &&
-    buffer[0] === 0xff &&
-    (mpegHeader & 0xe0) === 0xe0 &&
-    (mpegHeader & 0x18) !== 0x08 &&
-    (mpegHeader & 0x06) !== 0 &&
-    (mpegFormat & 0xf0) !== 0 &&
-    (mpegFormat & 0xf0) !== 0xf0 &&
-    (mpegFormat & 0x0c) !== 0x0c;
-  if (prefix.startsWith("ID3") || hasMp3FrameHeader) {
+  if (hasMpegFrameHeader(buffer, 0) || (prefix.startsWith("ID3") && hasId3v2MpegFrame(buffer))) {
     return "mp3";
   }
   if (!prefix.startsWith("OggS")) {

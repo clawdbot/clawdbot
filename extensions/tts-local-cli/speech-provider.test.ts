@@ -23,6 +23,8 @@ import { buildCliSpeechProvider } from "./speech-provider.js";
 
 const TEST_CFG = {} as OpenClawConfig;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
+const VALID_MPEG_FRAME_HEADER = [0xff, 0xfb, 0x90, 0x64] as const;
+const EMPTY_ID3V2_HEADER = [...Buffer.from("ID3"), 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
 function createCliFixture(): { dir: string; script: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-test-"));
@@ -271,8 +273,12 @@ describe("buildCliSpeechProvider", () => {
   });
 
   it.each([
-    { transport: "stdout", audio: [...Buffer.from("ID3audio")], writeFile: false },
-    { transport: "templated file", audio: [0xff, 0xfb, 0x90, 0x64], writeFile: true },
+    {
+      transport: "stdout",
+      audio: [...EMPTY_ID3V2_HEADER, ...VALID_MPEG_FRAME_HEADER],
+      writeFile: false,
+    },
+    { transport: "templated file", audio: VALID_MPEG_FRAME_HEADER, writeFile: true },
   ])("converts detected MP3 bytes from $transport to configured WAV", async (testCase) => {
     const fixture = createRawAudioFixture(testCase.audio);
     try {
@@ -383,6 +389,25 @@ describe("buildCliSpeechProvider", () => {
   it.each([
     { label: "plain bytes", audio: [...Buffer.from("not audio")] },
     { label: "reserved MP3 layer", audio: [0xff, 0xf1, 0x90, 0x64] },
+    { label: "bare ID3 prefix", audio: [...Buffer.from("ID3audio")] },
+    {
+      label: "ID3 tag with a non-sync-safe size",
+      audio: [
+        ...Buffer.from("ID3"),
+        0x04,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,
+        0x00,
+        ...VALID_MPEG_FRAME_HEADER,
+      ],
+    },
+    {
+      label: "ID3 tag followed by a reserved MP3 layer",
+      audio: [...EMPTY_ID3V2_HEADER, 0xff, 0xf1, 0x90, 0x64],
+    },
   ])("rejects $label on stdout with supported-format guidance", async ({ audio }) => {
     const fixture = createRawAudioFixture(audio);
     try {
@@ -394,6 +419,22 @@ describe("buildCliSpeechProvider", () => {
           }),
         }),
       ).rejects.toThrow("stdout audio format is not recognized");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unrecognized bytes written to a recognized audio extension", async () => {
+    const fixture = createRawAudioFixture([...Buffer.from("not audio")]);
+    try {
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--out", "{{OutputPath}}"],
+            outputFormat: "mp3",
+          }),
+        }),
+      ).rejects.toThrow("unknown format");
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
