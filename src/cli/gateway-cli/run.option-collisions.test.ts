@@ -940,19 +940,22 @@ describe("gateway run option collisions", () => {
       const repairedConfig = {
         agents: { entries: { main: {} } },
         env: stableConfig.env,
-        gateway: stableConfig.gateway,
-      };
+        gateway: { mode: "local" as const },
+      } satisfies ConfigFileSnapshot["sourceConfig"];
       const repairedSnapshot = {
-        ...configState.snapshot,
         config: repairedConfig,
-        runtimeConfig: repairedConfig,
+        exists: true,
         issues: [],
         legacyIssues: [],
+        parsed: repairedConfig,
+        path: "/tmp/openclaw.json",
         raw: JSON.stringify(repairedConfig),
         resolved: repairedConfig,
+        runtimeConfig: repairedConfig,
         sourceConfig: repairedConfig,
         valid: true,
-      } as ConfigFileSnapshot;
+        warnings: [],
+      } satisfies ConfigFileSnapshot;
       expect(
         await recheckGatewayRunBootstrap({
           opts: {},

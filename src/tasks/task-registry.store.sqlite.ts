@@ -92,7 +92,7 @@ const TASK_DELIVERY_STATE_SELECT_COLUMNS = [
   "last_notified_event_at",
 ] as const;
 
-export type TaskRegistryReadOnlyLoadResult = {
+type TaskRegistryReadOnlyLoadResult = {
   state: "ready" | "migration-required";
   snapshot: TaskRegistryStoreSnapshot;
 };
