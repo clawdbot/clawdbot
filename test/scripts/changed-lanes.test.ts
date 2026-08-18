@@ -1392,7 +1392,6 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
-      "environment variable count ratchet",
       "max-lines suppression ratchet",
       "assertion SAFETY comment ratchet",
       "changelog attributions",
@@ -2251,15 +2250,6 @@ describe("scripts/changed-lanes", () => {
       },
     },
     {
-      name: "adds the environment variable count ratchet for production source",
-      commandName: "environment variable count ratchet",
-      worktreeOptions: { base: "main" },
-      expected: {
-        worktree: ["check:env-var-count", "--base", "main"],
-        staged: ["check:env-var-count", "--staged", "--base", "HEAD"],
-      },
-    },
-    {
       name: "adds the assertion SAFETY comment ratchet for production source",
       commandName: "assertion SAFETY comment ratchet",
       worktreeOptions: { base: "main" },
@@ -2281,12 +2271,23 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("routes the shared shrink-ratchet owner to all three ratchets", () => {
+  it.each(["config/env-var-count-budget.txt", "scripts/check-env-var-count.mts"])(
+    "routes %s through the single baseline-ratchet entry",
+    (changedPath) => {
+      const commands = createChangedCheckPlan(detectChangedLanes([changedPath])).commands;
+
+      expect(commands).toContainEqual(
+        expect.objectContaining({ args: ["check:max-lines-ratchet", "--base", "origin/main"] }),
+      );
+      expect(commands.map((command) => command.args[0])).not.toContain("check:env-var-count");
+    },
+  );
+
+  it("routes the shared shrink-ratchet owner through both baseline entries", () => {
     const commands = createChangedCheckPlan(
       detectChangedLanes(["scripts/lib/shrink-ratchet.mts"]),
     ).commands.map((command) => command.args);
 
-    expect(commands).toContainEqual(["check:env-var-count", "--base", "origin/main"]);
     expect(commands).toContainEqual(["check:max-lines-ratchet", "--base", "origin/main"]);
     expect(commands).toContainEqual(["check:assertion-safety", "--base", "origin/main"]);
   });

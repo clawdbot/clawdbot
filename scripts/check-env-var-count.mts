@@ -109,9 +109,7 @@ export function main(argv: string[] = process.argv.slice(2), root = process.cwd(
   }
   const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
   const baseBudget = readBaseBudget(root, baseRef);
-  const approvedGrowth =
-    (baseBudget === 501 && budget === 502) || (baseBudget === 502 && budget === 503);
-  if (baseBudget !== null && !approvedGrowth) {
+  if (baseBudget !== null) {
     enforceRatchetScalar(budget, baseBudget, {
       increased: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
     });

@@ -30,7 +30,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { CallRecord, NormalizedEvent } from "../types.js";
+import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import {
@@ -53,6 +53,8 @@ const STREAM_TOKEN_TTL_MS = 30_000;
 const DEFAULT_HOST = "localhost:8443";
 const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
+const REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS = 30_000;
+const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
@@ -309,7 +311,16 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type TelephonyCloseReason = "completed" | "error";
+type RealtimeCallEndCause = "hangup" | "stream-close" | "inactivity" | "error";
+
+// Each socket keeps its exact binding; the call map only grants current-generation
+// record termination. Replacement can retire old audio without a late close killing its successor.
+type RealtimeTelephonyBinding = {
+  bridge: ActiveRealtimeVoiceBridge;
+  close: (cause: RealtimeCallEndCause) => void;
+  noteMediaActivity: () => void;
+  retire: () => void;
+};
 
 async function waitForNativeConsult(state: NativeConsultState): Promise<NativeConsultOutcome> {
   return await Promise.race([
@@ -354,13 +365,7 @@ export class RealtimeCallHandler {
   private readonly activeSockets = new Set<WebSocket>();
   private readonly serverClosingSockets = new WeakSet<WebSocket>();
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
-  private readonly activeTelephonyClosersByCallId = new Map<
-    string,
-    {
-      owner: ActiveRealtimeVoiceBridge;
-      close: (reason: TelephonyCloseReason) => void;
-    }
-  >();
+  private readonly activeTelephonyBindingsByCallId = new Map<string, RealtimeTelephonyBinding>();
   private readonly userTranscriptStatesByCallId = new Map<string, UserTranscriptState>();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
   private readonly consultSessionsByCallId = new Map<string, RealtimeConsultSession>();
@@ -453,7 +458,7 @@ export class RealtimeCallHandler {
     });
     wss.handleUpgrade(request, socket, head, (ws) => {
       this.activeSockets.add(ws);
-      let bridge: ActiveRealtimeVoiceBridge | null = null;
+      let telephonyBinding: RealtimeTelephonyBinding | null = null;
       let initialized = false;
       let activeCallSid = "unknown";
       let stopReceived = false;
@@ -472,25 +477,26 @@ export class RealtimeCallHandler {
             }
             initialized = true;
             activeCallSid = frame.providerCallId;
-            const nextBridge = this.handleCall(
+            const nextBinding = this.handleCall(
               frame.streamId,
               frame.providerCallId,
               ws,
               callerMeta,
               adapter,
             );
-            if (!nextBridge) {
+            if (!nextBinding) {
               return;
             }
-            bridge = nextBridge;
+            telephonyBinding = nextBinding;
             return;
           }
-          if (!bridge) {
+          if (!telephonyBinding) {
             return;
           }
           if (frame.kind === "media") {
             const audio = Buffer.from(frame.payloadBase64, "base64");
-            bridge.sendAudio(audio);
+            telephonyBinding.noteMediaActivity();
+            telephonyBinding.bridge.sendAudio(audio);
             if (frame.timestampMs !== undefined) {
               if (lastMediaTimestamp !== undefined) {
                 const gapMs = frame.timestampMs - lastMediaTimestamp;
@@ -503,12 +509,12 @@ export class RealtimeCallHandler {
                 }
               }
               lastMediaTimestamp = frame.timestampMs;
-              bridge.setMediaTimestamp(frame.timestampMs);
+              telephonyBinding.bridge.setMediaTimestamp(frame.timestampMs);
             }
             return;
           }
           if (frame.kind === "mark") {
-            bridge.acknowledgeMark();
+            telephonyBinding.bridge.acknowledgeMark();
             return;
           }
           if (frame.kind === "error") {
@@ -519,7 +525,7 @@ export class RealtimeCallHandler {
           }
           if (frame.kind === "stop") {
             stopReceived = true;
-            this.closeTelephonyBridge(activeCallSid, bridge, "completed");
+            telephonyBinding.close("hangup");
           }
         } catch (error) {
           console.error("[voice-call] realtime WS parse failed:", error);
@@ -530,13 +536,15 @@ export class RealtimeCallHandler {
         this.activeSockets.delete(ws);
         const reason =
           this.serverClosingSockets.has(ws) || stopReceived || code === 1000 || code === 1005
-            ? "completed"
+            ? "stream-close"
             : "error";
-        this.closeTelephonyBridge(activeCallSid, bridge, reason);
+        telephonyBinding?.close(reason);
       });
 
       ws.on("error", (error) => {
         console.error("[voice-call] realtime WS error:", error);
+        telephonyBinding?.close("error");
+        ws.terminate();
       });
 
       if (this.closing) {
@@ -648,7 +656,7 @@ export class RealtimeCallHandler {
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
     adapter: StreamFrameAdapter,
-  ): ActiveRealtimeVoiceBridge | null {
+  ): RealtimeTelephonyBinding | null {
     const preparedCall = this.prepareCallInManager(callSid, callerMeta);
     if (!preparedCall) {
       ws.close(1008, "Caller rejected by policy");
@@ -658,14 +666,20 @@ export class RealtimeCallHandler {
     const { callRecord } = preparedCall;
     const callId = callRecord.callId;
     const hadPredecessorOnAdmission = this.activeBridgesByCallId.has(callId);
+    const previousTelephonyBinding = this.activeTelephonyBindingsByCallId.get(callId);
     let callEndEmitted = false;
-    const emitCallEnd = (reason: "completed" | "error") => {
+    const emitCallEnd = (cause: RealtimeCallEndCause) => {
       if (callEndEmitted) {
         return;
       }
       callEndEmitted = true;
+      const reason: EndReason =
+        cause === "error" ? "error" : cause === "inactivity" ? "timeout" : "completed";
       this.endCallInManager(callSid, callId, reason);
-      if (reason !== "error") {
+      console.log(
+        `[voice-call] Realtime call ended callId=${callId} providerCallId=${callSid} reason=${cause}`,
+      );
+      if (cause !== "error" && cause !== "inactivity") {
         return;
       }
       void Promise.resolve(
@@ -1087,13 +1101,6 @@ export class RealtimeCallHandler {
     nativeConsultOwner.current = session;
     providerHandlesInputAudioBargeIn =
       session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn;
-    const closeTelephony = (reason: TelephonyCloseReason) => {
-      try {
-        session.close();
-      } finally {
-        emitCallEnd(reason);
-      }
-    };
     const previousConsultSession = this.consultSessionsByCallId.get(callId);
     if (previousConsultSession && previousConsultSession.owner !== session) {
       this.cancelConsultSession(callId, previousConsultSession.owner);
@@ -1102,11 +1109,6 @@ export class RealtimeCallHandler {
       owner: session,
       coordinator: harness.forcedConsults,
     });
-    this.activeBridgesByCallId.set(callId, session);
-    this.activeBridgesByCallId.set(callSid, session);
-    const telephonyCloser = { owner: session, close: closeTelephony };
-    this.activeTelephonyClosersByCallId.set(callId, telephonyCloser);
-    this.activeTelephonyClosersByCallId.set(callSid, telephonyCloser);
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
@@ -1142,6 +1144,72 @@ export class RealtimeCallHandler {
       }
     };
 
+    let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearLivenessTimer = () => {
+      if (livenessTimer) {
+        clearTimeout(livenessTimer);
+        livenessTimer = undefined;
+      }
+    };
+    let bindingClosed = false;
+    const closeBinding = (
+      binding: RealtimeTelephonyBinding,
+      cause?: RealtimeCallEndCause,
+    ): void => {
+      if (bindingClosed) {
+        return;
+      }
+      bindingClosed = true;
+      clearLivenessTimer();
+      const ownsCall = this.activeTelephonyBindingsByCallId.get(callId) === binding;
+      try {
+        session.close();
+      } catch (error) {
+        console.warn(
+          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
+        );
+      } finally {
+        this.clearActiveTelephonyBinding(callId, binding);
+        if (ownsCall && cause) {
+          emitCallEnd(cause);
+        }
+      }
+    };
+    const telephonyBinding: RealtimeTelephonyBinding = {
+      bridge: session,
+      close: (cause) => closeBinding(telephonyBinding, cause),
+      noteMediaActivity: () => {
+        if (
+          bindingClosed ||
+          this.activeTelephonyBindingsByCallId.get(callId) !== telephonyBinding
+        ) {
+          return;
+        }
+        clearLivenessTimer();
+        livenessTimer = setTimeout(() => {
+          console.warn(
+            `[voice-call] Realtime media inactive callId=${callId} providerCallId=${callSid} timeoutMs=${REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS} graceMs=${REALTIME_DISCONNECT_HANGUP_GRACE_MS}`,
+          );
+          livenessTimer = setTimeout(() => {
+            telephonyBinding.close("inactivity");
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.close(1000, "Media inactivity");
+            }
+          }, REALTIME_DISCONNECT_HANGUP_GRACE_MS);
+          livenessTimer.unref?.();
+        }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
+        livenessTimer.unref?.();
+      },
+      retire: () => closeBinding(telephonyBinding),
+    };
+    this.activeBridgesByCallId.set(callId, session);
+    this.activeBridgesByCallId.set(callSid, session);
+    this.activeTelephonyBindingsByCallId.set(callId, telephonyBinding);
+    telephonyBinding.noteMediaActivity();
+    if (previousTelephonyBinding && previousTelephonyBinding !== telephonyBinding) {
+      previousTelephonyBinding.retire();
+    }
+
     session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       const ownsCallState = this.isActiveBridgeOwner(callId, session);
@@ -1159,7 +1227,7 @@ export class RealtimeCallHandler {
       }
     });
 
-    return session;
+    return telephonyBinding;
   }
 
   private beginUserTranscriptOwnerAdoption(callId: string): UserTranscriptOwnerAdoption {
@@ -1361,7 +1429,12 @@ export class RealtimeCallHandler {
         continue;
       }
       this.activeBridgesByCallId.delete(key);
-      this.activeTelephonyClosersByCallId.delete(key);
+    }
+  }
+
+  private clearActiveTelephonyBinding(callId: string, binding: RealtimeTelephonyBinding): void {
+    if (this.activeTelephonyBindingsByCallId.get(callId) === binding) {
+      this.activeTelephonyBindingsByCallId.delete(callId);
     }
   }
 
@@ -1429,19 +1502,6 @@ export class RealtimeCallHandler {
         setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
       });
     }
-  }
-
-  private closeTelephonyBridge(
-    callIdOrSid: string,
-    bridge: ActiveRealtimeVoiceBridge | null,
-    reason: TelephonyCloseReason,
-  ): void {
-    const closer = this.activeTelephonyClosersByCallId.get(callIdOrSid);
-    if (closer && closer.owner === bridge) {
-      closer.close(reason);
-      return;
-    }
-    bridge?.close();
   }
 
   private scheduleForcedAgentConsult(params: {
@@ -1645,7 +1705,7 @@ export class RealtimeCallHandler {
       : undefined;
   }
 
-  private endCallInManager(callSid: string, callId: string, reason: "completed" | "error"): void {
+  private endCallInManager(callSid: string, callId: string, reason: EndReason): void {
     this.manager.processEvent({
       id: `realtime-ended-${callSid}-${Date.now()}`,
       type: "call.ended",
