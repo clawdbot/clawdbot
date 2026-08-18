@@ -226,6 +226,7 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
+      stats.cooldownClassification = undefined;
       stats.cooldownModel = undefined;
       profileMutated = true;
     }

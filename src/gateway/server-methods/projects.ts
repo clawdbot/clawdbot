@@ -33,8 +33,12 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
-import { githubApiToken } from "../control-ui-github-api.js";
+import {
+  CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
+  githubApiToken,
+} from "../control-ui-github-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
@@ -487,6 +491,20 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           undefined,
         );
       } catch (error) {
+        if (isTrustedSecretSurfaceUnavailableError(error)) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, {
+              details: {
+                code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
+                cause: "auth_required",
+              },
+              retryable: false,
+            }),
+          );
+          return;
+        }
         if (error instanceof ProjectCloneError) {
           respond(
             false,
@@ -521,15 +539,15 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       }
       try {
         respond(true, await searchRemoteProjects(params.query), undefined);
-      } catch {
+      } catch (error) {
+        const credentialUnavailable = isTrustedSecretSurfaceUnavailableError(error);
+        const message = credentialUnavailable
+          ? CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE
+          : "GitHub project search is unavailable. Retry shortly.";
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "GitHub project search is unavailable. Retry shortly.",
-            { retryable: true },
-          ),
+          errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: !credentialUnavailable }),
         );
       }
     },

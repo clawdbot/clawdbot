@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   ensureRepoToolNodeModulesLink,
   resolveRepoToolBinPath,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 
 const stylelintPath = resolveRepoToolBinPath("stylelint");
 ensureRepoToolNodeModulesLink(stylelintPath);

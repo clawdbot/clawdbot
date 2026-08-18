@@ -17,8 +17,7 @@ import type { RunExit } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
-import type { RunCliAgentParams } from "./cli-runner/types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
 type CliProvider = "claude-cli" | "codex-cli" | "google-gemini-cli";
 type McpLoopbackClientGrant = ReturnType<

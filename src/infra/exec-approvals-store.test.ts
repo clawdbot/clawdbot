@@ -223,11 +223,17 @@ describe("exec approvals SQLite store", () => {
     expect(row()).toMatchObject({ has_socket_token: 1, socket_path: first.socket?.path });
   });
 
-  it("fails closed and warns once for malformed raw_json", () => {
+  it.each([
+    { name: "invalid JSON", raw: "{not-json" },
+    {
+      name: "an invalid own prototype-key policy",
+      raw: '{"version":1,"agents":{"__proto__":{"security":42}}}',
+    },
+  ])("fails closed and warns once for $name", ({ raw }) => {
     const { db } = openOpenClawStateDatabase();
     db.prepare(
       "INSERT INTO exec_approvals_config (config_key, raw_json, socket_path, has_socket_token, default_security, default_ask, default_ask_fallback, auto_allow_skills, agent_count, allowlist_count, updated_at_ms) VALUES (?, ?, NULL, 0, NULL, NULL, NULL, NULL, 0, 0, 1)",
-    ).run("current", "{not-json");
+    ).run("current", raw);
 
     expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
     expect(loadExecApprovals().defaults?.security).toBe("deny");

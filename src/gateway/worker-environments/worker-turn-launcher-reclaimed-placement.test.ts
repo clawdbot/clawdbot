@@ -21,7 +21,7 @@ import {
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerTurnLaunchRequest } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -82,44 +82,39 @@ describe("worker turn launcher reclaimed placement", () => {
       }
       return active;
     };
-    const launchTurn = vi.fn(
-      async (request: Parameters<WorkerTunnelHandle["launchTurn"]>[0]): Promise<SpawnResult> => {
-        request.onDispatchReady?.();
-        workerStarted.resolve();
-        await resumeWorker.promise;
-        expect(placements.get(SESSION_ID)).toMatchObject({
-          state: "active",
-          turnClaim: { owner: "worker", runId },
-        });
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Redispatched worker reply" }],
-            timestamp: 51,
-          }),
-        );
-        createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId,
-          transcriptSeq: 2,
-          liveSeq: 1,
-        });
-        return {
-          stdout: JSON.stringify({
-            status: "completed",
-            transcriptLeafId: leafId,
-            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      },
-    );
+    const launchTurn = vi.fn(async (request: WorkerTurnLaunchRequest): Promise<SpawnResult> => {
+      request.onDispatchReady?.();
+      workerStarted.resolve();
+      await resumeWorker.promise;
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "active",
+        turnClaim: { owner: "worker", runId },
+      });
+      const completed = openSessionManager();
+      const leafId = completed.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Redispatched worker reply" }],
+          timestamp: 51,
+        }),
+      );
+      createWorkerSessionPlacementGate(placements).updateAckCursors({
+        claim: request.turnClaim,
+        transcriptSeq: 2,
+        liveSeq: 1,
+      });
+      return {
+        stdout: JSON.stringify({
+          status: "completed",
+          transcriptLeafId: leafId,
+          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),

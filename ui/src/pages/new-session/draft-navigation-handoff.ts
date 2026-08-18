@@ -10,6 +10,7 @@ export function retainDraft(
   openedFor: string | null,
   messageOwnerKey: string,
 ) {
+  submission.draftPersistence.persistNow();
   const owner = context?.gateway.snapshot.client;
   if (!context || !owner || submission.submitting || submission.pendingCloud.sessionKey) {
     return;
@@ -31,6 +32,7 @@ export function restoreDraft(
   routeKey: string,
   ownedMessage: string,
 ) {
+  submission.draftPersistence.selectRoute(routeKey);
   const owner = context?.gateway.snapshot.client;
   const draft =
     context && owner
@@ -41,10 +43,30 @@ export function restoreDraft(
         })
       : null;
   if (ownedMessage || draft) {
-    submission.setMessage(ownedMessage || draft?.message || "");
+    submission.restoreMessage(ownedMessage || draft?.message || "");
   }
   if (draft) {
-    submission.attachmentDraft.replace(draft.attachments);
+    submission.attachmentDraft.restore(draft.attachments);
   }
+  activateDraft(submission, routeKey);
   return routeKey;
+}
+
+export function activateDraft(submission: DraftSubmissionFlow, routeKey: string) {
+  if (!submission.pendingCloud.sessionKey) {
+    submission.draftPersistence.activateRoute(routeKey);
+  }
+}
+
+export function restoreDraftOwner(
+  submission: DraftSubmissionFlow,
+  gatewayUrl: string,
+  recoveryScope: string,
+) {
+  submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope);
+  submission.draftPersistence.setOwner(
+    gatewayUrl,
+    recoveryScope,
+    Boolean(submission.pendingCloud.sessionKey),
+  );
 }

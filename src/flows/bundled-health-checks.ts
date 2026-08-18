@@ -1,13 +1,22 @@
 // Bundled health checks define built-in doctor checks for runtime readiness.
 import { asOptionalObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import type { InspectEmbeddingProviderSetup } from "../plugins/provider-policy-surface.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+  loadBundledPluginPublicArtifactModuleSync,
+} from "../plugins/public-surface-loader.js";
+import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
+import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 
 type EmbeddingProviderSetupInspectionResult =
@@ -16,6 +25,9 @@ type EmbeddingProviderSetupInspectionResult =
 
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
+  registerCodexManagedAppServerDoctorChecks?: (host: {
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
   pluginStateIsolatedDoctorCheckIds?: readonly string[];
   registerCuaDriverDoctorChecks?: (host: {
     registerHealthCheck: typeof registerHealthCheck;
@@ -29,6 +41,12 @@ type BundledHealthApi = {
     memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
+};
+
+type WorkerProviderHealthApi = {
+  registerWorkerProviderDoctorChecks?: (host: {
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
 };
 
 type BundledHealthCheckSelection = {
@@ -105,6 +123,12 @@ export function registerBundledHealthChecks(params: {
     },
     memoryCoreActive: isMemoryCoreActive(params.cfg),
   });
+  if (shouldRegisterCodexManagedHealth(params.cfg)) {
+    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+      dirName: "codex",
+      artifactBasename: "api.js",
+    }).registerCodexManagedAppServerDoctorChecks?.({ registerHealthCheck });
+  }
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",
@@ -117,6 +141,40 @@ export function registerBundledHealthChecks(params: {
       artifactBasename: "api.js",
     }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
   }
+  registerBundledWorkerProviderHealthChecks(params, env);
+}
+
+function registerBundledWorkerProviderHealthChecks(
+  params: { cfg: OpenClawConfig; cwd?: string },
+  env: NodeJS.ProcessEnv,
+): void {
+  const providerIds = collectConfiguredWorkerProviderIds(params.cfg);
+  if (providerIds.length === 0) {
+    return;
+  }
+  const manifestRegistry = loadBundledPluginManifestRegistry({ env });
+  const pluginIds = new Set(
+    listBundledWorkerProviderOwners(manifestRegistry, providerIds).map((owner) => owner.pluginId),
+  );
+  for (const pluginId of pluginIds) {
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
+      dirName: pluginId,
+      artifactCandidates: ["doctor-health-api.js"],
+    })?.registerWorkerProviderDoctorChecks?.({ registerHealthCheck });
+  }
+}
+
+function shouldRegisterCodexManagedHealth(cfg: OpenClawConfig): boolean {
+  if (!collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")) {
+    return false;
+  }
+  if (cfg.plugins?.entries?.codex?.enabled === false) {
+    return false;
+  }
+  return passesManifestOwnerBasePolicy({
+    plugin: { id: "codex" },
+    normalizedConfig: normalizePluginsConfig(cfg.plugins),
+  });
 }
 
 function isMemoryCoreActive(cfg: OpenClawConfig): boolean {

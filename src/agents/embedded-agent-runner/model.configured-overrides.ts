@@ -1,6 +1,5 @@
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -38,17 +37,9 @@ import {
   resolveProviderRequestTimeoutMs,
   resolveProviderTransport,
 } from "./model.provider-hooks.js";
-import {
-  resolveBundledStaticCatalogModel,
-  type ManifestModelCatalogProviderAliasMetadata,
-} from "./model.static-catalog.js";
+import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
-export type StaticCatalogFallbackModel = Model & {
-  compat?: ModelCompatConfig;
-  contextTokens?: number;
-  params?: Record<string, unknown>;
-  mediaInput?: ModelMediaInputConfig;
-};
+export type StaticCatalogFallbackModel = ProviderRuntimeModel;
 
 export function shouldSuppressConfiguredModel(params: {
   provider: string;
@@ -332,6 +323,7 @@ export function applyConfiguredProviderOverrides(params: {
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
   staticCatalogModel?: StaticCatalogFallbackModel;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { providerConfig, modelId } = params;
@@ -397,15 +389,7 @@ export function applyConfiguredProviderOverrides(params: {
       ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
   const configuredStaticCatalogModel =
-    configuredModel &&
-    (params.staticCatalogModel ??
-      (resolveBundledStaticCatalogModel({
-        provider: params.provider,
-        modelId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        includeRuntimeDiscovery: true,
-      }) as StaticCatalogFallbackModel | undefined));
+    configuredModel && (params.staticCatalogModel ?? params.getStaticCatalogModel?.());
   const metadataOverrideModel =
     params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
       ? undefined
@@ -440,8 +424,6 @@ export function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
-    providerConfig.contextWindow === undefined &&
-    providerConfig.contextTokens === undefined &&
     providerConfig.maxTokens === undefined &&
     requestTimeoutMs === undefined &&
     !providerHeaders &&
@@ -524,8 +506,7 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedContextWindow =
-    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
+  const resolvedContextWindow = metadataOverrideModel?.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -594,10 +575,7 @@ export function applyConfiguredProviderOverrides(params: {
           input: normalizedInput,
           cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
           contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-          contextTokens:
-            metadataOverrideModel?.contextTokens ??
-            providerConfig.contextTokens ??
-            discoveredModel.contextTokens,
+          contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
           ...(normalizedResolvedMaxTokens !== undefined
             ? {
                 maxTokens: normalizedResolvedMaxTokens,

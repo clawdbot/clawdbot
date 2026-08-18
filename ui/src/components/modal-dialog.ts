@@ -204,6 +204,8 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     if (!dialog) {
       return;
     }
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
     if (this.label) {
       dialog.setAttribute("aria-label", this.label);
     } else {

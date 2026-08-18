@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -11,6 +10,7 @@ import {
   successfulSessionPatch,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -150,13 +150,74 @@ describe("AppSidebar session mutation feedback", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("assigns owners from the row menu and updates the owner chip", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.assignOwner") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ok: true,
+        key: "agent:main:a",
+        owner: {
+          actor: { type: "human", id: "profile-bob", label: "Bob" },
+          assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+          assignedAt: 10,
+        },
+      };
+    });
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      selfUser: { id: "profile-ada", name: "Ada" },
+      hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
+    });
+    const result = harness.sessions.state.result;
+    const row = result?.sessions.find((session) => session.key === "agent:main:a");
+    if (!result || !row) {
+      throw new Error("expected session owner fixture");
+    }
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
+    result.creators = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    expect(menu.textContent).toContain("Assign to me");
+    expect(menu.textContent).toContain("Assign to…");
+    menu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "assign-owner:human:profile-bob" } },
+      }),
+    );
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
+      key: row.key,
+      agentId: "main",
+      owner: { type: "human", id: "profile-bob" },
+    });
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
+          ?.getAttribute("title"),
+      ).toBe("Owned by Bob");
+    });
+  });
+
   it("reconciles and stops an idle active cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
     const { gateway, harness, sidebar } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: { features: { methods: ["sessions.reclaim"] } } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
@@ -203,9 +264,7 @@ describe("AppSidebar session mutation feedback", () => {
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: {
-        features: { methods: ["environments.destroy"] },
-      } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["environments.destroy"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");

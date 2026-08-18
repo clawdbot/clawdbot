@@ -1,5 +1,9 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
-import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwner,
+  SessionsAssignOwnerParams,
+  SessionsRecoverResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -53,6 +57,8 @@ export type SessionListOptions = {
   activeMinutes?: number;
   search?: string;
   creatorId?: string;
+  ownerId?: string;
+  involvingMe?: boolean;
   offset?: number;
   limit?: number;
   includeGlobal?: boolean;
@@ -70,7 +76,7 @@ export type SessionRefreshOptions = SessionListOptions & {
   backgroundHydrate?: boolean;
 };
 
-export type SessionListScope = Pick<SessionListOptions, "agentId" | "archivedFilter">;
+export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
 export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
 
@@ -150,6 +156,10 @@ export type SessionCapability = {
   readonly state: SessionState;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Captures the current Gateway connection generation for read-only requests. */
+  captureConnectionScope: () => SessionConnectionScope | null;
+  /** Whether a captured read-only request still belongs to the active connection. */
+  isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (
@@ -158,6 +168,7 @@ export type SessionCapability = {
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
   setCreatorFilter: (creatorId: string | null) => Promise<void>;
+  setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -174,6 +185,11 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
+  assignOwner: (
+    key: string,
+    owner: SessionsAssignOwnerParams["owner"],
+    options?: { agentId?: string | null },
+  ) => Promise<SessionOwner | null>;
   setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;
   /** Keep optimistic row changes in the published snapshot through later publishes. */

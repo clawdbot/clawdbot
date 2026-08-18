@@ -322,6 +322,7 @@ describe("probeGatewayStatus", () => {
       tlsFingerprint: "abc123",
       method: "status",
       timeoutMs: 5_000,
+      sharedStateMode: "read-only",
       configPath: "/tmp/openclaw-daemon/openclaw.json",
     });
   });
@@ -368,6 +369,7 @@ describe("probeGatewayStatus", () => {
       config,
       method: "status",
       timeoutMs: 30_000,
+      sharedStateMode: "read-only",
     });
   });
 
@@ -413,6 +415,7 @@ describe("probeGatewayStatus", () => {
       tlsFingerprint: undefined,
       method: "status",
       timeoutMs: 5_000,
+      sharedStateMode: "read-only",
     });
   });
 

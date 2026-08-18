@@ -479,6 +479,7 @@ suite.define(() => {
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
       await expect.poll(() => threadRows.count()).toBe(4);
+      expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
       const threadRowMetrics = await threadRows.evaluateAll((rows) =>
         rows.map((row) => {
           const link = row.querySelector(".sidebar-recent-session__link");
@@ -495,36 +496,17 @@ suite.define(() => {
           };
         }),
       );
-      expect(threadRowMetrics).toEqual([
-        {
-          height: 30,
+      expect(threadRowMetrics).toHaveLength(4);
+      expect(new Set(threadRowMetrics.map((metric) => metric.height)).size).toBe(1);
+      expect(threadRowMetrics[0]?.height).toBeGreaterThan(30);
+      for (const metric of threadRowMetrics) {
+        expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
           paddingBottom: "3px",
           paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-      ]);
+        });
+      }
       const projectLabelTone = await openclawProject
         .locator(".sidebar-session-catalog-project__label")
         .evaluate((label) => {

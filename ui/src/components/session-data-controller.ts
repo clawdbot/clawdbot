@@ -9,6 +9,7 @@ import {
 } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   CATALOG_SESSION_CONTINUED_EVENT,
   type CatalogSessionContinuedDetail,
@@ -71,7 +72,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   presenceInstanceId?: string;
 
   // These caches were not Lit state on the element and stay non-reactive here.
-  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
+  sessionResultsByAgent: Record<string, SessionsListResult> = {};
   sessionCreatedOrder = new Map<string, number>();
 
   private readonly subscriptions: SubscriptionsController;
@@ -498,7 +499,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.reconnectListRevision = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
-    this.sessionRowsByAgent = {};
+    this.sessionResultsByAgent = {};
     this.resetChildSessionState();
     this.sessionCreatedOrder.clear();
     this.visibleSessionLimits.clear();
@@ -690,7 +691,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     // A filter transition owns a new child/lineage generation; otherwise a
     // pending request from the retired view can repopulate its cleared rows.
     this.resetChildSessionState();
-    this.sessionRowsByAgent = {};
+    this.sessionResultsByAgent = {};
     if (statusFilter === "active" && this.context) {
       this.sessionsResult = this.context.sessions.state.result;
       this.sessionsAgentId = this.context.sessions.state.agentId;
@@ -771,7 +772,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
-      this.sessionMutationError = error instanceof Error ? error.message : String(error);
+      this.sessionMutationError = formatUiError(error);
       this.notify();
     }
   }

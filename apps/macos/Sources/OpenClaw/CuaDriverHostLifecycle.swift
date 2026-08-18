@@ -112,9 +112,12 @@ extension CuaDriverHostCoordinator {
             0o600)
         guard descriptor >= 0 else { return false }
         defer { close(descriptor) }
-        let contents = Array("\(processIdentifier)".utf8)
-        return contents.withUnsafeBytes { bytes in
-            Darwin.write(descriptor, bytes.baseAddress, bytes.count) == bytes.count
+        do {
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+            try handle.write(contentsOf: Data("\(processIdentifier)".utf8))
+            return true
+        } catch {
+            return false
         }
     }
 

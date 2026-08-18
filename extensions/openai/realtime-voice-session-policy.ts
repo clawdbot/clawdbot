@@ -82,6 +82,7 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
 };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
@@ -520,6 +521,7 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
 export async function resolveOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }): Promise<OpenAIRealtimeApiKeyResolution> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
   if (
@@ -532,6 +534,9 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
   const profileApiKey = await resolveProviderAuthProfileApiKey({
     provider: "openai",
     cfg: params.cfg,
+    ...(params.cfg && params.agentId
+      ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
+      : {}),
     profileTypes: ["api_key"],
     includeExternalCliAuth: false,
   });
@@ -548,6 +553,7 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
 export async function requireOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params);
   if (resolved.status === "available") {
@@ -577,6 +583,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(params: {
     hasOpenAIRealtimePlatformAuthInput({
       configuredApiKey: params.configuredApiKey,
       cfg: params.cfg,
+      agentId: params.agentId,
     })
   ) {
     throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
@@ -587,6 +594,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(params: {
 export function hasOpenAIRealtimePlatformAuthInput(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }): boolean {
   if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return true;
@@ -595,6 +603,9 @@ export function hasOpenAIRealtimePlatformAuthInput(params: {
     isProviderAuthProfileConfigured({
       provider: "openai",
       cfg: params.cfg,
+      ...(params.cfg && params.agentId
+        ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
+        : {}),
       profileTypes: ["api_key"],
       includeExternalCliAuth: false,
     })

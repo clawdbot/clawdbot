@@ -14,6 +14,7 @@ import { isCloudWorkerPlacementState } from "../../components/session-row-badges
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -111,6 +112,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         sidebarSessionStatusFilter: () => "active",
       };
       switch (action.kind) {
+        case "assign-owner":
+          await scope.sessions.assignOwner(row.key, action.owner, {
+            agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
+          });
+          break;
         case "fork":
           await operations.forkSession(host, session, scope);
           break;
@@ -411,8 +417,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!this.state || !this.ownsHeaderOutcome(owner)) {
       return;
     }
-    this.state.chatError = this.state.lastError =
-      error instanceof Error ? error.message : String(error);
+    this.state.chatError = this.state.lastError = formatUiError(error);
     this.state.requestUpdate?.();
   }
 

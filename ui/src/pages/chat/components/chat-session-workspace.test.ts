@@ -6,6 +6,15 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
+
+async function loadedSidebarContent(
+  handleOpenSidebar: ReturnType<typeof vi.fn>,
+): Promise<SidebarContent> {
+  await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledTimes(2));
+  expect(handleOpenSidebar.mock.calls[0]?.[0]).toBeNull();
+  return handleOpenSidebar.mock.calls[1]?.[0] as SidebarContent;
+}
 
 function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
   return {
@@ -83,8 +92,7 @@ describe("session workspace artifacts", () => {
 
       createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-      await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-      expect(handleOpenSidebar.mock.calls[0]?.[0]).toEqual({
+      expect(await loadedSidebarContent(handleOpenSidebar)).toEqual({
         kind: "markdown",
         content: `# Unicode artifact\n\n${testCase.fence}\n${testCase.content}\n\`\`\``,
         rawText: testCase.content,
@@ -102,8 +110,7 @@ describe("session workspace artifacts", () => {
 
     createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-    expect(handleOpenSidebar.mock.calls[0]?.[0]).toEqual({
+    expect(await loadedSidebarContent(handleOpenSidebar)).toEqual({
       kind: "image",
       mimeType: "image/png",
       rawText: null,
@@ -123,11 +130,42 @@ describe("session workspace artifacts", () => {
     await vi.waitFor(() =>
       expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i),
     );
-    expect(handleOpenSidebar).not.toHaveBeenCalled();
+    expect(handleOpenSidebar).toHaveBeenCalledOnce();
+    expect(handleOpenSidebar).toHaveBeenCalledWith(null);
   });
 });
 
 describe("openSessionWorkspaceFile", () => {
+  it.each([
+    { client: null, connected: true, label: "no Gateway client exists" },
+    { client: {}, connected: false, label: "the Gateway is disconnected" },
+  ])("preserves existing Review content when $label", ({ client, connected }) => {
+    const existingContent = {
+      kind: "markdown",
+      content: "Existing review",
+      rawText: "Existing review",
+    } satisfies SidebarContent;
+    let sidebarContent: SidebarContent | null = existingContent;
+    const handleOpenSidebar = vi.fn((content: SidebarContent | null) => {
+      sidebarContent = content;
+    });
+    const getFile = vi.fn();
+    const state = {
+      client,
+      connected,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: { getFile },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: "README.md" });
+
+    expect(getFile).not.toHaveBeenCalled();
+    expect(handleOpenSidebar).not.toHaveBeenCalled();
+    expect(sidebarContent).toBe(existingContent);
+  });
+
   it("opens Markdown with a canonical Gateway- and pane-scoped draft identity", async () => {
     const handleOpenSidebar = vi.fn();
     const getFile = vi.fn().mockResolvedValue({
@@ -156,8 +194,7 @@ describe("openSessionWorkspaceFile", () => {
 
     openSessionWorkspaceFile(state, { path: "readme.md" });
 
-    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({
+    expect(await loadedSidebarContent(handleOpenSidebar)).toMatchObject({
       kind: "file",
       name: "README.md",
       content: "# Before\n",
@@ -199,9 +236,9 @@ describe("openSessionWorkspaceFile", () => {
 
     openSessionWorkspaceFile(state, { path: "README.md" });
 
-    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({ kind: "file" });
-    expect(handleOpenSidebar.mock.calls[0]?.[0]?.edit).toBeUndefined();
+    const content = await loadedSidebarContent(handleOpenSidebar);
+    expect(content).toMatchObject({ kind: "file" });
+    expect(content.kind === "file" ? content.edit : undefined).toBeUndefined();
   });
 
   it.each([
@@ -289,8 +326,7 @@ describe("openSessionWorkspaceFile", () => {
 
     openSessionWorkspaceFile(state, { path: "screenshots/result.png" });
 
-    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({
+    expect(await loadedSidebarContent(handleOpenSidebar)).toMatchObject({
       kind: "image",
       mimeType: "image/png",
       src: "data:image/png;base64,iVBORw0KGgo=",
@@ -333,7 +369,8 @@ describe("openSessionWorkspaceFile", () => {
         "Failed to load screenshots/result.png",
       ),
     );
-    expect(handleOpenSidebar).not.toHaveBeenCalled();
+    expect(handleOpenSidebar).toHaveBeenCalledOnce();
+    expect(handleOpenSidebar).toHaveBeenCalledWith(null);
   });
 
   it("does not render base64 content as text when the preview discriminator disagrees", async () => {
@@ -365,7 +402,8 @@ describe("openSessionWorkspaceFile", () => {
     await vi.waitFor(() =>
       expect(createSessionWorkspaceProps(state).error).toBe("Failed to load notes.txt"),
     );
-    expect(handleOpenSidebar).not.toHaveBeenCalled();
+    expect(handleOpenSidebar).toHaveBeenCalledOnce();
+    expect(handleOpenSidebar).toHaveBeenCalledWith(null);
   });
 
   it("opens unsupported session files as metadata without treating bytes as text", async () => {
@@ -395,9 +433,9 @@ describe("openSessionWorkspaceFile", () => {
 
     openSessionWorkspaceFile(state, { path: "build/cache.db" });
 
-    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({ kind: "markdown" });
-    const content = handleOpenSidebar.mock.calls[0]?.[0]?.content ?? "";
+    const sidebarContent = await loadedSidebarContent(handleOpenSidebar);
+    expect(sidebarContent).toMatchObject({ kind: "markdown" });
+    const content = sidebarContent.kind === "markdown" ? sidebarContent.content : "";
     expect(content).toContain("This file is not previewable inline.");
     expect(content).toContain("application/x-sqlite3");
     expect(content).toContain("8,192 bytes");
@@ -431,8 +469,8 @@ describe("openSessionWorkspaceFile", () => {
 
     openSessionWorkspaceFile(state, { path: hostilePath });
 
-    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
-    const content = handleOpenSidebar.mock.calls[0]?.[0]?.content ?? "";
+    const sidebarContent = await loadedSidebarContent(handleOpenSidebar);
+    const content = sidebarContent.kind === "markdown" ? sidebarContent.content : "";
     expect(content).toContain(
       "``  build/`\\n\\n![remote](https://example.com/x) report~~old~~&amp;.db  ``",
     );

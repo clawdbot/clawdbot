@@ -6,7 +6,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  replaceRuntimeAuthProfileStoreSnapshots,
+  type AuthProfileStore,
+} from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
@@ -54,6 +57,11 @@ const mocks = vi.hoisted(() => ({
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
+  listProviderUsagePluginDescriptors: vi.fn(() => [
+    { provider: "anthropic", displayName: "Claude" },
+    { provider: "deepseek", displayName: "DeepSeek" },
+    { provider: "openai", displayName: "OpenAI" },
+  ]),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -93,6 +101,10 @@ vi.mock("../../agents/auth-health.js", async () => {
 
 vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  listProviderUsagePluginDescriptors: mocks.listProviderUsagePluginDescriptors,
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
@@ -201,6 +213,7 @@ let preparedMetadataSnapshot: unknown;
 
 function setPreparedAuthStore(store: AuthProfileStore): void {
   preparedAuthStore = store;
+  replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: "/tmp/agent", store }]);
 }
 
 function setPreparedMetadataSnapshot(snapshot: unknown): void {
@@ -389,7 +402,12 @@ describe("models.authStatus", () => {
   ])(
     "resolves an $name agentId against the configured roster",
     async ({ params, expectedAgentId }) => {
-      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+      const cfg = {
+        agents: {
+          defaults: { systemAgent: { agentId: "main" } },
+          list: [{ id: "main" }, { id: "writer" }],
+        },
+      };
       mocks.getRuntimeConfig.mockReturnValue(cfg);
       mocks.listAgentIds.mockReturnValue(["main", "writer"]);
 
@@ -1046,8 +1064,9 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["anthropic"],
       agentDir: "/tmp/agent",
+      authStore: preparedAuthStore,
       config: runtimeConfig,
-      timeoutMs: 3500,
+      timeoutMs: 5_000,
     });
     let result: ModelAuthStatusResult | undefined;
     await waitForFast(async () => {
@@ -1090,8 +1109,9 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["deepseek"],
       agentDir: "/tmp/agent",
+      authStore: preparedAuthStore,
       config: expect.any(Object),
-      timeoutMs: 3500,
+      timeoutMs: 5_000,
     });
     let result: ModelAuthStatusResult | undefined;
     await waitForFast(async () => {
@@ -1229,8 +1249,9 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenLastCalledWith({
       providers: ["openai"],
       agentDir: "/tmp/rebound-agent",
+      authStore: preparedAuthStore,
       config: expect.any(Object),
-      timeoutMs: 3500,
+      timeoutMs: 5_000,
     });
   });
 
@@ -1283,7 +1304,7 @@ describe("models.authStatus", () => {
   });
 
   it("does not reuse usage after a direct provider key rotates", async () => {
-    const cfg = {
+    let cfg = {
       models: { providers: { deepseek: { apiKey: "first-direct-value" } } },
     };
     mocks.getRuntimeConfig.mockReturnValue(cfg);
@@ -1311,7 +1332,10 @@ describe("models.authStatus", () => {
       expect(warmed.providers[0]?.usage?.summary).toBe("Balance 10");
     });
 
-    cfg.models.providers.deepseek.apiKey = "second-direct-value";
+    cfg = {
+      models: { providers: { deepseek: { apiKey: "second-direct-value" } } },
+    };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
     const rotated = await readAuthStatus();
     expect(rotated.providers[0]?.usage).toBeUndefined();
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);

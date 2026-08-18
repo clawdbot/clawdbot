@@ -1,12 +1,13 @@
 ---
 name: crabbox
-description: "Crabbox/Testbox remote proof for OpenClaw: trusted-source routing, untrusted isolation, Linux/macOS/Windows/WSL2, live E2E, desktop, diagnostics, cleanup."
+description: "Remote environment and isolation proof for OpenClaw: clean-machine E2E, untrusted code, package/install, live providers and channels, desktop, cross-OS, diagnostics, and cleanup."
 ---
 
 # Crabbox
 
-Remote OpenClaw proof. Heavy tests. Builds. Typecheck/lint fan-out. Docker.
-Packages. Live providers. Desktop. Cross-OS.
+Use Crabbox when the remote environment is part of the proof. It is not the
+default compute backend for trusted development tests, type checks, lint, or
+builds; run those locally unless the operator explicitly requests remote proof.
 
 Backends:
 
@@ -20,36 +21,32 @@ Crabbox.”
 
 ## Route First
 
-Source trust before test size.
+Route by required environment, not command size.
 
-- Trusted + one/few focused tests + ready deps: local.
-- Trusted + heavy proof: Blacksmith Testbox.
+- Trusted development tests, checks, and builds: local by default.
+- Clean-machine, install/package, Docker, E2E, live, desktop, or cross-OS proof:
+  Blacksmith Testbox or the direct provider that supplies the required environment.
 - Untrusted contributor/fork: secretless fork CI or sanitized direct AWS.
 - Never untrusted code on credential-hydrated Testbox.
 - Never run untrusted repo wrapper/config locally.
-- No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop
-  before handoff. Local proof fanning out/expensive: stop local, go remote.
-- Remote backend unavailable (broker/DNS/network/lease): trusted-source proof
-  falls back to local — including heavy suites/gates — instead of blocking.
-  Note fallback + reason in the proof summary. Untrusted source never falls
-  back to local.
+- Do not acquire a remote box merely to offload CPU or parallelize a local gate.
+- No speculative warmup. Acquire when the first environment-sensitive command
+  is ready. Reuse id. Stop.
 
-Need direct AWS semantics? Pass `--provider aws`. Need normal trusted OpenClaw
-heavy proof? Pass `--provider blacksmith-testbox`.
+Need direct AWS semantics? Pass `--provider aws`. Need a clean trusted OpenClaw
+environment? Pass `--provider blacksmith-testbox`.
 
 ## Preflight
 
-Run from repo root.
+Run from repo root only after routing selects remote proof. For repo-managed
+runs, start with the wrapper help; it validates the available wrapper surface.
 
 ```sh
-command -v crabbox
-../crabbox/bin/crabbox --version
 node scripts/crabbox-wrapper.mjs run --help | sed -n '1,100p'
-command -v blacksmith
-blacksmith --version
 ```
 
-Set checked binary once. PATH copy may be stale.
+Read `.crabbox.yaml`; never guess the provider default. Resolve the direct CLI
+only for direct AWS, SSH, desktop, or admin operations:
 
 ```sh
 if [ -x ../crabbox/bin/crabbox ]; then
@@ -59,8 +56,6 @@ else
 fi
 "$CRABBOX" --version
 ```
-
-Read `.crabbox.yaml`; never guess provider default.
 
 No binary? Clean sibling checkout only:
 
@@ -77,9 +72,9 @@ mkdir -p ../crabbox/bin
 
 Dirty/missing/nonstandard sibling: stop. No overwrite.
 
-## Trusted Testbox
+## Trusted Clean-Machine Testbox
 
-One-shot heavy gate:
+One-shot environment-sensitive proof:
 
 ```sh
 node scripts/crabbox-wrapper.mjs run \
@@ -89,7 +84,7 @@ node scripts/crabbox-wrapper.mjs run \
   OPENCLAW_TEST_PROJECTS_PARALLEL=6 \
   OPENCLAW_VITEST_MAX_WORKERS=1 \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
-  pnpm check:changed
+  <clean-machine-or-e2e-command>
 ```
 
 Several commands: warm once, save id, reuse, stop.
@@ -100,7 +95,7 @@ node scripts/crabbox-wrapper.mjs warmup \
 node scripts/crabbox-wrapper.mjs run \
   --provider blacksmith-testbox --id <tbx_id> --timing-json -- \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
-  pnpm test <path-or-filter>
+  <environment-sensitive-command>
 blacksmith testbox stop --id <tbx_id>
 ```
 
@@ -130,18 +125,6 @@ Rules:
 - Compound commands: `bash -lc`, never `sh -lc`. Job env uses Bash `declare`.
 - Testbox owns Chromium; never pass Crabbox `--browser` to
   `provider=blacksmith-testbox`.
-
-Autoreview parallel tests:
-
-- Current helper: short POSIX test home. Nothing extra.
-- Old helper + macOS `ControlPath too long`: put `TMPDIR=/tmp` on outer process.
-
-```sh
-TMPDIR=/tmp OPENCLAW_TESTBOX=1 "$AUTOREVIEW" \
-  --parallel-tests "pnpm check:changed"
-```
-
-- Do not put `TMPDIR` inside quoted test command. Home already created.
 
 ## Untrusted AWS
 

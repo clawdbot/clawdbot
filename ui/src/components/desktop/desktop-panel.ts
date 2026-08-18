@@ -10,7 +10,7 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
@@ -477,7 +477,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         onSecurityFailure: (detail) => {
           if (pending.operationId === this.operationId) {
             this.errorText = t("desktop.errors.securityFailed", {
-              reason: detail.reason ?? t("desktop.unknownReason"),
+              reason: formatUiExternalText(detail.reason, t("desktop.unknownReason")),
             });
           }
         },
@@ -546,7 +546,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       };
       this.state = "credentials";
       this.errorText = t("desktop.errors.securityFailed", {
-        reason: reason || t("desktop.unknownReason"),
+        reason: formatUiExternalText(reason, t("desktop.unknownReason")),
       });
       return;
     }
@@ -565,7 +565,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     this.state = "disconnected";
     this.disconnectedReason =
-      reason || (code ? t("desktop.closeCode", { code: String(code) }) : null);
+      formatUiExternalText(reason, code ? t("desktop.closeCode", { code: String(code) }) : "") ||
+      null;
   }
 
   private async launchApp(app: DesktopAppId): Promise<void> {

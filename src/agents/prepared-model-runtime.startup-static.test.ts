@@ -101,7 +101,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   isPluginMetadataSnapshotCompatible: () => true,
   loadPluginMetadataSnapshot: () => mocks.metadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
@@ -397,7 +398,14 @@ describe("prepared model runtime Gateway catalog mode", () => {
         includePluginCatalogs: true,
         modelsJsonContents: null,
         pluginCatalogs: [],
-        pluginMetadataSnapshot: mocks.metadataSnapshot,
+        pluginMetadataSnapshot: expect.objectContaining({
+          ...mocks.metadataSnapshot,
+          index: expect.objectContaining({
+            ...mocks.metadataSnapshot.index,
+            workspaceDir: "/tmp/prepared-static-workspace",
+          }),
+          workspaceDir: "/tmp/prepared-static-workspace",
+        }),
         workspaceDir: "/tmp/prepared-static-workspace",
       }),
     );

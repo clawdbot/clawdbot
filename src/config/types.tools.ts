@@ -368,6 +368,16 @@ export type SessionsSpawnToolsConfig = {
   };
 };
 
+export type GitHubToolIdentityConfig = {
+  /** Opaque generated directory version for atomic credential rotation. */
+  profileId: string;
+  /** Optional process-local author identity for commits made by local tools. */
+  gitAuthor?: {
+    name?: string;
+    email?: string;
+  };
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -392,6 +402,8 @@ export type AgentToolsConfig = {
   };
   /** Exec tool defaults for this agent. */
   exec?: ExecToolConfig;
+  /** Complete per-agent GitHub CLI identity and Git author override. */
+  github?: GitHubToolIdentityConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
@@ -412,6 +424,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */
+  github?: GitHubToolIdentityConfig;
   /** Per-sender tool policy overrides keyed by sender identity. */
   toolsBySender?: GroupToolPolicyBySenderConfig;
   web?: {
@@ -432,7 +446,7 @@ export type ToolsConfig = {
         enabled?: boolean;
         /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
         mode?: "cached" | "live";
-        /** Optional allowlist of domains passed to the native Codex tool. */
+        /** Native Codex search allowlist; also gates web_fetch on native-hosted-search turns. */
         allowedDomains?: string[];
         /** Optional Codex native search context size hint. */
         contextSize?: "low" | "medium" | "high";
@@ -532,7 +546,7 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
-  /** Structured update_plan checklist tool; enabled by default. Set false to opt out. */
+  /** Unified progress_card status tool; enabled by default. Set false to opt out. */
   updatePlan?: boolean;
 };
 

@@ -44,12 +44,14 @@ export function renderChatDetailSlot(params: {
   return html`<openclaw-chat-detail-panel
     class="chat-sidebar"
     .content=${content}
+    .basePath=${params.chat.basePath ?? ""}
     .loadFullMessage=${params.fullMessageLoader}
     .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
     .embedSandboxMode=${host.embedSandboxMode}
     .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
     .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
       openSessionWorkspaceFile(host, target)}
+    .onOpenSessionLink=${params.chat.onOpenSessionLink}
     .onRevealInWorkspace=${(path: string) => {
       revealSessionWorkspaceFile(host, path);
       host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));

@@ -33,6 +33,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
@@ -146,14 +147,8 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
   }
 }
 
-function resolveHooksAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: unknown },
-): string | undefined {
-  return (
-    resolveOptionFromCommand<string>(command, "agent") ??
-    (typeof opts?.agent === "string" ? opts.agent : undefined)
-  );
+function resolveHooksAgentOption(command: Command | undefined): string | undefined {
+  return resolveOptionFromCommand<string>(command, "agent");
 }
 
 function resolveHookForToggle(
@@ -267,6 +262,7 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 }
 
 function exitHooksCliWithError(err: unknown): never {
+  rethrowExpectedCliError(err);
   defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
   defaultRuntime.exit(1);
   throw new Error("unreachable");
@@ -560,11 +556,11 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
   return lines.join("\n");
 }
 
-async function enableHook(hookName: string): Promise<void> {
+async function enableHook(hookName: string, agentId?: string): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
   const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(
-    buildHooksReport(config, resolveHooksReportTarget(config)),
+    buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
     hookName,
     { requireEligible: true },
   );
@@ -584,11 +580,11 @@ async function enableHook(hookName: string): Promise<void> {
   );
 }
 
-async function disableHook(hookName: string): Promise<void> {
+async function disableHook(hookName: string, agentId?: string): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
   const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(
-    buildHooksReport(config, resolveHooksReportTarget(config)),
+    buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
     hookName,
   );
   const nextConfig = buildConfigWithHookEnabled({
@@ -624,7 +620,7 @@ export function registerHooksCli(program: Command): void {
     if (
       parentAgent &&
       actionCommand !== hooks &&
-      !new Set(["list", "info", "check"]).has(actionCommand.name())
+      !new Set(["list", "info", "check", "enable", "disable"]).has(actionCommand.name())
     ) {
       throw new Error(
         `openclaw hooks ${actionCommand.name()} does not support --agent; the option only selects an owner for read-only hook reports.`,
@@ -641,7 +637,7 @@ export function registerHooksCli(program: Command): void {
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts: HooksListOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command, opts));
+        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
         writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
       }),
@@ -654,7 +650,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts: HookInfoOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command, opts));
+        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
         writeHooksOutput(formatHookInfo(report, name, { ...opts, json }), json);
         return report.hooks.some((hook) => hook.name === name || hook.hookKey === name) ? 0 : 1;
@@ -668,7 +664,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (opts: HooksCheckOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command, opts));
+        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
         writeHooksOutput(formatHooksCheck(report, { ...opts, json }), json);
       }),
@@ -677,18 +673,20 @@ export function registerHooksCli(program: Command): void {
   hooks
     .command("enable <name>")
     .description("Enable a hook")
-    .action(async (name) =>
+    .option("--agent <id>", "Agent id whose workspace to inspect")
+    .action(async (name, _opts: { agent?: string }, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        await enableHook(name);
+        await enableHook(name, resolveHooksAgentOption(command));
       }),
     );
 
   hooks
     .command("disable <name>")
     .description("Disable a hook")
-    .action(async (name) =>
+    .option("--agent <id>", "Agent id whose workspace to inspect")
+    .action(async (name, _opts: { agent?: string }, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        await disableHook(name);
+        await disableHook(name, resolveHooksAgentOption(command));
       }),
     );
 
@@ -753,7 +751,7 @@ export function registerHooksCli(program: Command): void {
 
   hooks.action(async (opts: HooksListOptions, command: Command) =>
     runOneShotHooksCliAction(async () => {
-      const report = await loadHooksReport(resolveHooksAgentOption(command, opts));
+      const report = await loadHooksReport(resolveHooksAgentOption(command));
       const json = hasJsonOutput(opts);
       writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
     }),

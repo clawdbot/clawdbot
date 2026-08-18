@@ -15,7 +15,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  AcpRuntime,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
@@ -39,7 +38,7 @@ import {
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
+import { createLazyAcpRuntimeProxy, type CompleteAcpRuntime } from "./runtime-proxy.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
   ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
@@ -48,14 +47,9 @@ import {
   type AcpxGatewayInstanceRecord,
 } from "./state.js";
 
-type AcpxRuntimeLike = AcpRuntime & {
+type AcpxRuntimeLike = CompleteAcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
-  doctor?(): Promise<{
-    ok: boolean;
-    message: string;
-    details?: string[];
-  }>;
 };
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
@@ -69,8 +63,8 @@ type AcpxRuntimeFactoryParams = {
 };
 
 type AcpxBackendLifecycle = {
-  publish: (backend: { runtime: AcpRuntime; healthy?: () => boolean }) => void;
-  retract: (runtime: AcpRuntime) => void;
+  publish: (backend: { runtime: CompleteAcpRuntime; healthy?: () => boolean }) => void;
+  retract: (runtime: CompleteAcpRuntime) => void;
 };
 
 type CreateAcpxRuntimeServiceParams = {
@@ -441,7 +435,7 @@ export function createAcpxRuntimeService(
           return;
         }
         const doctorReport = await measureAcpxStartup(ctx, "probe.doctor", () =>
-          startedRuntime.doctor?.(),
+          startedRuntime.doctor(),
         );
         if (currentRevision !== lifecycleRevision) {
           return;

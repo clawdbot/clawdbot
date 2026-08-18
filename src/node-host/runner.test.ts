@@ -1,6 +1,8 @@
 /** Tests node-host runner command parsing, timeout, and plugin dispatch behavior. */
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -22,13 +24,13 @@ const mocks = vi.hoisted(() => ({
     stop: ReturnType<typeof vi.fn>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
-  mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
+  mcpDescriptorsChanged: undefined as (() => void) | undefined,
   nodePluginTools: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
-  fakeRuntimeWorkerRuns: false,
+  fakeRuntimeWorkerHosting: false,
   runnerAvailabilityChanged: undefined as ((available: boolean) => void) | undefined,
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
@@ -36,11 +38,6 @@ const mocks = vi.hoisted(() => ({
   availabilityChanged: undefined as (() => void) | undefined,
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
-  nodeWorkerBuild: {
-    bundleHash: "a".repeat(64),
-    openclawVersion: "2026.8.12",
-    protocolFeatures: ["worker-heartbeat-v1"],
-  },
   runtimeClient: undefined as
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
@@ -55,17 +52,13 @@ const mocks = vi.hoisted(() => ({
       gateway: params.gateway,
     };
   }),
-  getRuntimeConfig: vi.fn(() => ({
-    gateway: {
-      handshakeTimeoutMs: 1_000,
-    },
-  })),
+  getRuntimeConfig: vi.fn<() => unknown>(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
   startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
     ready: false,
     aborted: false,
     elapsedMs: 0,
   })),
-  resolveGatewayCredentialsWithSecretInputs: vi.fn(async () => ({})),
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(async (_params: { config: unknown }) => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
@@ -158,20 +151,21 @@ vi.mock("./plugin-node-host.js", () => ({
 }));
 
 vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: mocks.mcpConfiguredServerCount,
-    descriptors: mocks.mcpDescriptors,
-    callMcpTool: vi.fn(),
-    close: mocks.closeMcpManager,
-  })),
-}));
-
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: vi.fn(async () => ({
-    packageRoot: "/tmp/openclaw-node-worker",
-    revalidateBuild: vi.fn(async () => true),
-    build: structuredClone(mocks.nodeWorkerBuild),
-  })),
+  startNodeHostMcpManager: vi.fn(
+    async (
+      _servers: unknown,
+      deps?: {
+        onDescriptorsChanged?: () => void;
+      },
+    ) => {
+      mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
+      return {
+        descriptors: mocks.mcpDescriptors,
+        callMcpTool: vi.fn(),
+        close: mocks.closeMcpManager,
+      };
+    },
+  ),
 }));
 
 vi.mock("./skills.js", () => ({
@@ -197,10 +191,8 @@ vi.mock("./runtime.js", async (importOriginal) => {
           caps: [],
           commands: [],
           pathEnv: process.env.PATH ?? "",
-          ...(mocks.fakeRuntimeWorkerRuns
-            ? { workerRuns: structuredClone(mocks.nodeWorkerBuild) }
-            : {}),
         },
+        workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
           mocks.runtimeClient = params.client;
@@ -222,8 +214,8 @@ describe("runNodeHost", () => {
     mocks.capturedGatewayClientOptions.length = 0;
     mocks.capturedConfiguredGatewayConfigs.length = 0;
     mocks.capturedGatewayClients.length = 0;
-    mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
+    mocks.mcpDescriptorsChanged = undefined;
     mocks.nodePluginTools = [
       {
         pluginId: "test-plugin",
@@ -236,7 +228,7 @@ describe("runNodeHost", () => {
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
-    mocks.fakeRuntimeWorkerRuns = false;
+    mocks.fakeRuntimeWorkerHosting = false;
     mocks.runnerAvailabilityChanged = undefined;
     mocks.nodeHostCommands = [];
     mocks.nodeHostCaps = [];
@@ -440,10 +432,13 @@ describe("runNodeHost", () => {
     const config = {
       gateway: {
         mode: "local",
-        handshakeTimeoutMs: 1_000,
         remote: { token: "remote-token", password: "remote-password" },
       },
     };
+    setConfigResolutionFacts(
+      config,
+      new Set(["gateway.auth.token", "gateway.remote.token", "gateway.remote.password"]),
+    );
     mocks.getRuntimeConfig.mockReturnValue(config);
 
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
@@ -454,7 +449,6 @@ describe("runNodeHost", () => {
       config: {
         gateway: {
           mode: "local",
-          handshakeTimeoutMs: 1_000,
           remote: { token: undefined, password: undefined },
         },
       },
@@ -463,6 +457,9 @@ describe("runNodeHost", () => {
       remoteTokenPrecedence: "env-first",
       remotePasswordPrecedence: "env-first",
     });
+    const resolvedConfig =
+      mocks.resolveGatewayCredentialsWithSecretInputs.mock.calls[0]?.[0].config;
+    expect(getConfigResolutionFacts(resolvedConfig)).toEqual(new Set(["gateway.auth.token"]));
     expect(config.gateway.remote).toEqual({
       token: "remote-token",
       password: "remote-password",
@@ -625,7 +622,7 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
-  it("keeps the initial worker build compatible before post-hello negotiation", async () => {
+  it("keeps runner consent out of the connection handshake", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -635,8 +632,7 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
 
-    expect(lastCapturedOptions()?.workerRuns).toEqual(mocks.nodeWorkerBuild);
-    expect(lastCapturedOptions()?.workerRuns).not.toHaveProperty("bundlePrewarm");
+    expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -686,10 +682,11 @@ describe("runNodeHost", () => {
     });
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: false },
     });
   });
 
-  it("publishes the opt-in local worker build in the atomic runner inventory", async () => {
+  it("publishes opt-in consent and capacity in the atomic runner inventory", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -705,49 +702,68 @@ describe("runNodeHost", () => {
       features: { methods: [], events: [] },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 
-    await vi.waitFor(() => {
-      expect(
-        client?.request.mock.calls.filter(
-          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-        ),
-      ).toEqual([
-        [
-          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-          {
-            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-            workerRuns: mocks.nodeWorkerBuild,
-          },
-        ],
-        [
-          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-          {
-            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-            workerRuns: { ...mocks.nodeWorkerBuild, bundlePrewarm: 1 },
-          },
-        ],
-      ]);
+    expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: {
+        enabled: true,
+        capacity: "available",
+        bundlePrewarm: 1,
+      },
     });
   });
 
   it("withdraws and restores worker launch eligibility without reconnecting", async () => {
     mocks.useFakeRuntime = true;
-    mocks.fakeRuntimeWorkerRuns = true;
+    mocks.fakeRuntimeWorkerHosting = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
     );
     const options = mocks.capturedGatewayClientOptions[0];
     const client = mocks.capturedGatewayClients[0];
-    expect(options?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+    expect(options?.workerRuns).toBeUndefined();
 
     mocks.runnerAvailabilityChanged?.(true);
     options?.onHelloOk?.({
       protocol: 4,
-      features: { methods: [], events: [] },
+      features: {
+        methods: [],
+        events: [],
+        capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION],
+      },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: mocks.nodeWorkerBuild,
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
+      });
+    });
+
+    options?.onHelloOk?.({
+      protocol: 4,
+      features: {
+        methods: [],
+        events: [],
+        capabilities: [
+          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        ],
+      },
+    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+    await vi.waitFor(() => {
+      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
       });
     });
 
@@ -755,6 +771,13 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: {
+          enabled: true,
+          capacity: "full",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
       });
     });
 
@@ -762,7 +785,13 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: mocks.nodeWorkerBuild,
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+          bundleStatus: 1,
+        },
       });
     });
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();
@@ -855,42 +884,7 @@ describe("runNodeHost", () => {
     );
   });
 
-  it("declares and publishes configured node-host MCP tools", async () => {
-    mocks.mcpConfiguredServerCount = 1;
-    mocks.mcpDescriptors = [
-      {
-        pluginId: "node-mcp",
-        name: "docs_search",
-        description: "Search docs",
-        command: "mcp.tools.call.v1",
-        mcp: { server: "docs", tool: "search" },
-      },
-    ];
-
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-
-    const options = lastCapturedOptions();
-    expect(options?.caps).toContain("mcp");
-    expect(options?.commands).toContain("mcp.tools.call.v1");
-    options?.onHelloOk?.({
-      protocol: 1,
-      features: { methods: [NODE_PLUGIN_TOOLS_UPDATE_METHOD], events: [] },
-    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-    expect(mocks.capturedGatewayClients[0]?.request).toHaveBeenCalledWith(
-      "node.pluginTools.update",
-      {
-        tools: expect.arrayContaining([
-          expect.objectContaining({ pluginId: "node-mcp", name: "docs_search" }),
-        ]),
-      },
-    );
-    expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-  });
-
-  it("publishes plugin tools while MCP discovery is still pending", async () => {
-    mocks.mcpConfiguredServerCount = 1;
+  it("publishes plugin tools during MCP discovery and republishes catalog changes", async () => {
     let resolveReadiness:
       | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
       | undefined;
@@ -900,11 +894,12 @@ describe("runNodeHost", () => {
       }),
     );
     let resolveManager: ((manager: NodeHostMcpManager) => void) | undefined;
-    vi.mocked(startNodeHostMcpManager).mockReturnValueOnce(
-      new Promise((resolve) => {
+    vi.mocked(startNodeHostMcpManager).mockImplementationOnce(async (_servers, deps) => {
+      mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
+      return await new Promise((resolve) => {
         resolveManager = resolve;
-      }),
-    );
+      });
+    });
     const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
     await vi.waitFor(() => expect(lastCapturedOptions()).toBeDefined());
     lastCapturedOptions()?.onHelloOk?.({
@@ -916,25 +911,43 @@ describe("runNodeHost", () => {
       { tools: [expect.objectContaining({ pluginId: "test-plugin" })] },
     );
 
+    const descriptors: NodeHostMcpManager["descriptors"] = [
+      {
+        pluginId: "node-mcp",
+        name: "closed_search",
+        description: "Search closed server",
+        command: "mcp.tools.call.v1",
+        mcp: { server: "closed", tool: "search" },
+      },
+      {
+        pluginId: "node-mcp",
+        name: "healthy_search",
+        description: "Search healthy server",
+        command: "mcp.tools.call.v1",
+        mcp: { server: "healthy", tool: "search" },
+      },
+    ];
     resolveManager?.({
-      configuredServerCount: 1,
-      descriptors: [
-        {
-          pluginId: "node-mcp",
-          name: "docs_search",
-          description: "Search docs",
-          command: "mcp.tools.call.v1",
-          mcp: { server: "docs", tool: "search" },
-        },
-      ],
+      descriptors,
       callMcpTool: vi.fn(),
       close: mocks.closeMcpManager,
     });
+    const client = mocks.capturedGatewayClients[0];
+    const publishedToolNames = () => {
+      const params = client?.request.mock.calls.findLast(
+        ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+      )?.[1] as { tools: Array<{ name?: string }> } | undefined;
+      return params?.tools.map((descriptor) => descriptor.name);
+    };
     await vi.waitFor(() => {
-      expect(mocks.capturedGatewayClients[0]?.request).toHaveBeenCalledWith(
-        "node.pluginTools.update",
-        { tools: expect.arrayContaining([expect.objectContaining({ pluginId: "node-mcp" })]) },
-      );
+      expect(publishedToolNames()).toEqual(["closed_search", "healthy_search", "remote_echo"]);
+    });
+
+    descriptors.splice(0, 1);
+    expect(mocks.mcpDescriptorsChanged).toBeDefined();
+    mocks.mcpDescriptorsChanged?.();
+    await vi.waitFor(() => {
+      expect(publishedToolNames()).toEqual(["healthy_search", "remote_echo"]);
     });
     resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
     await expect(running).rejects.toThrow("event loop readiness timeout");
@@ -943,6 +956,7 @@ describe("runNodeHost", () => {
   it.each([
     ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+    ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",

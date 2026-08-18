@@ -315,7 +315,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { sendDurableMessageBatchCore } = await loadDeliverRuntime();
+    const { durableMessageBatchMayHaveReachedRecipient, sendDurableMessageBatchCore } =
+      await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
@@ -391,14 +392,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         reason: send.reason,
       };
     }
-    if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
+    if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
       // The adapter call completed but returned no identity. Treat that as
       // potentially visible so callers never retry or emit a duplicate fallback.
       return {
         ok: true,
         delivered: true,
         ambiguous: true,
-        reason: send.reason,
+        reason: "adapter_returned_no_identity",
       };
     }
     const results = send.status === "sent" ? send.results : [];

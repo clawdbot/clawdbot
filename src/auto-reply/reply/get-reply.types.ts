@@ -30,8 +30,6 @@ type InternalReplySessionOptions = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
-  /** Marks when this reply is waiting to own its session's reply lane. */
-  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Receives terminal queue-cap outcomes without widening the public reply API. */
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Overrides persisted queue mode for this reply only. */

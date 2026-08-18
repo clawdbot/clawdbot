@@ -88,7 +88,7 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
@@ -170,7 +170,7 @@ function resolveAgentWorkspaceFileOrRespondError(
     cfg,
   );
   if (!agentId) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+    respondAgentNotFound(respond, String(rawAgentId));
     return null;
   }
   const rawName = params.name;
@@ -299,7 +299,11 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
 }
 
 function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
-  const agentId = normalizeAgentId(agentIdRaw);
+  const normalized = normalizeAgentIdStrict(agentIdRaw);
+  if (!normalized.ok) {
+    return null;
+  }
+  const agentId = normalized.value;
   const allowed = new Set(listAgentIds(cfg));
   if (!allowed.has(agentId)) {
     return null;
@@ -894,10 +898,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const modelCatalog = await readPreparedServerMethodModelCatalog(context);
-    const result = listAgentsForGateway(cfg, modelCatalog, {
-      includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
-    });
-    respond(true, result, undefined);
+    respond(
+      true,
+      listAgentsForGateway(cfg, modelCatalog, {
+        includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+      }),
+      undefined,
+    );
   },
   "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {
@@ -935,7 +942,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const agentId = normalizeAgentId(params.agentId);
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
     if (!isConfiguredAgent(cfg, agentId)) {
       respondAgentNotFound(respond, agentId);
       return;
@@ -1029,7 +1041,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const agentId = normalizeAgentId(params.agentId);
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
     if (agentOwnsSharedAuthStore(cfg, agentId)) {
       respond(
         false,
@@ -1250,7 +1267,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         // A journaled path is trash-eligible only while registry ownership still points at the
         // deleted agent; recovery must not consume a path claimed by a surviving agent.
         const agentDirRegistryPath = normalizeAgentDirRegistryPath(deleteResult.agentDir);
-        await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId);
 
         const removed: AgentDeleteRemovedPath[] = [];
         const failed: AgentDeleteFailedPath[] = [];
@@ -1495,6 +1512,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           removedBindings: deleteResult.removedBindings,
           removed,
           failed,
+          ...(purgeFailed ? { purgeFailed: true as const } : {}),
         };
       });
       respond(true, result, undefined);
@@ -1522,7 +1540,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const agentId = resolveAgentIdOrError(params.agentId, cfg);
     if (!agentId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      respondAgentNotFound(respond, params.agentId);
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);

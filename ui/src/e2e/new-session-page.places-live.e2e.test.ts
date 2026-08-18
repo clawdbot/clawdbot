@@ -38,6 +38,65 @@ suite.define(() => {
     }
   });
 
+  it("shows advertised machines and treats the catalog default as no override", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": { nodes: [] },
+        "environments.list": {
+          environments: [],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                {
+                  id: "standard",
+                  label: "Standard",
+                  description: "Balanced capacity",
+                  default: true,
+                },
+                { id: "fast", label: "Fast", description: "More compute" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-where-trigger");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Cloud · aws" }).click();
+
+      await trigger.click();
+      await place.getByText("Machine", { exact: true }).waitFor();
+      const standard = place.locator('[data-value="machine:standard"]');
+      const fast = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => standard.getAttribute("aria-pressed")).toBe("true");
+      await expect.poll(() => standard.textContent()).toContain("Balanced capacity");
+      await expect.poll(() => standard.textContent()).toContain("Default");
+      await expect.poll(() => fast.textContent()).toContain("More compute");
+
+      await fast.click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await captureUiProof(page, "picker-cloud-machine-fast.png");
+
+      await standard.click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("refreshes destinations from gateway events while the picker stays open", async () => {
     const updateIssue = {
       code: "update-required",

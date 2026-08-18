@@ -1,5 +1,8 @@
 // Xai tests cover realtime voice provider plugin behavior.
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -80,9 +83,11 @@ const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProv
 
     return {
       FakeWebSocket: MockWebSocket,
-      isProviderAuthProfileConfiguredMock: vi.fn(() => false),
+      isProviderAuthProfileConfiguredMock: vi.fn((_params: { agentDir?: string }) => false),
       resolveApiKeyForProviderMock: vi.fn(
-        async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
+        async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({
+          apiKey: undefined,
+        }),
       ),
     };
   });
@@ -236,6 +241,60 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     await expect(bridge.connect()).rejects.toThrow("xAI credentials missing for realtime voice");
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("checks realtime readiness in the selected agent directory", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
+    );
+    const provider = buildXaiRealtimeVoiceProvider();
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+
+    expect(provider.isConfigured({ cfg, providerConfig: {}, agentId: "molty" })).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+      provider: "xai",
+      cfg,
+      agentDir: "/tmp/openclaw-molty-agent",
+    });
+  });
+
+  it("resolves realtime auth from the selected agent directory", async () => {
+    resolveApiKeyForProviderMock.mockImplementation(async ({ agentDir }) => ({
+      apiKey: agentDir === "/tmp/openclaw-molty-agent" ? "xai-molty" : undefined,
+    }));
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+    const bridge = createTestBridge({
+      cfg,
+      agentId: "molty",
+      providerConfig: {},
+    });
+
+    const { connecting, socket } = await startRealtimeBridge(bridge);
+    await connecting;
+    bridge.close();
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+      provider: "xai",
+      cfg,
+      agentDir: "/tmp/openclaw-molty-agent",
+    });
+    expect((socket.args[1] as { headers?: Record<string, string> }).headers?.Authorization).toBe(
+      "Bearer xai-molty",
+    );
   });
 
   it("coalesces concurrent connects and ignores connects after readiness", async () => {
@@ -836,30 +895,34 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       expectedActions: [],
     },
     {
-      name: "cancels and truncates active response audio on barge-in",
+      name: "clamps manual barge-in to produced G.711 audio",
       hasAudio: true,
       manual: true,
-      timestamp: 1300,
+      audioBytes: 3_700 * 8,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      timestamp: 4760,
       expectedActions: [
         { type: "response.cancel" },
         {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 300,
+          audio_end_ms: 3_700,
         },
       ],
     },
     {
-      name: "truncates queued playback on server-VAD barge-in without cancelling xAI",
+      name: "clamps server-VAD barge-in to produced PCM16 audio without cancelling xAI",
       hasAudio: true,
-      timestamp: 1250,
+      audioBytes: 3_700 * 48,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      timestamp: 4760,
       expectedActions: [
         {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 250,
+          audio_end_ms: 3_700,
         },
       ],
     },
@@ -884,6 +947,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       acknowledged: true,
       completed: true,
       manual: true,
+      audioBytes: 300 * 8,
       timestamp: 1300,
       expectedActions: [
         {
@@ -911,6 +975,8 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       completed,
       startNewResponse,
       manual,
+      audioBytes,
+      audioFormat,
       timestamp,
       expectedActions,
     }) => {
@@ -918,7 +984,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       const onAudio = vi.fn();
       const onClearAudio = vi.fn();
       const bridge = createTestBridge({
-        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        ...(audioFormat ? { audioFormat } : {}),
         onAudio,
         onClearAudio,
       });
@@ -930,7 +996,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         socket.emitServer({
           type: "response.output_audio.delta",
           item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
+          delta: Buffer.alloc(audioBytes ?? 16).toString("base64"),
         });
       }
       if (acknowledged) {

@@ -8,6 +8,7 @@ import type {
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { buildWidgetThemeMessage, postWidgetTheme } from "./widget-theme.ts";
 
@@ -240,7 +241,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     if (this.discussionTask.status === TaskStatus.ERROR) {
       const error = this.discussionTask.error;
       return html`<div class="session-discussion__empty">
-        <div class="callout danger">${error instanceof Error ? error.message : String(error)}</div>
+        <div class="callout danger">${formatUiError(error)}</div>
       </div>`;
     }
     const value = this.discussionTask.value;

@@ -16,14 +16,21 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
 
 <Steps>
   <Step title="Reset (optional)">
-    - `--reset` resets state before setup runs; without it, re-running onboarding
-      keeps existing config and reuses it as defaults.
+    - Reset is owned by the `--reset` command flag, not by the interactive
+      **Setup mode** menu. Without it, re-running onboarding keeps existing
+      config and reuses it as defaults.
     - `--reset-scope` controls what `--reset` removes: `config` (config file
       only), `config+creds+sessions` (default), or `full` (also removes the
       workspace).
-    - If the config file is invalid, onboarding stops and tells you to run
-      `openclaw doctor` first, then re-run setup.
-    - Reset moves state to Trash (never deletes directly).
+    - Before reset, the command validates TTY availability and rejectable CLI
+      options, including the full-reset workspace target. Non-interactive setup
+      also requires `--accept-risk` at this point.
+    - Migration import options (`--flow import`, `--import-from`,
+      `--import-source`, and `--import-secrets`) cannot be combined with
+      `--reset`; run the import without `--reset`.
+    - Interactive classic setup moves state to Trash (never deletes directly)
+      before showing its risk acknowledgement. Declining that later prompt
+      cancels setup but does not undo the reset.
 
   </Step>
   <Step title="Risk acknowledgement">
@@ -34,6 +41,12 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
       onboarding exits with an error instead of prompting.
     - Interactive runs get a confirm prompt instead of the flag; declining
       cancels setup.
+
+  </Step>
+  <Step title="Workspace">
+    - Default `~/.openclaw/workspace` (configurable).
+    - Seeds the workspace files needed for the agent bootstrap ritual.
+    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 
   </Step>
   <Step title="Model/Auth">
@@ -84,12 +97,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     is only a legacy import source.
     </Note>
   </Step>
-  <Step title="Workspace">
-    - Default `~/.openclaw/workspace` (configurable).
-    - Seeds the workspace files needed for the agent bootstrap ritual.
-    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
-
-  </Step>
   <Step title="Gateway">
     - Port (default **18789**), bind, auth mode, tailscale exposure.
     - Auth recommendation: keep **Token** even for loopback so local WS clients must authenticate.
@@ -126,6 +133,13 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - Configure later: `openclaw configure --section web`.
 
   </Step>
+  <Step title="Skills (recommended)">
+    - Reads the available skills and checks requirements.
+    - Lets you choose a node manager: **npm / pnpm / bun**.
+    - Auto-installs optional dependencies for trusted bundled skills (some use Homebrew on macOS).
+    - Skips skills whose Homebrew, uv, or Go installer prerequisite is unavailable, groups them with manual setup guidance, and points you at `openclaw doctor` once the prerequisite is installed.
+
+  </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent
       - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
@@ -142,13 +156,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
   <Step title="Health check">
     - Starts the Gateway (if needed) and runs `openclaw health`.
     - Tip: `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported (requires a reachable gateway).
-
-  </Step>
-  <Step title="Skills (recommended)">
-    - Reads the available skills and checks requirements.
-    - Lets you choose a node manager: **npm / pnpm / bun**.
-    - Auto-installs optional dependencies for trusted bundled skills (some use Homebrew on macOS).
-    - Skips skills whose Homebrew, uv, or Go installer prerequisite is unavailable, groups them with manual setup guidance, and points you at `openclaw doctor` once the prerequisite is installed.
 
   </Step>
   <Step title="Finish">

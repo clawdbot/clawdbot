@@ -151,7 +151,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
-  const preDispatchAcquisition = await state.ensureDispatchReplyOperation("pre_dispatch");
+  const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
+    "pre_dispatch",
+    Boolean(pluginOwnedBinding),
+  );
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }

@@ -107,6 +107,21 @@ describe("registerChannelsCli", () => {
     },
   );
 
+  it.each([
+    ["parent", ["channels", "--agent", "ops", "resolve", "room"]],
+    ["leaf", ["channels", "resolve", "--agent", "ops", "room"]],
+  ])("forwards the %s --agent option to channel resolution", async (_label, args) => {
+    const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    expect(channelsResolveCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "ops", entries: ["room"] }),
+      runtimeMock,
+    );
+  });
+
   it("rejects unsupported resolve target kinds before dispatching", async () => {
     const writeErr = vi.fn();
     const program = new Command().name("openclaw").exitOverride().configureOutput({ writeErr });

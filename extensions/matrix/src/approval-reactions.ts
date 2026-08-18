@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Matrix plugin module implements approval reactions behavior.
 import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
@@ -40,14 +41,14 @@ type MatrixApprovalReactionBinding = {
 
 type MatrixApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
 
 type MatrixApprovalReactionTarget = {
   accountId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   roomId: string;
   eventId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -198,7 +199,7 @@ export function registerMatrixApprovalReactionTarget(params: {
   roomId: string;
   eventId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): void {
@@ -256,7 +257,7 @@ export function unregisterMatrixApprovalReactionTarget(params: {
 export async function unregisterMatrixApprovalReactionTargetsForApproval(params: {
   accountId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): Promise<MatrixApprovalReactionTargetRef[]> {
   const accountId = normalizeAccountId(params.accountId);
   const approvalId = params.approvalId.trim();

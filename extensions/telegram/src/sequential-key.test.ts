@@ -148,7 +148,18 @@ describe("getTelegramSequentialKey", () => {
           text: "/steer@vacs_tars_bot keep going",
         }),
       },
-      "telegram:-100:control",
+      "telegram:-100:topic:5907",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 5907,
+          text: "/queue@some_other_bot status",
+        }),
+      },
+      "telegram:-100:topic:5907",
     ],
     [
       {

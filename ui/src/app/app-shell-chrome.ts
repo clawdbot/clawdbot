@@ -12,6 +12,7 @@ import {
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -19,10 +20,14 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import {
+  DEBUG_OVERLAY_REQUEST_EVENT,
+  DEBUG_OVERLAY_TOGGLE_EVENT,
+} from "../pages/debug/debug-overlay-contract.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -69,12 +74,14 @@ export interface ShellChromeHost extends HTMLElement {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
+  readonly debugOverlayElement: OptionalCustomElement;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
+  readonly custodianPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
-  readonly approvalOverlay: (HTMLElement & { show(): void }) | undefined;
+  readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
   routeState: ShellRouteState;
   navDrawerOpen: boolean;
   desktopNavigationExpanded: boolean;
@@ -110,6 +117,7 @@ export class ShellChromeOwner {
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
     window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
+    window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener("dragover", this.handleUnhandledFileDrag);
@@ -124,6 +132,7 @@ export class ShellChromeOwner {
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
   disconnect(): void {
@@ -131,6 +140,7 @@ export class ShellChromeOwner {
     host.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
     window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
+    window.removeEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
     window.removeEventListener("dragover", this.handleUnhandledFileDrag);
@@ -144,6 +154,7 @@ export class ShellChromeOwner {
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {
@@ -373,6 +384,19 @@ export class ShellChromeOwner {
     if (event.defaultPrevented) {
       return;
     }
+    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
+    if (settingsModifier && event.shiftKey && resolveAsciiShortcutKey(event) === "d") {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable]:not([contenteditable='false'])")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      this.toggleDebugOverlay();
+      return;
+    }
     const plainKey = !event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey;
     if (plainKey && event.key === "Escape" && this.isSettingsTakeover()) {
       if (host.navDrawerOpen) {
@@ -387,7 +411,6 @@ export class ShellChromeOwner {
       host.exitSettings();
       return;
     }
-    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
       host.navigate("appearance");
@@ -400,6 +423,20 @@ export class ShellChromeOwner {
     }
   };
 
+  private readonly handleDebugOverlayRequest = (): void => {
+    this.toggleDebugOverlay();
+  };
+
+  private toggleDebugOverlay(): void {
+    const host = this.host;
+    void ensureOptionalElementForHost(host, host.debugOverlayElement)
+      .then(async () => {
+        await host.updateComplete;
+        window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_TOGGLE_EVENT));
+      })
+      .catch(() => undefined);
+  }
+
   /** Open overlays and editable controls own Escape before settings can exit. */
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
@@ -407,7 +444,7 @@ export class ShellChromeOwner {
     if (
       host.commandPalette?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
-      (overlaySnapshot?.approvalQueue.length ?? 0) > 0 ||
+      host.approvalOverlay?.dialogOpen === true ||
       document.querySelector("dialog[open]")
     ) {
       return true;
@@ -532,6 +569,17 @@ export class ShellChromeOwner {
       return;
     }
     this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
+  };
+
+  readonly handleDeferredCustodianToggle = (event: Event): void => {
+    const host = this.host;
+    if (isOptionalElementDefined(host.custodianPanelElement)) {
+      return;
+    }
+    const snapshot = host.context?.gateway?.snapshot;
+    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+      this.deliverPanelEventAfterLoad(host.custodianPanelElement, event);
+    }
   };
 
   readonly handleCommandPaletteSlashCommand = (command: string): void => {

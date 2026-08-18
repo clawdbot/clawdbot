@@ -567,6 +567,7 @@ describe("loadEnabledBundleMcpConfig", () => {
             $schema: AGENT_MCP_SCHEMA,
             mcpServers: {
               valid: { type: "stdio", command: "node", cwd: "./child" },
+              dotPrefixedChild: { type: "stdio", command: "node", cwd: "./..cache" },
               relativeEscape: { type: "stdio", command: "node", cwd: "./../escape" },
               placeholderEscape: {
                 type: "stdio",
@@ -575,7 +576,7 @@ describe("loadEnabledBundleMcpConfig", () => {
               },
             },
           },
-          textFiles: { "child/.keep": "" },
+          textFiles: { "child/.keep": "", "..cache/.keep": "" },
         });
         const rootRealPath = await fs.realpath(pluginRoot);
         const relativeProcessCwd = path.relative(rootRealPath, await fs.realpath(process.cwd()));
@@ -588,10 +589,14 @@ describe("loadEnabledBundleMcpConfig", () => {
           cfg: createEnabledBundleConfig(["portable-cwd"]),
         });
 
-        expect(Object.keys(loaded.config.mcpServers)).toEqual(["valid"]);
+        expect(Object.keys(loaded.config.mcpServers)).toEqual(["valid", "dotPrefixedChild"]);
         await expectResolvedPathEqual(
           loaded.config.mcpServers.valid?.cwd,
           path.join(pluginRoot, "child"),
+        );
+        await expectResolvedPathEqual(
+          loaded.config.mcpServers.dotPrefixedChild?.cwd,
+          path.join(pluginRoot, "..cache"),
         );
         expect(loaded.diagnostics).toHaveLength(2);
         expect(loaded.diagnostics.map((entry) => entry.message)).toEqual([

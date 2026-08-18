@@ -222,6 +222,8 @@ const threadBindingSchema = z
       .pipe(z.string().min(1))
       .optional()
       .catch(undefined),
+    // Legacy rows may contain the retired two-field permission overlay. Keep
+    // parsing it so the rest of the binding survives; SessionEntry owns live policy.
     approvalPolicy: z
       .preprocess(
         (value) => (value === "on-failure" ? "on-request" : value),
@@ -262,6 +264,17 @@ const threadBindingSchema = z
     conversationStartId: optionalStringSchema,
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
+    // Observed density of the last completed turn on this thread: prompt chars
+    // actually sent vs provider-reported input tokens. Read by the no-engine
+    // continuity cap so the next projection is sized from this session's real
+    // content density instead of a fixed chars-per-token guess.
+    continuityCalibration: z
+      .object({
+        promptChars: z.number().int().positive(),
+        inputTokens: z.number().int().positive(),
+      })
+      .optional()
+      .catch(undefined),
   })
   .superRefine((binding, context) => {
     if (binding.connectionScope === "supervision") {

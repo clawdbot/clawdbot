@@ -20,7 +20,6 @@ import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
-// Keep typical replies visible; disclosure is reserved for JSON that dominates the transcript.
 const JSON_COLLAPSE_LINE_THRESHOLD = 40;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -85,15 +84,14 @@ export function handleMarkdownCodeBlockCopy(event: Event): void {
     if (codeBlockCopyAttempts.get(button) !== attempt) {
       return;
     }
-    const idleLabel = button.querySelector(".code-block-copy__idle");
-    idleLabel?.replaceChildren(t(copied ? "common.copy" : "common.copyFailed"));
     button.classList.toggle("copied", copied);
+    button.classList.toggle("copy-failed", !copied);
     button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
     clearTimeout(codeBlockCopyResetTimers.get(button));
     const resetTimer = setTimeout(
       () => {
         button.classList.remove("copied");
-        idleLabel?.replaceChildren(t("common.copy"));
+        button.classList.remove("copy-failed");
         button.setAttribute("aria-label", t("common.copyCode"));
         codeBlockCopyResetTimers.delete(button);
       },
@@ -148,6 +146,11 @@ function renderCodeElement(
   return `<pre><code${classAttr}>${highlighted}</code></pre>`;
 }
 
+function renderCodeBlockHeader(lang: string, copyButton: string): string {
+  const language = escapeMarkdownHtml(lang || t("chat.codeBlock.languageFallback"));
+  return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${copyButton}</div></div>`;
+}
+
 export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
@@ -159,15 +162,14 @@ export function renderMarkdownCodeBlock(
   if (!shouldRenderCodeBlockCopy(env)) {
     return codeBlock;
   }
-  const langLabel = lang ? `<span class="code-block-lang">${escapeMarkdownHtml(lang)}</span>` : "";
   const copyText = options.copyText ?? text;
   const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
   const attrSafe = escapeMarkdownHtml(copyPayload);
   const encodingAttr = blockArt
     ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
     : "";
-  const copyButton = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeMarkdownHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeMarkdownHtml(t("common.copied"))}</span></button>`;
-  const header = `<div class="code-block-header">${langLabel}${copyButton}</div>`;
+  const copyButton = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+  const header = renderCodeBlockHeader(lang, copyButton);
 
   const trimmed = text.trim();
   const isJson =

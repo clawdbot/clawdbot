@@ -1,6 +1,7 @@
 // Outbound send service chooses plugin-handled message actions or the core
 // message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -71,6 +72,8 @@ type OutboundSendContext = {
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
   sessionId?: string;
+  runId?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -178,6 +181,8 @@ async function sendCoreMessage(params: {
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,
+    runId: params.ctx.runId,
+    executionIdentityToken: params.ctx.executionIdentityToken,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,

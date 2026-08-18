@@ -18,22 +18,23 @@ or validating a change without wasting hours.
 
 Prove the touched surface first. Do not reflexively run the whole suite.
 
-Route by source trust first, then proof size. Only trusted source may run
-locally; never execute untrusted repository tooling locally, regardless of
-proof size. Run one/few focused tests and cheap static checks locally when the
-existing dependency install is ready. Use a
-remote backend for larger suites, changed gates with typecheck/lint fan-out,
-builds, Docker, packaging, E2E, live proof, and cross-platform work. Trusted
-maintainer heavy proof defaults to Blacksmith Testbox. Untrusted contributor
-or fork code must use secretless fork CI or sanitized direct AWS Crabbox;
-never sync or run it on the credential-hydrated Blacksmith workflow.
+Route by source trust first, then required environment. Only trusted source may
+run locally; never execute untrusted repository tooling locally. Trusted
+development tests, changed gates, typecheck/lint, and builds run locally by
+default, including broad suites when they are the proportional proof. Use a
+remote backend only when the environment is part of the proof: clean-machine,
+install/package, Docker, E2E, live, desktop, or cross-platform work, or when the
+operator explicitly requests remote proof. Do not use Crabbox merely as
+generic compute offload. Untrusted contributor or fork code must use secretless
+fork CI or sanitized direct AWS Crabbox; never sync or run it on the
+credential-hydrated Blacksmith workflow.
 
 Do not pre-warm for anticipated work. Acquire the backend lazily when the
-first heavy command is ready to run, save its id, reuse it for later heavy
-commands, and stop it before handoff. A single late heavy command can remain a
-one-shot.
+first environment-sensitive command is ready to run, save its id, reuse it for
+later remote commands, and stop it before handoff. A single late remote command
+can remain a one-shot.
 
-For untrusted heavy proof, switch to a clean trusted `main` checkout and lazily
+For untrusted proof, switch to a clean trusted `main` checkout and lazily
 warm direct AWS with an installed trusted Crabbox binary. Do not execute the
 untrusted checkout's wrapper or config locally:
 
@@ -89,19 +90,16 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox stop --provider aws <cbx_id>
 ```
 
-Once heavy proof starts, save the returned id, reuse it for later heavy gates,
+Once remote proof starts, save the returned id, reuse it for later remote work,
 sync the current checkout on every run, and stop it before handoff.
 
 1. Inspect the diff and classify the touched surface:
-   - trusted source, one/few focused tests with ready local dependencies:
-     `node scripts/run-vitest.mjs <path-or-filter>`
-   - if focused proof fans out, becomes expensive, or lacks ready dependencies:
-     acquire the safe remote backend selected by source trust
-   - changed gates, builds, typechecks, lint fan-out, Docker, package, E2E, or
-     live work: run it remotely; these are never routine laptop work
-   - `check:changed` classifies first; docs-only, no-change, and small metadata
-     plans stay local when dependencies are ready, while heavy or dependency-
-     missing plans delegate remotely
+   - trusted development: run the smallest proportional local test, changed
+     gate, typecheck/lint, or build; broaden locally when the contract requires it
+   - clean-machine, install/package, Docker, E2E, live, desktop, or cross-OS
+     proof: acquire the safe remote backend selected by source trust
+   - `check:changed` classifies and runs the required local typecheck/lint/guard
+     plan when dependencies are ready
    - direct AWS Crabbox proof: pass `--provider aws`; untrusted code also
      requires the sanitized invocation above
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
@@ -114,21 +112,19 @@ sync the current checkout on every run, and stop it before handoff.
 ## Guardrails
 
 - Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
-- Keep trusted-source local proof bounded to one/few focused tests and cheap
-  static checks with ready dependencies. Untrusted repository tooling never
-  runs locally. Full suites and computationally intensive commands run remotely.
+- Run trusted development tests, checks, and builds locally with scope
+  proportional to the touched contract. Untrusted repository tooling never runs
+  locally. Remote proof requires a remote-environment or isolation reason.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use standard Git commands when committing; stage only your files.
-- If dependencies are missing on the selected remote box, run `pnpm install` there, retry
-  once, then report the first actionable error. Do not reconcile or reinstall a
-  local Codex worktree merely to run validation.
-- In a Codex worktree or linked/sparse checkout, do not run direct local
-  `pnpm test*`, `pnpm check*`, or `pnpm crabbox:run`. Use
-  `node scripts/crabbox-wrapper.mjs` for remote proof and
-  `node scripts/check-changed.mjs` for classify-first changed checks. Use
-  `node scripts/run-vitest.mjs` for bounded focused local proof when the
-  dependency install is ready. Use `git commit --no-verify` only after the
-  relevant proof is already clean.
+- If dependencies are missing on the selected host, run `pnpm install`, retry
+  once, then report the first actionable error.
+- Codex and other linked/sparse worktrees may run local `pnpm test*` and
+  `pnpm check*` when the dependency install is ready. If pnpm would reconcile a
+  shared install, use `node scripts/run-vitest.mjs` or
+  `node scripts/check-changed.mjs` to bypass that package-manager preflight.
+  For actual remote proof, invoke `node scripts/crabbox-wrapper.mjs` directly
+  rather than local `pnpm crabbox:run`.
 - For remote proof, use the Crabbox wrapper first, but name the actual backend.
   Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
   Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
@@ -162,24 +158,23 @@ sync the current checkout on every run, and stop it before handoff.
 <tbx_id>` (id is not positional) before reporting cloud state.
 - Reuse only an id/slug created in this operator session unless explicitly
   coordinating with another lane. If Testbox queues, fails capacity, or cannot
-  allocate, switch to direct AWS Crabbox when that still proves the requested
-  surface. If the whole remote backend is unavailable (broker/DNS/network/
-  lease), trusted-source proof falls back to local execution — including heavy
-  suites and gates — instead of blocking; note the fallback and reason in the
-  proof summary. Untrusted source never falls back to local.
+  allocate, report the blocker or switch to direct AWS Crabbox only when that
+  still proves the requested surface.
 - Reuse does not mean stale source: omit `--no-sync` so every run uploads the
   current checkout. Use `--no-sync` only to rerun an unchanged, already-synced
   tree intentionally.
 
-## Local Focused Proof
+## Local Development Proof
 
-Use these commands only while the dependency install is ready and the proof
-remains bounded. If it fans out or becomes expensive, acquire a remote backend.
+Use the smallest command that proves the touched contract, then broaden locally
+when the risk requires it. Select a remote backend only for environment or
+isolation proof.
 
 ```bash
 pnpm changed:lanes --json
-pnpm check:changed       # local small plan or delegated heavy plan; no Vitest
+pnpm check:changed       # local changed typecheck/lint/guard plan; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
+pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
 pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
@@ -192,7 +187,8 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
 Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
 mode and will not exit on its own.
-When the checkout is a Codex worktree, prefer the direct node harness instead:
+In a linked worktree, use the direct Node harness when avoiding pnpm dependency
+reconciliation is useful:
 
 ```bash
 node scripts/run-vitest.mjs <path-or-filter>

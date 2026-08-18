@@ -185,7 +185,8 @@ function resolveRuntimeDiscordMessageActions() {
   }
 }
 
-const discordMessageActions = {
+const discordMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: true,
   resolveExecutionMode: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>

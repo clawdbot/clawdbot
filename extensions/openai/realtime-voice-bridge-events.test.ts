@@ -1,4 +1,5 @@
 // Openai tests cover realtime voice provider plugin behavior.
+import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -74,34 +75,70 @@ describe("OpenAI realtime voice bridge events", () => {
     expect(hasSentEventType(socket, "conversation.item.truncate")).toBe(false);
   });
 
-  it("truncates externally interrupted playback after an immediate mark acknowledgement", async () => {
-    const onAudio = vi.fn();
-    const onClearAudio = vi.fn();
-    const bridge = createNativeBridge({
-      onAudio,
-      onClearAudio,
-      onMark: () => bridge.acknowledgeMark(),
-    });
-    const socket = await connectReadyBridge(bridge);
+  it.each([
+    {
+      name: "externally interrupted playback at the produced duration",
+      producedAudioMs: 300,
+      mediaElapsedMs: 300,
+      bytesPerMs: 8,
+      audioFormat: undefined,
+      providerVad: false,
+    },
+    {
+      name: "provider VAD after the media clock advances past produced audio",
+      producedAudioMs: 3_700,
+      mediaElapsedMs: 3_760,
+      bytesPerMs: 8,
+      audioFormat: undefined,
+      providerVad: true,
+    },
+    {
+      name: "provider VAD after a PCM16 playback clock overrun",
+      producedAudioMs: 3_700,
+      mediaElapsedMs: 3_760,
+      bytesPerMs: 48,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      providerVad: true,
+    },
+  ])(
+    "truncates $name",
+    async ({ producedAudioMs, mediaElapsedMs, bytesPerMs, audioFormat, providerVad }) => {
+      const onAudio = vi.fn();
+      const onClearAudio = vi.fn();
+      const bridge = createNativeBridge({
+        onAudio,
+        onClearAudio,
+        ...(audioFormat ? { audioFormat } : {}),
+        ...(providerVad ? {} : { onMark: () => bridge.acknowledgeMark() }),
+      });
+      const socket = await connectReadyBridge(bridge);
 
-    bridge.setMediaTimestamp(1000);
-    emitAssistantPlayback(socket);
-    bridge.setMediaTimestamp(1300);
+      bridge.setMediaTimestamp(1000);
+      emitAssistantPlayback(socket, { audio: Buffer.alloc(producedAudioMs * bytesPerMs) });
+      bridge.setMediaTimestamp(1000 + mediaElapsedMs);
 
-    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+      if (providerVad) {
+        emitServerEvent(socket, { type: "input_audio_buffer.speech_started" });
+      } else {
+        bridge.handleBargeIn?.({ audioPlaybackActive: true });
+      }
 
-    expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
-    expect(parseSent(socket).slice(-2)).toEqual([
-      expectedResponseCancelEvent(),
-      {
+      expect(onAudio).toHaveBeenCalledTimes(1);
+      expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+      const truncation = parseSent(socket).findLast(
+        (event) => event.type === "conversation.item.truncate",
+      );
+      expect(truncation).toEqual({
         type: "conversation.item.truncate",
         item_id: "item_1",
         content_index: 0,
-        audio_end_ms: 300,
-      },
-    ]);
-  });
+        audio_end_ms: producedAudioMs,
+      });
+      expect(parseSent(socket).some((event) => event.type === "response.cancel")).toBe(
+        !providerVad,
+      );
+    },
+  );
 
   it("preserves FIFO playback acknowledgements after sustained output", async () => {
     const onClearAudio = vi.fn();
@@ -326,7 +363,7 @@ describe("OpenAI realtime voice bridge events", () => {
     emitServerEvent(socket, {
       type: "response.audio.delta",
       item_id: "item_1",
-      delta: Buffer.from("assistant audio").toString("base64"),
+      delta: Buffer.alloc(2_400).toString("base64"),
     });
     bridge.setMediaTimestamp(1300);
 

@@ -73,6 +73,7 @@ describe("chat pane placement", () => {
     } satisfies GatewaySessionRow;
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: pane.context.gateway.snapshot,
+      movingKey: null,
       reclaimingKey: null,
       row: session,
     });
@@ -80,6 +81,8 @@ describe("chat pane placement", () => {
     await pane.reclaimHeaderPlacement(session);
 
     expect(placement).toEqual({
+      moving: false,
+      moveDisabledReason: "This Gateway does not support this session action.",
       reclaimDisabledReason: "This Gateway does not support this session action.",
     });
     expect(document.body.querySelectorAll("openclaw-modal-dialog")).toHaveLength(dialogsBefore);
@@ -116,6 +119,109 @@ describe("chat pane placement", () => {
       { key: session.key, agentId: "main" },
       { timeoutMs: 10 * 60_000 },
     );
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
+  it("moves an active placement to the Gateway with exact-source facts", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { profiles: [], environments: [] };
+      }
+      if (method === "node.list") {
+        return { nodes: [] };
+      }
+      return { ok: true };
+    });
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    const session = { ...activePlacementSession(), hasActiveRun: true };
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("The active turn will be interrupted");
+    });
+    const moveButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Move session",
+    );
+    expect(moveButton).toBeDefined();
+    moveButton?.click();
+    await moving;
+
+    expect(request).toHaveBeenCalledWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      expected: {
+        generation: 1,
+        environmentId: "worker:one",
+        ownerEpoch: 1,
+      },
+      target: { kind: "gateway" },
+    });
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
+  it("moves an active placement to a selected profile machine", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return {
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "beast", label: "Beast" },
+              ],
+            },
+          ],
+          environments: [],
+        };
+      }
+      if (method === "node.list") {
+        return { nodes: [] };
+      }
+      return { ok: true };
+    });
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    const session = activePlacementSession();
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    });
+    document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
+    document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
+    const moveButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Move session",
+    );
+    moveButton?.click();
+    await moving;
+
+    expect(request).toHaveBeenCalledWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      expected: {
+        generation: 1,
+        environmentId: "worker:one",
+        ownerEpoch: 1,
+      },
+      target: { kind: "profile", profileId: "aws", machineClass: "beast" },
+    });
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 
@@ -249,11 +355,13 @@ describe("chat pane placement", () => {
     expect(state.sessionKey).toBe(sessionB.key);
     const placementA = resolveChatPanePlacement({
       gatewaySnapshot: pane.context.gateway.snapshot,
+      movingKey: null,
       reclaimingKey: pane.headerPlacementReclaimingKey,
       row: sessionA,
     });
     const placementB = resolveChatPanePlacement({
       gatewaySnapshot: pane.context.gateway.snapshot,
+      movingKey: null,
       reclaimingKey: pane.headerPlacementReclaimingKey,
       row: sessionB,
     });

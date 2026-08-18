@@ -107,7 +107,8 @@ describe("buildStatusMessageParts presentation", () => {
     const parts = buildStatusMessageParts({
       now: 1_751_529_600_000,
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
-      agent: { model: "anthropic/claude-haiku-4-5", contextTokens: 100_000 },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      runtimeContextTokens: 100_000,
       sessionEntry: {
         sessionId: "status-meter-session",
         totalTokens: 87_000,
@@ -155,10 +156,8 @@ describe("buildStatusMessage context window", () => {
       },
       agent: {
         model: "ollama-cloud/deepseek-v4-pro",
-        contextTokens: 1_000_000,
       },
       configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
-      explicitConfiguredContextTokens: 1_000_000,
       runtimeContextTokens: 1_000_000,
       sessionEntry: {
         sessionId: "manual-switch-stale-runtime",
@@ -245,7 +244,6 @@ describe("buildStatusMessage context window", () => {
       },
       agent: {
         model: "anthropic/claude-haiku-4-5",
-        contextTokens: 200_000,
       },
       runtimeContextTokens: 1_000_000,
       sessionEntry: {
@@ -286,10 +284,8 @@ describe("buildStatusMessage context window", () => {
       },
       agent: {
         model: "ollama-cloud/deepseek-v4-pro",
-        contextTokens: 1_000_000,
       },
       configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
-      explicitConfiguredContextTokens: 1_000_000,
       runtimeContextTokens: 128_000,
       sessionEntry: {
         sessionId: "auto-fallback-qwen",

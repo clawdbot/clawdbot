@@ -22,6 +22,14 @@ export type RealtimeVoiceAudioFormat =
       channels: 1;
     };
 
+export function realtimeVoiceAudioDurationMs(
+  format: RealtimeVoiceAudioFormat,
+  byteLength: number,
+): number {
+  const bytesPerSample = format.encoding === "pcm16" ? 2 : 1;
+  return (byteLength * 1000) / (format.sampleRateHz * format.channels * bytesPerSample);
+}
+
 export const REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ: RealtimeVoiceAudioFormat = {
   encoding: "g711_ulaw",
   sampleRateHz: 8000,
@@ -183,6 +191,8 @@ export type RealtimeVoiceProviderResolveConfigContext = {
 
 export type RealtimeVoiceProviderConfiguredContext = {
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth readiness. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
 };
 

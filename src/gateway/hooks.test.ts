@@ -11,7 +11,6 @@ import {
   normalizeHookDispatchSessionKey,
   resolveEffectiveHookTargetAgentId,
   resolveHookSessionKey,
-  resolveHookTargetAgentId,
   normalizeAgentPayload,
   normalizeWakePayload,
   resolveHooksConfig,
@@ -143,7 +142,29 @@ describe("gateway hooks helpers", () => {
       ok: true,
       value: { text: "hi", mode: "now" },
     });
+    expect(
+      normalizeWakePayload({
+        text: "wake later",
+        mode: "next-heartbeat",
+        sessionKey: "hook:wake:later",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        text: "wake later",
+        mode: "next-heartbeat",
+        sessionKey: "hook:wake:later",
+      },
+    });
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
+    expect(normalizeWakePayload({ text: "wake", agentId: 42 })).toEqual({
+      ok: false,
+      error: "agentId must be a non-empty string",
+    });
+    expect(normalizeWakePayload({ text: "wake", agentId: "  " })).toEqual({
+      ok: false,
+      error: "agentId must be a non-empty string",
+    });
   });
 
   test("normalizeAgentPayload defaults + validates channel", () => {
@@ -340,9 +361,18 @@ describe("gateway hooks helpers", () => {
     if (noAgent.ok) {
       expect(noAgent.value.agentId).toBeUndefined();
     }
+
+    expect(normalizeAgentPayload({ message: "hello", agentId: 42 })).toEqual({
+      ok: false,
+      error: "agentId must be a non-empty string",
+    });
+    expect(normalizeAgentPayload({ message: "hello", agentId: "  " })).toEqual({
+      ok: false,
+      error: "agentId must be a non-empty string",
+    });
   });
 
-  test("resolveHookTargetAgentId preserves omitted default target intent", () => {
+  test("hook target resolution keeps config fallback out of request payloads", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
@@ -350,12 +380,43 @@ describe("gateway hooks helpers", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveHooksConfigOrThrow(cfg);
-    expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
-    expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBe("main");
-    expect(resolveHookTargetAgentId(resolved, undefined)).toBeUndefined();
-    expect(resolveHookTargetAgentId(resolved, " ")).toBeUndefined();
-    expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBe("main");
-    expect(resolveEffectiveHookTargetAgentId(resolved, " ")).toBe("main");
+    expect(resolveEffectiveHookTargetAgentId(resolved, "missing-agent", "mapping")).toEqual({
+      ok: true,
+      selectedAgentId: "main",
+      effectiveAgentId: "main",
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, "!!!", "mapping")).toEqual({
+      ok: true,
+      selectedAgentId: "main",
+      effectiveAgentId: "main",
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, "hooks", "request")).toEqual({
+      ok: true,
+      selectedAgentId: "hooks",
+      effectiveAgentId: "hooks",
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, "missing-agent", "request")).toEqual({
+      ok: false,
+      code: "unknown-agent",
+      agentId: "missing-agent",
+      error: 'unknown agentId "missing-agent"',
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, "Missing Agent", "request")).toEqual({
+      ok: false,
+      code: "unknown-agent",
+      agentId: "missing-agent",
+      error: 'unknown agentId "missing-agent"',
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, "!!!", "request")).toEqual({
+      ok: false,
+      code: "unknown-agent",
+      agentId: "!!!",
+      error: 'unknown agentId "!!!"',
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
+      ok: true,
+      effectiveAgentId: "main",
+    });
   });
 
   test("global hook dispatch honors the persisted fixed-store owner", () => {
@@ -369,42 +430,42 @@ describe("gateway hooks helpers", () => {
       },
     });
 
-    expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBe("ops");
-    expect(resolveEffectiveHookTargetAgentId(resolved, "research")).toBeUndefined();
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
+      ok: true,
+      effectiveAgentId: "ops",
+    });
+    expect(resolveEffectiveHookTargetAgentId(resolved, "research", "request")).toEqual({
+      ok: false,
+      code: "owner-conflict",
+      agentId: "research",
+      ownerAgentId: "ops",
+      error:
+        'agentId "research" conflicts with global session-store owner "ops"; use agentId "ops" or update agents.defaults.sessionStore.agentId',
+    });
   });
 
   test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(false);
-    expect(isHookAgentAllowed(resolved, "")).toBe(false);
-    expect(isHookAgentAllowed(resolved, "   ")).toBe(false);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(false);
+    expect(isHookAgentAllowed(resolved, "main")).toBe(false);
   });
 
   test("isHookAgentAllowed treats empty allowlist as deny-all routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(false);
-    expect(isHookAgentAllowed(resolved, "")).toBe(false);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
   });
 
-  test("isHookAgentAllowed allows omitted agentId when default agent is allowlisted", () => {
+  test("isHookAgentAllowed allows the resolved default agent when allowlisted", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["main"]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
-    expect(isHookAgentAllowed(resolved, "")).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
   });
 
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
-    expect(isHookAgentAllowed(resolved, "")).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
   });
 
   test("resolveHookSessionKey disables request sessionKey by default", () => {

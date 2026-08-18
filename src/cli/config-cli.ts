@@ -4,7 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
-import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -54,6 +54,7 @@ import {
   type ConfigSetOptions,
 } from "./config-set-input.js";
 import { resolveConfigSetMode } from "./config-set-parser.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
 export { parseConfigSetPath } from "./config-cli-path.js";
@@ -155,7 +156,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const res = getAtPath(redactConfigObject(snapshot.config), parsedPath);
     if (!res.found) {
       if (opts.json) {
-        writeRuntimeJson(runtime, { error: `Config path not found: ${opts.path}` });
+        writeRuntimeJson(runtime, formatCliJsonFailure(`Config path not found: ${opts.path}`));
         runtime.exit(1);
         return;
       }
@@ -183,7 +184,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       throw err;
     }
     if (opts.json) {
-      writeRuntimeJson(runtime, { error: formatErrorMessage(err) });
+      writeRuntimeJson(runtime, formatCliJsonFailure(err));
       runtime.exit(1);
       return;
     }
@@ -317,7 +318,11 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {
       if (opts.json) {
-        writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
+        writeRuntimeJson(
+          runtime,
+          { ...formatCliJsonFailure("file not found"), valid: false, path: outputPath },
+          0,
+        );
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
         runtime.error(
@@ -330,20 +335,15 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     if (!snapshot.valid) {
       const issues = normalizeConfigIssues(snapshot.issues);
       if (opts.json) {
-        writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
-      } else {
-        const displayIssues = attachConfigIssueDiagnostics(issues, {
-          raw: snapshot.raw,
-          parsed: snapshot.parsed,
-          effective: snapshot.sourceConfig,
-          configPath: snapshot.path,
-          formatPathForDisplay: true,
-          includeReceivedValueHint: true,
+        writeRuntimeJson(runtime, {
+          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          valid: false,
+          path: outputPath,
+          issues,
         });
+      } else {
         runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of formatConfigIssueLines(displayIssues, danger("×"), {
-          normalizeRoot: true,
-        })) {
+        for (const line of renderConfigValidationIssueLines(snapshot, danger("×"))) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
@@ -371,7 +371,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     if (opts.json) {
       writeRuntimeJson(
         runtime,
-        { valid: false, path: outputPath, error: formatErrorMessage(err) },
+        { ...formatCliJsonFailure(err), valid: false, path: outputPath },
         0,
       );
     } else {

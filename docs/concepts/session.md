@@ -20,13 +20,13 @@ DM channels, with group activity and background work flowing into it — see
 
 ## How messages are routed
 
-| Source          | Behavior                  |
-| --------------- | ------------------------- |
-| Direct messages | Shared session by default |
-| Group chats     | Isolated per group        |
-| Rooms/channels  | Isolated per room         |
-| Cron jobs       | Fresh session per run     |
-| Webhooks        | Isolated per hook         |
+| Source          | Behavior                      |
+| --------------- | ----------------------------- |
+| Direct messages | Shared session by default     |
+| Group chats     | Isolated per group by default |
+| Rooms/channels  | Isolated per room by default  |
+| Cron jobs       | Fresh session per run         |
+| Webhooks        | Isolated per hook             |
 
 ## DM isolation
 
@@ -71,6 +71,39 @@ troubleshooting.
 
 Verify your setup with `openclaw security audit`.
 
+## Group and room routing
+
+`session.groupScope` controls where non-direct peers store conversation
+context:
+
+| Value                 | Behavior                                                                                  |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `per-group` (default) | Keep each group, room, or channel in its existing channel-scoped session                  |
+| `main`                | Route groups, rooms, and channels into the agent's [main session](/concepts/main-session) |
+
+A route binding can override the global value. This is useful when only a
+named team room should join the main conversation:
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "main",
+      match: {
+        channel: "slack",
+        peer: { kind: "channel", id: "C0123TEAM" },
+      },
+      session: { groupScope: "main" },
+    },
+  ],
+}
+```
+
+Use `peer.kind: "group"` for providers that classify the room as a group.
+The binding override wins over global `session.groupScope`. This setting
+changes session-key selection only: DM routing, mention gating, delivery
+context, and replies to the source room remain unchanged.
+
 ## Incognito sessions
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread disappears when the Gateway restarts, does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
@@ -89,7 +122,7 @@ adds an optional retrieval step across that agent's other private
 conversations; it does not combine their transcripts.
 
 Private direct and persistent explicit UI conversations can supply relevant
-context to one another. Groups and channels stay separate in both directions:
+context to one another. Under default `session.groupScope: "per-group"`, groups and channels stay separate in both directions:
 their transcripts are not private recall sources, and replies in those
 conversations do not receive private transcript context. The current
 conversation is also excluded because its history is already loaded.

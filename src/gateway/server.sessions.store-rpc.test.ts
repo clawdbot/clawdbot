@@ -63,14 +63,14 @@ async function loadTranscriptRows(params: {
   });
 }
 
-test("sessions.patch validates persistent emoji icons", async () => {
+test("sessions.patch validates persistent session icons", async () => {
   const invalid = await directSessionHandlerReq("sessions.patch", {
     key: "agent:main:main",
     icon: "hand",
   });
-  expect(invalid).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: "icon must be a single emoji" },
+  expect(invalid.error).toEqual({
+    code: "INVALID_REQUEST",
+    message: "icon must be a single emoji or one of: braces, book, monitor, bot, kanban, coins",
   });
 });
 

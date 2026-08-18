@@ -634,6 +634,9 @@ function completeEmbeddedRun(
         livenessState,
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
         ...(input.attempt.yieldDetected ? { yielded: true } : {}),
+        ...(input.attempt.yieldAcknowledgment
+          ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }
+          : {}),
         ...(input.emptyAssistantReplyIsSilent
           ? { terminalReplyKind: "silent-empty" as const }
           : {}),

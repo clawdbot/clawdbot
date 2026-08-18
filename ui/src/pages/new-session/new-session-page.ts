@@ -6,10 +6,11 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/web-awesome-popover.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
@@ -26,7 +27,7 @@ import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
-import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
+import * as drafts from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -45,7 +46,9 @@ import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-class NewSessionPage extends OpenClawLightDomElement {
+const { activateDraft, restoreDraft, restoreDraftOwner, retainDraft } = drafts;
+
+export class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
   @consume({ context: applicationContext, subscribe: true })
@@ -102,7 +105,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         onCloudState: (error) => this.submission.setError(error),
         onPendingCloudReset: () => this.submission.resetPendingCloudWithoutClearingStorage(),
         onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          this.submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+          restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
         onAdoptAgentDefaults: () =>
           this.place.adoptAgentDefaults({
             preserveSelectedAgent: true,
@@ -244,11 +247,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.gateway.retryPendingCatalogTarget();
     void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
-    this.place.modelControl.loadCatalogTargets(
-      this.context,
-      this.place.agentId,
-      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
-    );
     const agentState = this.context?.agents.state;
     const agentsReady = Boolean(
       this.gateway.connected &&
@@ -257,12 +255,18 @@ class NewSessionPage extends OpenClawLightDomElement {
       agentState.client === this.gateway.client &&
       this.place.agents().length > 0,
     );
+    this.place.modelControl.loadCatalogTargets(
+      this.context,
+      agentsReady && this.place.agentId ? (this.place.selectedAgent()?.id ?? "") : "",
+      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
+    );
     const openKey = this.data
       ? catalog.routeKey(this.data)
       : catalog.routeKeyFromSearch(window.location.search);
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
+      this.submission.draftPersistence.persistNow();
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
@@ -288,6 +292,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       });
     }
     this.place.restorePreferenceSelections();
+    activateDraft(this.submission, openKey);
   }
 
   private invalidateGatewayDiscovery(
@@ -374,6 +379,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       environments: this.place.isAdmin() ? this.gateway.environments : [],
       cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,
+      machineClass: this.place.machineClass,
       execNode: this.place.execNode,
     });
     const projectState = resolveProjectChip({
@@ -395,29 +401,30 @@ class NewSessionPage extends OpenClawLightDomElement {
     const gatewayLabel = this.gateway.gatewayName
       ? t("newSession.gatewayNamed", { name: this.gateway.gatewayName })
       : t("newSession.gateway");
-    const commonPopover = (kind: "where" | "project" | "detail") => ({
-      popoverOpen: this.browser.popoverOpen(kind),
-      popoverHiding: this.browser.popoverHiding(kind),
-      onGuardTransition: (event: MouseEvent) => this.browser.guardPopoverTransition(event, kind),
-      onPopoverShow: () => this.browser.onPopoverShow(kind),
-      onPopoverHide: () => this.browser.onPopoverHide(kind),
-      onPopoverAfterHide: () => this.browser.onPopoverAfterHide(kind),
-    });
     const submitting = this.submission.submitting;
     const pendingCloud = Boolean(this.submission.pendingCloud.sessionKey);
     return html`${renderWhereChip({
       state: whereState,
       gatewayName: this.gateway.gatewayName,
       cloudProfileId: this.place.cloudProfileId,
+      machineClass: this.place.machineClass,
       execNode: this.place.execNode,
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       submitting,
       pendingCloud,
       isAdmin: this.place.isAdmin(),
-      ...commonPopover("where"),
+      ...this.browser.popoverCallbacks("where"),
       onSelectExecNode: (nodeId) => this.place.selectExecNode(nodeId),
       onSelectCloudProfile: (profileId) => this.place.selectCloudProfile(profileId),
+      onSelectCloudMachine: (machineId) =>
+        this.place.cloudMachines.select(
+          this.place.cloudProfileId,
+          machineId,
+          cloudProfiles,
+          submitting || pendingCloud,
+          () => this.requestUpdate(),
+        ),
       onConnectMachine: () => this.openConnectMachine(),
     })}${renderProjectChip({
       state: projectState,
@@ -449,7 +456,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       execNode: this.place.execNode,
       submitting,
       pendingCloud,
-      ...commonPopover("project"),
+      ...this.browser.popoverCallbacks("project"),
       browserTarget: this.browser.browserTarget,
       browserListing: this.browser.browserListing,
       browserLoading: this.browser.browserLoading,
@@ -494,7 +501,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       worktreeName: this.place.worktreeName,
       submitting,
       pendingCloud,
-      ...commonPopover("detail"),
+      ...this.browser.popoverCallbacks("detail"),
       onToggleWorktree: () => this.place.toggleWorktree(),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
@@ -551,7 +558,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.gateway.connected &&
         this.connectMachineOpen
       ) {
-        this.connectMachineError = error instanceof Error ? error.message : String(error);
+        this.connectMachineError = formatUiError(error);
       }
     } finally {
       if (requestId === this.connectMachineRequestId) {
@@ -592,6 +599,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           attachmentDraft: this.submission.attachmentDraft,
           canSubmit: this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
+          blockedSubmitNotice: this.submission.blockedSubmitNotice(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.submission.message,
@@ -599,6 +607,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           draftAvailable: this.submission.canStartAsDraft(),
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
+          requestUpdate: () => this.requestUpdate(),
           submitting: this.submission.submitting,
           textareaController: this.submission.composerTextarea,
           messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
@@ -712,10 +721,3 @@ class NewSessionPage extends OpenClawLightDomElement {
     `;
   }
 }
-
-if (!customElements.get("openclaw-new-session-page")) {
-  customElements.define("openclaw-new-session-page", NewSessionPage);
-}
-
-export const render = (data: unknown) =>
-  html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

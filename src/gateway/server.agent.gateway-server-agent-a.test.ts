@@ -1,6 +1,8 @@
 /**
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -14,6 +16,7 @@ import {
   type AgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { getMediaDir } from "../media/store.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -158,6 +161,18 @@ const offloadedImageAttachment = () => ({
     "base64",
   ),
 });
+
+async function listInboundMedia(): Promise<Set<string>> {
+  const entries = await fs.readdir(path.join(getMediaDir(), "inbound")).catch(() => []);
+  return new Set(entries);
+}
+
+async function expectNoNewInboundMedia(before: Set<string>): Promise<void> {
+  await vi.waitFor(async () => {
+    const after = await listInboundMedia();
+    expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
+  });
+}
 
 async function runAgentImageRequest(params: {
   idempotencyKey: string;
@@ -588,13 +603,16 @@ describe("gateway server agent", () => {
   );
 
   test("agent rejects unknown reply channel", async () => {
+    const inboundBefore = await listInboundMedia();
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
       replyChannel: "unknown-channel",
+      attachments: [offloadedImageAttachment()],
       idempotencyKey: "idem-agent-reply-unknown",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("unknown channel");
+    await expectNoNewInboundMedia(inboundBefore);
 
     const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
@@ -741,6 +759,9 @@ describe("gateway server agent", () => {
     expect(media?.[0]?.path).toMatch(/\/media\/inbound\//);
     expect(media?.[0]?.url).toMatch(/^media:\/\/inbound\//);
     expect(call.message).toBe(`what is in the image?\n[media attached: ${media?.[0]?.url}]`);
+    await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
+      isFile: expect.any(Function),
+    });
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
@@ -768,6 +789,8 @@ describe("gateway server agent", () => {
   test("agent errors when delivery requested and no last channel exists", async () => {
     testState.allowFrom = ["+1555"];
     try {
+      testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+      await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
       await setTestSessionStore({
         entries: {
           main: {
@@ -776,17 +799,21 @@ describe("gateway server agent", () => {
           },
         },
       });
+      const inboundBefore = await listInboundMedia();
       const res = await rpcReq(gatewaySuite.ws, "agent", {
         message: "hi",
         sessionKey: "main",
         deliver: true,
         bestEffortDeliver: false,
+        attachments: [offloadedImageAttachment()],
         idempotencyKey: "idem-agent-missing-provider",
       });
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("INVALID_REQUEST");
       expect(res.error?.message).toContain("Channel is required");
+      expect(res.error?.message).not.toMatch(/^Error:/u);
       expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+      await expectNoNewInboundMedia(inboundBefore);
     } finally {
       testState.allowFrom = undefined;
     }

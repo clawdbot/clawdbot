@@ -8,8 +8,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AttemptFailureSource } from "./attempt-terminal.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { AttemptFailureSource, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
@@ -44,6 +43,7 @@ import {
   isCodexNotificationForTurn,
   readCodexNotificationThreadId,
 } from "./notification-correlation.js";
+import type { CodexApprovalKind } from "./plugin-approval-roundtrip.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -137,8 +137,10 @@ export class CodexAppServerEventProjector {
       (text) => this.toolProgressProjection.matchesEcho(text),
       () => this.nextTranscriptTimestamp(),
     );
-    this.reasoningProjection = new CodexReasoningProjection(params, (event) =>
-      this.emitAgentEvent(event),
+    this.reasoningProjection = new CodexReasoningProjection(
+      params,
+      (event) => this.emitAgentEvent(event),
+      options.onNativePlanUpdate,
     );
   }
 
@@ -199,8 +201,15 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  recordNativeToolApprovalFailure(toolCallId: string, disposition: ApprovalFailure): void {
+  recordNativeToolApprovalFailure(
+    toolCallId: string,
+    disposition: ApprovalFailure,
+    approvalKind?: CodexApprovalKind,
+  ): void {
     this.nativeToolLifecycleProjector.recordApprovalFailureDisposition(toolCallId, disposition);
+    if (disposition === "timed_out" && approvalKind) {
+      this.toolProgressProjection.approvalTimeoutKinds.set(toolCallId, approvalKind);
+    }
   }
 
   recordNativeToolPreToolUseFailure(failure: CodexNativePreToolUseFailure): void {
@@ -239,7 +248,7 @@ export class CodexAppServerEventProjector {
         this.reasoningProjection.handlePlanDelta(params);
         break;
       case "turn/plan/updated":
-        this.reasoningProjection.handleTurnPlanUpdated(params);
+        await this.reasoningProjection.handleTurnPlanUpdated(params);
         break;
       case "item/started":
         await this.handleItemStarted(params);
@@ -350,10 +359,13 @@ export class CodexAppServerEventProjector {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
   }
 
-  /** Projects a successful OpenClaw update_plan call through the native plan stream. */
-  recordDynamicPlanUpdate(params: unknown): void {
+  /** Projects a successful OpenClaw progress_card call through the native plan stream. */
+  async recordDynamicProgressCardUpdate(params: unknown): Promise<void> {
     if (isJsonObject(params)) {
-      this.reasoningProjection.handleTurnPlanUpdated(params, "openclaw");
+      const projected: JsonObject = {
+        plan: Array.isArray(params.plan) ? params.plan : [],
+      };
+      await this.reasoningProjection.handleTurnPlanUpdated(projected, "openclaw");
     }
   }
 
@@ -544,6 +556,7 @@ export class CodexAppServerEventProjector {
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
     }
+    this.toolProgressProjection.approvalTimeoutKinds.clear();
     this.assistantProjection.finalizeAnswerCandidate(turn);
     this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();

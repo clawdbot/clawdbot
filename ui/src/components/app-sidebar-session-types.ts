@@ -1,8 +1,11 @@
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionCreatedActor,
+  SessionOwner,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -59,6 +62,9 @@ export type SidebarRecentSession = {
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
   /**
@@ -97,7 +103,7 @@ export type SidebarRecentSession = {
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
-  outboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
   lastMessagePreview?: string;
@@ -126,9 +132,9 @@ export type SidebarRecentSession = {
 };
 
 export const enum RowVisibilityReason {
-  Any,
-  ActiveRun,
-  Attention,
+  Any = 0,
+  ActiveRun = 1,
+  Attention = 2,
 }
 
 export function rowDemandsVisibility(
@@ -390,10 +396,10 @@ export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
-  { mode: "people", labelKey: "sessionsView.people" },
+  { mode: "people", labelKey: "sessionsView.owners" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

@@ -12,9 +12,10 @@ import type {
   SessionMembersListResult,
   SessionVisibility,
 } from "../../api/types.ts";
-import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasMultiplePresenceIdentities } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -30,6 +31,7 @@ import {
 import { resetSessionCompanion } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
@@ -155,7 +157,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         }
         return;
       }
-      this.setSessionSharingState(cacheKey, { loading: false, error: String(error) });
+      this.setSessionSharingState(cacheKey, { loading: false, error: formatUiError(error) });
     }
   }
 
@@ -166,7 +168,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.setSessionSharingState(key, {
       ...(this.sessionSharingStates.get(key) ?? { loading: false }),
       loading: false,
-      error: String(error),
+      error: formatUiError(error),
     });
     // Sharing errors stay with their session; the visible slot belongs only to the selected session.
     if (areUiSessionKeysEquivalent(this.state?.sessionKey, session)) {
@@ -497,7 +499,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
+    const operation = Symbol("session-suggestion-add");
     this.sessionSuggestionAddOperation = operation;
     this.requestUpdate();
     try {
@@ -528,7 +530,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         this.sessionSuggestionAddOperation === operation &&
         this.isConnectionScopeCurrent(scope)
       ) {
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
@@ -562,7 +564,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
     const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
-    const editOperation = resolution === "edit" ? Symbol() : undefined;
+    const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
       this.sessionSuggestionEditOperation = editOperation;
     }
@@ -611,7 +613,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         ) {
           scope.state.handleChatDraftChange(previousEditDraft);
         }
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
@@ -682,6 +684,22 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       }, 2_500),
     );
     this.requestUpdate();
+  }
+
+  protected clearTypingActorForSessionMessage(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    if (
+      clearTypingActorForSessionMessage(payload, this.typingActors, this.typingTimers, {
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+        sessionKey: state.sessionKey,
+      })
+    ) {
+      this.requestUpdate();
+    }
   }
 
   protected typingActorViews(): { id: string; label: string }[] {

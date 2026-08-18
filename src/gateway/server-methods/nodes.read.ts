@@ -14,6 +14,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,
 } from "../../infra/node-runner-inventory.js";
@@ -24,6 +26,7 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtim
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
   isNodeRunnerSessionHost,
   updateNodeRunnerInventory,
 } from "../node-registry-private.js";
@@ -102,12 +105,17 @@ async function listNodesForClient(params: {
     params.context.nodeRegistry,
     params.connectedNodes,
   );
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
     pairedNodes: params.pairedNodes,
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
     sessionHostNodeIds,
+    workerBundleByNodeId,
     issuesByNodeId,
   });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
@@ -417,7 +425,12 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
       return;
     }
-    if (declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE) {
+    if (
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] ===
+        NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE
+    ) {
       respond(
         false,
         undefined,

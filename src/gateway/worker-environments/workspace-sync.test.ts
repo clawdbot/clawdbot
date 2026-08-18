@@ -75,6 +75,8 @@ describe("worker workspace command transport retry", () => {
     ).resolves.toMatchObject({ code: 255, termination: "exit" });
     expect(run).toHaveBeenCalledOnce();
     expect(sshArgvPort(run.mock.calls[0]![0])).toBe(2222);
+    // The pinned clock makes the derived dispatch timeout deterministic; a
+    // less-than bound would also accept zero and mask a broken deadline.
     expect(run.mock.calls[0]![1].timeoutMs).toBe(777);
 
     await actions.runWorkspaceCommand({

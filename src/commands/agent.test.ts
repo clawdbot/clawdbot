@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
+import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
@@ -31,12 +32,19 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
+import {
+  loadVisibleSkills,
+  loadWorkspaceSkills,
+} from "../skills/loading/workspace-skill-loader.js";
+import type { SkillEntry } from "../skills/types.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -52,6 +60,10 @@ import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
+}));
+
+const attemptExecutionMocks = vi.hoisted(() => ({
+  useRealRunAgentAttempt: false,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -211,6 +223,12 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
       sessionEntry: params.sessionEntry,
     })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
+      if (attemptExecutionMocks.useRealRunAgentAttempt) {
+        const actual = await vi.importActual<
+          typeof import("../agents/command/attempt-execution.js")
+        >("../agents/command/attempt-execution.js");
+        return await actual.runAgentAttempt(params as never);
+      }
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
       const sessionEntry = params.sessionEntry as
@@ -387,6 +405,46 @@ function mockConfig(
   return cfg;
 }
 
+function mockUserInvocableSkills(params: {
+  home: string;
+  skills: Array<{ name: string; disableModelInvocation?: boolean }>;
+}) {
+  const entries = params.skills.map(({ name, disableModelInvocation = false }) => {
+    const baseDir = path.join(params.home, "openclaw", "skills", name);
+    const filePath = path.join(baseDir, "SKILL.md");
+    return {
+      skill: {
+        name,
+        description: `${name} instructions`,
+        filePath,
+        baseDir,
+        source: "openclaw-workspace",
+        sourceInfo: {
+          path: filePath,
+          source: "openclaw-workspace",
+          scope: "project",
+          origin: "top-level",
+        },
+        disableModelInvocation,
+      },
+      frontmatter: {},
+      invocation: { userInvocable: true, disableModelInvocation },
+      exposure: {
+        includeInRuntimeRegistry: true,
+        includeInAvailableSkillsPrompt: !disableModelInvocation,
+        userInvocable: true,
+      },
+    } satisfies SkillEntry;
+  });
+  vi.mocked(loadVisibleSkills).mockImplementation((_workspaceDir, opts) => {
+    const filter = opts?.skillFilter;
+    return filter === undefined
+      ? entries
+      : entries.filter((entry) => filter.includes(entry.skill.name));
+  });
+  vi.mocked(loadWorkspaceSkills).mockReturnValue(entries);
+}
+
 async function writeSessionStoreSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
@@ -500,6 +558,7 @@ function createOutboundSessionRouteFixture(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  attemptExecutionMocks.useRealRunAgentAttempt = false;
   resetPluginRuntimeStateForTest();
   installThinkingTestProviders();
   clearSessionStoreCacheForTest();
@@ -509,6 +568,7 @@ beforeEach(() => {
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
@@ -517,6 +577,152 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
+    "does not discover skills for literal dollar input: %s",
+    async (message) => {
+      await withTempHome(async (home) => {
+        const store = path.join(home, "sessions.json");
+        mockConfig(home, store);
+
+        await agentCommandFromIngress(
+          { message, agentId: "main", allowModelOverride: false },
+          runtime,
+        );
+
+        expect(getLastEmbeddedCall()?.prompt).toBe(message);
+        expect(loadVisibleSkills).not.toHaveBeenCalled();
+        expect(loadWorkspaceSkills).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("renders a Claude bundle command template on Gateway ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([
+        {
+          pluginId: "test-bundle",
+          rawName: "workflows-review",
+          description: "Review a workflow",
+          promptTemplate: "Review this workflow carefully.\n\nFocus on:\n$ARGUMENTS",
+          sourceFilePath: "/tmp/plugin/commands/workflows-review.md",
+        },
+      ]);
+
+      await agentCommandFromIngress(
+        {
+          message: "/workflows_review retries and cleanup",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.prompt).toBe(
+        "Review this workflow carefully.\n\nFocus on:\nretries and cleanup",
+      );
+    });
+  });
+
+  it.each([
+    {
+      label: "dollar reference",
+      message: "Review this with $release_notes.",
+      request: "Review this with $release_notes.",
+    },
+    {
+      label: "leading slash invocation",
+      message: "/release_notes summarize the changes",
+      request: "/release_notes summarize the changes",
+    },
+  ])("expands a skill $label on Gateway ingress", async ({ message, request }) => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      mockUserInvocableSkills({ home, skills: [{ name: "release-notes" }] });
+
+      await agentCommandFromIngress(
+        { message, agentId: "main", allowModelOverride: false },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.prompt).toBe(
+        [
+          "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+          "- release-notes",
+          "",
+          "User request:",
+          request,
+        ].join("\n"),
+      );
+    });
+  });
+
+  it("expands an explicitly referenced skill hidden from model invocation", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      mockUserInvocableSkills({
+        home,
+        skills: [{ name: "release-notes", disableModelInvocation: true }],
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "$release_notes draft the summary",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      const skillFile = path.join(home, "openclaw", "skills", "release-notes", "SKILL.md");
+      expect(getLastEmbeddedCall()?.prompt).toContain(`- release-notes (SKILL.md: ${skillFile})`);
+    });
+  });
+
+  it("rejects an explicitly referenced skill hidden by the agent allowlist", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store);
+      cfg.agents!.defaults!.skills = ["allowed-skill"];
+      vi.mocked(resolveEffectiveAgentSkillFilter).mockReturnValueOnce(["allowed-skill"]);
+      mockUserInvocableSkills({ home, skills: [{ name: "hidden-skill" }] });
+
+      await expect(
+        agentCommandFromIngress(
+          { message: "$hidden_skill", agentId: "main", allowModelOverride: false },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        'Skill "hidden-skill" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+      );
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("expands an explicit reference when the skills prompt catalog is unavailable", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store);
+      cfg.skills = { limits: { maxSkillsPromptChars: 1 } };
+      mockUserInvocableSkills({ home, skills: [{ name: "release-notes" }] });
+
+      await agentCommandFromIngress(
+        {
+          message: "Use $release_notes despite the catalog cap.",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.skillsSnapshot?.prompt).toBe("");
+      expect(getLastEmbeddedCall()?.prompt).toContain("- release-notes");
+    });
+  });
+
   it("enforces ingress model override authorization", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.
@@ -666,6 +872,64 @@ describe("agentCommand", () => {
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
+    });
+  });
+
+  it("enforces stored workspace permissions through public agent ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:dashboard:workspace-permission";
+      const sessionRoot = path.join(home, "worktree");
+      const outsidePath = path.join(home, "outside.txt");
+      const insidePath = path.join(sessionRoot, "inside.txt");
+      fs.mkdirSync(sessionRoot, { recursive: true });
+      mockConfig(home, store);
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "workspace-permission-session",
+          updatedAt: Date.now(),
+          spawnedCwd: sessionRoot,
+          permissionMode: "workspace",
+          sessionRoot,
+        },
+      });
+      attemptExecutionMocks.useRealRunAgentAttempt = true;
+
+      let outsideWriteError: unknown;
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (opts) => {
+        const codingRoot = opts.cwd ?? opts.workspaceDir;
+        const writeTool = createHostWorkspaceWriteTool(codingRoot, {
+          containmentRoot: opts.sessionRoot ?? codingRoot,
+          workspaceOnly: opts.permissionMode !== undefined && opts.permissionMode !== "full",
+        });
+        try {
+          await writeTool.execute("outside-write", {
+            path: outsidePath,
+            content: "outside",
+          });
+        } catch (error) {
+          outsideWriteError = error;
+        }
+        await writeTool.execute("inside-write", {
+          path: insidePath,
+          content: "inside",
+        });
+        return createDefaultAgentResult();
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "write inside the session worktree",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(outsideWriteError).toBeInstanceOf(Error);
+      expect(String(outsideWriteError)).toMatch(/(?:sandbox|workspace) root/i);
+      expect(fs.existsSync(outsidePath)).toBe(false);
+      expect(fs.readFileSync(insidePath, "utf8")).toBe("inside");
     });
   });
 

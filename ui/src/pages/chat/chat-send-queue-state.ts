@@ -1,5 +1,6 @@
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type {
@@ -18,7 +19,7 @@ import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-sen
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import { controlUiNowMs } from "./performance.ts";
-import { hasAbortableSessionRun, isChatBusy } from "./run-lifecycle.ts";
+import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR, surfaceChatDeliveryFailure } from "./steer-lifecycle.ts";
 
@@ -29,8 +30,9 @@ export function setChatError(
   host: { lastError?: string | null; chatError?: string | null },
   error: string | null,
 ) {
-  host.lastError = error;
-  host.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  host.lastError = message;
+  host.chatError = message;
 }
 
 export function enqueuePendingSendMessage(
@@ -190,7 +192,7 @@ export function finishChatDeliveryAdmission(
     }
     return "pending";
   }
-  if (routeVisible(current.agentId) && (isChatBusy(host) || hasAbortableSessionRun(host))) {
+  if (routeVisible(current.agentId) && (isChatBusy(host) || hasDirectSessionRun(host))) {
     const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
     if (!parked) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);

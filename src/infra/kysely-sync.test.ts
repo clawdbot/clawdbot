@@ -604,7 +604,7 @@ function runRetentionScenario(options: {
       };
     }
 
-    process.stdout.write(JSON.stringify(await runScenario()));
+    process.stdout.write(JSON.stringify(await runScenario()), () => process.exit(0));
   `;
   const result = spawnSync(
     process.execPath,

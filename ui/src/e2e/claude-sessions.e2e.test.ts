@@ -4,221 +4,20 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  captureTopVisibleVirtualRow,
+  expectPaintedVirtualRowAnchor,
+  startVirtualRowPaintProbe,
+  stopVirtualRowPaintProbe,
+  type VirtualRowPaintResult,
+  waitForPaintedVirtualRowAnchor,
+} from "./virtual-row-anchor.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Claude native session catalog",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-type VisibleVirtualRow = {
-  index: number;
-  key: string;
-  totalSize: number;
-  viewportTop: number;
-};
-
-type VirtualRowPaintSample = {
-  index: number | null;
-  intersectsViewport: boolean;
-  totalSize: number;
-  viewportTop: number | null;
-};
-
-type VirtualRowPaintProbe = {
-  frameIds: number[];
-  observer: MutationObserver;
-  pendingSamples: number;
-  samples: VirtualRowPaintSample[];
-  timerIds: number[];
-};
-
-type VirtualRowPaintResult = {
-  pending: boolean;
-  samples: VirtualRowPaintSample[];
-};
-
-async function captureTopVisibleVirtualRow(thread: Locator): Promise<VisibleVirtualRow> {
-  return thread.evaluate((element) => {
-    const viewport = element.getBoundingClientRect();
-    const row = Array.from(
-      element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-    ).find((candidate) => {
-      const rect = candidate.getBoundingClientRect();
-      return (
-        candidate.dataset.virtualRowKey !== "history" &&
-        rect.bottom > viewport.top &&
-        rect.top < viewport.bottom
-      );
-    });
-    if (!row) {
-      throw new Error("expected a visible virtual transcript row");
-    }
-    const index = Number.parseInt(row.dataset.index ?? "", 10);
-    if (!Number.isFinite(index)) {
-      throw new Error("expected the virtual transcript anchor to expose its row index");
-    }
-    return {
-      index,
-      key: row.dataset.virtualRowKey ?? "",
-      totalSize:
-        element.querySelector<HTMLElement>(".chat-virtual-sizer")?.getBoundingClientRect().height ??
-        0,
-      viewportTop: row.getBoundingClientRect().top - viewport.top,
-    };
-  });
-}
-
-async function startVirtualRowPaintProbe(thread: Locator, anchor: VisibleVirtualRow) {
-  await thread.evaluate((element, expected) => {
-    const target = globalThis as typeof globalThis & {
-      chatPrependPaintProbe?: VirtualRowPaintProbe;
-    };
-    const staleProbe = target.chatPrependPaintProbe;
-    if (staleProbe) {
-      staleProbe.observer.disconnect();
-      staleProbe.frameIds.forEach((frameId) => cancelAnimationFrame(frameId));
-      staleProbe.timerIds.forEach((timerId) => clearTimeout(timerId));
-      delete target.chatPrependPaintProbe;
-    }
-    const probe: VirtualRowPaintProbe = {
-      frameIds: [],
-      observer: new MutationObserver(() => undefined),
-      pendingSamples: 0,
-      samples: [],
-      timerIds: [],
-    };
-    const sample = () => {
-      const viewport = element.getBoundingClientRect();
-      const row = Array.from(
-        element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-      ).find(
-        (candidate) =>
-          candidate.dataset.virtualRowKey !== "history" &&
-          candidate.dataset.virtualRowKey === expected.key,
-      );
-      const rect = row?.getBoundingClientRect();
-      const index = row ? Number.parseInt(row.dataset.index ?? "", 10) : Number.NaN;
-      probe.samples.push({
-        index: Number.isFinite(index) ? index : null,
-        intersectsViewport: Boolean(
-          rect && rect.bottom > viewport.top && rect.top < viewport.bottom,
-        ),
-        totalSize:
-          element.querySelector<HTMLElement>(".chat-virtual-sizer")?.getBoundingClientRect()
-            .height ?? 0,
-        viewportTop: rect ? rect.top - viewport.top : null,
-      });
-    };
-    const removePendingId = (ids: number[], id: number) => {
-      const index = ids.indexOf(id);
-      if (index !== -1) {
-        ids.splice(index, 1);
-      }
-    };
-    const scheduleSample = () => {
-      // Each mutation batch owns a post-paint sample; later mutations must not
-      // cancel an earlier frame that could expose a visible anchor jump.
-      probe.pendingSamples += 1;
-      const firstFrame = requestAnimationFrame(() => {
-        removePendingId(probe.frameIds, firstFrame);
-        const secondFrame = requestAnimationFrame(() => {
-          removePendingId(probe.frameIds, secondFrame);
-          const timerId = window.setTimeout(() => {
-            removePendingId(probe.timerIds, timerId);
-            sample();
-            probe.pendingSamples -= 1;
-          }, 0);
-          probe.timerIds.push(timerId);
-        });
-        probe.frameIds.push(secondFrame);
-      });
-      probe.frameIds.push(firstFrame);
-    };
-    probe.observer = new MutationObserver(scheduleSample);
-    probe.observer.observe(element, {
-      attributeFilter: ["style"],
-      attributes: true,
-      childList: true,
-      subtree: true,
-    });
-    target.chatPrependPaintProbe = probe;
-  }, anchor);
-}
-
-async function readVirtualRowPaintProbe(thread: Locator) {
-  return thread.evaluate(() => {
-    const probe = (
-      globalThis as typeof globalThis & {
-        chatPrependPaintProbe?: VirtualRowPaintProbe;
-      }
-    ).chatPrependPaintProbe;
-    if (!probe) {
-      throw new Error("expected an active virtual row paint probe");
-    }
-    return {
-      pendingSamples: probe.pendingSamples,
-      samples: probe.samples,
-    };
-  });
-}
-
-async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPaintResult> {
-  return thread.evaluate(() => {
-    const target = globalThis as typeof globalThis & {
-      chatPrependPaintProbe?: VirtualRowPaintProbe;
-    };
-    const probe = target.chatPrependPaintProbe;
-    if (!probe) {
-      throw new Error("expected an active virtual row paint probe");
-    }
-    const pending = probe.pendingSamples > 0;
-    probe.observer.disconnect();
-    probe.frameIds.forEach((frameId) => cancelAnimationFrame(frameId));
-    probe.timerIds.forEach((timerId) => clearTimeout(timerId));
-    delete target.chatPrependPaintProbe;
-    return { pending, samples: probe.samples };
-  });
-}
-
-function virtualRowAnchorStatus(anchor: VisibleVirtualRow, samples: VirtualRowPaintSample[]) {
-  return {
-    advanced: samples.some(
-      (sample) =>
-        (sample.index !== null && sample.index > anchor.index) ||
-        sample.totalSize > anchor.totalSize,
-    ),
-    anchored: samples.every(
-      (sample) =>
-        sample.viewportTop !== null && Math.abs(sample.viewportTop - anchor.viewportTop) <= 2,
-    ),
-    present: samples.length > 0 && samples.every((sample) => sample.viewportTop !== null),
-    visible: samples.every((sample) => sample.intersectsViewport),
-  };
-}
-
-async function waitForPaintedVirtualRowAnchor(thread: Locator, anchor: VisibleVirtualRow) {
-  await expect
-    .poll(async () => {
-      const probe = await readVirtualRowPaintProbe(thread);
-      return probe.pendingSamples === 0 && virtualRowAnchorStatus(anchor, probe.samples).advanced;
-    })
-    .toBe(true);
-}
-
-function expectPaintedVirtualRowAnchor(anchor: VisibleVirtualRow, result: VirtualRowPaintResult) {
-  const evidence = JSON.stringify({ anchor, ...result });
-  expect(
-    { pending: result.pending, ...virtualRowAnchorStatus(anchor, result.samples) },
-    evidence,
-  ).toEqual({
-    pending: false,
-    advanced: true,
-    anchored: true,
-    present: true,
-    visible: true,
-  });
-}
 
 function resumableClaudeCatalog() {
   return {
@@ -717,7 +516,7 @@ suite.define(() => {
               response: {
                 hostId: "node:devbox",
                 threadId: "remote-thread",
-                items: [{ id: "u1", type: "userMessage", text: "older question" }],
+                items: [{ id: "a0", type: "agentMessage", text: "older question" }],
               },
             },
             {
@@ -789,7 +588,9 @@ suite.define(() => {
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
     await catalogPane.locator(".chat-history-loading").waitFor();
-    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
+    await showEarlier.waitFor();
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
     const anchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, anchor);
     let paintResult: VirtualRowPaintResult;
@@ -804,6 +605,7 @@ suite.define(() => {
         )
         .toBe(41);
       await page.clock.runFor(100);
+      await waitForPaintedVirtualRowAnchor(thread, anchor);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
@@ -854,12 +656,162 @@ suite.define(() => {
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
     expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
-    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
   });
 
-  it("auto-loads older native history with a spinner and stable viewport", async () => {
+  it("auto-pages an underfilled native transcript until it becomes scrollable", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+    }
+    const viewport = { width: 1280, height: 900 };
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const historyMessage = (seq: number, role: "assistant" | "user", text: string) => ({
+      __openclaw: { seq },
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+      role,
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const recent = [
+      historyMessage(21, "user", "Recent question"),
+      historyMessage(22, "assistant", "Recent answer"),
+    ];
+    // Consecutive assistant records collapse into one rendered group, so this
+    // page advances the raw offset without filling the real transcript viewport.
+    const firstOlderPage = Array.from({ length: 4 }, (_, index) =>
+      historyMessage(index + 17, "assistant", `Short older answer ${index + 17}`),
+    );
+    const secondOlderPage = Array.from({ length: 16 }, (_, index) => {
+      const seq = index + 1;
+      const role = seq % 2 === 0 ? "assistant" : "user";
+      return historyMessage(
+        seq,
+        role,
+        `Scrollable older ${role} message ${seq}\n${"Transcript detail line\n".repeat(3)}`,
+      );
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.history"],
+      featureMethods: ["chat.metadata", "chat.startup"],
+      methodResponses: {
+        "chat.startup": {
+          messages: recent,
+          hasMore: true,
+          nextOffset: 2,
+          totalMessages: 30,
+          sessionId: "native-underfill-pagination",
+          thinkingLevel: null,
+        },
+        "chat.history": {
+          cases: [
+            {
+              match: { offset: 2 },
+              response: {
+                messages: firstOlderPage,
+                hasMore: true,
+                nextOffset: 6,
+                totalMessages: 30,
+                sessionId: "native-underfill-pagination",
+                thinkingLevel: null,
+              },
+            },
+            {
+              match: { offset: 6 },
+              response: {
+                messages: secondOlderPage,
+                hasMore: true,
+                nextOffset: 22,
+                totalMessages: 30,
+                sessionId: "native-underfill-pagination",
+                thinkingLevel: null,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = pane.locator(".chat-thread");
+      await page.getByText("Recent answer", { exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).map(
+            (request) => (request.params as { offset?: number } | undefined)?.offset,
+          ),
+        )
+        .toEqual([2]);
+      await pane.locator(".chat-history-loading").waitFor();
+      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+        true,
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
+          fullPage: true,
+        });
+      }
+
+      await gateway.deferNext("chat.history", { offset: 6 });
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).map(
+            (request) => (request.params as { offset?: number } | undefined)?.offset,
+          ),
+        )
+        .toEqual([2, 6]);
+      await pane.locator(".chat-history-loading").waitFor();
+      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+        true,
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "01-native-history-continued-auto-load.png"),
+          fullPage: true,
+        });
+      }
+
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      await expect.poll(() => pane.locator(".chat-history-loading").count()).toBe(0);
+      expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "02-native-history-final-scrollable.png"),
+          fullPage: true,
+        });
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 300);
+      });
+      expect(
+        (await gateway.getRequests("chat.history")).map(
+          (request) => (request.params as { offset?: number } | undefined)?.offset,
+        ),
+      ).toEqual([2, 6]);
+    } finally {
+      await suite.closeBrowserContext(context);
+      if (artifactDir && proofVideo) {
+        await proofVideo.saveAs(path.join(artifactDir, "native-history-auto-pagination.webm"));
+      }
+    }
+  });
+
+  it("shows loaded native history before fetching and revealing an earlier page", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const historyMessage = (seq: number, prefix: string) => ({
@@ -917,45 +869,78 @@ suite.define(() => {
       element.scrollTop = element.scrollHeight;
       element.dispatchEvent(new Event("scroll"));
     });
+    const showEarlier = page.getByRole("button", { name: "Show earlier" });
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await page.screenshot({
+        path: path.join(artifactDir, "00-native-history-available.png"),
+        fullPage: true,
+      });
+    }
+    const initialRequestCount = (await gateway.getRequests("chat.history")).length;
+    const tailAnchor = await captureTopVisibleVirtualRow(thread);
+    const initialScrollTop = await thread.evaluate((element) => element.scrollTop);
+    await showEarlier.click();
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollTop))
+      .toBeLessThan(initialScrollTop);
+    const earlierAnchor = await captureTopVisibleVirtualRow(thread);
+    expect(earlierAnchor.index).toBeLessThan(tailAnchor.index);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(initialRequestCount);
     await gateway.deferNext("chat.history");
     await thread.evaluate((element) => {
       element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
+      element.parentElement?.querySelector<HTMLButtonElement>(".chat-history-available")?.click();
     });
-    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
-    await gateway.waitForRequest("chat.history");
+    // Pin each wait past the earlier chat.history traffic so a slow runner
+    // can't return a stale load-time or prior-page request.
+    await gateway.waitForRequest("chat.history", { after: initialRequestCount });
     await page.locator(".chat-history-loading").waitFor();
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
         fullPage: true,
       });
     }
-    const anchor = await captureTopVisibleVirtualRow(thread);
-    await startVirtualRowPaintProbe(thread, anchor);
-    let paintResult: VirtualRowPaintResult;
-    try {
-      await gateway.resolveDeferred("chat.history");
-      await expect
-        .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
-        )
-        .toBe(140);
-      await waitForPaintedVirtualRowAnchor(thread, anchor);
-    } finally {
-      paintResult = await stopVirtualRowPaintProbe(thread);
-    }
-    expectPaintedVirtualRowAnchor(anchor, paintResult);
+    await gateway.rejectDeferred("chat.history", {
+      code: "UNAVAILABLE",
+      message: "history unavailable",
+      retryable: true,
+    });
+    await expect.poll(() => page.locator(".chat-history-loading").count()).toBe(0);
+    expect(await showEarlier.getAttribute("aria-busy")).toBe("false");
+    const failedRequestCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("chat.history");
+    await showEarlier.click();
+    await gateway.waitForRequest("chat.history", { after: failedRequestCount });
+    await page.locator(".chat-history-loading").waitFor();
+    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
+    await gateway.resolveDeferred("chat.history", {
+      messages: older,
+      hasMore: true,
+      nextOffset: 140,
+      totalMessages: 180,
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
+    await expect
+      .poll(() =>
+        page
+          .locator("openclaw-chat-pane")
+          .evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
+      )
+      .toBe(140);
+    const firstOlderMessage = page.getByText(/^older native message 1\n/);
+    await firstOlderMessage.waitFor();
+    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
     if (artifactDir) {
       await page.screenshot({
-        path: path.join(artifactDir, "02-native-history-prepended-stable.png"),
+        path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
         fullPage: true,
       });
     }
@@ -963,15 +948,32 @@ suite.define(() => {
       limit: 100,
       offset: 100,
     });
-    const exhaustedRequestCount = (await gateway.getRequests("chat.history")).length;
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
+    const firstPageRequestCount = (await gateway.getRequests("chat.history")).length;
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount);
+    await gateway.deferNext("chat.history");
+    await showEarlier.click();
+    await gateway.waitForRequest("chat.history", { after: firstPageRequestCount });
+    expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
+      limit: 100,
+      offset: 140,
     });
-    await page.getByText(/^older native message 1\n/).waitFor();
+    await gateway.resolveDeferred("chat.history", {
+      messages: [],
+      hasMore: false,
+      totalMessages: 180,
+      sessionId: "native-scrollback",
+      thinkingLevel: null,
+    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await page.locator(".chat-history-loading").count()).toBe(0);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(exhaustedRequestCount);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
     await page.close();
   });
 

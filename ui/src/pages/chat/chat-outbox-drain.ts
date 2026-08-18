@@ -1,5 +1,6 @@
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
@@ -16,7 +17,9 @@ import {
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
+  anyChatOutboxPaneMatches,
   excludeComposerAttachments,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
@@ -90,6 +93,7 @@ type StoredChatOutboxClientState = {
   retryTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
+const STORED_OUTBOX_CONFIRMATION_GRACE_MS = 5_000;
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
 const STORED_OUTBOX_RETRY_MIN_MS = 100;
 const STORED_OUTBOX_RETRY_MAX_MS = 30_000;
@@ -105,7 +109,10 @@ function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredCha
   if (existing) {
     return existing;
   }
-  const created = { lanes: new Map(), retryTimers: new Map() };
+  const created: StoredChatOutboxClientState = {
+    lanes: new Map(),
+    retryTimers: new Map(),
+  };
   storedChatOutboxClients.set(client, created);
   return created;
 }
@@ -161,6 +168,10 @@ function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): b
     left.agentId === right.agentId &&
     left.sessionKey === right.sessionKey
   );
+}
+
+function queuedDeliveryVersion(item: ChatQueueItem): string {
+  return `${item.id}\u0000${item.sendRunId ?? ""}\u0000${item.sendAttempts ?? 0}`;
 }
 
 async function readCurrentStoredChatHistory(
@@ -281,21 +292,54 @@ async function reconcileStoredChatOutboxHead(
       return "blocked";
     }
   }
+  const outboxOwner = chatOutboxOwner(host);
+  const clearConfirmationGrace = () => outboxOwner.clearConfirmationGrace(outbox, item.id);
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
   // Keyed unknown sends reach history only for exact proof; absence stays blocked.
   if (history === "blocked" || history === "continue" || item.sendState === "unconfirmed") {
+    clearConfirmationGrace();
     return history === "continue" ? "continue" : "blocked";
   }
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
+    clearConfirmationGrace();
     return "blocked";
   }
   if ((item.sendAttempts ?? 0) > 0) {
     // History and run metadata are non-atomic; verify idle before parking unknown.
     const verifiedHistory = await readCurrentStoredChatHistory(...historyArgs);
     if (verifiedHistory === "blocked" || verifiedHistory === "continue") {
+      clearConfirmationGrace();
       return verifiedHistory;
     }
+    const liveSendCurrent = anyChatOutboxPaneMatches(host, (pane) => {
+      const liveItem = pane.chatQueue.find((entry) => entry.id === item.id);
+      return (
+        liveItem?.sendState === "sending" &&
+        sameQueuedDeliveryVersion(liveItem, { ...item, sendState: "sending" })
+      );
+    });
+    if (liveSendCurrent) {
+      // Start the bound only after idle is verified; a valid run can outlive the send request.
+      const now = Date.now();
+      const deadlineMs = outboxOwner.confirmationDeadline(
+        outbox,
+        item.id,
+        queuedDeliveryVersion(item),
+        now,
+        STORED_OUTBOX_CONFIRMATION_GRACE_MS,
+      );
+      if (deadlineMs !== null && now < deadlineMs) {
+        scheduleStoredChatOutboxRetry(
+          host,
+          outbox,
+          Math.min(STORED_OUTBOX_RETRY_DEFAULT_MS, deadlineMs - now),
+          dependencies,
+        );
+        return "blocked";
+      }
+    }
+    clearConfirmationGrace();
     const parked = updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
       ...entry,
       sendError: UNCONFIRMED_CHAT_SEND_ERROR,
@@ -523,7 +567,7 @@ async function drainStoredChatOutbox(
           dependencies.setChatError(host, null);
         }
       } catch (err) {
-        return failCommand(String(err), true);
+        return failCommand(formatUiError(err), true);
       }
       continue;
     }

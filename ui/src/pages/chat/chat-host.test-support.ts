@@ -1,6 +1,13 @@
 import { vi } from "vitest";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+  type GatewayRequestMock,
+} from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
@@ -8,8 +15,8 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type RequestHandlers = Record<string, unknown>;
 
-export function makeRequestMock(handlers: RequestHandlers = {}) {
-  return vi.fn((method: string, params?: unknown) => {
+export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestMock {
+  return createGatewayRequestMock((method: string, params?: unknown) => {
     if (!Object.hasOwn(handlers, method)) {
       // Keep unrelated Gateway traffic inert so each test declares only the responses it observes.
       return Promise.resolve({});
@@ -26,10 +33,6 @@ export function makeRequestMock(handlers: RequestHandlers = {}) {
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
 
-function clientWithRequest(request: unknown): ChatHost["client"] {
-  return { request } as unknown as ChatHost["client"];
-}
-
 type TestChatHost = Omit<ChatHost, "settings"> & {
   applySettings: (patch: Partial<UiSettings>) => void;
   basePath: string;
@@ -38,6 +41,8 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
+  chatModelCatalog: ModelCatalogEntry[];
+  chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
@@ -103,7 +108,7 @@ export function makeChatHost(
     },
   };
   const host = {
-    client: request ? clientWithRequest(request) : null,
+    client: request ? createTestGatewayClient(request) : null,
     chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
     chatStream: null,
@@ -129,7 +134,7 @@ export function makeChatHost(
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
     chatAvatarSource: null,
     chatAvatarStatus: null,

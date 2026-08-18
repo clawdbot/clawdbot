@@ -1,5 +1,5 @@
 // Control UI chat module implements session cache behavior.
-const MAX_CACHED_CHAT_SESSIONS = 20;
+export const MAX_CACHED_CHAT_SESSIONS = 20;
 
 export function getSessionCacheValue<T>(map: Map<string, T>, sessionKey: string): T | undefined {
   if (!map.has(sessionKey)) {

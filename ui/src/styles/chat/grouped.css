@@ -108,7 +108,18 @@
 }
 
 .chat-group.tool {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+  display: block;
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+
+.chat-group.tool.chat-group--with-footer {
+  display: block;
+}
+
+.chat-group.tool.chat-group--with-footer > .chat-group-messages {
+  max-width: var(--chat-message-column-max);
 }
 
 .chat-group.user .chat-group-footer {
@@ -131,8 +142,8 @@
   width: 100%;
   min-width: 0;
   min-height: 24px;
-  opacity: 0;
-  pointer-events: none;
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition: opacity 120ms ease-out;
 }
 
@@ -147,7 +158,7 @@
    other footer details stay focusable but leave the row layout until reveal. */
 .chat-group-footer--persistent-identity {
   position: relative;
-  opacity: 1;
+  opacity: var(--chat-persistent-footer-opacity, 1);
   pointer-events: none;
 }
 
@@ -155,9 +166,9 @@
 .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group-footer--persistent-identity .msg-meta,
 .chat-group-footer--persistent-identity .chat-group-footer-actions {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
+  position: var(--chat-footer-detail-position, absolute);
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
 }
 
 .chat-group:hover .chat-group-footer--persistent-identity,
@@ -300,10 +311,10 @@
   padding: 4px;
   min-width: 24px;
   min-height: 24px;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-md);
   color: var(--muted);
-  opacity: 0;
-  pointer-events: none;
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition:
     opacity 120ms ease-out,
     color 120ms ease-out,
@@ -328,7 +339,7 @@
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: transparent;
   color: var(--accent);
 }
 
@@ -347,7 +358,7 @@
 .chat-divider {
   display: grid;
   gap: 7px;
-  margin: 18px 8px;
+  margin: var(--space-7) 8px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
@@ -458,6 +469,16 @@
 .chat-notice__body {
   width: min(560px, 100%);
   margin: 0 auto;
+}
+
+.chat-notice--danger {
+  width: min(560px, calc(100% - 32px));
+  margin: 14px auto;
+  text-align: left;
+}
+
+.chat-notice--danger .chat-notice__body {
+  width: 100%;
 }
 
 .chat-notice :where(ul, ol, pre, blockquote) {
@@ -660,9 +681,9 @@ img.chat-avatar.chat-avatar--logo {
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  align-self: baseline;
   min-height: 22px;
-  margin-top: 8px;
+  margin-top: 0;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: var(--radius-sm);
@@ -671,6 +692,8 @@ img.chat-avatar.chat-avatar--logo {
   font-size: 12px; /* was 11px */
   font-weight: 700;
   line-height: 1;
+  vertical-align: 0.08em;
+  white-space: nowrap;
 }
 
 .chat-group.user .chat-duplicate-count {
@@ -695,32 +718,32 @@ img.chat-avatar.chat-avatar--logo {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* No hover to reveal the footer: keep it always visible and add a little
-     more separation from the next group. */
+  /* Shared message renderers stay touch-readable by default. Transcript rows
+     opt into one-at-a-time disclosure through their owning thread. */
   .chat-group {
+    --chat-footer-disclosure-opacity: 1;
+    --chat-footer-disclosure-pointer-events: auto;
+    --chat-footer-detail-position: static;
     padding-bottom: 0;
     margin-bottom: 14px;
   }
 
-  .chat-group-footer--persistent-identity .chat-confirm-wrap,
-  .chat-group-footer--persistent-identity .chat-group-timestamp,
-  .chat-group-footer--persistent-identity .msg-meta,
-  .chat-group-footer--persistent-identity .chat-group-footer-actions {
-    position: static;
-    opacity: 1;
-    pointer-events: auto;
-  }
-
   .chat-group-footer {
     margin-top: 4px;
-    opacity: 1;
-    pointer-events: auto;
   }
 
-  .chat-group-footer-actions button,
-  .chat-message-actions-row button {
-    opacity: 1;
-    pointer-events: auto;
+  :where(.chat-thread) .chat-group {
+    --chat-footer-disclosure-opacity: 0;
+    --chat-footer-disclosure-pointer-events: none;
+    --chat-footer-detail-position: absolute;
+    --chat-persistent-footer-opacity: 0;
+  }
+
+  :where(.chat-thread) .chat-group:is(.chat-group--meta-revealed, :focus-within) {
+    --chat-footer-disclosure-opacity: 1;
+    --chat-footer-disclosure-pointer-events: auto;
+    --chat-footer-detail-position: static;
+    --chat-persistent-footer-opacity: 1;
   }
 
   .chat-group-footer-actions .chat-copy-btn,
@@ -807,16 +830,21 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user .chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: transparent;
+  box-shadow: none;
 }
 
-/* Light mode: restore borders. Order contract: stays below the role variants
-   above; it ties with .chat-group.user .chat-bubble on specificity and the
-   light skin must win (user bubbles render on var(--bg) in light mode). */
+/* Light mode: restore borders for surfaces that retain them. */
 :root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
   background: var(--bg);
   box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
+:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
+  border-color: transparent;
+  background: var(--accent-subtle);
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell,
@@ -836,7 +864,7 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 55% / 0.4);
+  border-color: transparent;
 }
 
 .chat-group.user.chat-group--sender-tint .chat-sender-name {
@@ -845,13 +873,13 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
   background: hsl(var(--chat-sender-hue) 65% 94%);
-  border-color: hsl(var(--chat-sender-hue) 45% 82%);
+  border-color: transparent;
 }
 
-/* Outranks the light skin above (it also sets border-color); without this the
-   tinted hover border never applies in light mode. */
+/* Keep tinted user turns borderless when the generic light hover skin applies. */
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 62%);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {

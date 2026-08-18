@@ -866,8 +866,10 @@ class TranslationClient {
   private closed = false;
   private sequence: Promise<unknown> = Promise.resolve();
   private readonly model: Model;
+  private readonly systemPrompt: string;
 
-  private constructor(private readonly systemPrompt: string) {
+  private constructor(systemPrompt: string) {
+    this.systemPrompt = systemPrompt;
     this.model = resolveTranslationModel();
   }
 

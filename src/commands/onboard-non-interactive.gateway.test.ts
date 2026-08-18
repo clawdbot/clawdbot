@@ -519,7 +519,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           port: 24680,
           bind: "loopback",
           auth: { mode: "password", password: passwordRef },
-          tailscale: { mode: "serve", resetOnExit: true },
+          tailscale: { mode: "serve" },
         },
       } as OpenClawConfig);
 
@@ -596,7 +596,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         gateway: {
           bind: "lan",
           auth: { mode: "password", password: "test-password" },
-          tailscale: { mode: "serve", resetOnExit: true },
+          tailscale: { mode: "serve" },
         },
       } as OpenClawConfig);
 
@@ -613,7 +613,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           gatewayAuth: "token",
           gatewayToken: token,
           tailscale: "off",
-          tailscaleResetOnExit: false,
         },
         runtime,
       );
@@ -623,7 +622,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           mode?: string;
           bind?: string;
           auth?: { mode?: string; token?: string };
-          tailscale?: { mode?: string; resetOnExit?: boolean };
+          tailscale?: { mode?: string };
         };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
@@ -636,7 +635,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
-      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off", resetOnExit: false });
+      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off" });
       expect(cfg?.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);

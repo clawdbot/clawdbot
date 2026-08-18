@@ -24,7 +24,7 @@ type DeviceWorkerRuntimeOptions = {
   now?: () => number;
 };
 
-type DeviceWorkerAvailability = {
+export type DeviceWorkerAvailability = {
   available: boolean;
   issue?: NodeRunnerInventoryIssue;
   unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
@@ -47,6 +47,22 @@ export async function resolveDeviceWorkerAvailability(
 ): Promise<DeviceWorkerAvailability> {
   const resolveAvailability = service ? DEVICE_WORKER_AVAILABILITY.get(service) : undefined;
   return resolveAvailability ? await resolveAvailability(deviceId) : { available: false };
+}
+
+export function deviceUnavailableText(deviceId: string, availability: DeviceWorkerAvailability) {
+  if (availability.issue) {
+    return formatNodeRunnerUpdateRequired(deviceId, availability.issue);
+  }
+  switch (availability.unavailableReason) {
+    case "unpaired":
+      return `device worker is not a paired node host: ${deviceId}`;
+    case "disconnected":
+      return `device worker node is not connected: ${deviceId}; reconnect it before retrying`;
+    case "at-capacity":
+      return `device worker is at capacity (all worker slots in use): ${deviceId}; retry after a running turn completes`;
+    default:
+      return `device worker availability is unknown: ${deviceId}; verify the node host is paired and connected, then retry`;
+  }
 }
 
 export function bindDeviceWorkerReconciliation(
@@ -73,7 +89,7 @@ function requireDeviceId(profile: WorkerProfile): string {
 }
 
 function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerRuns !== undefined;
+  return node.workerHost.capacity === "available";
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
@@ -105,7 +121,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       options.getPairedDevice(deviceId),
       findConnectedNode(deviceId),
     ]);
-    // NodeWorkerSupervisorNodeProof.workerRuns is omitted while a connected node is at capacity.
+    // Connected hosts remain discoverable while full; capacity gates only new leases.
     const unavailableReason = !hasPairedNodeRole(paired)
       ? "unpaired"
       : !connected
@@ -122,25 +138,13 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   };
   const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
+    supportedExecutionModes: ["worker-turn"],
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);
       const availability = await resolveAvailability(deviceId);
       if (!availability.available) {
-        if (availability.issue) {
-          throw new WorkerProviderError(
-            formatNodeRunnerUpdateRequired(deviceId, availability.issue),
-          );
-        }
-        if (availability.unavailableReason === "unpaired") {
-          throw new WorkerProviderError(`device worker is not a paired node host: ${deviceId}`);
-        }
-        if (availability.unavailableReason === "disconnected") {
-          throw new WorkerProviderError(`device worker node is not connected: ${deviceId}`);
-        }
-        throw new WorkerProviderError(
-          `device worker is at capacity (all worker slots in use): ${deviceId}; retry after a running turn completes`,
-        );
+        throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
       }
       return {
         leaseId: deviceLeaseId(deviceId, operationId),

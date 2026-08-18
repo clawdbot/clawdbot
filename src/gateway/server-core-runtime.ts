@@ -151,6 +151,7 @@ export async function startGatewayCoreRuntime(input: {
     broadcastPluginEvent,
     activateRuntimeSecrets,
     residentRegistry,
+    shutdownRuntime,
   } = runtime;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
@@ -234,8 +235,7 @@ export async function startGatewayCoreRuntime(input: {
     stop: async () => {
       const earlyRuntime = await startEarlyRuntime();
       earlyRuntime.skillsChangeUnsub();
-      const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
-      stopTaskRegistryMaintenance();
+      shutdownRuntime.stopTaskRegistryMaintenance();
     },
   });
   const earlyRuntime = await startupTrace.measure("runtime.early", () =>
@@ -410,7 +410,8 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
         (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (descriptor.name !== "desktop.launch" &&

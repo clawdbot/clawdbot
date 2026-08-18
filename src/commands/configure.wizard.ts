@@ -8,12 +8,14 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -44,6 +46,7 @@ import { healthCommand } from "./health.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -62,6 +65,7 @@ import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
+type GatewayHealthCheckOutcome = "succeeded" | "failed" | "skipped";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
@@ -101,7 +105,7 @@ async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   port: number;
-}): Promise<boolean> {
+}): Promise<GatewayHealthCheckOutcome> {
   const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
     port: params.port,
@@ -143,7 +147,7 @@ async function runGatewayHealthCheck(params: {
       // A failed ref does not invalidate a resolved sibling config credential.
       // Skip only when generic health auth could otherwise recover ambient auth.
       if (!hasResolvedRemoteAuth) {
-        return false;
+        return "skipped";
       }
     }
     ({ token, password } = remoteProbeAuth.auth);
@@ -164,14 +168,16 @@ async function runGatewayHealthCheck(params: {
     password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
   }
 
-  await waitForGatewayReachable({
-    url: wsUrl,
-    token,
-    password,
-    deadlineMs: 15_000,
-  });
-
   try {
+    const gatewayProbe = await waitForGatewayReachable({
+      url: wsUrl,
+      token,
+      password,
+      deadlineMs: 15_000,
+    });
+    if (!gatewayProbe.ok) {
+      throw new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${wsUrl}`);
+    }
     await healthCommand(
       {
         json: false,
@@ -195,8 +201,9 @@ async function runGatewayHealthCheck(params: {
       ].join("\n"),
       "Health check help",
     );
+    return "failed";
   }
-  return true;
+  return "succeeded";
 }
 
 async function promptConfigureSection(
@@ -573,15 +580,17 @@ export async function runConfigureWizard(
       remoteConfig = committed.config;
       logConfigUpdated(runtime);
       if (selectedSections?.includes("health")) {
-        const healthCheckAttempted = await runGatewayHealthCheck({
+        const healthCheckOutcome = await runGatewayHealthCheck({
           cfg: remoteConfig,
           runtime,
           port: resolveGatewayPort(remoteConfig),
         });
         outro(
-          healthCheckAttempted
+          healthCheckOutcome === "succeeded"
             ? "Remote gateway configured and health check completed."
-            : "Remote gateway configured; health check skipped.",
+            : healthCheckOutcome === "failed"
+              ? "Remote gateway configured, but health check failed."
+              : "Remote gateway configured; health check skipped.",
         );
       } else {
         outro("Remote gateway configured.");
@@ -602,7 +611,12 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    // Configure keeps legacy default-owner semantics; only explicit fleets opt into
+    // the System Agent target used unconditionally by setup and recovery callers.
+    const resolveSetupTarget = () =>
+      nextConfig.agents?.ownership === "explicit"
+        ? resolveSystemAgentOnboardingTarget(nextConfig)
+        : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
     let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
@@ -659,16 +673,24 @@ export async function runConfigureWizard(
         }
       }
       const target = resolveSetupTarget();
-      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
+        (key) => normalizeAgentId(key) === target.agentId,
+      );
+      const targetEntry = authoredEntryKey
+        ? nextConfig.agents?.entries?.[authoredEntryKey]
+        : undefined;
+      // Explicit fleets own workspace at the selected entry even when it inherited
+      // the global default; legacy owners stay global until they author an override.
       nextConfig =
-        targetEntry?.workspace !== undefined
+        targetEntry?.workspace !== undefined ||
+        (nextConfig.agents?.ownership === "explicit" && targetEntry !== undefined)
           ? {
               ...nextConfig,
               agents: {
                 ...nextConfig.agents,
                 entries: {
                   ...nextConfig.agents?.entries,
-                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                  [authoredEntryKey ?? target.agentId]: { ...targetEntry, workspace: workspaceDir },
                 },
               },
             }

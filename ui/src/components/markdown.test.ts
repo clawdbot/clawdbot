@@ -10,15 +10,6 @@ function htmlFragment(html: string): HTMLElement {
   return container;
 }
 
-function escapedCodeBlockCopyAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
   const testWindow = window as Window & typeof globalThis & { [key: string]: unknown };
   Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
@@ -353,16 +344,23 @@ describe("toSanitizedMarkdownHtml", () => {
     it("renders indented code blocks", () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");
-      expect(html).toBe(
-        `<p>text</p>\n<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("indented code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>indented code\n</code></pre></div>`,
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector("p")?.textContent).toBe("text");
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
+      expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe(
+        "indented code",
       );
     });
 
     it("includes copy button", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
-      expect(html).toBe(
-        `<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>`,
-      );
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
+      expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
+      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
     });
 
     it("omits copy chrome when rendering user-preserved code blocks", () => {
@@ -383,7 +381,8 @@ PY
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-copy")).toBeNull();
-      expect(fragment.textContent).toBe(source);
+      expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
+      expect(fragment.querySelector("pre code")?.textContent).toBe(source);
     });
 
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
@@ -425,6 +424,7 @@ PY
       i18n.registerTranslation("pt-BR", {
         chat: {
           codeBlock: {
+            languageFallback: "Código",
             jsonLines: "JSON · {count} linhas",
           },
         },
@@ -433,6 +433,8 @@ PY
       try {
         const fragment = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
         expect(fragment.querySelector("summary")?.textContent).toContain("JSON · 41 linhas");
+        const unlabeled = htmlFragment(toSanitizedMarkdownHtml("```\nconteúdo\n```"));
+        expect(unlabeled.querySelector(".code-block-lang")?.textContent).toBe("Código");
       } finally {
         await i18n.setLocale("en");
       }
@@ -635,9 +637,7 @@ PY
 
     it("keeps app-relative links navigable", () => {
       const html = toSanitizedMarkdownHtml("[usage](/usage)");
-      expect(html).toBe(
-        '<p><a href="/usage" rel="noreferrer noopener" target="_blank">usage</a></p>\n',
-      );
+      expect(html).toBe('<p><a href="/usage">usage</a></p>\n');
     });
 
     it("rewrites docs-root links to the public docs host", () => {
@@ -656,7 +656,7 @@ PY
         ),
       );
       expect(html).toBe(
-        '<p><a href="/channels" rel="noreferrer noopener" target="_blank">channels</a> <a href="/automation" rel="noreferrer noopener" target="_blank">automation</a> <a href="/skills/workshop" rel="noreferrer noopener" target="_blank">workshop</a> <a href="/chat" rel="noreferrer noopener" target="_blank">chat</a> <a href="/control/chat/main" rel="noreferrer noopener" target="_blank">baseChat</a> <a href="/control/sessions" rel="noreferrer noopener" target="_blank">baseSessions</a> <a href="/healthz" rel="noreferrer noopener" target="_blank">health</a> <a href="/googlechat" rel="noreferrer noopener" target="_blank">pluginDynamic</a> <a href="/api/files/1" rel="noreferrer noopener" target="_blank">asset</a> <a href="/control/api/files/1" rel="noreferrer noopener" target="_blank">baseApi</a> <a href="/control/avatar/main" rel="noreferrer noopener" target="_blank">baseAvatar</a> <a href="/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">plugin</a> <a href="/control/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">basePlugin</a> <a href="/__openclaw__/canvas/documents/x/index.html" rel="noreferrer noopener" target="_blank">artifact</a> <a href="/control/__openclaw__/canvas/x" rel="noreferrer noopener" target="_blank">baseArtifact</a></p>\n',
+        '<p><a href="/channels">channels</a> <a href="/automation">automation</a> <a href="/skills/workshop">workshop</a> <a href="/chat">chat</a> <a href="/control/chat/main">baseChat</a> <a href="/control/sessions">baseSessions</a> <a href="/healthz" rel="noreferrer noopener" target="_blank">health</a> <a href="/googlechat" rel="noreferrer noopener" target="_blank">pluginDynamic</a> <a href="/api/files/1" rel="noreferrer noopener" target="_blank">asset</a> <a href="/control/api/files/1" rel="noreferrer noopener" target="_blank">baseApi</a> <a href="/control/avatar/main" rel="noreferrer noopener" target="_blank">baseAvatar</a> <a href="/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">plugin</a> <a href="/control/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">basePlugin</a> <a href="/__openclaw__/canvas/documents/x/index.html" rel="noreferrer noopener" target="_blank">artifact</a> <a href="/control/__openclaw__/canvas/x" rel="noreferrer noopener" target="_blank">baseArtifact</a></p>\n',
       );
     });
   });

@@ -1,19 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  claimExecApprovalFollowupRuntimeHandoff,
-  finalizeExecApprovalFollowupRuntimeHandoff,
-  releaseExecApprovalFollowupRuntimeHandoff,
-} from "../../agents/bash-tools.exec-approval-followup-state.js";
-import {
-  buildExecApprovalContinuationPrompt,
-  EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
-  type ExecApprovalContinuationPromptRange,
-} from "../../agents/bash-tools.exec-approval-output.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -38,24 +26,16 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import {
-  buildRunUserTurnIdempotencyKey,
-  createUserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
-import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import {
-  clientHasAdminScope,
-  shouldSuppressAgentPromptPersistence,
   yieldAfterAgentAcceptedAck,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
@@ -64,10 +44,16 @@ import {
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
+import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
+import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import {
+  finalizePreparedAgentRunUserTurn,
+  releasePreparedAgentRunUserTurn,
+} from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export function startAgentRunExecution(params: {
@@ -79,7 +65,6 @@ export function startAgentRunExecution(params: {
   sessionEntry?: SessionEntry;
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
-  requestedSessionKeyRaw?: string;
   resolvedSessionId?: string;
   agentId?: string;
   activeSessionAgentId: string;
@@ -89,14 +74,11 @@ export function startAgentRunExecution(params: {
   isOneShotModelRun: boolean;
   isRestartRecoveryResumeRun: boolean;
   suppressVisibleSessionEffects: boolean;
-  message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
-  effectiveTranscriptInputText: string;
   inputProvenance?: InputProvenance;
   runId: string;
-  idempotencyKey: string;
   agentDedupeKeys: readonly string[];
   spawnedBy?: string;
   groupId?: string;
@@ -105,13 +87,11 @@ export function startAgentRunExecution(params: {
   bestEffortDeliver: boolean;
   lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
-  requestedPromptPersistenceSuppression: boolean;
   preserveUserFacingSessionModelState: boolean;
   sessionEffects?: "visible" | "internal";
   skipAgentInitialSessionTouch: boolean;
   restoredCronContinuation?: RestoredCronContinuation;
   canUseInternalRuntimeHandoff: boolean;
-  execApprovalFollowupApprovalId?: string;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
   io: AgentTurnIo;
@@ -131,8 +111,6 @@ export function startAgentRunExecution(params: {
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
-    const execApprovalFollowupHandoffClaimId = randomUUID();
-    let claimedExecApprovalFollowupHandoffId: string | undefined;
     let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -163,52 +141,11 @@ export function startAgentRunExecution(params: {
         return;
       }
 
-      let execApprovalFollowupRuntimeHandoff =
-        params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-          ? claimExecApprovalFollowupRuntimeHandoff({
-              handoffId: params.request.internalRuntimeHandoffId,
-              approvalId: params.execApprovalFollowupApprovalId,
-              idempotencyKey: params.idempotencyKey,
-              sessionKey: params.resolvedSessionKey,
-              claimId: execApprovalFollowupHandoffClaimId,
-            })
-          : undefined;
-      if (
-        !execApprovalFollowupRuntimeHandoff &&
-        params.canUseInternalRuntimeHandoff &&
-        params.execApprovalFollowupApprovalId &&
-        params.requestedSessionKeyRaw &&
-        params.requestedSessionKeyRaw !== params.resolvedSessionKey
-      ) {
-        execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
-          handoffId: params.request.internalRuntimeHandoffId,
-          approvalId: params.execApprovalFollowupApprovalId,
-          idempotencyKey: params.idempotencyKey,
-          sessionKey: params.requestedSessionKeyRaw,
-          claimId: execApprovalFollowupHandoffClaimId,
-        });
-      }
-      if (execApprovalFollowupRuntimeHandoff) {
-        claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
-      }
-
-      let message = params.message;
-      let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
-      let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
-      let execApprovalContinuationTranscriptPromptRange:
-        | ExecApprovalContinuationPromptRange
-        | undefined;
-      if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
-        const continuation = buildExecApprovalContinuationPrompt(
-          execApprovalFollowupRuntimeHandoff.resultText,
-        );
-        message = continuation.message;
-        effectiveTranscriptInputText = continuation.message;
-        execApprovalContinuationPromptRange = continuation.resultRange;
-        execApprovalContinuationTranscriptPromptRange = continuation.resultRange;
-      } else if (message === EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE) {
-        throw new Error("exec approval followup runtime handoff is unavailable");
-      }
+      let message = prepared.userTurn.message;
+      let execApprovalContinuationPromptRange =
+        prepared.userTurn.execApprovalContinuationPromptRange;
+      const execApprovalContinuationTranscriptPromptRange =
+        prepared.userTurn.execApprovalContinuationTranscriptPromptRange;
 
       if (!params.isOneShotModelRun && params.resolvedSessionKey) {
         await reactivateCompletedSubagentSession({
@@ -251,68 +188,8 @@ export function startAgentRunExecution(params: {
           };
         }
       }
-      const senderIsOwner = params.restoredCronContinuation
-        ? true
-        : clientHasAdminScope(params.client);
-      const userTurnTranscriptRecorder =
-        params.resolvedSessionKey &&
-        params.resolvedSessionId &&
-        !params.suppressVisibleSessionEffects &&
-        params.images.length === 0 &&
-        params.imageOrder.length === 0
-          ? createUserTurnTranscriptRecorder({
-              input: {
-                text: effectiveTranscriptInputText,
-                timestamp: Date.now(),
-                idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
-                ...gatewayClientSenderFields(params.client),
-                senderIsOwner,
-                ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
-              },
-              target: () => {
-                const loaded = loadSessionEntry(params.resolvedSessionKey!, {
-                  ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
-                  clone: false,
-                });
-                const loadedEntry = loaded.entry;
-                const loadedSessionId = loadedEntry?.sessionId?.trim();
-                if (loadedSessionId && loadedSessionId !== params.resolvedSessionId) {
-                  return undefined;
-                }
-                const latestEntry = loadedSessionId
-                  ? loadedEntry
-                  : params.sessionEntry?.sessionId?.trim() === params.resolvedSessionId
-                    ? params.sessionEntry
-                    : {
-                        sessionId: params.resolvedSessionId!,
-                        updatedAt: Date.now(),
-                      };
-                if (!latestEntry) {
-                  return undefined;
-                }
-                return {
-                  sessionId: latestEntry.sessionId,
-                  sessionKey: params.resolvedSessionKey!,
-                  sessionEntry: latestEntry,
-                  sessionStore: loaded.store,
-                  storePath: loaded.storePath,
-                  agentId: params.activeSessionAgentId,
-                  cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
-                  ...(prepared.resolvedThreadId != null
-                    ? { threadId: prepared.resolvedThreadId }
-                    : {}),
-                  config: params.cfgForAgent ?? params.cfg,
-                };
-              },
-              errorContext: "gateway agent user turn transcript",
-              beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-              onPersistenceError: (error) => {
-                params.context.logGateway.warn(
-                  `gateway agent user transcript persistence failed: ${formatForLog(error)}`,
-                );
-              },
-            })
-          : undefined;
+      const senderIsOwner = prepared.userTurn.senderIsOwner;
+      const userTurnTranscriptRecorder = prepared.userTurn.recorder;
 
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
@@ -332,6 +209,12 @@ export function startAgentRunExecution(params: {
         runId: params.runId,
         sessionEntry: params.sessionEntry,
       });
+      const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+      const executionIdentitySpawnFacts =
+        agentRuntimeIdentity &&
+        params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
+          ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
+          : undefined;
       const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
         canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
         expectedExistingSessionId: params.request.expectedExistingSessionId,
@@ -363,162 +246,163 @@ export function startAgentRunExecution(params: {
       if (localUserIngress) {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
-      dispatchAgentRunFromGateway({
-        cronCreatorAuthority: prepared.cronCreatorAuthority,
-        ingressOpts: {
-          message,
-          images: params.images,
-          imageOrder: params.imageOrder,
-          media: params.media,
-          agentId: ingressAgentId,
-          provider: prepared.effectiveProviderOverride,
-          model: prepared.effectiveModelOverride,
-          to: params.delivery.resolvedTo,
-          sessionId: params.resolvedSessionId,
-          sessionKey: params.resolvedSessionKey,
-          thinking: prepared.effectiveThinking,
-          deliver: params.delivery.deliver,
-          deliveryTargetMode: params.delivery.deliveryTargetMode,
-          channel: params.delivery.resolvedChannel,
-          accountId: params.delivery.resolvedAccountId,
-          threadId: prepared.resolvedThreadId,
-          runContext,
-          ...(execApprovalFollowupRuntimeHandoff?.bashElevated
-            ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
-            : {}),
-          ...(execApprovalContinuationPromptRange ? { execApprovalContinuationPromptRange } : {}),
-          ...(execApprovalContinuationTranscriptPromptRange
-            ? { execApprovalContinuationTranscriptPromptRange }
-            : {}),
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          timeout: params.request.timeout?.toString(),
-          bestEffortDeliver: params.bestEffortDeliver,
-          messageChannel: params.delivery.originMessageChannel,
-          runId: params.runId,
-          lane: params.request.lane,
-          modelRun: params.request.modelRun === true,
-          promptMode: params.request.promptMode,
-          extraSystemPrompt: params.request.extraSystemPrompt,
-          bootstrapContextMode: params.request.bootstrapContextMode,
-          bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-          toolsAllow: params.restoredCronContinuation?.toolsAllow,
-          runtimePluginToolGrant,
-          trustedInternalHandoff: prepared.trustedInternalHandoff,
-          toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
-          scheduledToolPolicy: params.restoredCronContinuation
-            ? resolveScheduledToolPolicyContext({
-                toolsAllow: params.restoredCronContinuation.toolsAllow,
-                scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
-                callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
-              })
-            : undefined,
-          requireExplicitMessageTarget:
-            params.restoredCronContinuation?.cliSessionBindingFacts?.requireExplicitMessageTarget,
-          cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
-          acpTurnSource: params.request.acpTurnSource,
-          internalEvents: params.request.internalEvents,
-          inputProvenance: params.inputProvenance,
-          senderIsOwner,
-          sessionEffects: params.sessionEffects,
-          skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
-          preserveUserFacingSessionModelState:
-            params.preserveUserFacingSessionModelState && !params.restoredCronContinuation,
-          sourceReplyDeliveryMode: params.restoredCronContinuation
-            ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
-            : params.request.sourceReplyDeliveryMode,
-          disableMessageTool: params.request.disableMessageTool,
-          swarmCollector: params.request.swarmCollector,
-          swarmOutputSchema: params.request.swarmOutputSchema,
-          forceRestartSafeTools: params.request.forceRestartSafeTools,
-          forceCodeModeTools: params.request.forceCodeModeTools,
-          ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
-          operationalRunInstance: prepared.operationalRunInstance,
-          onAdmittedRunContext: (admittedRunContext) => {
-            const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
-            if (!authority) {
-              throw new Error("agent run delegated authority was not admitted");
-            }
-            // Sessionless runs intentionally have no abort-map owner. Their
-            // prepared admission retains authority until agentCommand closes it.
-            if (prepared.activeRunAbort.registered) {
-              prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
-            }
-          },
-          internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
-          internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
-          suppressPromptPersistence:
-            params.requestedPromptPersistenceSuppression ||
-            shouldSuppressAgentPromptPersistence({
-              inputProvenance: params.inputProvenance,
+      finalizePreparedAgentRunUserTurn(prepared.userTurn);
+      dispatchAgentRunFromGateway(
+        withAgentRunDispatchExecutionIdentity(
+          {
+            cronCreatorAuthority: prepared.cronCreatorAuthority,
+            ingressOpts: {
+              message,
+              images: params.images,
+              imageOrder: params.imageOrder,
+              media: params.media,
+              agentId: ingressAgentId,
+              provider: prepared.effectiveProviderOverride,
+              model: prepared.effectiveModelOverride,
+              to: params.delivery.resolvedTo,
+              sessionId: params.resolvedSessionId,
+              sessionKey: params.resolvedSessionKey,
+              thinking: prepared.effectiveThinking,
+              deliver: params.delivery.deliver,
+              deliveryTargetMode: params.delivery.deliveryTargetMode,
+              channel: params.delivery.resolvedChannel,
+              accountId: params.delivery.resolvedAccountId,
+              threadId: prepared.resolvedThreadId,
+              runContext,
+              ...(prepared.userTurn.bashElevated
+                ? { bashElevated: prepared.userTurn.bashElevated }
+                : {}),
+              ...(execApprovalContinuationPromptRange
+                ? { execApprovalContinuationPromptRange }
+                : {}),
+              ...(execApprovalContinuationTranscriptPromptRange
+                ? { execApprovalContinuationTranscriptPromptRange }
+                : {}),
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              spawnedBy: params.spawnedBy,
+              timeout: params.request.timeout?.toString(),
+              bestEffortDeliver: params.bestEffortDeliver,
+              messageChannel: params.delivery.originMessageChannel,
+              runId: params.runId,
+              lane: params.request.lane,
+              modelRun: params.request.modelRun === true,
+              promptMode: params.request.promptMode,
+              extraSystemPrompt: params.request.extraSystemPrompt,
+              bootstrapContextMode: params.request.bootstrapContextMode,
+              bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
+              toolsAllow: params.restoredCronContinuation?.toolsAllow,
+              runtimePluginToolGrant,
+              trustedInternalHandoff: prepared.trustedInternalHandoff,
+              toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
+              scheduledToolPolicy: params.restoredCronContinuation
+                ? resolveScheduledToolPolicyContext({
+                    toolsAllow: params.restoredCronContinuation.toolsAllow,
+                    scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+                    callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
+                  })
+                : undefined,
+              requireExplicitMessageTarget:
+                params.restoredCronContinuation?.cliSessionBindingFacts
+                  ?.requireExplicitMessageTarget,
+              cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
+              acpTurnSource: params.request.acpTurnSource,
               internalEvents: params.request.internalEvents,
-            }),
-          userTurnTranscriptRecorder,
-          cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
-          abortSignal: prepared.activeRunAbort.controller.signal,
-          lifecycleGeneration: params.lifecycleGeneration,
-          onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
-          onActiveModelSelected: createAgentRunModelSelectionHandler({
-            context: params.context,
+              inputProvenance: params.inputProvenance,
+              senderIsOwner,
+              sessionEffects: params.sessionEffects,
+              skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
+              preserveUserFacingSessionModelState:
+                params.preserveUserFacingSessionModelState && !params.restoredCronContinuation,
+              sourceReplyDeliveryMode: params.restoredCronContinuation
+                ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
+                : params.request.sourceReplyDeliveryMode,
+              disableMessageTool: params.request.disableMessageTool,
+              swarmCollector: params.request.swarmCollector,
+              swarmOutputSchema: params.request.swarmOutputSchema,
+              forceRestartSafeTools: params.request.forceRestartSafeTools,
+              forceCodeModeTools: params.request.forceCodeModeTools,
+              ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+              operationalRunInstance: prepared.operationalRunInstance,
+              onAdmittedRunContext: (admittedRunContext) => {
+                const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+                if (!authority) {
+                  throw new Error("agent run delegated authority was not admitted");
+                }
+                // Sessionless runs intentionally have no abort-map owner. Their
+                // prepared admission retains authority until agentCommand closes it.
+                if (prepared.activeRunAbort.registered) {
+                  prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+                }
+              },
+              internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
+              internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
+              suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
+              userTurnTranscriptRecorder,
+              cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
+              abortSignal: prepared.activeRunAbort.controller.signal,
+              lifecycleGeneration: params.lifecycleGeneration,
+              onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
+              onActiveModelSelected: createAgentRunModelSelectionHandler({
+                context: params.context,
+                runId: params.runId,
+                cfg: params.cfg,
+                cfgForAgent: params.cfgForAgent,
+                restoredCronContinuationLifecycleRevision:
+                  prepared.restoredCronContinuationLifecycleRevision,
+                resolvedSessionKey: params.resolvedSessionKey,
+                lifecycleStorePath: prepared.lifecycleStorePath,
+                activeSessionAgentId: params.activeSessionAgentId,
+                trustedInternalHandoff: prepared.trustedInternalHandoff,
+              }),
+              onSessionIdChanged: (sessionId) => {
+                if (prepared.activeRunAbort.entry) {
+                  prepared.activeRunAbort.entry.sessionId = sessionId;
+                }
+              },
+              workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
+                spawnedBy: params.spawnedBy,
+                workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
+                cwd: params.sessionEntry?.spawnedCwd,
+              }),
+              cwd: resolveSessionRuntimeCwd({
+                requestedCwd: params.request.cwd,
+                sessionEntry: params.sessionEntry,
+              }),
+              allowGatewaySubagentBinding: true,
+              ...(params.mainRestartRecoveryOwnerLease
+                ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
+                : {}),
+              ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
+              ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
+                ? {
+                    mainRestartRecoveryAttempt:
+                      params.request.internalExecutionIdentityRecoveryAttempt,
+                  }
+                : {}),
+              allowModelOverride: prepared.effectiveAllowModelOverride,
+            },
             runId: params.runId,
-            cfg: params.cfg,
-            cfgForAgent: params.cfgForAgent,
-            restoredCronContinuationLifecycleRevision:
-              prepared.restoredCronContinuationLifecycleRevision,
-            resolvedSessionKey: params.resolvedSessionKey,
-            lifecycleStorePath: prepared.lifecycleStorePath,
-            activeSessionAgentId: params.activeSessionAgentId,
-            trustedInternalHandoff: prepared.trustedInternalHandoff,
-          }),
-          onSessionIdChanged: (sessionId) => {
-            if (prepared.activeRunAbort.entry) {
-              prepared.activeRunAbort.entry.sessionId = sessionId;
-            }
+            dedupeKeys: params.agentDedupeKeys,
+            abortController: prepared.activeRunAbort.controller,
+            cleanupAbortController: cleanupAdmittedRun,
+            onSettled: params.restoredCronContinuation
+              ? async ({ terminalOutcome, onRecovered }) =>
+                  await params.releaseCronContinuationClaimWithRecovery(
+                    { terminalOutcome },
+                    onRecovered,
+                  )
+              : undefined,
+            io: params.io,
+            context: params.context,
+            taskTrackingMode: prepared.dispatchTaskTrackingMode,
+            restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
           },
-          workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
-            spawnedBy: params.spawnedBy,
-            workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
-            cwd: params.sessionEntry?.spawnedCwd,
-          }),
-          cwd: resolveSessionRuntimeCwd({
-            requestedCwd: params.request.cwd,
-            sessionEntry: params.sessionEntry,
-          }),
-          allowGatewaySubagentBinding: true,
-          ...(params.mainRestartRecoveryOwnerLease
-            ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
-            : {}),
-          ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
-          ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
-            ? {
-                mainRestartRecoveryAttempt: params.request.internalExecutionIdentityRecoveryAttempt,
-              }
-            : {}),
-          allowModelOverride: prepared.effectiveAllowModelOverride,
-        },
-        runId: params.runId,
-        dedupeKeys: params.agentDedupeKeys,
-        abortController: prepared.activeRunAbort.controller,
-        cleanupAbortController: cleanupAdmittedRun,
-        onSettled: params.restoredCronContinuation
-          ? async ({ terminalOutcome, onRecovered }) =>
-              await params.releaseCronContinuationClaimWithRecovery(
-                { terminalOutcome },
-                onRecovered,
-              )
-          : undefined,
-        io: params.io,
-        context: params.context,
-        taskTrackingMode: prepared.dispatchTaskTrackingMode,
-        restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
-      });
+          executionIdentitySpawnFacts,
+        ),
+      );
       dispatched = true;
-      finalizeExecApprovalFollowupRuntimeHandoff({
-        handoffId: claimedExecApprovalFollowupHandoffId,
-        claimId: execApprovalFollowupHandoffClaimId,
-      });
     } catch (err) {
       const renderedErr = formatErrorMessageWithCode(err);
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
@@ -538,10 +422,7 @@ export function startAgentRunExecution(params: {
       });
     } finally {
       if (!dispatched) {
-        releaseExecApprovalFollowupRuntimeHandoff({
-          handoffId: claimedExecApprovalFollowupHandoffId,
-          claimId: execApprovalFollowupHandoffClaimId,
-        });
+        releasePreparedAgentRunUserTurn(prepared.userTurn);
         try {
           const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
           if (restoreAdmittedRecovery) {

@@ -10,6 +10,81 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 describe("sessions tool self-archive", () => {
+  it("returns success before a detached dynamic-tool self-archive commits", async () => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-detached-archive-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = "agent:main:detached-self-archive";
+      const sessionId = "session-detached-self-archive";
+      const config: OpenClawConfig = { session: { store: storePath } };
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId, updatedAt: 1 },
+      );
+      const runAbort = new AbortController();
+      const callGateway = vi.fn(async () => {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId, updatedAt: 2, archivedAt: Date.now() },
+        );
+        runAbort.abort(new Error("archive stopped the active turn"));
+        return { ok: true };
+      });
+      const tool = createSessionsTool({
+        agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
+        config,
+        callGateway: callGateway as never,
+      });
+      const admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        assertAllowed: () => {},
+      });
+
+      try {
+        const projected = await Promise.race([
+          tool.execute("archive-current", { action: "patch", archived: true }).then((result) => ({
+            success: true as const,
+            result,
+          })),
+          new Promise<{ success: false }>((resolve) => {
+            runAbort.signal.addEventListener("abort", () => resolve({ success: false }), {
+              once: true,
+            });
+          }),
+        ]);
+
+        expect(projected.success).toBe(true);
+        if (projected.success) {
+          expect(projected.result.details).toMatchObject({
+            status: "scheduled",
+            sessionKey,
+          });
+        }
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
+          "archivedAt",
+        );
+      } finally {
+        admission.release();
+      }
+
+      await vi.waitFor(() => {
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
+        });
+        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toHaveProperty(
+          "archivedAt",
+        );
+      });
+    });
+  });
+
   it("defers self-archiving until the current agent turn has completed", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-self-archive-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

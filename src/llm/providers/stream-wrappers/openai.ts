@@ -1,4 +1,6 @@
 import {
+  codeModeToolSurfaceObserver,
+  type CodeModeToolSurfaceObservation,
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
@@ -6,12 +8,8 @@ import {
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
   readCodeModePayloadToolName,
-} from "@openclaw/ai/transports";
-import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
-} from "@openclaw/ai/transports";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
@@ -37,6 +35,10 @@ import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  isCodeModeDiagnosticEnabled,
+  logCodeModeDiagnostic,
+} from "../../../logging/code-mode-diagnostic.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
@@ -140,9 +142,10 @@ function filterCodeModePayloadHookResult(
   nextPayload: unknown,
   visibleToolNames: ReadonlySet<string>,
   allowedHostedToolTypes: ReadonlySet<string>,
+  observer?: (observation: CodeModeToolSurfaceObservation) => void,
 ): unknown {
   const finalPayload = nextPayload === undefined ? payload : nextPayload;
-  filterCodeModePayloadTools(finalPayload, visibleToolNames, allowedHostedToolTypes);
+  filterCodeModePayloadTools(finalPayload, visibleToolNames, allowedHostedToolTypes, observer);
   return nextPayload === undefined ? undefined : finalPayload;
 }
 
@@ -660,6 +663,44 @@ export function createCodexNativeWebSearchWrapper(
         );
       }
       const originalOnPayload = options?.onPayload;
+      const codeModeDiagnosticsEnabled = isCodeModeDiagnosticEnabled();
+      const existingToolSurfaceObserver = codeModeToolSurfaceObserver.get(options);
+      const existingToolSurfaceCollector = codeModeToolSurfaceObserver.getCollector(options);
+      const observedBeforeToolIdentities = new Set<string>();
+      const collectToolSurface =
+        existingToolSurfaceCollector ??
+        (codeModeDiagnosticsEnabled
+          ? ({ beforeToolIdentities }: CodeModeToolSurfaceObservation) => {
+              for (const identity of beforeToolIdentities) {
+                observedBeforeToolIdentities.add(identity);
+              }
+            }
+          : undefined);
+      let diagnosticEmitted = false;
+      const observeToolSurface =
+        existingToolSurfaceObserver ??
+        (codeModeDiagnosticsEnabled
+          ? ({ beforeToolIdentities, afterToolIdentities }: CodeModeToolSurfaceObservation) => {
+              for (const identity of beforeToolIdentities) {
+                observedBeforeToolIdentities.add(identity);
+              }
+              if (diagnosticEmitted) {
+                return;
+              }
+              diagnosticEmitted = true;
+              const retained = new Set(afterToolIdentities);
+              const allBeforeToolIdentities = [...observedBeforeToolIdentities];
+              logCodeModeDiagnostic(log, "provider-tool-surface", {
+                provider: readStringValue(model.provider),
+                model: readStringValue(model.id),
+                beforeToolIdentities: allBeforeToolIdentities,
+                afterToolIdentities,
+                removedToolIdentities: allBeforeToolIdentities.filter(
+                  (identity) => !retained.has(identity),
+                ),
+              });
+            }
+          : undefined);
       const codeModeOptions: OpenClawSimpleStreamOptions = {
         ...options,
         openclawCodeModeToolSurface: true,
@@ -668,7 +709,13 @@ export function createCodexNativeWebSearchWrapper(
           if (activation?.state === "native_active") {
             patchCodexNativeWebSearchPayload({ payload, config: params.config });
           }
-          filterCodeModePayloadTools(payload, codeModeVisibleToolNames, allowedHostedToolTypes);
+          filterCodeModePayloadHookResult(
+            payload,
+            undefined,
+            codeModeVisibleToolNames,
+            allowedHostedToolTypes,
+            collectToolSurface,
+          );
           const nextPayload = originalOnPayload?.(payload, model);
           if (isPromiseLike(nextPayload)) {
             return Promise.resolve(nextPayload).then((resolvedPayload) =>
@@ -677,6 +724,7 @@ export function createCodexNativeWebSearchWrapper(
                 resolvedPayload,
                 codeModeVisibleToolNames,
                 allowedHostedToolTypes,
+                observeToolSurface,
               ),
             );
           }
@@ -685,9 +733,13 @@ export function createCodexNativeWebSearchWrapper(
             nextPayload,
             codeModeVisibleToolNames,
             allowedHostedToolTypes,
+            observeToolSurface,
           );
         },
       };
+      if (observeToolSurface && !existingToolSurfaceObserver) {
+        codeModeToolSurfaceObserver.set(codeModeOptions, observeToolSurface, collectToolSurface);
+      }
       return underlying(model, context, codeModeOptions);
     }
 

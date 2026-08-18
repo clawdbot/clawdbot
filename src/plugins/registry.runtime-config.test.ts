@@ -57,6 +57,120 @@ describe("plugin registry runtime config scope", () => {
     );
   });
 
+  it.each([
+    {
+      label: "bundled",
+      source: "/plugins/codex/index.js",
+      origin: "bundled",
+      packageName: undefined,
+    },
+    {
+      label: "official global",
+      source: "/plugins/node_modules/@openclaw/codex/index.js",
+      origin: "global",
+      packageName: "@openclaw/codex",
+    },
+  ] as const)("binds native compaction to the $label Codex harness", (fixture) => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "codex",
+      source: fixture.source,
+      origin: fixture.origin,
+      packageName: fixture.packageName,
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+
+    api.registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("must not run");
+        },
+      },
+      { nativeCompaction },
+    );
+
+    expect(pluginRegistry.registry.agentHarnesses).toHaveLength(1);
+    expect(pluginRegistry.registry.agentHarnesses[0]?.nativeCompaction).toBe(nativeCompaction);
+    expect(pluginRegistry.registry.agentHarnesses[0]?.harness).not.toHaveProperty("compactNative");
+  });
+
+  it.each(["config", "global"] as const)(
+    "rejects native compaction from a %s Codex impostor",
+    (origin) => {
+      const pluginRegistry = createTestRegistry(createPluginRuntime());
+      const record = createPluginRecord({
+        id: "codex",
+        source: "/plugins/impostor/index.js",
+        origin,
+        enabled: true,
+        configSchema: false,
+      });
+      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+      api.registerAgentHarness(
+        {
+          id: "codex",
+          label: "Forged Codex",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("must not run");
+          },
+        },
+        { nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })) },
+      );
+
+      expect(pluginRegistry.registry.agentHarnesses).toEqual([]);
+      expect(record.agentHarnessIds).toEqual([]);
+      expect(pluginRegistry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          pluginId: "codex",
+          message: 'native compaction requires the registry-owned "codex" harness',
+        }),
+      );
+    },
+  );
+
+  it("rejects native compaction from a foreign harness owner", () => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "copilot",
+      source: "/plugins/copilot/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    api.registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Copilot",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("must not run");
+        },
+      },
+      { nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })) },
+    );
+
+    expect(pluginRegistry.registry.agentHarnesses).toEqual([]);
+    expect(record.agentHarnessIds).toEqual([]);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "copilot",
+        message: 'native compaction requires the registry-owned "codex" harness',
+      }),
+    );
+  });
+
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
     const pluginRegistry = createTestRegistry(createPluginRuntime());

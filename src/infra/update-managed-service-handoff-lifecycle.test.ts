@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -44,6 +44,20 @@ function createSpawnMock(params?: { pid?: number }) {
 
 function signalHandoffReady(child: ReturnType<typeof createSpawnMock>): void {
   child.stdout.write("OPENCLAW_UPDATE_HANDOFF_READY\n");
+}
+
+async function waitForHandoffReady(output: Readable | null): Promise<void> {
+  if (!output) {
+    throw new Error("expected managed handoff helper stdout");
+  }
+  let buffered = "";
+  for await (const chunk of output) {
+    buffered = `${buffered}${chunk.toString()}`.slice(-1024);
+    if (buffered.includes("OPENCLAW_UPDATE_HANDOFF_READY\n")) {
+      return;
+    }
+  }
+  throw new Error("managed handoff helper exited before readiness");
 }
 
 vi.mock("node:child_process", async () => {
@@ -300,7 +314,10 @@ async function runHelperWithCommand(params: {
   parentExitTimeoutMs?: number | null;
   serviceRecovery?: Record<string, unknown>;
   pathPrepend?: string;
-}): Promise<{ code: number }> {
+}): Promise<{
+  ready: Promise<void>;
+  completion: Promise<{ code: number }>;
+}> {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
@@ -353,12 +370,19 @@ async function runHelperWithCommand(params: {
       ? { PATH: `${params.pathPrepend}${path.delimiter}${process.env.PATH ?? ""}` }
       : {}),
   };
-  return await new Promise<{ code: number }>((resolve) => {
-    execFile(process.execPath, [helperScriptPath, helperParamsPath], { env: childEnv }, (err) => {
-      const childError = err as NodeJS.ErrnoException | null;
-      resolve({ code: typeof childError?.code === "number" ? childError.code : 0 });
-    });
+  let child!: ReturnType<typeof execFile>;
+  const completion = new Promise<{ code: number }>((resolve) => {
+    child = execFile(
+      process.execPath,
+      [helperScriptPath, helperParamsPath],
+      { env: childEnv },
+      (err) => {
+        const childError = err as NodeJS.ErrnoException | null;
+        resolve({ code: typeof childError?.code === "number" ? childError.code : 0 });
+      },
+    );
   });
+  return { ready: waitForHandoffReady(child.stdout), completion };
 }
 
 async function writeFakeSystemctl(): Promise<{ binDir: string; recordPath: string }> {
@@ -642,11 +666,12 @@ describe("managed service update handoff", () => {
     "starts the managed gateway service when the update command fails after handoff",
     async () => {
       const { binDir, recordPath } = await writeFakeSystemctl();
-      const result = await runHelperWithCommand({
+      const { completion } = await runHelperWithCommand({
         commandArgv: [process.execPath, "-e", "process.exit(7)"],
         serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
         pathPrepend: binDir,
       });
+      const result = await completion;
 
       expect(result.code).toBe(7);
       await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
@@ -657,11 +682,12 @@ describe("managed service update handoff", () => {
 
   it("leaves the gateway service alone when the update command succeeds", async () => {
     const { binDir, recordPath } = await writeFakeSystemctl();
-    const result = await runHelperWithCommand({
+    const { completion } = await runHelperWithCommand({
       commandArgv: [process.execPath, "-e", "process.exit(0)"],
       serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
       pathPrepend: binDir,
     });
+    const result = await completion;
 
     expect(result.code).toBe(0);
     await expect(pathExists(recordPath)).resolves.toBe(false);
@@ -669,7 +695,7 @@ describe("managed service update handoff", () => {
 
   itUnix("retries launchd start when bootstrap reports an already-loaded label", async () => {
     const { binDir, recordPath } = await writeFakeLaunchctl();
-    const result = await runHelperWithCommand({
+    const { completion } = await runHelperWithCommand({
       commandArgv: [process.execPath, "-e", "process.exit(7)"],
       serviceRecovery: {
         kind: "launchd",
@@ -679,6 +705,7 @@ describe("managed service update handoff", () => {
       },
       pathPrepend: binDir,
     });
+    const result = await completion;
 
     expect(result.code).toBe(7);
     await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
@@ -1033,19 +1060,26 @@ describe("managed service update handoff", () => {
   it("runs the handoff after an indefinitely awaited parent exits", async () => {
     const { spawn } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const parent = spawn(process.execPath, ["-e", "setTimeout(() => {}, 750)"], {
-      stdio: "ignore",
+    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+      stdio: ["pipe", "ignore", "ignore"],
     });
+    let completion: Promise<{ code: number }> | undefined;
 
     try {
-      const result = await runHelperWithCommand({
+      const helper = await runHelperWithCommand({
         commandArgv: [process.execPath, "-e", ""],
         parentPid: parent.pid,
         parentExitTimeoutMs: null,
       });
-      expect(result.code).toBe(0);
+      completion = helper.completion;
+      await helper.ready;
+      expect(parent.exitCode).toBeNull();
+      parent.stdin.end();
+      await expect(completion).resolves.toEqual({ code: 0 });
     } finally {
+      parent.stdin.end();
       parent.kill();
+      await completion?.catch(() => undefined);
     }
   });
 });

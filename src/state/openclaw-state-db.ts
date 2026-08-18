@@ -29,7 +29,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { isSqliteSchemaVersionError, readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -41,7 +41,6 @@ import { VERSION } from "../version.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { openClawStateDatabaseCache as stateDbCache } from "./openclaw-state-db-cache.js";
-export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -56,6 +55,7 @@ import {
   assertOpenClawStateDatabaseV5ForMigration,
   assertOpenClawStateDatabaseV6ForMigration,
   assertOpenClawStateDatabaseV7ForMigration,
+  assertOpenClawStateDatabaseV8ForMigration,
   assertSupportedSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
@@ -67,10 +67,12 @@ import {
 } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
+  type AgentDatabasePathMigrationSummary as AgentPathSummary,
   assertCanonicalStateSchemaShape,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
+  migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateRetiredCommitmentsSchema,
   migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
@@ -78,6 +80,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
   OpenClawStateOwnershipError,
@@ -85,11 +88,13 @@ import {
 } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 
 const STATE_MIGRATION_ASSERTIONS = {
   5: assertOpenClawStateDatabaseV5ForMigration,
   6: assertOpenClawStateDatabaseV6ForMigration,
   7: assertOpenClawStateDatabaseV7ForMigration,
+  8: assertOpenClawStateDatabaseV8ForMigration,
 } as const;
 
 export {
@@ -183,7 +188,12 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
-        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
+        } else if (
+          previousVersion === 5 ||
+          previousVersion === 6 ||
+          previousVersion === 7 ||
+          previousVersion === 8
+        ) {
           STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
@@ -196,6 +206,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
           applied.push("Migrated cloud worker placements to execution modes");
         }
+        applied.push(
+          ...describeAgentPathMigration(migrateAgentPaths(db, previousVersion, pathname)),
+        );
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -375,12 +388,18 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
-        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
+        } else if (
+          previousVersion === 5 ||
+          previousVersion === 6 ||
+          previousVersion === 7 ||
+          previousVersion === 8
+        ) {
           STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
+        const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
@@ -439,6 +458,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
             ),
         );
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+        warnAgentPathMigration(stateDbLog, pathMigration, pathname);
       },
       {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -574,7 +594,7 @@ function openUnpublishedOpenClawStateDatabase(
       db.close();
       if (
         err instanceof Error &&
-        (err.name === "SqliteSchemaVersionError" || isTerminalSqliteIntegrityError(err))
+        (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
       ) {
         recordOpenClawStateDatabaseOpenFailure(pathname, err);
       }

@@ -185,6 +185,18 @@ export function createStandingIntentTool(options: {
     execute: async (_toolCallId, rawParams) => {
       const params = (rawParams ?? {}) as IntentToolParams;
       if (params.action === "create") {
+        const provider = options.provider?.trim();
+        const senderId = options.senderId?.trim();
+        if (!provider || !senderId) {
+          const missingIdentity = !provider
+            ? senderId
+              ? "channel"
+              : "channel and sender"
+            : "sender";
+          throw new Error(
+            `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
+          );
+        }
         const nowMs = Date.now();
         const scope = parseScope<IntentScope>(
           params.scope,
@@ -223,7 +235,7 @@ export function createStandingIntentTool(options: {
                   accountId: options.accountId,
                   senderId: options.senderId ?? "",
                 }),
-          creatorSender: options.senderId ?? "",
+          creatorSender: senderId,
           expiresAt: parseExpiry(params.expiresAt, nowMs),
           maxFires: positiveInteger(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES),
           cooldownSeconds: nonNegativeInteger(

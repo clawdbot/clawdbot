@@ -16,8 +16,8 @@ import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercio
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
 import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
+import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep } from "../lib/sleep.mjs";
-import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
@@ -813,51 +813,6 @@ function timedOutError(message: string) {
 const activeCommandChildren = new Set<ChildProcess>();
 let commandCleanupHandlersInstalled = false;
 
-type CommandTreeTarget = Pick<ChildProcess, "kill" | "pid">;
-
-export function signalCommandTree(
-  child: CommandTreeTarget,
-  signal: NodeJS.Signals,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: (
-      command: string,
-      args: readonly string[],
-      options: { stdio: "ignore" },
-    ) => { error?: Error; status: number | null };
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (child.pid && useProcessGroup) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal);
-}
-
 function commandProcessTreeAlive(child: ChildProcess) {
   if (!child.pid || process.platform === "win32") {
     return child.exitCode === null && child.signalCode === null;
@@ -902,7 +857,7 @@ async function finishTimedOutCommandProcessTree(
     await waitForCommandProcessTreeExit(child, graceRemainingMs);
   }
   if (commandProcessTreeAlive(child)) {
-    signalCommandTree(child, "SIGKILL");
+    terminateManagedChild(child, "SIGKILL");
     await waitForCommandProcessTreeExit(child, options.timeoutKillGraceMs);
   }
   activeCommandChildren.delete(child);
@@ -916,7 +871,7 @@ function untrackCommandChild(child: ChildProcess) {
 
 function signalActiveCommandChildren(signal: NodeJS.Signals) {
   for (const child of activeCommandChildren) {
-    signalCommandTree(child, signal);
+    terminateManagedChild(child, signal);
   }
 }
 
@@ -990,10 +945,10 @@ export function runCommand(params: {
           stderr,
         )}`,
       );
-      signalCommandTree(child, "SIGTERM");
+      terminateManagedChild(child, "SIGTERM");
       forceKillAt = Date.now() + timeoutKillGraceMs;
       killTimer = setTimeout(() => {
-        signalCommandTree(child, "SIGKILL");
+        terminateManagedChild(child, "SIGKILL");
       }, timeoutKillGraceMs);
       killTimer.unref?.();
     }, timeoutMs);
@@ -1010,7 +965,7 @@ export function runCommand(params: {
         const appended = appendCommandStdout(stdout, chunk);
         if (!appended.ok) {
           stdoutLimitError = appended.message;
-          signalCommandTree(child, "SIGKILL");
+          terminateManagedChild(child, "SIGKILL");
         } else {
           stdout = appended.value;
         }
@@ -1151,14 +1106,7 @@ function killTree(child: ChildProcess | undefined) {
   if (!child) {
     return;
   }
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
+  terminateManagedChild(child, "SIGTERM");
 }
 
 export function signalPidTree(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
@@ -1450,7 +1398,7 @@ export function writeSutConfig(params: {
           bind: "loopback",
           mode: "local",
           port: params.gatewayPort,
-          tailscale: { mode: "funnel", resetOnExit: true },
+          tailscale: { mode: "funnel" },
         }
       : { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
     ...(params.mcpAppFixture
@@ -2390,8 +2338,7 @@ async function stopTailscaleFunnelBridge(
   bridge: Pick<FunnelBridge, "proxyPath" | "tunnelPid">,
 ) {
   try {
-    // Explicit reset is the backstop when Gateway shutdown loses its async
-    // resetOnExit cleanup; the public route must not outlive this fresh lease.
+    // The proof owns this fresh Funnel lease, so it explicitly removes the route.
     await runCommand({
       args: ["funnel", "reset"],
       command: bridge.proxyPath,

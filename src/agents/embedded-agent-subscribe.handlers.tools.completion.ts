@@ -20,6 +20,7 @@ import {
   consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { readEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -33,6 +34,7 @@ import {
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
+  isPluginNativeMessagingTool,
   isMessagingToolSendAction,
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
@@ -57,7 +59,7 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readUpdatePlanResult,
+  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -96,7 +98,7 @@ import {
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { isToolResultError } from "./tool-result-error.js";
+import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -234,6 +236,7 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
+  ctx.state.lastToolRecovery = terminal.lastToolRecovery;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -253,15 +256,21 @@ export async function handleToolExecutionEnd(
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
   const hasMessagingTargetEvidence =
     isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const messageDelivery = readEmbeddedMessageDeliveryFact(
+    readToolResultDetails(toolSendReceiptResult)?.messageDelivery,
+  );
   const didDeliverMessagingResult =
     isMessagingInvocation &&
-    isDeliveredMessagingToolResult({
-      toolName,
-      args: startArgs,
-      result,
-      hookResult: toolSendReceiptResult,
-      isError: isToolError,
-    });
+    (messageDelivery
+      ? messageDelivery.status === "settled" && (!isToolError || messageDelivery.partialDelivery)
+      : isPluginNativeMessagingTool(toolName) &&
+        isDeliveredMessagingToolResult({
+          toolName,
+          args: startArgs,
+          result,
+          hookResult: toolSendReceiptResult,
+          isError: isToolError,
+        }));
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
@@ -289,6 +298,7 @@ export async function handleToolExecutionEnd(
       args: startArgs,
       result,
       isError: isToolError,
+      deliveryConfirmed: didDeliverMessagingResult,
     });
   const sourceReplyFinal = deliveredCurrentSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
@@ -366,7 +376,7 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,

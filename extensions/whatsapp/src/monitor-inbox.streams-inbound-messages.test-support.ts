@@ -16,8 +16,8 @@ import {
   installWebMonitorInboxUnitTestHooks,
   startInboxMonitor,
   waitForMessageCalls,
+  type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
-import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
