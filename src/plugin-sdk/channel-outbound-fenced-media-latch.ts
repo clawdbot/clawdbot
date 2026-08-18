@@ -7,8 +7,8 @@ import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "./channel-outbo
 
 /** Latch fenced-MEDIA diagnostics to accepted visible direct-delivery text (#41966). */
 export function createDirectAcceptedFencedMediaWarnLatch(params: { payload: object }) {
-  // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
   // Plan builder only consumes extractMarkdownImages from context; no cfg/surface contract.
+  // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
   const planEntry = createOutboundPayloadPlan([params.payload as never])[0];
   if (!planEntry?.mediaTokenSkippedInFence) {
     return {
