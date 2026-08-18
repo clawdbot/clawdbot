@@ -65,6 +65,7 @@
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
     "!dist/plugin-sdk/channel-mention-gating.d.ts",
     "!dist/plugin-sdk/channel-route.d.ts",
+    "!dist/plugin-sdk/channel-secret-owner-runtime.d.ts",
     "!dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
     "!dist/plugin-sdk/channel-target-testing.js",
     "!dist/plugin-sdk/channel-target-testing.d.ts",
@@ -740,6 +741,9 @@
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
+    },
+    "./plugin-sdk/channel-secret-owner-runtime": {
+      "default": "./dist/plugin-sdk/channel-secret-owner-runtime.js"
     },
     "./plugin-sdk/channel-secret-tts-runtime": {
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"

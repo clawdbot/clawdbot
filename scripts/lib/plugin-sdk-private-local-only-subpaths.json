@@ -22,6 +22,7 @@
   "channel-contract-testing",
   "channel-mention-gating",
   "channel-route",
+  "channel-secret-owner-runtime",
   "channel-secret-tts-runtime",
   "channel-target-testing",
   "channel-targets",

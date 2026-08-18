@@ -222,10 +222,10 @@ export const voiceTestMocks = {
   assertSecretOwnerAvailableMock,
 };
 
-vi.mock("openclaw/plugin-sdk/channel-secret-basic-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/channel-secret-owner-runtime", async () => {
   const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/channel-secret-basic-runtime")
-  >("openclaw/plugin-sdk/channel-secret-basic-runtime");
+    typeof import("openclaw/plugin-sdk/channel-secret-owner-runtime")
+  >("openclaw/plugin-sdk/channel-secret-owner-runtime");
   return {
     ...actual,
     assertSecretOwnerAvailable: assertSecretOwnerAvailableMock,

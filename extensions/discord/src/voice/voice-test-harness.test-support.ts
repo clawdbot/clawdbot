@@ -623,6 +623,7 @@ function buildVoiceTestHarness() {
     decodeOpusStreamChunksMock,
     updateVoiceStateMock,
     enqueueSystemEventMock,
+    assertSecretOwnerAvailableMock,
     managerModule,
     realtimeModule,
     segmentModule,

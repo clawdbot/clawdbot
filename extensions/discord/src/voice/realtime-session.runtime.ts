@@ -1,4 +1,4 @@
-import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceSessionInstructions,

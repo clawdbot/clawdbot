@@ -26,6 +26,8 @@ defineDiscordVoiceTests(
     textToSpeechMock,
     logVerboseMock,
     controlRealtimeVoiceAgentRunMock,
+    resolveConfiguredRealtimeVoiceProviderMock,
+    assertSecretOwnerAvailableMock,
     realtimeSessionMock,
     decodeOpusStreamMock,
     managerModule,
