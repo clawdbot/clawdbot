@@ -46,6 +46,10 @@ export async function appendTranscriptEvent(
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
+      // Authority/participation check must run inside the write transaction, before the
+      // append proceeds, so an unauthorized session-lifecycle write is rejected atomically
+      // rather than after the fact (see session-accessor.entry-mutation.ts's commitGuard).
+      options.beforeCommitInTransaction?.();
       appendTranscriptEventInTransaction(
         database,
         resolved,
@@ -82,6 +86,10 @@ function appendTranscriptEventSyncCore(
   const resolved = resolveSqliteTranscriptScope(fencedScope);
   let result: Result<boolean, TranscriptEventAppendError> = ok(false);
   runOpenClawAgentWriteTransaction((database) => {
+    // Authority/participation check must run inside the write transaction, before the
+    // append proceeds, so an unauthorized session-lifecycle write is rejected atomically
+    // rather than after the fact (see session-accessor.entry-mutation.ts's commitGuard).
+    options.beforeCommitInTransaction?.();
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!fresh) {
       result = err({
