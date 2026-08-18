@@ -9,6 +9,7 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
+import { redactSensitiveText } from "../../../logging/redact.js";
 import {
   attachRuntimePromptMediaFacts,
   isImageMediaFact,
@@ -220,6 +221,7 @@ async function loadMediaFromRef(
   },
 ): Promise<WebMediaResult | null> {
   options?.signal?.throwIfAborted();
+  const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
@@ -240,8 +242,8 @@ async function loadMediaFromRef(
         });
         targetPath = resolved.resolved;
       } catch (err) {
-        log.debug(
-          `${options?.label ?? "Native media"}: sandbox validation failed: ${formatErrorMessage(err)}`,
+        log.warn(
+          `${options?.label ?? "Native media"}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
         );
         return null;
       }
@@ -266,7 +268,9 @@ async function loadMediaFromRef(
     return media;
   } catch (err) {
     options?.signal?.throwIfAborted();
-    log.debug(`${options?.label ?? "Native media"}: failed to load: ${formatErrorMessage(err)}`);
+    log.warn(
+      `${options?.label ?? "Native media"}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+    );
     return null;
   }
 }

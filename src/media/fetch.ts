@@ -21,7 +21,7 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
-import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
+import { saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -393,7 +393,7 @@ async function assertMediaResponseOk(params: {
   readIdleTimeoutMs?: number;
 }): Promise<void> {
   const { res, url, finalUrl, sourceUrl, readIdleTimeoutMs } = params;
-  if (res.ok) {
+  if (res.ok && res.body) {
     return;
   }
   const statusText = res.statusText ? ` ${res.statusText}` : "";
@@ -573,23 +573,15 @@ async function saveOkMediaResponse(params: {
     ? (params.filePathHint ?? fileName)
     : undefined;
   try {
-    const saved = params.res.body
-      ? await saveMediaStream(
-          responseBodyChunks(params.res.body, params.readIdleTimeoutMs),
-          contentType ?? undefined,
-          params.subdir ?? "inbound",
-          params.maxBytes,
-          params.originalFilename,
-          detectionFilePathHint,
-        )
-      : await saveMediaBuffer(
-          Buffer.alloc(0),
-          contentType ?? undefined,
-          params.subdir ?? "inbound",
-          params.maxBytes,
-          params.originalFilename,
-          detectionFilePathHint,
-        );
+    const body = expectDefined(params.res.body, "media response body");
+    const saved = await saveMediaStream(
+      responseBodyChunks(body, params.readIdleTimeoutMs),
+      contentType ?? undefined,
+      params.subdir ?? "inbound",
+      params.maxBytes,
+      params.originalFilename,
+      detectionFilePathHint,
+    );
     return { ...saved, ...(fileName ? { fileName } : {}) };
   } catch (err) {
     if (err instanceof MediaFetchError) {

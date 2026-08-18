@@ -1,4 +1,5 @@
 /** Runs prompt assembly, admission, submission, and prompt-local recovery. */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   buildHeartbeatOutcomeContext,
@@ -99,6 +100,8 @@ type PromptSubmissionPhaseInput = Pick<
   | "trajectoryRecorder"
 >;
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
+
+const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 
 export async function runEmbeddedAttemptPromptPhase(input: {
   attempt: PromptAssemblyInput["attempt"];
@@ -241,16 +244,18 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             }),
           )
         : undefined;
-    const promptContext = prepareEmbeddedAttemptPromptContext({
-      attempt,
-      ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
-      messages: activeSession.messages,
-      prompt: promptAssembly,
-      replaceSessionMessages: (messages) => {
-        activeSession.agent.state.messages = messages;
-      },
-      ...input.context,
-    });
+    const buildPromptContext = () =>
+      prepareEmbeddedAttemptPromptContext({
+        attempt,
+        ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
+        messages: activeSession.messages,
+        prompt: promptAssembly,
+        replaceSessionMessages: (messages) => {
+          activeSession.agent.state.messages = messages;
+        },
+        ...input.context,
+      });
+    let promptContext = buildPromptContext();
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
     input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
@@ -312,6 +317,36 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       prompt: promptContext.promptSubmission.prompt,
       skipPromptSubmission,
     });
+    if (
+      imageResult.failedMediaCount > 0 &&
+      !activeSession.messages.some(
+        (message) =>
+          message.role === "custom" &&
+          message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
+          asOptionalRecord(message.details)?.runId === attempt.runId,
+      )
+    ) {
+      const count = imageResult.failedMediaCount;
+      const content = `System note: ${count} image attachment${count === 1 ? "" : "s"} could not be loaded; their image contents are unavailable. Tell the user and ask them to resend ${count === 1 ? "the image" : "the images"}; do not claim inspection.`;
+      await input.withOwnedTranscriptWrite(() =>
+        activeSession.sendCustomMessage(
+          {
+            customType: FAILED_PROMPT_MEDIA_NOTE_TYPE,
+            content,
+            display: true,
+            details: {
+              source: "prompt-image-hydration",
+              runId: attempt.runId,
+              failedMediaCount: count,
+            },
+          },
+          { triggerTurn: false },
+        ),
+      );
+      promptContext = buildPromptContext();
+      input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
+      input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
+    }
 
     const reserveTokens = input.getCompactionReserveTokens();
     let state: PromptPreflightInput["state"] = {

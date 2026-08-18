@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   removeTrailingPrecheckError: vi.fn(),
   resolveApiKey: vi.fn(),
   submitPrompt: vi.fn(),
+  useRealPromptExecution: { value: false },
   debug: vi.fn(),
   warn: vi.fn(),
 }));
@@ -40,11 +44,20 @@ vi.mock("./attempt-prompt-build.js", () => ({
   prepareEmbeddedAttemptPromptAssembly: mocks.preparePromptAssembly,
   prepareEmbeddedAttemptPromptContext: mocks.preparePromptContext,
 }));
-vi.mock("./attempt-prompt-submit.js", () => ({
-  handleEmbeddedAttemptPromptError: mocks.handlePromptError,
-  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
-  submitEmbeddedAttemptPrompt: mocks.submitPrompt,
-}));
+vi.mock("./attempt-prompt-submit.js", async (importOriginal) => {
+  const { prepareEmbeddedAttemptPromptExecution } =
+    await importOriginal<typeof import("./attempt-prompt-submit.js")>();
+  return {
+    handleEmbeddedAttemptPromptError: mocks.handlePromptError,
+    prepareEmbeddedAttemptPromptExecution: (
+      input: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0],
+    ) =>
+      mocks.useRealPromptExecution.value
+        ? prepareEmbeddedAttemptPromptExecution(input)
+        : mocks.preparePromptExecution(input),
+    submitEmbeddedAttemptPrompt: mocks.submitPrompt,
+  };
+});
 vi.mock("./attempt-prompt-preflight.js", () => ({
   handleEmbeddedAttemptMidTurnPrecheck: mocks.handleMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight: mocks.preparePromptPreflight,
@@ -116,16 +129,17 @@ function createFixture() {
       transcriptLeafId: "leaf-1",
     };
   });
-  mocks.preparePromptContext.mockImplementation(() => {
+  mocks.preparePromptContext.mockImplementation((input: { messages?: unknown[] } = {}) => {
     order.push("context");
+    const messages = input.messages ?? [];
     return {
       aggregatePressureEngaged: false,
       contextTokenBudget: 32_000,
       currentUserTimestampOverride: { timestamp: 123, text: "hello" },
       effectivePrompt: "hello",
-      hookMessagesForCurrentPrompt: [],
+      hookMessagesForCurrentPrompt: messages,
       llmBoundaryPromptForPrecheck: "hello",
-      prePromptMessageCount: 2,
+      prePromptMessageCount: 2 + messages.length,
       promptForModel: "hello",
       promptForSession: "hello",
       promptSubmission: { prompt: "hello", runtimeOnly: false },
@@ -170,16 +184,25 @@ function createFixture() {
   });
   mocks.handlePromptError.mockResolvedValue({});
 
-  const activeSession = {
-    messages: [],
-    agent: {
-      state: { messages: [] },
-      streamFn: vi.fn(),
-    },
-  };
+  const messages: unknown[] = [];
+  const appendCustomMessageEntry = vi.fn();
   const sessionManager = {
     appendCustomEntry: vi.fn(),
+    appendCustomMessageEntry,
     getEntries: vi.fn(() => []),
+  };
+  const sendCustomMessage = vi.fn(async (message: Record<string, unknown>) => {
+    const persisted = { role: "custom", timestamp: Date.now(), ...message };
+    messages.push(persisted);
+    appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+  });
+  const activeSession = {
+    messages,
+    agent: {
+      state: { messages },
+      streamFn: vi.fn(),
+    },
+    sendCustomMessage,
   };
   const input = {
     attempt: {
@@ -213,6 +236,7 @@ function createFixture() {
       toolResultPromptProjectionState: {},
     },
     execution: {
+      mediaOwnerAgentId: "main",
       effectiveFsWorkspaceOnly: false,
       effectiveWorkspace: "/tmp/workspace",
       sandbox: null,
@@ -268,12 +292,14 @@ function createFixture() {
   } as unknown as PromptPhaseInput;
 
   return {
+    appendCustomMessageEntry,
     input,
     markYieldAborted,
     order,
     setFinalPromptText,
     setPrePromptMessageCount,
     setPromptCacheChangesForTurn,
+    sendCustomMessage,
     state,
     yieldState,
   };
@@ -281,6 +307,7 @@ function createFixture() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.useRealPromptExecution.value = false;
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
@@ -370,6 +397,50 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect.objectContaining({ skipPromptSubmission: false }),
     );
     expect(mocks.submitPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("persists an unloadable structured image warning in the same provider context", async () => {
+    const fixture = createFixture();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-note-"));
+    const sensitiveUrlToken = "sensitive-media-token-1234567890";
+    const missingPath = path.join(workspaceDir, `missing.png?token=${sensitiveUrlToken}`);
+    mocks.useRealPromptExecution.value = true;
+    fixture.input.attempt.config = {};
+    fixture.input.attempt.imageOrder = ["offloaded"];
+    fixture.input.attempt.media = [{ path: missingPath, contentType: "image/png" }];
+    fixture.input.attempt.model.input = ["text", "image"];
+    fixture.input.execution.effectiveFsWorkspaceOnly = true;
+    fixture.input.execution.effectiveWorkspace = workspaceDir;
+
+    try {
+      await runEmbeddedAttemptPromptPhase(fixture.input);
+      await runEmbeddedAttemptPromptPhase(fixture.input);
+
+      const note = expect.objectContaining({
+        role: "custom",
+        customType: "openclaw.system-note",
+        display: true,
+        content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+      });
+      expect(fixture.sendCustomMessage).toHaveBeenCalledOnce();
+      expect(fixture.appendCustomMessageEntry).toHaveBeenCalledOnce();
+      expect(fixture.input.activeSession.messages).toContainEqual(note);
+      expect(mocks.preparePromptPreflight).toHaveBeenLastCalledWith(
+        expect.objectContaining({ hookMessagesForCurrentPrompt: expect.arrayContaining([note]) }),
+      );
+      expect(mocks.submitPrompt).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          activeSession: expect.objectContaining({ messages: expect.arrayContaining([note]) }),
+        }),
+      );
+      expect(mocks.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/failed to load.*missing\.png.*file not found/i),
+      );
+      expect(mocks.warn.mock.calls.flat().join("\n")).not.toContain(sensitiveUrlToken);
+      expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("reads yield state after submission fails and publishes abort state before recovery", async () => {
