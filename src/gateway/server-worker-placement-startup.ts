@@ -139,7 +139,14 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       placements: params.placements,
       environments: params.environments,
       ...workspaceConflictHandlers,
-      runLocalBarrier: async ({ sessionId, sessionKey, agentId, executionMode, startDispatch }) => {
+      runLocalBarrier: async ({
+        sessionId,
+        sessionKey,
+        agentId,
+        executionMode,
+        authorize,
+        startDispatch,
+      }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const {
           resolveWorkerPlacementExecutionMode,
@@ -195,6 +202,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
             }
             const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
             await preflightWorkerWorkspace({ localPath: worktree.path });
+            authorize?.();
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({
@@ -293,7 +301,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           void nodeWorkspaceRetention.schedule(request.deviceId);
         }
       },
-      runMoveBarrier: async ({ sessionId, sessionKey, agentId, begin }) => {
+      runMoveBarrier: async ({ sessionId, sessionKey, agentId, authorize, begin }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const { resolveGatewaySessionStoreTargetWithStore } = sessionRuntime;
         const target = resolveGatewaySessionStoreTargetWithStore({
@@ -322,6 +330,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               expectedTarget: target,
               errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
             });
+            authorize?.();
             begun = begin();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
@@ -385,7 +394,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         }
         return { executionMode, ...destination.value };
       },
-      runReclaimBarrier: async ({ sessionId, sessionKey, agentId, begin, reclaim }) => {
+      runReclaimBarrier: async ({ sessionId, sessionKey, agentId, authorize, begin, reclaim }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const { resolveGatewaySessionStoreTargetWithStore } = sessionRuntime;
         const target = resolveGatewaySessionStoreTargetWithStore({
@@ -417,16 +426,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
               errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
             });
             const placement = params.placements.get(sessionId);
-            if (
-              (placement?.state !== "active" && placement?.state !== "draining") ||
-              placement.turnClaim
-            ) {
+            if (placement?.state !== "active" && placement?.state !== "draining") {
               throw new Error(
                 `Session ${sessionKey} has active work; wait before stopping its cloud worker`,
               );
             }
             worktreePath = worktree.path;
-            drainingPlacement = begin();
             const released = await interruptSessionWorkAdmissions({
               scope: target.storePath,
               identities: lifecycleIdentities,
@@ -443,15 +448,69 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
             });
           },
           run: async () => {
-            if (!worktreePath || !drainingPlacement) {
+            if (!worktreePath) {
               throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
             }
+            authorize?.();
+            drainingPlacement = begin();
             reclaimedPlacement = await reclaim(worktreePath, drainingPlacement);
             params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
           },
         });
         if (!reclaimedPlacement) {
           throw new Error(`Session ${sessionKey} cloud worker stop barrier did not complete`);
+        }
+        return reclaimedPlacement;
+      },
+      runFailedReclaimBarrier: async ({ sessionId, sessionKey, agentId, authorize, reclaim }) => {
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+        const {
+          resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetWithStore,
+        } = sessionRuntime;
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg: getRuntimeConfig(),
+          key: sessionKey,
+          agentId,
+          clone: false,
+        });
+        const lifecycleIdentities = [
+          sessionKey,
+          target.canonicalKey,
+          ...target.storeKeys,
+          sessionId,
+        ];
+        let reclaimedPlacement: Awaited<ReturnType<typeof reclaim>> | undefined;
+        await runExclusiveSessionLifecycleMutation({
+          scope: target.storePath,
+          identities: lifecycleIdentities,
+          run: async () => {
+            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
+              cfg: getRuntimeConfig(),
+              key: sessionKey,
+              agentId,
+              clone: false,
+            });
+            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
+              currentTarget.store,
+              currentTarget.storeKeys,
+            );
+            if (
+              currentTarget.storePath !== target.storePath ||
+              currentTarget.canonicalKey !== target.canonicalKey ||
+              currentTarget.agentId !== target.agentId ||
+              currentEntry?.sessionId !== sessionId
+            ) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} changed before failed cloud worker cleanup. Retry.`,
+              );
+            }
+            authorize?.();
+            reclaimedPlacement = await reclaim();
+          },
+        });
+        if (!reclaimedPlacement) {
+          throw new Error(`Session ${sessionKey} failed cloud worker cleanup did not complete`);
         }
         return reclaimedPlacement;
       },

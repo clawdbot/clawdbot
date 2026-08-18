@@ -99,6 +99,14 @@ dispatch so authorization failures have one canonical structured response:
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
   workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
+- `environments.list` needs `operator.read`. Operators with `operator.write`
+  can use administrator-provisioned shared runner infrastructure through
+  `sessions.dispatch`, `sessions.reclaim`, and `sessions.move`; those methods
+  retain session ownership, participation, and commit-time revalidation
+  fences. `operator.read` alone cannot start, stop, or move a session. Cloud
+  profile mutation, pairing and Connect machine, raw `environments.create` or
+  `environments.destroy`, incognito sessions, direct `execNode` execution, and
+  arbitrary host or node paths remain `operator.admin`.
 - `worktrees.branches` needs `operator.write`. Its handler limits non-admin
   callers to workspace-contained paths or registered-project roots; other host
   paths require `operator.admin`.

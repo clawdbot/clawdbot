@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -286,6 +286,67 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
+
+  it("retries pending failed-environment teardown before clearing the placement", async () => {
+    const harness = createHarness(placementStore, { failAt: "sync", destroyFails: true });
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("environment destroy: destroy pending"),
+    });
+
+    vi.mocked(harness.environments.destroy).mockImplementationOnce(async () => {
+      harness.markEnvironmentDestroyed();
+      const destroyed = harness.environments.get(harness.attached.environmentId);
+      if (!destroyed) {
+        throw new Error("expected destroyed environment");
+      }
+      return destroyed;
+    });
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({ state: "local" });
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["active", "failed"] as const)(
+    "rejects %s reclaim before its first durable cleanup action when authorization changes",
+    async (state) => {
+      const harness = createHarness(placementStore);
+      if (state === "active") {
+        await harness.service.dispatch(REQUEST);
+      } else {
+        const requested = placementStore.startDispatch(REQUEST);
+        placementStore.fail({
+          sessionId: REQUEST.sessionId,
+          expectedGeneration: requested.generation,
+          recoveryError: "dispatch failed",
+        });
+      }
+      const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;
+      const authorizationError = new Error("session participation changed");
+
+      await expect(
+        harness.service.reclaim(
+          {
+            sessionId: REQUEST.sessionId,
+            sessionKey: REQUEST.sessionKey,
+            agentId: REQUEST.agentId,
+          },
+          () => {
+            throw authorizationError;
+          },
+        ),
+      ).rejects.toBe(authorizationError);
+
+      expect(harness.placements.current()).toMatchObject({ state });
+      expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyCalls);
+    },
+  );
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
     const harness = createHarness(placementStore, {

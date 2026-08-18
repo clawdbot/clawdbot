@@ -415,6 +415,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,
     runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(localWorkspace, begin()),
+    runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     resolveWorkspacePath: async () => localWorkspace,
     reportWorkspaceResultConflict: async () => {},
     resolveWorkspaceResultConflict: async () => undefined,

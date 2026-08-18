@@ -144,9 +144,11 @@ The `environments.list` response must include the configured id under `profiles`
 
 ## Dispatching a session
 
+Operators with `operator.write` can run an authorized managed-worktree session on shared runner infrastructure that a Team Gateway administrator has already provisioned and paired. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
+
 In the Control UI, open **New Session** and use the unified **Place** picker to choose both the working folder and a **Cloud · profile** destination. A cloud destination appears only when all four eligibility gates pass:
 
-1. The connected operator has `operator.admin` scope.
+1. The connected operator has `operator.write` scope.
 2. `environments.list` advertises at least one configured profile.
 3. The selected Gateway folder is a Git checkout that can use a managed worktree.
 4. The selected agent runtime advertises cloud placement support.
@@ -164,7 +166,7 @@ Other runtimes remain unavailable unless their harness explicitly declares a clo
 
 The equivalent RPC flow is:
 
-Create a session with a managed worktree, then dispatch it. The RPC requires `operator.admin` and is advertised only while at least one worker profile is configured:
+Create a session with a managed worktree, then dispatch it. The RPC requires `operator.write` and is advertised only while at least one worker profile is configured:
 
 ```bash
 openclaw gateway call sessions.create \
@@ -195,15 +197,15 @@ Apply uses the dispatch-time manifest as the merge base. Cloud-only changes are 
 
 While a fenced result is still reconciling, a new turn waits up to 15 seconds for the prior claim to release. If it is still busy, the turn fails with an actionable “previous cloud turn's workspace result is still reconciling” message and can be retried shortly. On restart, recovery discovers pending and staged results before stale-claim cleanup, completes or retries their local apply, and reclaims dead environments only after preserving the result. The bounded SQLite rollback journal makes an interrupted filesystem apply recoverable without replaying already accepted mutations.
 
-To continue the same session somewhere else, open the **Runs on Cloud** chip and choose **Move session…**. Select the Gateway, a paired device, or a configured cloud profile and, when available, its machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect, and Gateway restart recovery resumes the same operation before generic placement cleanup.
+To continue the same session somewhere else, an operator with `operator.write` can open the **Runs on Cloud** chip and choose **Move session…**. Select the Gateway, a paired device, or a configured cloud profile and, when available, its machine class. Moving to the current profile with a different class resizes the session by replacing its worker. The Gateway closes new admission, interrupts any active turn, reconciles the source workspace, destroys the old environment, and then activates the destination. An interrupted turn is never replayed: partial output may disappear, and you send the next turn again after the move. The exact target, including a machine override, and bounded errors are durable, so the Control UI shows **Moving to…** or the recovery error after a reconnect, and Gateway restart recovery resumes the same operation before generic placement cleanup.
 
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
 
 Archiving a non-main cloud-worker session with an active placement also performs this safe stop and reclaim before the Gateway records it as archived. If the placement is still transitioning or failed without proof that its environment is gone, the session remains unarchived; wait for the placement to settle, then retry. Restoring the session retains the reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
 
-For a broken or runaway cloud environment, an operator can call `environments.destroy` with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment.
+For a broken or runaway cloud environment, an administrator can call the admin-only `environments.destroy` method with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment.
 
-The equivalent administrative RPC is:
+The equivalent write-scoped session RPC is:
 
 ```bash
 openclaw gateway call sessions.reclaim \
@@ -211,7 +213,7 @@ openclaw gateway call sessions.reclaim \
   --params '{"key":"agent:main:big-refactor"}'
 ```
 
-The result placement is `reclaimed` after an active worker is safely stopped. If an earlier failure already proved that the environment is gone, reclaim clears the failed placement and returns `local` instead. No other placement states are successful reclaim results.
+The result placement is `reclaimed` after an active worker is safely stopped. Reclaim also waits for an in-flight dispatch and retries pending teardown for a failed placement before returning `local`. No other placement states are successful reclaim results.
 
 For automation, read the active placement's `generation`, `environmentId`, and `activeOwnerEpoch` from `sessions.describe`, then supply those exact source facts to `sessions.move`:
 
@@ -249,8 +251,8 @@ The bundled Crabbox provider does not support Cloud Worker Desktop after node tr
 
 ## Troubleshooting
 
-- **No cloud profile is advertised** — run `openclaw gateway call environments.list --params '{}'` as an admin. If the response has no `profiles`, validate `cloudWorkers.profiles`, inspect the provider plugin, and restart the Gateway. This is a configuration or provider-activation problem, not an authorization result.
-- **Cloud destinations are hidden or an RPC is denied** — the connected operator lacks `operator.admin`. Reconnect with admin scope; configuring a profile does not grant that scope.
+- **No cloud profile is advertised** — run the `operator.read`-scoped `openclaw gateway call environments.list --params '{}'`. If the response has no `profiles`, ask an administrator to validate `cloudWorkers.profiles`, inspect the provider plugin, and restart the Gateway. This is a configuration or provider-activation problem, not an authorization result.
+- **Cloud destinations are hidden or an RPC is denied** — placing, reclaiming, or moving a session requires `operator.write`; `operator.read` alone can discover profiles but cannot start, stop, or move a session. Profile configuration, infrastructure pairing, Connect machine, raw environment lifecycle, direct `execNode` execution, incognito sessions, and arbitrary host or node paths remain `operator.admin`.
 - **The selected runtime lacks cloud placement support** — choose a model whose advertised runtime supports cloud placement. The bundled OpenClaw and Codex runtimes are supported; undeclared runtimes remain local-only.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.

@@ -527,7 +527,7 @@ export async function stopCloudWorker(
   // Reclaim during an active run is never offered, so decide that before the
   // await; a run starting while the modal is open is left to the gateway, whose
   // rejection is a recorded reason instead of a silently dropped confirmation.
-  if (!stopAction || (stopAction.method === "sessions.reclaim" && session.hasActiveRun)) {
+  if (!stopAction || (stopAction.blocksActiveRun && session.hasActiveRun)) {
     return;
   }
   const confirmed = await showConfirmDialog({
@@ -551,18 +551,10 @@ export async function stopCloudWorker(
   }
   try {
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
-    const result = await requestCloudWorkerStop(scope.client, stopAction, {
+    await requestCloudWorkerStop(scope.client, {
       key: session.key,
       agentId,
     });
-    if (result && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      showToast({
-        message: t("sessionsView.cloudWorkerStopResult", {
-          session: session.label,
-          state: result.worker?.state ?? result.status,
-        }),
-      });
-    }
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

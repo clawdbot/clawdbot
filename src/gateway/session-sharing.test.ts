@@ -453,14 +453,17 @@ describe("session sharing policy", () => {
 
   it("fails closed when a required session mutation has no target", () => {
     const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never;
-    expect(
-      resolveSessionMutationAuthorization({
-        client: client({}),
-        method: "sessions.reset",
-        requestParams: {},
-        context,
-      }).error,
-    ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+    for (const method of ["sessions.reset", "sessions.move"]) {
+      expect(
+        resolveSessionMutationAuthorization({
+          client: client({}),
+          method,
+          requestParams: {},
+          context,
+        }).error,
+        method,
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+    }
     expect(
       resolveSessionMutationAuthorization({
         client: client({ scopes: ["operator.admin"] }),

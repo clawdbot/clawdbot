@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
 
 const dispatchTestMocks = vi.hoisted(() => ({
   findLiveByOwner: vi.fn(),
@@ -123,6 +123,7 @@ export async function invokeSessionDispatch(
   target: { profileId: string; machineClass?: string } | { deviceId: string } = {
     profileId: "test",
   },
+  sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
@@ -135,6 +136,7 @@ export async function invokeSessionDispatch(
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }
@@ -148,6 +150,7 @@ export async function invokeSessionMove(
       | { kind: "profile"; profileId: string; machineClass?: string }
       | { kind: "device"; deviceId: string };
   },
+  sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
@@ -160,11 +163,15 @@ export async function invokeSessionMove(
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }
 
-export async function invokeSessionReclaim(context: GatewayRequestContext) {
+export async function invokeSessionReclaim(
+  context: GatewayRequestContext,
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
     sessionDispatchHandlers["sessions.reclaim"],
@@ -176,6 +183,7 @@ export async function invokeSessionReclaim(context: GatewayRequestContext) {
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }

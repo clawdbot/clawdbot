@@ -118,18 +118,25 @@ export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
   target: WorkerPlacementMoveTarget;
 };
 
+/** Closure-bound request authority; in-process only and never part of durable placement intent. */
+export type WorkerPlacementAuthorization = () => void;
+
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
   dispatch(
     request: WorkerPlacementDispatchRequest,
+    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
   move?(
     request: WorkerPlacementMoveRequest,
     onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "active" }>>;
   reclaim?(
     request: WorkerPlacementReclaimRequest,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,

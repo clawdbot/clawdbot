@@ -10,6 +10,7 @@ import type {
 } from "./placement-move-intent.js";
 import type {
   WorkerPlacementDispatchRequest,
+  WorkerPlacementAuthorization,
   WorkerPlacementMoveDestination,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
@@ -22,6 +23,7 @@ type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" 
 
 export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
+    authorize?: WorkerPlacementAuthorization;
     begin: () => {
       intent: WorkerPlacementMoveIntent;
       placement: WorkerDrainingDispatchPlacement;
@@ -43,6 +45,7 @@ export function createWorkerPlacementMoveService(options: {
   dispatch: (
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
+    authorize?: WorkerPlacementAuthorization,
   ) => Promise<WorkerActiveDispatchPlacement>;
   reclaimSource: (
     request: WorkerPlacementReclaimRequest,
@@ -91,6 +94,7 @@ export function createWorkerPlacementMoveService(options: {
   const move = async (
     request: WorkerPlacementMoveRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerMovePlacement> => {
     let intent: WorkerPlacementMoveIntent | undefined;
     try {
@@ -105,6 +109,7 @@ export function createWorkerPlacementMoveService(options: {
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
         agentId: request.agentId,
+        authorize,
         begin: () => {
           const started = options.placements.beginPlacementMove({
             sessionId: request.sessionId,

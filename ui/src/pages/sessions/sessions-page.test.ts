@@ -792,17 +792,12 @@ describe("sessions page lifecycle", () => {
     expect(page.sessionMutationPending).toBe(false);
   });
 
-  it("destroys a pending cloud worker and reports its terminal state", async () => {
-    const request = vi.fn(() =>
-      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
-    );
+  it("reclaims a pending cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
     const managed = createManagedSessions();
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, managed.sessions));
     managed.refreshList.mockClear();
-    const toast = document.createElement("openclaw-toast-host");
-    document.body.append(toast);
-    await toast.updateComplete;
     const row = {
       key: "agent:main:cloud",
       label: "Cloud task",
@@ -825,13 +820,12 @@ describe("sessions page lifecycle", () => {
       confirmLabel: "Stop worker",
       danger: true,
     });
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
-      environmentId: "environment-1",
-    });
-    expect(managed.refreshList).toHaveBeenCalledOnce();
-    expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-      'Cloud worker for "Cloud task" is destroyed.',
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:cloud", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
     );
+    expect(managed.refreshList).toHaveBeenCalledOnce();
     expect(page.sessionMutationPending).toBe(false);
   });
 

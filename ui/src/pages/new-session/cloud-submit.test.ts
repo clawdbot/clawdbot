@@ -186,7 +186,7 @@ describe("cloud draft advancement", () => {
           placement: { state: "active", environmentId: "worker-current" },
         });
       }
-      if (method === "environments.destroy") {
+      if (method === "sessions.reclaim") {
         return Promise.resolve({ ok: true });
       }
       throw new Error(`unexpected method ${method}`);
@@ -215,8 +215,9 @@ describe("cloud draft advancement", () => {
       error: "cloud recovery storage is unavailable",
     });
     expect(setRecoveryPhase).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
-      environmentId: "worker-current",
+    expect(request).toHaveBeenCalledWith("sessions.reclaim", {
+      key: "agent:cloud:current",
+      agentId: "cloud",
     });
     expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
   });
@@ -235,7 +236,11 @@ describe("cloud draft advancement", () => {
         phase: "dispatching",
       }),
     );
-    const request = vi.fn().mockResolvedValueOnce({ ok: true, deleted: true });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { sessionId: "session-stale" } })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, deleted: true });
     const clearRecovery = vi.fn();
 
     await expect(
@@ -340,7 +345,11 @@ describe("cloud draft advancement", () => {
   });
 
   it("does not persist volatile incognito recovery when submission is cancelled", async () => {
-    const request = vi.fn().mockResolvedValueOnce({ ok: true, deleted: true });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { sessionId: "session-incognito" } })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, deleted: true });
 
     await expect(
       advanceCloudDraftSession({
@@ -361,11 +370,21 @@ describe("cloud draft advancement", () => {
         setRecoveryPhase: vi.fn(),
       }),
     ).resolves.toEqual({ status: "cancelled", recoveryPersisted: false });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.describe",
+      "sessions.patch",
+      "sessions.delete",
+    ]);
     expect(sessionStorage.length).toBe(0);
   });
 
   it("keeps a cancelled draft recoverable when its cleanup fails", async () => {
-    const request = vi.fn().mockRejectedValueOnce(new Error("delete unavailable"));
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { sessionId: "session-cancelled" } })
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("delete unavailable"))
+      .mockResolvedValueOnce({ ok: true });
     const clearRecovery = vi.fn();
 
     await expect(
@@ -394,6 +413,12 @@ describe("cloud draft advancement", () => {
       JSON.parse(sessionStorage.getItem(recoveryStorageKey("agent:cloud:cancelled")) ?? "null"),
     ).toMatchObject({ sessionKey: "agent:cloud:cancelled" });
     expect(clearRecovery).not.toHaveBeenCalled();
+    expect(request).toHaveBeenLastCalledWith("sessions.patch", {
+      key: "agent:cloud:cancelled",
+      agentId: "cloud",
+      archived: false,
+      expectedSessionId: "session-cancelled",
+    });
   });
 
   it("redispatches a recovered transcript after terminal placement", async () => {
@@ -414,6 +439,7 @@ describe("cloud draft advancement", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-2" } })
       .mockRejectedValueOnce(new Error("send response lost"));
     const clearRecovery = vi.fn();
@@ -441,14 +467,14 @@ describe("cloud draft advancement", () => {
       error: "send response lost",
       messageId: "message-recovered",
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.dispatch", {
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.dispatch", {
       key: "agent:cloud:recovered",
       agentId: "cloud",
       profileId: "aws",
       machineClass: "fast",
     });
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "sessions.send",
       expect.objectContaining({ idempotencyKey: "message-recovered" }),
     );
@@ -473,6 +499,7 @@ describe("cloud draft advancement", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockResolvedValueOnce({ ok: true })
       .mockRejectedValueOnce(
         new GatewayRequestError({
           code: "INVALID_REQUEST",

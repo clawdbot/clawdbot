@@ -342,11 +342,12 @@ export function createHarness(
     placements,
     environments,
     workspaceOperations: options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator(),
-    runLocalBarrier: async ({ startDispatch }) => {
+    runLocalBarrier: async ({ authorize, startDispatch }) => {
       log.push("barrier");
       if (options.failAt === "preflight") {
         fail("preflight");
       }
+      authorize?.();
       const placement = startDispatch();
       if (options.failAt === "barrier") {
         throw new Error("barrier failed");
@@ -357,7 +358,8 @@ export function createHarness(
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ begin }) => {
+    runMoveBarrier: async ({ authorize, begin }) => {
+      authorize?.();
       const begun = begin();
       if (options.failMoveAfterBegin) {
         throw new Error("move barrier interrupted");
@@ -372,8 +374,14 @@ export function createHarness(
             executionMode: REQUEST.executionMode,
             ...(target.kind === "device" ? { deviceId: target.deviceId } : {}),
           },
-    runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim(options.workspacePath ?? "/gateway/workspace", begin()),
+    runReclaimBarrier: async ({ authorize, begin, reclaim }) => {
+      authorize?.();
+      return await reclaim(options.workspacePath ?? "/gateway/workspace", begin());
+    },
+    runFailedReclaimBarrier: async ({ authorize, reclaim }) => {
+      authorize?.();
+      return await reclaim();
+    },
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";

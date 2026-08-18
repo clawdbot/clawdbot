@@ -26,8 +26,9 @@ const MOVE_REQUEST: WorkerPlacementMoveRequest = {
 };
 
 describe("worker placement dispatch coordinator", () => {
-  it("forwards the optional internal transition observer", async () => {
+  it("forwards in-process transition and authorization hooks outside request equality", async () => {
     const observer = vi.fn();
+    const authorize = vi.fn();
     const dispatch = vi.fn().mockResolvedValue({ state: "active" });
     const service = {
       dispatch,
@@ -37,9 +38,9 @@ describe("worker placement dispatch coordinator", () => {
       reconcileActive: vi.fn(),
     } as unknown as DispatchService;
 
-    await coordinateWorkerPlacementDispatch(service).dispatch(REQUEST, observer);
+    await coordinateWorkerPlacementDispatch(service).dispatch(REQUEST, observer, authorize);
 
-    expect(dispatch).toHaveBeenCalledWith(REQUEST, observer);
+    expect(dispatch).toHaveBeenCalledWith(REQUEST, observer, authorize);
   });
 
   it("coalesces an identical dispatch and rejects a conflicting in-flight request", async () => {
@@ -166,6 +167,39 @@ describe("worker placement dispatch coordinator", () => {
     await dispatching;
     expect(move).toHaveBeenCalledOnce();
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("serializes reclaim behind an in-flight dispatch", async () => {
+    const dispatchStarted = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
+    const dispatch = vi.fn(async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      return { state: "active" };
+    });
+    const reclaim = vi.fn().mockResolvedValue({ state: "reclaimed" });
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      reclaim,
+      reconcile: vi.fn(),
+      reconcileActive: vi.fn(),
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service);
+
+    const dispatching = coordinated.dispatch(REQUEST);
+    await dispatchStarted.promise;
+    const reclaiming = coordinated.reclaim({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    });
+
+    expect(reclaim).not.toHaveBeenCalled();
+    releaseDispatch.resolve();
+    await dispatching;
+    await reclaiming;
+    expect(reclaim).toHaveBeenCalledOnce();
   });
 
   it("coalesces full sweeps but runs a fresh targeted pass with its environment id", async () => {

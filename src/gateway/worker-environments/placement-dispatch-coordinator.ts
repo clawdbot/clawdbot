@@ -91,7 +91,7 @@ export function coordinateWorkerPlacementDispatch(
     }
   >();
   return {
-    dispatch: async (request, onTransition) => {
+    dispatch: async (request, onTransition, authorize) => {
       const inFlight = dispatchInFlight.get(request.sessionId);
       if (inFlight) {
         if (
@@ -108,7 +108,9 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await inFlight.operation;
       }
-      const operation = runPlacementOperation(() => service.dispatch(request, onTransition));
+      const operation = runPlacementOperation(() =>
+        service.dispatch(request, onTransition, authorize),
+      );
       dispatchInFlight.set(request.sessionId, { request, operation });
       try {
         return await operation;
@@ -122,7 +124,7 @@ export function coordinateWorkerPlacementDispatch(
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
       ),
-    move: async (request, onTransition) => {
+    move: async (request, onTransition, authorize) => {
       const inFlight = moveInFlight.get(request.sessionId);
       if (inFlight) {
         if (!isDeepStrictEqual(inFlight.request, request)) {
@@ -130,7 +132,9 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await inFlight.operation;
       }
-      const operation = runExclusivePlacementOperation(() => service.move(request, onTransition));
+      const operation = runExclusivePlacementOperation(() =>
+        service.move(request, onTransition, authorize),
+      );
       moveInFlight.set(request.sessionId, { request, operation });
       try {
         return await operation;
@@ -140,7 +144,8 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
+    reclaim: async (request, authorize) =>
+      await runExclusivePlacementOperation(() => service.reclaim(request, authorize)),
     reconcile: () => runReconciliation(service.reconcile),
     reconcileActive: (environmentId) =>
       environmentId === undefined

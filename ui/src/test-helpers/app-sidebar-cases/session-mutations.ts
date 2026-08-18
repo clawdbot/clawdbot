@@ -256,15 +256,13 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
-  it("destroys a pending cloud worker through its session", async () => {
-    const request = vi.fn(() =>
-      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
-    );
+  it("reclaims a pending cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
     const { gateway, harness, sidebar } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: gatewayHelloForMethods(["environments.destroy"]),
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
@@ -281,7 +279,6 @@ describe("AppSidebar session mutation feedback", () => {
     };
     row.hasActiveRun = true;
     harness.publishList({ result: state.result, agentId: state.agentId });
-    const toast = await mountToastHost();
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
@@ -289,15 +286,12 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
-      environmentId: "environment-1",
-    });
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
-    await waitForFast(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-        'Cloud worker for "a" is destroyed.',
-      ),
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
     );
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
