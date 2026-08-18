@@ -88,7 +88,7 @@ The current chat shows exactly one live card:
 - When the session rail is visible, the card appears in the rail.
 - At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
 
-The two placements are mutually exclusive. Other sessions can show their latest card in the sidebar hovercard. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The two placements are mutually exclusive. In chat content, hover a session-reference link to see that referenced session's latest card. Sidebar rows intentionally have no hover surface. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
 
 ## Pin the card to the dashboard
 
