@@ -116,6 +116,7 @@ function inspectResult(status: SkillWorkshopProposal["status"] = "pending") {
 function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshopProposal {
   return {
     key: "proposal-1",
+    kind: "update",
     slug: "inbox-cleaner",
     name: "Inbox Cleaner",
     oneLine: "Clean inbox triage",
@@ -185,6 +186,7 @@ describe("Skill Workshop proposal RPCs", () => {
       agentId: "research",
       proposalId: "proposal-1",
     });
+    expect(state.skillWorkshopProposals[0]?.kind).toBe("create");
   });
 
   it("preserves capped support-file size formatting through the shared helper", async () => {

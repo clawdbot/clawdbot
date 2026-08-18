@@ -28,7 +28,7 @@ export {
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
 type SkillProposalStatus = SkillWorkshopProposalStatus;
-type SkillProposalKind = "create" | "update";
+type SkillProposalKind = SkillWorkshopProposal["kind"];
 type SkillProposalScanState = "pending" | "clean" | "failed" | "quarantined";
 
 type SkillProposalManifestEntry = {
@@ -219,6 +219,7 @@ function proposalFromManifest(
   const previousIsCurrent = previous?.updatedAt === updatedAt;
   return {
     key: entry.id,
+    kind: entry.kind,
     slug: entry.skillKey,
     name: entry.title || entry.skillName,
     oneLine: entry.description,
@@ -253,6 +254,7 @@ function proposalFromInspect(
         : undefined;
   return {
     key: record.id,
+    kind: record.kind,
     slug: record.target.skillKey,
     name: record.title || record.target.skillName,
     oneLine: record.description,
@@ -280,6 +282,7 @@ function proposalFromEvaluation(
   const createdAt = parseDateMs(record.createdAt);
   return {
     key: record.id,
+    kind: record.kind,
     slug: record.target.skillKey,
     name: record.title || record.target.skillName,
     oneLine: record.description,

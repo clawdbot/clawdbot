@@ -8,15 +8,18 @@ import {
 
 function proposal(options: {
   key: string;
+  kind?: SkillWorkshopProposal["kind"];
   status?: SkillWorkshopProposalStatus;
   slug?: string;
   description?: string;
   updatedAt?: number;
 }): SkillWorkshopProposal {
+  const kind = options.kind ?? "update";
   return {
     key: options.key,
+    kind,
     slug: options.slug ?? "release-sanity",
-    name: `Update ${options.slug ?? "release-sanity"}`,
+    name: `${kind === "create" ? "Create" : "Update"} ${options.slug ?? "release-sanity"}`,
     oneLine: options.description ?? `Description for ${options.key}`,
     body: "## Workflow\n- Verify the release.",
     status: options.status ?? "applied",
@@ -32,11 +35,20 @@ function proposal(options: {
 }
 
 describe("Skill Workshop proposal filtering", () => {
-  it("groups applied revisions by skill with deterministic newest-first history", () => {
+  it("keeps every revision in an update-only lineage labeled Update", () => {
+    const [skill] = filterSkillWorkshopAppliedSkills(
+      [proposal({ key: "new", updatedAt: 2 }), proposal({ key: "old", updatedAt: 1 })],
+      "",
+    );
+
+    expect(skill?.revisions.map(({ operation }) => operation)).toEqual(["update", "update"]);
+  });
+
+  it("groups applied revisions with deterministic order and recorded operations", () => {
     const proposals = [
       proposal({ key: "revision-a", updatedAt: 1 }),
       proposal({ key: "revision-c", updatedAt: 3 }),
-      proposal({ key: "revision-b", updatedAt: 2 }),
+      proposal({ key: "revision-b", kind: "create", updatedAt: 2 }),
       proposal({ key: "revision-d", updatedAt: 3 }),
     ];
 
@@ -53,8 +65,8 @@ describe("Skill Workshop proposal filtering", () => {
     ).toEqual([
       { key: "revision-d", operation: "update", version: 4 },
       { key: "revision-c", operation: "update", version: 3 },
-      { key: "revision-b", operation: "update", version: 2 },
-      { key: "revision-a", operation: "create", version: 1 },
+      { key: "revision-b", operation: "create", version: 2 },
+      { key: "revision-a", operation: "update", version: 1 },
     ]);
   });
 

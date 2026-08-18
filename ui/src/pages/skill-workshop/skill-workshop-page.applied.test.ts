@@ -70,6 +70,7 @@ describe("Skill Workshop applied history", () => {
     const proposals = timestamps.map(
       (updatedAt): SkillWorkshopProposal => ({
         key: `proposal-${updatedAt}`,
+        kind: updatedAt === 2 ? "create" : "update",
         slug: "release-sanity",
         name: `${updatedAt === 1 ? "Create" : "Update"} release-sanity`,
         oneLine: `Revision ${updatedAt} description`,
@@ -93,7 +94,7 @@ describe("Skill Workshop applied history", () => {
       return {
         record: {
           id: "proposal-1",
-          kind: "create",
+          kind: "update",
           status: "applied",
           title: "Create release-sanity",
           description: "Revision 1 description",
@@ -131,11 +132,16 @@ describe("Skill Workshop applied history", () => {
 
     expect(page.querySelectorAll(".sw-row")).toHaveLength(1);
     expect(page.querySelector(".sw-row")?.textContent).toContain("4 revisions");
+    await vi.waitFor(
+      () => expect(page.querySelectorAll(".sw-applied-history__item")).toHaveLength(4),
+      { interval: 1 },
+    );
     const history = page.querySelectorAll<HTMLButtonElement>(".sw-applied-history__item");
-    expect(history).toHaveLength(4);
     expect(history[0]?.textContent).toContain("Update");
     expect(history[0]?.textContent).toContain("v4");
-    expect(history[3]?.textContent).toContain("Create");
+    expect(history[2]?.textContent).toContain("Create");
+    expect(history[2]?.textContent).toContain("v2");
+    expect(history[3]?.textContent).toContain("Update");
     expect(history[3]?.textContent).toContain("v1");
 
     history[3]?.click();

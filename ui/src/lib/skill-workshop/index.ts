@@ -52,6 +52,7 @@ export type SkillWorkshopEvaluation = {
 
 export type SkillWorkshopProposal = {
   key: string;
+  kind: "create" | "update";
   slug: string;
   name: string;
   oneLine: string;
@@ -92,7 +93,7 @@ export type SkillWorkshopActionNotice = {
 type SkillWorkshopAppliedRevision = {
   proposal: SkillWorkshopProposal;
   version: number;
-  operation: "create" | "update";
+  operation: SkillWorkshopProposal["kind"];
 };
 
 export type SkillWorkshopAppliedSkill = {
@@ -139,7 +140,7 @@ function groupSkillWorkshopAppliedSkills(
     latest: proposalsForSkill[0],
     revisions: proposalsForSkill.map((proposal, index) => {
       const version = proposalsForSkill.length - index;
-      return { proposal, version, operation: version === 1 ? "create" : "update" };
+      return { proposal, version, operation: proposal.kind };
     }),
   }));
 }

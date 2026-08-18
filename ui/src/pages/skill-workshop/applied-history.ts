@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { until } from "lit/directives/until.js";
 import { t } from "../../i18n/index.ts";
 import {
   filterSkillWorkshopAppliedSkills,
@@ -6,6 +7,18 @@ import {
   type SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
+
+type AppliedHistoryRenderer = typeof import("./applied-history.runtime.ts").renderAppliedHistory;
+
+let appliedHistoryRenderer: AppliedHistoryRenderer | undefined;
+let appliedHistoryRuntime: Promise<AppliedHistoryRenderer> | undefined;
+
+function loadAppliedHistoryRenderer(): Promise<AppliedHistoryRenderer> {
+  return (appliedHistoryRuntime ??= import("./applied-history.runtime.ts").then((runtime) => {
+    appliedHistoryRenderer = runtime.renderAppliedHistory;
+    return appliedHistoryRenderer;
+  }));
+}
 
 export function resolveAppliedHistory(
   proposals: SkillWorkshopProposal[],
@@ -22,30 +35,15 @@ export function resolveAppliedHistory(
   return { skills, selectedSkill, selectedProposal };
 }
 
-export function renderAppliedHistory(props: SkillWorkshopProps, skill: SkillWorkshopAppliedSkill) {
-  return html`
-    <section class="sw-section sw-applied-history">
-      <h3 class="sw-section__label">${t("skillWorkshop.applied.history")}</h3>
-      <div class="sw-applied-history__list">
-        ${skill.revisions.map(({ proposal, operation, version }) => {
-          const selected = proposal.key === props.selectedKey;
-          return html`
-            <button
-              class="sw-applied-history__item ${selected ? "is-selected" : ""}"
-              aria-current=${selected ? "true" : "false"}
-              @click=${() => props.onSelect(proposal.key)}
-            >
-              <span class="sw-applied-history__operation">
-                ${t(`skillWorkshop.applied.${operation}`)}
-              </span>
-              <span class="sw-applied-history__age">${proposal.ageLabel}</span>
-              <span class="sw-applied-history__version">
-                ${t("skillWorkshop.applied.version", { version: String(version) })}
-              </span>
-            </button>
-          `;
-        })}
-      </div>
-    </section>
-  `;
+export function renderLazyAppliedHistory(
+  props: SkillWorkshopProps,
+  skill: SkillWorkshopAppliedSkill,
+) {
+  if (appliedHistoryRenderer) {
+    return appliedHistoryRenderer(props, skill);
+  }
+  return until(
+    loadAppliedHistoryRenderer().then((renderer) => renderer(props, skill)),
+    html`<p class="sw-muted" aria-busy="true">${t("common.loading")}</p>`,
+  );
 }

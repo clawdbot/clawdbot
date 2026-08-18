@@ -21,7 +21,7 @@ import {
   type SkillWorkshopProposal,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import { renderAppliedHistory, resolveAppliedHistory } from "./applied-history.ts";
+import { renderLazyAppliedHistory, resolveAppliedHistory } from "./applied-history.ts";
 import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
 import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
 import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
@@ -365,7 +365,7 @@ function renderDetail(
             : renderProposalBody(proposal.body)}
         </div>
 
-        ${appliedSkill ? renderAppliedHistory(props, appliedSkill) : nothing}
+        ${appliedSkill ? renderLazyAppliedHistory(props, appliedSkill) : nothing}
         ${proposal.supportFiles.length > 0
           ? html`
               <div class="sw-section" style="margin-top: 18px;">
