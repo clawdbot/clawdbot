@@ -17,7 +17,7 @@ import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import {
   backfillDreamDiary,
@@ -109,7 +109,7 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   };
 }
 
-class AgentMemoryPanel extends OpenClawLightDomElement {
+class AgentMemoryPanel extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 

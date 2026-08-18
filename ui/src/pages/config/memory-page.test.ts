@@ -551,6 +551,30 @@ describe("MemorySettingsPage catalog state", () => {
 });
 
 describe("MemorySettingsPage tab routing", () => {
+  it("keeps the nested Dreams hosts out of the Memory page layout", async () => {
+    const { element } = createPage({
+      configObject: {},
+      catalog: [],
+      routeData: memoryTabRoute("dreams"),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() =>
+        expect(element.querySelector("openclaw-agent-memory-panel")).not.toBeNull(),
+      );
+
+      expect(element.style.display).toBe("contents");
+      expect(element.querySelector<HTMLElement>("openclaw-memory-dreaming")?.style.display).toBe(
+        "contents",
+      );
+      expect(element.querySelector<HTMLElement>("openclaw-agent-memory-panel")?.style.display).toBe(
+        "contents",
+      );
+    } finally {
+      element.remove();
+    }
+  });
+
   it("probes embeddings through the guarded overview request and renders the result", async () => {
     const probe = deferred<DoctorMemoryStatusPayload>();
     const initial: DoctorMemoryStatusPayload = {

@@ -1,10 +1,10 @@
 // Dreams tab host. Agent selection is owned by the parent Memory page.
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import "../agents/memory/memory-panel.ts";
 
-class MemoryDreamingSettings extends OpenClawLightDomElement {
+class MemoryDreamingSettings extends OpenClawLightDomContentsElement {
   @property() agentId: string | null = null;
 
   override render() {

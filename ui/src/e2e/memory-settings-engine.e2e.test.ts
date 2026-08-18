@@ -1,6 +1,7 @@
 // Control UI tests cover memory engine ordering and serialized config writes.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -19,6 +20,17 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "memory-settings-engine",
 );
+
+async function captureUiProof(target: Locator, fileName: string): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(uiProofArtifactDir, { recursive: true });
+  await target.screenshot({
+    animations: "disabled",
+    path: path.join(uiProofArtifactDir, fileName),
+  });
+}
 
 function configResponse(engineId: string, hash: string) {
   const config = { plugins: { slots: { memory: engineId } } };
@@ -93,16 +105,10 @@ suite.define(() => {
 
         const pendingOffSave = await gateway.waitForRequest("config.set");
         expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
-        if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
-          await page
-            .locator(".settings-page > .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
-            });
-        }
+        await captureUiProof(
+          page.locator(".settings-page > .settings-section").first(),
+          "00-off-write-draining.png",
+        );
         await gateway.resolveDeferred("config.set", { ok: true, hash: "mock-config-hash-1" });
         const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
         expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
@@ -123,16 +129,10 @@ suite.define(() => {
           .poll(() => page.getByText("Could not change the memory engine").count())
           .toBe(0);
 
-        if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
-          await page
-            .locator(".settings-page > .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "01-openclaw-memory-selected.png"),
-            });
-        }
+        await captureUiProof(
+          page.locator(".settings-page > .settings-section").first(),
+          "01-openclaw-memory-selected.png",
+        );
       },
     );
   });
@@ -212,13 +212,10 @@ suite.define(() => {
         expect(await page.getByText("Could not update Active memory").count()).toBe(0);
         expect(pageErrors).toEqual([]);
 
-        if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
-          await page.locator("openclaw-memory-settings").screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "03-addon-committed-refresh-warning.png"),
-          });
-        }
+        await captureUiProof(
+          page.locator("openclaw-memory-settings > .memory-page"),
+          "03-addon-committed-refresh-warning.png",
+        );
       },
     );
   });
@@ -261,16 +258,10 @@ suite.define(() => {
           )
           .toBe("true");
 
-        if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
-          await page
-            .locator(".settings-page > .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "02-configured-engine-unavailable.png"),
-            });
-        }
+        await captureUiProof(
+          page.locator(".settings-page > .settings-section").first(),
+          "02-configured-engine-unavailable.png",
+        );
       },
     );
   });
