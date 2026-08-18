@@ -24,6 +24,10 @@ const store = vi.hoisted(() => {
     ),
     writeDurableComposerDraft: vi.fn(async () => ({ status: "persisted" as const })),
     retireDurableComposerDraft: vi.fn(async () => ({ status: "persisted" as const })),
+    writeDurableComposerSnapshot: vi.fn(async (_snapshot: unknown) => ({
+      result: { status: "persisted" as const },
+      payloadUnavailable: false,
+    })),
   };
 });
 
@@ -32,6 +36,17 @@ vi.mock("../../lib/chat/composer-draft-store.runtime.ts", () => ({
   writeDurableComposerDraft: store.writeDurableComposerDraft,
   retireDurableComposerDraft: store.retireDurableComposerDraft,
 }));
+
+// The store runtime above is only dynamically imported, so a shared module
+// graph could reuse a draft-persistence.ts evaluated without the mock.
+// Mocking this statically imported helper forces a fresh evaluation and gives
+// a deterministic write seam; the file also runs in the isolated ui lane
+// (vitest.ui-isolated-paths.mjs) so the re-evaluation cannot perturb sibling
+// files' module singletons.
+vi.mock("../chat/durable-composer-persistence.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat/durable-composer-persistence.ts")>();
+  return { ...actual, writeDurableComposerSnapshot: store.writeDurableComposerSnapshot };
+});
 
 async function resolvePendingRead(result: StoreReadResult) {
   // The read is issued behind the store's lazy import; wait for it to land.
@@ -81,11 +96,11 @@ describe("NewSessionDraftPersistence restore race", () => {
     expect(flow.message).toBe("typed before restore");
     // The typed text also wins persistence: local-wins writes it above the
     // stored revision instead of leaving the stale draft in place.
-    const write = store.writeDurableComposerDraft.mock.calls.at(-1) as
-      | [unknown, { revision: number; text: string }, unknown]
+    const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0] as
+      | { revision: number; text: string }
       | undefined;
-    expect(write?.[1].text).toBe("typed before restore");
-    expect(write?.[1].revision).toBeGreaterThan(7);
+    expect(write?.text).toBe("typed before restore");
+    expect(write?.revision).toBeGreaterThan(7);
   });
 
   it("persists text typed before activation even when no stored draft exists", async () => {
@@ -96,10 +111,10 @@ describe("NewSessionDraftPersistence restore race", () => {
     await resolvePendingRead({ status: "not-found" });
     await settle();
     expect(flow.message).toBe("typed before restore");
-    const write = store.writeDurableComposerDraft.mock.calls.at(-1) as
-      | [unknown, { text: string }, unknown]
+    const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0] as
+      | { text: string }
       | undefined;
-    expect(write?.[1].text).toBe("typed before restore");
+    expect(write?.text).toBe("typed before restore");
   });
 
   it("restores a stored draft into a pristine composer", async () => {
