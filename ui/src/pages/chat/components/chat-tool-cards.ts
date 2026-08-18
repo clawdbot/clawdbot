@@ -305,7 +305,7 @@ function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
   if (kind !== "edit" && kind !== "write") {
     return target;
   }
-  return target.split(/[\\/]/u).filter(Boolean).at(-1) ?? target;
+  return target.split(/[\\/]/u).findLast(Boolean) ?? target;
 }
 
 export function syncToolDisclosureOverflow(event: Event): void {
