@@ -13,6 +13,7 @@ import {
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  describeInsufficientTsdownHeap,
   listTsdownOutputRoots,
   parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
@@ -386,6 +387,62 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("refuses to start when the host budget cannot fit the build", () => {
+    // 1500MiB minus the 768MiB headroom leaves 732MB, well under what the packages pass needs.
+    const shortfall = describeInsufficientTsdownHeap({
+      env: {},
+      cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
+    });
+
+    expect(shortfall?.fatal).toBe(true);
+    expect(shortfall?.message).toContain("732MB build heap");
+    expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP=1");
+  });
+
+  it("refuses a host whose slice cannot hold the whole-build peak", () => {
+    // A 4GiB slice resolves a 3328MB heap and clears the early invocations, then dies partway
+    // through the third: the binding constraint is the 4730MiB whole-build peak, not one pass.
+    expect(
+      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 })
+        ?.fatal,
+    ).toBe(true);
+  });
+
+  it("admits the smallest slice measured to complete a full build", () => {
+    expect(
+      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 }),
+    ).toBeNull();
+  });
+
+  it("downgrades the refusal to a warning when the operator opts in", () => {
+    expect(
+      describeInsufficientTsdownHeap({
+        env: { OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP: "1" },
+        cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
+      })?.fatal,
+    ).toBe(false);
+  });
+
+  it("stays silent when the host budget fits the build", () => {
+    expect(
+      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 8 * 1024 * 1024 * 1024 }),
+    ).toBeNull();
+  });
+
+  it("never sizes the heap above a cgroup limit smaller than the old floor", () => {
+    // A floor applied on top of a real limit yields a heap the cgroup cannot honour, so the
+    // build is OOM-killed instead of merely running smaller.
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
+    });
+
+    // 1500 MiB budget minus the 768 MiB headroom, not the former 2048 MiB floor.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=732");
   });
 
   it("caps the tsdown heap using the process's own cgroup slice budget", () => {

@@ -46,7 +46,6 @@ const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
-const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const DEFAULT_CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
 const DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH = "/sys/fs/cgroup/memory";
@@ -695,11 +694,50 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
     return defaultMaxOldSpaceMb;
   }
 
-  const cgroupCap = Math.max(
-    MIN_TSDOWN_MAX_OLD_SPACE_MB,
-    limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
-  );
+  // Never exceed the budget just discovered: a floor applied on top of a real limit produces
+  // a heap the cgroup cannot honour, which is an OOM kill rather than a smaller build.
+  const cgroupCap = Math.max(1, limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB);
   return Math.min(defaultMaxOldSpaceMb, cgroupCap);
+}
+
+/**
+ * Measured against this repo by running the full eleven-invocation build inside real cgroups.
+ * A 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
+ * and a 2816MiB slice (2048MB heap) are both killed partway through the third invocation, so the
+ * binding constraint is the whole-build peak rather than any single pass. Roughly 380MiB of that
+ * peak is rolldown, a native addon, which --max-old-space-size does not govern at all.
+ */
+const MEASURED_MIN_TSDOWN_HEAP_MB = 4352;
+const TSDOWN_ALLOW_SMALL_HEAP_ENV = "OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP";
+
+/**
+ * Describes a host that cannot fit the build, or null when it can. Reported before any
+ * output is cleaned: a host that cannot rebuild must not also lose the build it already
+ * has. Fatal by default because continuing either aborts partway through the invocation
+ * list or, when the heap outruns a container limit, thrashes at the ceiling instead of
+ * failing, which starves every other process on the machine.
+ */
+export function describeInsufficientTsdownHeap(params: MemoryLimitParams = {}) {
+  const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
+  if (maxOldSpaceMb >= MEASURED_MIN_TSDOWN_HEAP_MB) {
+    return null;
+  }
+  const env = params.env ?? process.env;
+  return {
+    fatal: env[TSDOWN_ALLOW_SMALL_HEAP_ENV] !== "1",
+    message: [
+      `[tsdown-build] This host cannot build OpenClaw: it allows a ${maxOldSpaceMb}MB build heap, ` +
+        `and a full build needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
+        `native allocations are counted; those are not covered by --max-old-space-size.`,
+      "Stopping before any build output is removed. Pick one:",
+      "  - give this machine or container more memory",
+      `  - set ${TSDOWN_ALLOW_SMALL_HEAP_ENV}=1 to attempt the build anyway`,
+      // Deliberately not suggesting a declarations-only build. Skipping them collapses the
+      // invocation list into one larger pass that measured worse twice over: it pinned a 3GB
+      // container at its ceiling with oom_kill still 0 and never finished, which is the same
+      // thrash this guard exists to prevent. With declarations on the pass peaks near 2.5GB.
+    ].join("\n"),
+  };
 }
 
 function parseMaxOldSpaceSizeMb(value: unknown, fallbackMb: number) {
@@ -1171,6 +1209,14 @@ if (isMainModule()) {
   if (args.help) {
     console.log(tsdownBuildUsage());
     process.exit(0);
+  }
+  const heapShortfall = describeInsufficientTsdownHeap();
+  if (heapShortfall) {
+    if (heapShortfall.fatal) {
+      console.error(heapShortfall.message);
+      process.exit(1);
+    }
+    console.warn(heapShortfall.message);
   }
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
