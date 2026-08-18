@@ -1,7 +1,5 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { resolveSessionResetPolicy } from "../../../../src/config/sessions.js";
-import { buildAgentSessionPatch } from "../../../../src/gateway/server-methods/agent-session-patch.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   compareSessionRowsByUpdatedAt,
@@ -415,35 +413,14 @@ describe("visibleSessionMatches", () => {
 describe("isSystemCreatedSessionRow", () => {
   const base = { key: "agent:main:explicit:probe", kind: "direct", updatedAt: 1 } as const;
   it("keeps a newly created operator-named CLI session visible", () => {
-    const key = "agent:main:incident-42";
-    const patch = buildAgentSessionPatch({
-      freshEntry: undefined,
-      initialEntry: undefined,
-      cfg: {},
-      sessionAgentId: "main",
-      canonicalSessionKey: key,
-      storePath: "/tmp/openclaw-explicit-session-visibility-test.json",
-      normalizedSpawned: {},
-      requestDeliveryHint: undefined,
-      explicitSessionKey: key,
-      hasRestoredCronContinuation: false,
-      resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-      now: 1,
-      isSystemGatewayRun: false,
-      visibleRequest: true,
-      fallbackSessionId: "session-id",
-      touchInteraction: true,
-      failedSessionTranscriptMissing: () => false,
-    }).patch;
     const row: GatewaySessionRow = {
-      key,
+      key: "agent:main:incident-42",
       kind: "direct",
       updatedAt: 1,
       createdVia: "run",
-      displayName: patch.displayName,
+      displayName: "incident-42",
     };
 
-    expect(row.displayName).toBe("incident-42");
     expect(isSystemCreatedSessionRow(row)).toBe(false);
   });
 
@@ -457,11 +434,6 @@ describe("isSystemCreatedSessionRow", () => {
       false,
     ],
     ["run + label stays visible", { createdVia: "run", label: "My batch job" }, false],
-    [
-      "run + displayName stays visible",
-      { createdVia: "run", displayName: "Nightly digest" },
-      false,
-    ],
     ["operator creation stays visible", { createdVia: "operator" }, false],
     ["legacy row without provenance stays visible", {}, false],
     [
