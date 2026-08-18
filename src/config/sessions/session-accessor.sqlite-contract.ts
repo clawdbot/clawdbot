@@ -83,12 +83,25 @@ export type TranscriptEventAppendOptions = {
   /** Synchronous authority check run inside the append transaction. */
   beforeCommitInTransaction?: () => void;
   /**
+   * The caller's last known-good transcript row snapshot, from an earlier
+   * `onCommittedSnapshot` or `readTranscriptSnapshotSync`. When provided, it is
+   * revalidated against the current rows *before* this append: if a foreign
+   * process committed a row since that snapshot was taken, `onCommittedSnapshot`
+   * is not invoked for this append, so the caller's stale snapshot is left in
+   * place instead of being silently replaced by one that absorbed the foreign
+   * row without it ever being added to the caller's own in-memory entries. A
+   * later `replaceTranscriptEventsSync` call against that stale snapshot then
+   * detects the drift and fails instead of dropping the foreign row.
+   */
+  expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[];
+  /**
    * Invoked synchronously inside the append's own write transaction, immediately
    * after the row is written, with the transcript row snapshot as of that same
    * commit. Sync callers use this to capture an atomically-consistent "expected
    * snapshot" for a later `replaceTranscriptEventsSync` — reading it back after
    * the transaction has already committed would leave a window for a foreign
-   * process's append to land in between and be silently absorbed.
+   * process's append to land in between and be silently absorbed. Skipped when
+   * `expectedSnapshot` is provided and no longer matches (see above).
    */
   onCommittedSnapshot?: (rows: SqliteTranscriptSnapshotRow[]) => void;
 };
@@ -149,6 +162,8 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   parentId?: string | null;
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   useRawWhenLinear?: boolean;
+  /** See {@link TranscriptEventAppendOptions.expectedSnapshot}. */
+  expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[];
   /** See {@link TranscriptEventAppendOptions.onCommittedSnapshot}. */
   onCommittedSnapshot?: (rows: SqliteTranscriptSnapshotRow[]) => void;
 };

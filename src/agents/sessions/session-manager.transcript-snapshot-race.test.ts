@@ -184,4 +184,65 @@ describe("SessionManager transcript snapshot race regression (#124393)", () => {
     separateEntriesReadSpy.mockRestore();
     separateSnapshotReadSpy.mockRestore();
   });
+
+  it("rejects a rewrite when a foreign process commits right before our own next append", async () => {
+    // Regression for the clawsweeper[bot] P1 finding on PR #124749: a foreign row
+    // committed after this manager's last known snapshot but before its *own* next
+    // append must not be silently absorbed into the "known-good" snapshot that a
+    // later rewrite validates against -- that would let the rewrite delete it.
+    const dir = tempDirs.make("openclaw-session-manager-snapshot-race-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "snapshot-race-foreign-before-own-append";
+    const sessionKey = "agent:main:dashboard:snapshot-race-foreign-before-own-append";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await sessionAccessor.upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+
+    const target = parseSqliteSessionFileMarker(marker);
+    if (!target) {
+      throw new Error("expected SQLite transcript marker fixture");
+    }
+    const manager = SessionManager.open({ ...target, sessionKey }, dir);
+
+    // A foreign process commits its own append *before* this manager's next append,
+    // without this manager ever observing it.
+    const foreignAppend = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "foreign-message",
+      message: buildAssistantMessage("foreign answer"),
+      parentId: user.messageId,
+    });
+
+    // This manager's own append must still succeed -- the foreign row must not block
+    // it -- but it must not record a "known-good" snapshot that absorbed the foreign
+    // row without ever adding it to this manager's own in-memory entries. A non-message
+    // append (appendThinkingLevelChange, like any other leaf/opaque append) goes
+    // through appendTranscriptEventSync, which -- unlike a message append -- has no
+    // effectiveParentId reconciliation that would otherwise reload and resync the
+    // manager on its own.
+    manager.appendThinkingLevelChange("high");
+
+    // A rewrite must now detect that its tracked snapshot is stale (because the
+    // append above could not safely refresh it) instead of proceeding to overwrite
+    // storage with entries that omit the foreign row.
+    expect(() =>
+      manager.removeTrailingEntries((entry) => entry.type === "thinking_level_change"),
+    ).toThrow(expect.objectContaining({ name: "SqliteTranscriptMutationConflictError" }));
+
+    const records = await loadTranscriptEvents(scope);
+    const ids = records
+      .map((record) =>
+        record && typeof record === "object" && "id" in record ? record.id : undefined,
+      )
+      .filter((id): id is string => typeof id === "string");
+    expect(ids).toContain(foreignAppend.messageId);
+  });
 });

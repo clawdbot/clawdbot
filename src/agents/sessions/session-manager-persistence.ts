@@ -183,6 +183,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, header, {
+          expectedSnapshot: this.getExpectedTranscriptSnapshot(),
           onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
         }),
         "Session transcript header was not persisted",
@@ -193,6 +194,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (leafEntry) {
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry, {
+          expectedSnapshot: this.getExpectedTranscriptSnapshot(),
           onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
         }),
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
@@ -208,6 +210,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
           ...(options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }
             : {}),
+          expectedSnapshot: this.getExpectedTranscriptSnapshot(),
           onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
         }),
         `Session transcript entry was not persisted: ${entry.id}`,
@@ -223,6 +226,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
+      expectedSnapshot: this.getExpectedTranscriptSnapshot(),
       onCommittedSnapshot: (rows: SqliteTranscriptSnapshotRow[]) =>
         this.recordCommittedTranscriptSnapshot(rows),
     } satisfies Parameters<typeof appendTranscriptMessageSync>[1];

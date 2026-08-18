@@ -51,6 +51,11 @@ export class SessionManagerCore {
   // between our last commit and the rewrite is detected instead of silently deleted.
   private transcriptSnapshot: SqliteTranscriptSnapshotRow[] | undefined;
 
+  /** The transcript row snapshot subclasses should pass as `expectedSnapshot` to a new append. */
+  protected getExpectedTranscriptSnapshot(): SqliteTranscriptSnapshotRow[] | undefined {
+    return this.transcriptSnapshot;
+  }
+
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
