@@ -372,6 +372,7 @@ export function createAgentTurnService({
           // string and numeric threadIds (e.g., Matrix uses integers).
           threadId: recipientThreadId,
         });
+        const explicitSessionKey = normalizeOptionalString(request.sessionKey);
         const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
           buildAgentSessionPatch({
             freshEntry,
@@ -383,6 +384,7 @@ export function createAgentTurnService({
             normalizedSpawned,
             requestDeliveryHint,
             requestLabel: request.label,
+            ...(explicitSessionKey ? { explicitSessionKey } : {}),
             pluginOwnerId:
               freshEntry === undefined
                 ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)

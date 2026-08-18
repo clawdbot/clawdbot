@@ -14,6 +14,12 @@ import { isRecoverableTerminalSessionStatus } from "../../config/sessions/termin
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeSessionDeliveryState,
@@ -52,6 +58,7 @@ export function buildAgentSessionPatch(params: {
   normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
   requestDeliveryHint: DeliveryContext | undefined;
   requestLabel?: string;
+  explicitSessionKey?: string;
   pluginOwnerId?: string;
   expectedExistingSessionId?: string;
   hasRestoredCronContinuation: boolean;
@@ -136,6 +143,16 @@ export function buildAgentSessionPatch(params: {
     origin: sessionDeliveryOrigin(params.freshEntry),
   });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
+  const explicitSessionDisplayName =
+    params.freshEntry === undefined &&
+    params.visibleRequest &&
+    normalizeOptionalString(params.explicitSessionKey) &&
+    !labelValue &&
+    !isCronSessionKey(params.canonicalSessionKey) &&
+    !isSubagentSessionKey(params.canonicalSessionKey) &&
+    !isAcpSessionKey(params.canonicalSessionKey)
+      ? parseAgentSessionKey(params.canonicalSessionKey)?.rest.trim()
+      : undefined;
   const freshSessionRotatedSinceLoad = Boolean(
     params.initialEntry?.sessionId &&
     params.freshEntry?.sessionId &&
@@ -232,6 +249,9 @@ export function buildAgentSessionPatch(params: {
     ...automaticRecoveryClearPatch,
     delivery,
     ...(labelValue ? { label: labelValue } : {}),
+    // An operator-supplied key is an explicit name: keep it instead of generating
+    // a dashboard title later, matching the semantics of a Control UI rename.
+    ...(explicitSessionDisplayName ? { displayName: explicitSessionDisplayName } : {}),
     ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
     groupId: nextGroup.groupId,
     groupChannel: nextGroup.groupChannel,
