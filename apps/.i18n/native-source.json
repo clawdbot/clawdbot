@@ -18605,6 +18605,17 @@
       ]
     },
     {
+      "id": "native.android.565f13278080f6c3",
+      "source": "Waiting for a concurrency slot",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.9ee1b8e3390bce87",
       "source": "Waiting for device approval",
       "surface": "android",
