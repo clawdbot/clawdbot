@@ -97,6 +97,7 @@ export type GatewaySessionRow = {
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   icon?: string;
+  channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   /** Preferred Control UI face for generic session navigation. */
@@ -109,7 +110,7 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionOrigin;
+  origin?: Omit<SessionOrigin, "avatar">;
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;

@@ -1,5 +1,6 @@
 // Control UI shared URL helpers.
 // Normalizes base paths and avatar URLs for browser/gateway surfaces.
+import { CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX } from "./control-ui-contract.js";
 
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
@@ -29,6 +30,11 @@ export function buildControlUiAvatarUrl(basePath: string, agentId: string): stri
   return basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/${agentId}`
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;
+}
+
+/** Builds the authenticated conversation-avatar URL for a session. */
+export function buildControlUiChannelAvatarUrl(basePath: string, sessionKey: string): string {
+  return `${basePath}${CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX}/${encodeURIComponent(sessionKey)}`;
 }
 
 /** URL prefix for gateway-served Control UI avatar assets. */
