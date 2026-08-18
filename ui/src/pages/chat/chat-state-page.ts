@@ -265,7 +265,6 @@ export function createPageState(
     renderLifecycle,
     requestUpdate: () => renderLifecycle.invalidate(),
     sessionWorkspaceState: undefined,
-    sessionWorkspaceOpenRequest: undefined,
     backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;

@@ -53,11 +53,11 @@ function createGatewayHarness() {
   return {
     gateway,
     request,
-    emit(payload: unknown) {
+    emit(payload: unknown, event = CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       for (const listener of eventListeners) {
         listener({
           type: "event",
-          event: CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+          event,
           payload,
           seq: 1,
         });
@@ -185,6 +185,40 @@ describe("SessionPullRequestIndicatorsController", () => {
     selectedAgentId = "work";
     controller.hostUpdated();
     await vi.advanceTimersByTimeAsync(0);
+
+    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+  });
+
+  it("clears a structural session's indicator while replacement data is pending", async () => {
+    vi.useFakeTimers();
+    const host = new TestHost();
+    const harness = createGatewayHarness();
+    const row = {
+      key: "agent:main:demo",
+      isChild: false,
+      worktreeId: "wt-demo",
+    } as SidebarRecentSession;
+    const controller = new SessionPullRequestIndicatorsController(host, {
+      getConnected: () => true,
+      getRows: () => [row],
+      getSelectedAgentId: () => "main",
+      getGateway: () => harness.gateway,
+    });
+    controller.hostConnected();
+    controller.hostUpdated();
+    await vi.advanceTimersByTimeAsync(0);
+    harness.emit({
+      sessions: {
+        [row.key]: {
+          pullRequests: [{ number: 1, state: "open" }],
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+
+    harness.emit({ sessionKey: row.key, agentId: "main", reason: "rewind" }, "sessions.changed");
 
     expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
   });

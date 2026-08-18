@@ -8,8 +8,13 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import {
+  isStructuralSessionMutationReason,
+  readSessionChangedEvent,
+} from "./sessions/reconcile.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./sessions/session-key.ts";
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
@@ -61,7 +66,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   >();
   const pendingRefreshKeys = new Set<string>();
   const retry = createGatewayRetryOwner();
-  let knownClient = gateway.snapshot.client;
+  const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
   let syncRequestGeneration = 0;
@@ -126,14 +131,51 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
 
+  const retireConnection = () => {
+    syncRequestGeneration += 1;
+    lastHello = null;
+    lastSignature = null;
+    const hadSnapshots = snapshots.size > 0;
+    snapshots.clear();
+    for (const key of waiters.keys()) {
+      settle(key);
+    }
+    if (hadSnapshots) {
+      notify();
+    }
+  };
+
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
-    if (snapshot.client !== knownClient || snapshot.hello !== lastHello) {
+    const changed = connection.transition(snapshot);
+    if (changed) {
+      retireConnection();
+    }
+    if (changed || snapshot.hello !== lastHello) {
       retry.reset();
       scheduleSync();
     }
   };
 
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
+    if (event.event === "sessions.changed") {
+      const changed = readSessionChangedEvent(event.payload);
+      const reason = asNullableRecord(event.payload)?.reason;
+      if (!changed || !isStructuralSessionMutationReason(reason)) {
+        return;
+      }
+      const scopedEventKey = scopedSessionPullRequestKey(changed.key, changed.agentId ?? undefined);
+      if (!watchedKeys().includes(scopedEventKey)) {
+        return;
+      }
+      const removed = snapshots.delete(scopedEventKey);
+      pendingRefreshKeys.add(scopedEventKey);
+      retry.reset();
+      if (removed) {
+        notify();
+      }
+      scheduleSync();
+      return;
+    }
     if (event.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       return;
     }
@@ -177,7 +219,9 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       return;
     }
     attached = true;
-    knownClient = gateway.snapshot.client;
+    if (connection.transition(gateway.snapshot)) {
+      retireConnection();
+    }
     lastHello = null;
     lastSignature = null;
     // Active consumers own these registrations: isolate:false workers share document, so an
@@ -217,14 +261,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
-    if (snapshot.client !== knownClient) {
-      retry.reset();
-      knownClient = snapshot.client;
-      lastHello = null;
-      lastSignature = null;
-      snapshots.clear();
-      notify();
-    }
     const available =
       snapshot.phase === "connected" &&
       client !== null &&

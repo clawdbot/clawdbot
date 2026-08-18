@@ -4,6 +4,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
+  isStructuralSessionMutationReason,
   readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
@@ -16,8 +17,10 @@ import type { SessionCapability, SessionGateway, SessionState } from "./session-
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
+  buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionEventMatches,
 } from "./session-key.ts";
@@ -122,7 +125,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const retirePullRequestSummary = (key: string) => {
     const normalizedKey = key.trim();
     pullRequestEpochs.delete(normalizedKey);
-    pullRequestSummaries.delete(normalizedKey);
+    return pullRequestSummaries.delete(normalizedKey);
   };
 
   // Canonical Gateway rows are the source of truth for everything except the
@@ -427,13 +430,27 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
+    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
+    if (eventInfo && isStructuralSessionMutationReason(eventReason)) {
+      const aliasKey =
+        eventInfo.key === "global" && eventInfo.agentId
+          ? buildAgentMainSessionKey({
+              agentId: eventInfo.agentId,
+              mainKey: resolveUiConfiguredMainKey(gateway.snapshot),
+            })
+          : eventInfo.key;
+      const removed = retirePullRequestSummary(eventInfo.key);
+      const aliasRemoved = aliasKey !== eventInfo.key && retirePullRequestSummary(aliasKey);
+      if (aliasRemoved || removed) {
+        publish({ ...state });
+      }
+    }
     if (eventInfo?.archived !== null) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
-    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();

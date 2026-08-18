@@ -82,6 +82,11 @@ type SessionChangedEventInfo = {
   isChatTurn: boolean;
 };
 
+const STRUCTURAL_REASONS = new Set<unknown>(["new", "reset", "branch-switch", "fork", "rewind"]);
+
+export const isStructuralSessionMutationReason = (reason: unknown): reason is string =>
+  STRUCTURAL_REASONS.has(reason);
+
 type ThinkingMetadataCarrier = {
   modelProvider?: string | null;
   model?: string | null;

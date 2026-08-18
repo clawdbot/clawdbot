@@ -121,7 +121,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       const snapshot = store.get(this.scopedKey(session.key));
       // Empty failure snapshots retain the rendered chip; snapshots carrying
       // last-known PRs can also hydrate a newly mounted row.
-      if (!snapshot || (snapshot.status !== "ready" && snapshot.pullRequests.length === 0)) {
+      if (!snapshot) {
+        changed = this.states.delete(session.key) || changed;
+        continue;
+      }
+      if (snapshot.status !== "ready" && snapshot.pullRequests.length === 0) {
         continue;
       }
       const entry = {

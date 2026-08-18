@@ -69,11 +69,11 @@ function createGatewayHarness() {
     subscribeEvents,
     unsubscribeSnapshots,
     unsubscribeEvents,
-    emit(payload: unknown) {
+    emit(payload: unknown, event = "controlUi.sessionPullRequests.changed") {
       for (const listener of eventListeners) {
         listener({
           type: "event",
-          event: "controlUi.sessionPullRequests.changed",
+          event,
           payload,
           seq: 1,
         });
@@ -120,15 +120,27 @@ describe("session pull request snapshot store", () => {
     await flushSync();
   });
 
-  it("resubscribes the current union after reconnect", async () => {
+  it("retires snapshots and resubscribes normally across a same-client reconnect", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const owner = {};
-    store.watch(owner, ["agent:main:demo"]);
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(1);
+    harness.emit({
+      sessions: {
+        [key]: {
+          pullRequests: [{ number: 1, state: "open" }],
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
 
     harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
+    expect(store.get(key)).toBeUndefined();
+
     harness.setSnapshot({
       ...harness.gateway.snapshot,
       phase: "connected",
@@ -137,8 +149,76 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
     expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:demo"],
+      sessionKeys: [key],
     });
+    store.unwatch(owner);
+    await flushSync();
+  });
+
+  it.each(["new", "reset", "branch-switch", "fork", "rewind"])(
+    "retires and force-refreshes only the matching session for %s",
+    async (reason) => {
+      const harness = createGatewayHarness();
+      const store = sessionPullRequestsForGateway(harness.gateway);
+      const owner = {};
+      const listener = vi.fn();
+      const globalAlias = reason === "rewind";
+      const key = globalAlias ? "agent:work:global" : "agent:main:demo";
+      const otherKey = "agent:main:other";
+      store.watch(owner, [key, otherKey]);
+      const unsubscribe = store.subscribe(listener);
+      await flushSync();
+      harness.emit({
+        sessions: {
+          [key]: { pullRequests: [{ number: 1 }], rateLimited: false, status: "ready" },
+          [otherKey]: { pullRequests: [{ number: 2 }], rateLimited: false, status: "ready" },
+        },
+      });
+      harness.request.mockClear();
+      listener.mockClear();
+
+      harness.emit(
+        {
+          sessionKey: globalAlias ? "global" : key,
+          agentId: globalAlias ? "work" : "main",
+          reason,
+        },
+        "sessions.changed",
+      );
+
+      expect(store.get(key)).toBeUndefined();
+      expect(store.get(otherKey)?.pullRequests).toEqual([{ number: 2 }]);
+      expect(listener).toHaveBeenCalled();
+      await flushSync();
+      expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+        sessionKeys: [key, otherKey].toSorted(),
+        refreshSessionKeys: [key],
+      });
+      unsubscribe();
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
+
+  it("keeps snapshots for ordinary send events", async () => {
+    const harness = createGatewayHarness();
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const owner = {};
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
+    await flushSync();
+    harness.emit({
+      sessions: {
+        [key]: { pullRequests: [{ number: 1 }], rateLimited: false, status: "ready" },
+      },
+    });
+    harness.request.mockClear();
+
+    harness.emit({ sessionKey: key, agentId: "main", reason: "send" }, "sessions.changed");
+    await flushSync();
+
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1 }]);
+    expect(harness.request).not.toHaveBeenCalled();
     store.unwatch(owner);
     await flushSync();
   });

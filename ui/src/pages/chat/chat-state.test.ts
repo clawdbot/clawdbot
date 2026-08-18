@@ -733,6 +733,60 @@ describe("canonical session message recovery", () => {
     expect(retireSessionCompanion).toHaveBeenCalledExactlyOnceWith("agent:other:main", "other");
   });
 
+  it("retires current checkout presentation for a structural event", () => {
+    const listBranches = vi.fn(() => new Promise<never>(() => {}));
+    const { state } = createSessionEventState({
+      chatBranches: [
+        {
+          leafEntryId: "old-leaf",
+          headline: "Old checkout",
+          messageCount: 1,
+          active: true,
+        },
+      ],
+      chatBranchesConnectionEpoch: 1,
+      chatBranchesSessionKey: "agent:main:main",
+      sessions: {
+        listBranches,
+        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+        refresh: vi.fn().mockResolvedValue(undefined),
+      } as never,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: state.sessionKey, agentId: "main", reason: "branch-switch" },
+    });
+
+    expect(state.chatBranches).toEqual([]);
+    expect(state.chatBranchesSessionKey).toBeNull();
+    expect(listBranches).toHaveBeenCalled();
+  });
+
+  it.each([
+    { sessionKey: "agent:main:main", agentId: "main", reason: "send" },
+    { sessionKey: "agent:other:main", agentId: "other", reason: "rewind" },
+  ])("preserves checkout presentation for non-matching event $reason/$sessionKey", (payload) => {
+    const oldBranches = [
+      { leafEntryId: "old-leaf", headline: "Old checkout", messageCount: 1, active: true },
+    ];
+    const { state } = createSessionEventState({
+      chatBranches: oldBranches,
+      chatBranchesConnectionEpoch: 1,
+      chatBranchesSessionKey: "agent:main:main",
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload,
+    });
+
+    expect(state.chatBranches).toBe(oldBranches);
+    expect(state.chatBranchesSessionKey).toBe("agent:main:main");
+  });
+
   it("keeps the routed row when a hidden pane observes its archive first", () => {
     const archivedKey = "agent:main:dashboard:archived";
     const sharedHost = makeChatHost({

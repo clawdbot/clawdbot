@@ -86,12 +86,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       store.refresh(pullRequestKey);
     }
     const result = store.get(pullRequestKey);
-    if (
-      !result ||
-      result.status === "unavailable" ||
-      !this.isConnectionScopeCurrent(scope) ||
-      sessionKey !== scope.state.sessionKey
-    ) {
+    if (!this.isConnectionScopeCurrent(scope) || sessionKey !== scope.state.sessionKey) {
+      return;
+    }
+    if (!result) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
+      this.sessionPullRequestsRateLimited = false;
+      this.dismissedSessionPullRequestIds = new Set();
+      this.requestUpdate();
+      return;
+    }
+    if (result.status === "unavailable") {
       return;
     }
     this.sessionPullRequests = result.pullRequests;

@@ -41,6 +41,12 @@ function emitSnapshot(
   emitGatewayEvent: (event: string, payload: unknown) => void,
   sessionKey: string,
   snapshot: {
+    branch?: {
+      owner: string;
+      repo: string;
+      branch: string;
+      createUrl?: string;
+    };
     pullRequests: ControlUiSessionPullRequest[];
     rateLimited: boolean;
     status: "ready" | "rate-limited" | "unavailable";
@@ -142,6 +148,37 @@ describe("chat pane pushed pull request state", () => {
     });
 
     expect(pane.sessionPullRequests).toEqual([]);
+  });
+
+  it("clears the pane snapshot while a structural replacement is pending", async () => {
+    const { pane, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+      setPullRequestSummary: vi.fn(),
+    } as unknown as SessionCapability);
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      branch: {
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "feature/demo",
+        createUrl: "https://github.com/openclaw/openclaw/pull/new/feature/demo",
+      },
+      pullRequests: [pullRequest(111532, "open")],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pane.refreshSessionPullRequests();
+    expect(pane.sessionPullRequests).toHaveLength(1);
+
+    emitGatewayEvent("sessions.changed", {
+      sessionKey: "agent:main:current",
+      agentId: "main",
+      reason: "branch-switch",
+    });
+    await pane.refreshSessionPullRequests();
+
+    expect(pane.sessionPullRequests).toEqual([]);
+    expect(pane.sessionPullRequestsBranch).toBeUndefined();
   });
 
   it("preserves shared PR state for an empty rate-limited snapshot", async () => {

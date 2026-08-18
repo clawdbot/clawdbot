@@ -7,6 +7,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
+  isStructuralSessionMutationReason,
   readSessionChangedEvent,
   type SessionChangedResult,
 } from "../../lib/sessions/reconcile.ts";
@@ -37,7 +38,10 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
-import { refreshSessionWorkspace } from "./components/chat-session-workspace.ts";
+import {
+  refreshSessionWorkspace,
+  retireSessionWorkspaceCheckout,
+} from "./components/chat-session-workspace.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
@@ -195,11 +199,6 @@ function replayPendingSessionMessageReload(
   void loadChatHistory(state).finally(() => state.requestUpdate?.());
 }
 
-// Branch topology only changes on structural mutations; the producer records
-// the reason, so reload branches only for those instead of on every
-// sessions.changed (each cache miss rescans the full transcript on the gateway).
-const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
-
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
@@ -218,11 +217,11 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (
-    matchesChat &&
-    typeof source?.reason === "string" &&
-    BRANCH_TOPOLOGY_REASONS.has(source.reason)
-  ) {
+  if (matchesChat && isStructuralSessionMutationReason(source?.reason)) {
+    state.chatBranches = [];
+    state.chatBranchesSessionKey = null;
+    state.chatBranchesConnectionEpoch = null;
+    retireSessionWorkspaceCheckout(state);
     void loadChatBranches(state);
   }
   if (event && matchesChat && event.archived !== null) {
