@@ -423,6 +423,81 @@ suite.define(() => {
     );
   });
 
+  it("leaves Markdown session links to their dedicated preview hovercard", async () => {
+    const now = Date.now();
+    const selectedSessionKey = "agent:main:selected-markdown-link";
+    const linkedSessionKey = "agent:main:linked-markdown-hover";
+
+    await suite.withPage(
+      {
+        hasTouch: false,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          historyMessages: [
+            {
+              content: [
+                {
+                  type: "text",
+                  text: `Open \`${linkedSessionKey}\` for the linked session.`,
+                },
+              ],
+              role: "assistant",
+              timestamp: now,
+            },
+          ],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              {
+                key: selectedSessionKey,
+                kind: "direct",
+                label: "Selected session",
+                updatedAt: now,
+              },
+              {
+                key: linkedSessionKey,
+                kind: "direct",
+                label: "Linked sidebar session",
+                updatedAt: now - 60_000,
+              },
+            ]),
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const link = page.locator(`.markdown-session-link[data-session-key="${linkedSessionKey}"]`);
+        await link.waitFor({ state: "visible" });
+        await link.focus();
+
+        const preview = page.locator(".session-link-hovercard");
+        await preview.waitFor({ state: "visible" });
+        expect(await preview.getAttribute("role")).toBe("dialog");
+        expect(await link.getAttribute("aria-controls")).toBe(await preview.getAttribute("id"));
+        await expect
+          .poll(
+            async () => {
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 700);
+              });
+              return (await gateway.getRequests("progressCard.get")).filter(
+                (request) =>
+                  isRecord(request.params) && request.params.sessionKey === linkedSessionKey,
+              ).length;
+            },
+            { timeout: 2_000 },
+          )
+          .toBe(0);
+        expect(await page.locator(".session-progress-hovercard").count()).toBe(0);
+      },
+    );
+  });
+
   it("keeps the portaled progress dialog keyboard-reachable and viewport-contained", async () => {
     const selectedSessionKey = "agent:main:selected-focus";
     const sessionKey = "agent:main:focusable-progress";
