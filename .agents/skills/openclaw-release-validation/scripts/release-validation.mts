@@ -543,20 +543,51 @@ async function runCampaignCommand(version?: string): Promise<void> {
   process.stdout.write(`${JSON.stringify({ releaseTag, ...result }, null, 2)}\n`);
 }
 
-function runBoardCommand(fixture: FixtureKind): void {
-  const manifest = loadScenarioManifest();
+export function renderMissionOverview(manifest: ScenarioManifest, fixture: FixtureKind): string {
   const lines = [
-    `# ${manifest.title}`,
+    "# Available OpenClaw release-validation tests",
     "",
     `Fixture: ${fixture}`,
     "",
-    ...manifest.subsystems.flatMap((scenario, index) => [
-      `- [ ] ${index + 1}/${manifest.subsystems.length} ${scenario.title}`,
-      ...scenario.instructions[fixture].map((instruction) => `  - ${instruction}`),
-      `  - Pass when: ${scenario.passEvidence.join(" ")}`,
-    ]),
+    "Choose any numbers or names, or choose `all`. No mission starts until you confirm.",
+    "",
+    ...manifest.subsystems.map(
+      (scenario, index) => `${index + 1}. ${scenario.title} — ${scenario.passEvidence.join(" ")}`,
+    ),
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderMissionDetails(
+  manifest: ScenarioManifest,
+  fixture: FixtureKind,
+  subsystemId: string,
+): string {
+  const scenario = manifest.subsystems.find((entry) => entry.id === subsystemId);
+  if (!scenario) {
+    throw new Error(`unknown subsystem: ${subsystemId}`);
+  }
+  const lines = [
+    `# ${scenario.title}`,
+    "",
+    ...scenario.instructions[fixture].map((instruction) => `- ${instruction}`),
+    `- Pass when: ${scenario.passEvidence.join(" ")}`,
+    ...scenario.safety.map((item) => `- Safety: ${item}`),
+    ...(scenario.docs.length > 0 ? [`- Docs: ${scenario.docs.join(", ")}`] : []),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function runBoardCommand(fixture: FixtureKind): void {
+  const manifest = loadScenarioManifest();
+  process.stdout.write(renderMissionOverview(manifest, fixture));
+}
+
+function runMissionCommand(fixture: FixtureKind, subsystemId: string | undefined): void {
+  if (!subsystemId) {
+    throw new Error("mission requires a subsystem id, such as pairing or control-ui");
+  }
+  process.stdout.write(renderMissionDetails(loadScenarioManifest(), fixture, subsystemId));
 }
 
 async function main(): Promise<void> {
@@ -566,13 +597,20 @@ async function main(): Promise<void> {
     await runCampaignCommand(versionIndex === -1 ? undefined : args[versionIndex + 1]);
     return;
   }
-  if (command === "board") {
+  if (command === "board" || command === "mission") {
     const fixtureIndex = args.indexOf("--fixture");
     const fixture = fixtureIndex === -1 ? "clean" : args[fixtureIndex + 1];
     if (fixture !== "clean" && fixture !== "copied") {
       throw new Error("--fixture must be clean or copied");
     }
-    runBoardCommand(fixture);
+    if (command === "board") {
+      runBoardCommand(fixture);
+    } else {
+      runMissionCommand(
+        fixture,
+        args.find((arg) => !arg.startsWith("--") && arg !== fixture),
+      );
+    }
     return;
   }
   process.stdout.write(
@@ -580,7 +618,8 @@ async function main(): Promise<void> {
       "OpenClaw release-validation helpers",
       "",
       "  campaign [--version vYYYY.M.D-beta.N]  Get or create the shared release issue",
-      "  board [--fixture clean|copied]          Print the 19-mission local checklist",
+      "  board [--fixture clean|copied]          Show the compact test-selection menu",
+      "  mission <id> [--fixture clean|copied]   Show details for one selected mission",
       "",
     ].join("\n"),
   );

@@ -18,12 +18,12 @@ seven phases. Keep exactly one phase in progress and check each off visibly:
 2. Choose fixture and, for copied state, choose the source gateway.
 3. Prepare the isolated candidate runtime.
 4. Create or import the fixture and upgrade it.
-5. Complete the subsystem mission board.
+5. Choose the subsystem scope and complete only those missions.
 6. Publish feedback and record the promotion vote.
 7. Destroy run-owned resources and restore any source gateway stopped here.
 
 The detailed mission source of truth is
-`references/subsystem-checklist.json`. Print a local board at any time:
+`references/subsystem-checklist.json`. Print the compact test menu at any time:
 
 ```sh
 node --import tsx .agents/skills/openclaw-release-validation/scripts/release-validation.mts board --fixture copied
@@ -78,13 +78,30 @@ gateway action; OCM `running` alone is not proof.
 
 ## 5. Subsystem missions
 
-Load the complete checklist JSON. For each mission:
+Load the complete checklist JSON, but use progressive disclosure:
+
+1. Show a compact overview of all available subsystem names with one short
+   sentence describing what each tests. Do not show procedures yet.
+2. Ask: **Which subsystems do you want to test in this run?** Prefer a
+   multiselect UI when available; otherwise accept names, numbers, or `all`.
+3. Echo the selected scope and let the tester adjust it before continuing.
+4. Mark unchosen missions `not selected`, not `skipped`, and omit them from the
+   active checklist. The tester may add another mission later.
+5. Start no mission until the tester confirms the selection. In particular,
+   never start Pairing merely because it is first in the manifest.
+
+After selection, create the visible checklist from only the chosen missions.
+Then handle one selected mission at a time:
 
 1. Show its fixture-specific steps, pass evidence, safety note, and docs.
 2. Let the tester work through it; assist with commands and observation.
 3. Record `pass`, `fail`, `blocked`, `skipped`, or `n/a` plus their note.
 4. Count `fail` and `blocked` as completed coverage; require a useful note.
 5. Update the visible checklist immediately.
+
+Reveal the next mission's detailed procedure only when the tester chooses or
+reaches it. Keep the compact overview available without dumping every mission's
+instructions into the conversation.
 
 For Channels on copied state, first prove the inherited channel while the
 source is stopped. Then remove that channel's configuration from the copied

@@ -6,6 +6,8 @@ import {
   getOrCreateCampaignIssue,
   loadScenarioManifest,
   recordSubsystemResult,
+  renderMissionDetails,
+  renderMissionOverview,
   renderRunComment,
   selectLatestBetaRelease,
 } from "../../.agents/skills/openclaw-release-validation/scripts/release-validation.mts";
@@ -278,5 +280,19 @@ describe("openclaw release validation", () => {
       expect(subsystem.instructions.copied.length).toBeGreaterThan(0);
       expect(subsystem.passEvidence.length).toBeGreaterThan(0);
     }
+  });
+
+  it("shows a compact selection overview before revealing one chosen mission", () => {
+    const manifest = loadScenarioManifest();
+    const overview = renderMissionOverview(manifest, "copied");
+
+    expect(overview).toContain("Choose any numbers or names");
+    expect(overview).toContain("1. Pairing");
+    expect(overview).toContain("19. OpenClaw harness");
+    expect(overview).not.toContain("Pair one new client or sender");
+
+    const details = renderMissionDetails(manifest, "copied", "pairing");
+    expect(details).toContain("Pair one new client or sender");
+    expect(details).not.toContain("Channels");
   });
 });
