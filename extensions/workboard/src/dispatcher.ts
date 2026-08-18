@@ -249,7 +249,7 @@ function selectStartableCards(
       !isWorkboardClaimReclaimable(claim, now) &&
       (card.status === "running" ||
         (card.status !== "done" && cardHasActiveClaim(card, now)) ||
-        card.execution?.status === "running");
+        (card.status !== "done" && card.execution?.status === "running"));
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }

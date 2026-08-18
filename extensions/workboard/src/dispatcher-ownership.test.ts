@@ -625,4 +625,51 @@ describe("Workboard dispatcher ownership", () => {
       metadata: { claim: { ownerId: "workboard-dispatcher" } },
     });
   });
+
+  it("releases the owner slot for a done card with a stale running execution", async () => {
+    const keyed = createMemoryStore();
+    const store = new WorkboardStore(keyed);
+    const done = await store.create({
+      title: "Finished worker",
+      status: "ready",
+      agentId: "worker-1",
+      workspaceAccess: { unrestricted: true },
+    });
+    // Simulate a worker run that finished (card done) but whose execution
+    // record was never closed, e.g. the gateway restarted mid-run.
+    await keyed.register(done.id, {
+      version: 1,
+      card: {
+        ...done,
+        status: "done",
+        execution: {
+          id: "exec-stale",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "running",
+          startedAt: 1,
+          updatedAt: 2,
+        },
+      },
+    });
+    const ready = await store.create({
+      title: "Next worker",
+      status: "ready",
+      agentId: "worker-1",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-next-worker" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 1 },
+    });
+
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: ready.id, runId: "run-next-worker" }),
+    ]);
+    expect(result.startFailures).toEqual([]);
+    expect(run).toHaveBeenCalledOnce();
+  });
 });
