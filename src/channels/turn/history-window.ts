@@ -425,7 +425,9 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         throw error;
       }
       if (recordParams.shouldRecord?.() === false) {
-        return [];
+        // Match the in-memory window: cancellation while media resolves keeps
+        // the already-admitted text but must not attach late media.
+        return recordPersisted(recordParams);
       }
       const media = normalizeHistoryMediaEntries({
         media: resolvedMedia,

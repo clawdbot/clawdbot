@@ -135,6 +135,47 @@ describe("createChannelHistoryWindow", () => {
     ]);
   });
 
+  it("keeps persisted text when recording is cancelled while media resolves", async () => {
+    const persistence = createPersistenceStore();
+    const history = createChannelHistoryWindow({
+      historyMap: new Map(),
+      persistence: { store: persistence.store, keyPrefix: "imessage:main", now: () => 100 },
+    });
+    let shouldRecord = true;
+
+    await history.recordWithMedia({
+      historyKey: "group-1",
+      limit: 50,
+      messageId: "pdf-1",
+      entry: {
+        sender: "Alice",
+        body: "This is the worksheet",
+        timestamp: 10,
+        messageId: "pdf-1",
+      },
+      media: async () => {
+        shouldRecord = false;
+        return [
+          {
+            path: "/state/media/inbound/worksheet.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+          },
+        ];
+      },
+      shouldRecord: () => shouldRecord,
+    });
+
+    expect(history.buildInboundHistory({ historyKey: "group-1", limit: 50 })).toEqual([
+      {
+        sender: "Alice",
+        body: "This is the worksheet",
+        timestamp: 10,
+        messageId: "pdf-1",
+      },
+    ]);
+  });
+
   it("consumes only the captured high-water mark and preserves concurrent messages", () => {
     const persistence = createPersistenceStore();
     const history = createChannelHistoryWindow({
