@@ -4,7 +4,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
-  isStructuralSessionMutationReason,
   readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
@@ -431,7 +430,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       archivedFilter: roster.lastOptions().archivedFilter,
     });
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-    if (eventInfo && isStructuralSessionMutationReason(eventReason)) {
+    if (eventInfo?.isStructural) {
       const aliasKey =
         eventInfo.key === "global" && eventInfo.agentId
           ? buildAgentMainSessionKey({

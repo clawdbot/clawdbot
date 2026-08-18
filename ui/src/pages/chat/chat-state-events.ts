@@ -7,7 +7,6 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
-  isStructuralSessionMutationReason,
   readSessionChangedEvent,
   type SessionChangedResult,
 } from "../../lib/sessions/reconcile.ts";
@@ -217,7 +216,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (matchesChat && isStructuralSessionMutationReason(source?.reason)) {
+  if (matchesChat && event?.isStructural) {
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
     state.chatBranchesConnectionEpoch = null;

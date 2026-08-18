@@ -11,10 +11,7 @@ import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
-import {
-  isStructuralSessionMutationReason,
-  readSessionChangedEvent,
-} from "./sessions/reconcile.ts";
+import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./sessions/session-key.ts";
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
@@ -159,8 +156,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
-      const reason = asNullableRecord(event.payload)?.reason;
-      if (!changed || !isStructuralSessionMutationReason(reason)) {
+      if (!changed?.isStructural) {
         return;
       }
       const scopedEventKey = scopedSessionPullRequestKey(changed.key, changed.agentId ?? undefined);
