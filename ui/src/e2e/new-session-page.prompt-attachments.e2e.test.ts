@@ -90,6 +90,11 @@ suite.define(() => {
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
       await firstMessage.fill("restore this prompt after restart and incognito");
       await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
+      await firstPage.reload();
+      await expect
+        .poll(() => firstMessage.inputValue())
+        .toBe("restore this prompt after restart and incognito");
+      await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
       await firstPage.close();
 
       const restoredPage = await context.newPage();

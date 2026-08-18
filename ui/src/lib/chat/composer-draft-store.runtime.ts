@@ -34,6 +34,8 @@ type DurableComposerDraft = {
   attachments: DurableComposerDraftAttachment[];
 };
 
+type ReadDurableComposerDraft = DurableComposerDraft & { writeId: string };
+
 type StoredDurableComposerDraft = DurableComposerDraft & {
   key: string;
   ownerKey: string;
@@ -45,14 +47,14 @@ type StoredDurableComposerDraft = DurableComposerDraft & {
 };
 
 type DurableComposerDraftReadResult =
-  | { status: "found"; draft: DurableComposerDraft }
-  | { status: "not-found"; revision?: number }
+  | { status: "found"; draft: ReadDurableComposerDraft }
+  | { status: "not-found"; revision?: number; writeId?: string }
   | { status: "storage-failed" };
 
 type DurableComposerDraftWriteResult =
-  | { status: "persisted"; revision?: number }
+  | { status: "persisted"; revision?: number; writeId?: string }
   | { status: "conflict" }
-  | { status: "payload-too-large" }
+  | { status: "payload-too-large"; revision?: number; writeId?: string }
   | { status: "storage-failed" };
 
 let databasePromise: Promise<IDBDatabase> | null = null;
@@ -270,7 +272,7 @@ export async function readDurableComposerDraft(
         const expired = tombstone(record, now);
         store.put(expired);
         await transactionComplete(transaction);
-        return { status: "not-found", revision: expired.revision };
+        return { status: "not-found", revision: expired.revision, writeId: expired.writeId };
       }
       store.delete(record.key);
       await transactionComplete(transaction);
@@ -278,12 +280,13 @@ export async function readDurableComposerDraft(
     }
     await transactionComplete(transaction);
     if (!isActiveDraft(record)) {
-      return { status: "not-found", revision: record.revision };
+      return { status: "not-found", revision: record.revision, writeId: record.writeId };
     }
     return {
       status: "found",
       draft: {
         revision: record.revision,
+        writeId: record.writeId,
         text: record.text,
         attachments: record.attachments,
       },
@@ -296,7 +299,12 @@ export async function readDurableComposerDraft(
 export async function writeDurableComposerDraft(
   scope: DurableComposerDraftScope,
   draft: DurableComposerDraft,
-  options: { expectedRevision: number; writeId: string },
+  options: {
+    expectedRevision: number;
+    expectedWriteId?: string;
+    expectedWriteIds?: readonly string[];
+    writeId: string;
+  },
 ): Promise<DurableComposerDraftWriteResult> {
   const payloadBytes = draft.attachments.reduce((total, attachment) => {
     return total + attachment.blob.size;
@@ -307,7 +315,13 @@ export async function writeDurableComposerDraft(
       { revision: draft.revision, text: draft.text, attachments: [] },
       options,
     );
-    return fallbackResult.status === "persisted" ? { status: "payload-too-large" } : fallbackResult;
+    return fallbackResult.status === "persisted"
+      ? {
+          status: "payload-too-large",
+          revision: fallbackResult.revision,
+          writeId: fallbackResult.writeId,
+        }
+      : fallbackResult;
   }
   try {
     const database = await openDatabase();
@@ -318,13 +332,15 @@ export async function writeDurableComposerDraft(
     if (current?.revision === draft.revision) {
       transaction.abort();
       return current.writeId === options.writeId
-        ? { status: "persisted", revision: current.revision }
+        ? { status: "persisted", revision: current.revision, writeId: current.writeId }
         : { status: "conflict" };
     }
-    if (
-      current &&
-      (current.revision !== options.expectedRevision || current.revision > draft.revision)
-    ) {
+    const expectedCurrent = current
+      ? (current.revision === options.expectedRevision &&
+          (options.expectedWriteId === undefined || current.writeId === options.expectedWriteId)) ||
+        options.expectedWriteIds?.includes(current.writeId) === true
+      : options.expectedRevision === 0 && options.expectedWriteId === undefined;
+    if (!expectedCurrent || (current?.revision ?? 0) > draft.revision) {
       transaction.abort();
       return { status: "conflict" };
     }
@@ -344,7 +360,7 @@ export async function writeDurableComposerDraft(
     store.put(record);
     await pruneOwnerRecords(store, record.ownerKey, now);
     await transactionComplete(transaction);
-    return { status: "persisted", revision: draft.revision };
+    return { status: "persisted", revision: draft.revision, writeId: options.writeId };
   } catch {
     return { status: "storage-failed" };
   }
@@ -361,6 +377,7 @@ export async function retireDurableComposerDraft(
     const key = recordKey(scope);
     const current = parseStoredDraft(await requestResult(store.get(key)));
     const revision = nextFenceRevision(Math.max(minimumRevision, current?.revision ?? 0));
+    const writeId = `retired:${revision}`;
     const now = Date.now();
     store.put({
       key,
@@ -372,11 +389,11 @@ export async function retireDurableComposerDraft(
       text: "",
       attachments: [],
       updatedAt: now,
-      writeId: `retired:${revision}`,
+      writeId,
     } satisfies StoredDurableComposerDraft);
     await pruneOwnerRecords(store, ownerKey(scope), now);
     await transactionComplete(transaction);
-    return { status: "persisted", revision };
+    return { status: "persisted", revision, writeId };
   } catch {
     return { status: "storage-failed" };
   }

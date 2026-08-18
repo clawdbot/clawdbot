@@ -13,6 +13,8 @@ import {
 export type DurableChatComposerSnapshot = {
   scope: DurableComposerDraftScope;
   expectedRevision: number;
+  expectedWriteId?: string;
+  expectedWriteIds?: readonly string[];
   revision: number;
   text: string;
   attachments: ChatAttachment[];
@@ -129,6 +131,8 @@ export async function hydrateDurableComposerAttachments(
 export async function writeDurableComposerSnapshot(snapshot: {
   scope: DurableComposerDraftScope;
   expectedRevision: number;
+  expectedWriteId?: string;
+  expectedWriteIds?: readonly string[];
   revision: number;
   text: string;
   storedAttachments: DurableComposerDraftAttachment[] | null;
@@ -143,7 +147,12 @@ export async function writeDurableComposerSnapshot(snapshot: {
       text: payloadUnavailable ? "" : snapshot.text,
       attachments: snapshot.storedAttachments ?? [],
     },
-    { expectedRevision: snapshot.expectedRevision, writeId: snapshot.writeId },
+    {
+      expectedRevision: snapshot.expectedRevision,
+      ...(snapshot.expectedWriteId ? { expectedWriteId: snapshot.expectedWriteId } : {}),
+      ...(snapshot.expectedWriteIds?.length ? { expectedWriteIds: snapshot.expectedWriteIds } : {}),
+      writeId: snapshot.writeId,
+    },
   );
   return { result, payloadUnavailable };
 }

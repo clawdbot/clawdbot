@@ -162,6 +162,46 @@ suite.define(() => {
             gatewayOwner: "other-gateway",
           });
 
+          const lineageScope = scope("write-lineage");
+          await draftStore.writeDurableComposerDraft(
+            lineageScope,
+            { revision: 26, text: "first writer", attachments: [] },
+            { expectedRevision: 0, writeId: "first-writer" },
+          );
+          const wrongLineage = await draftStore.writeDurableComposerDraft(
+            lineageScope,
+            { revision: 27, text: "unrelated writer", attachments: [] },
+            {
+              expectedRevision: 26,
+              expectedWriteId: "different-writer",
+              writeId: "unrelated-writer",
+            },
+          );
+          const matchingLineage = await draftStore.writeDurableComposerDraft(
+            lineageScope,
+            { revision: 28, text: "matching writer", attachments: [] },
+            {
+              expectedRevision: 26,
+              expectedWriteId: "first-writer",
+              writeId: "matching-writer",
+            },
+          );
+          const localLineage = await draftStore.writeDurableComposerDraft(
+            lineageScope,
+            { revision: 29, text: "local successor", attachments: [] },
+            {
+              expectedRevision: 0,
+              expectedWriteIds: ["matching-writer"],
+              writeId: "local-successor",
+            },
+          );
+          const lineageRead = await draftStore.readDurableComposerDraft(lineageScope);
+          const missingPredecessor = await draftStore.writeDurableComposerDraft(
+            scope("missing-predecessor"),
+            { revision: 90, text: "must conflict", attachments: [] },
+            { expectedRevision: 89, writeId: "missing-predecessor" },
+          );
+
           const tooLargeBlob = new Blob([new Uint8Array(25 * 1024 * 1024 + 1)]);
           const oversizedScope = scope("oversized");
           const oversized = await draftStore.writeDurableComposerDraft(
@@ -274,10 +314,7 @@ suite.define(() => {
           });
           incognitoState.incognito = false;
           await incognitoPersistence.setIncognito(false);
-          await waitFor(async () => {
-            const read = await draftStore.readDurableComposerDraft(incognitoScope);
-            return incognitoState.message === "" || read.status === "found";
-          });
+          const incognitoAfterToggle = await draftStore.readDurableComposerDraft(incognitoScope);
           const incognitoRetainedMessage = incognitoState.message;
           if (incognitoRetainedMessage) {
             incognitoState.message = "normal after incognito";
@@ -352,6 +389,73 @@ suite.define(() => {
           await staleClearPersistence.clearSubmittedDraft();
           const staleClearRead = await draftStore.readDurableComposerDraft(staleClearScope);
 
+          const resetLineageScope = {
+            gatewayOwner: "reset-lineage-gateway",
+            recoveryScope: "reset-lineage-credential",
+            scopeKey: "reset-lineage-route",
+          };
+          await draftStore.writeDurableComposerDraft(
+            resetLineageScope,
+            { revision: 90, text: "cached predecessor", attachments: [] },
+            { expectedRevision: 0, writeId: "cached-predecessor" },
+          );
+          const resetLineageState: DraftState = {
+            message: "",
+            attachments: [],
+            incognito: false,
+          };
+          const resetLineagePersistence = new newSession.NewSessionDraftPersistence(
+            () => resetLineageState,
+            (message, attachments) => {
+              resetLineageState.message = message;
+              resetLineageState.attachments = attachments;
+            },
+            () => undefined,
+          );
+          resetLineagePersistence.setOwner(
+            resetLineageScope.gatewayOwner,
+            resetLineageScope.recoveryScope,
+          );
+          resetLineagePersistence.activateRoute(resetLineageScope.scopeKey);
+          await waitFor(async () => resetLineageState.message === "cached predecessor");
+          const databaseRequest = indexedDB.open("openclaw-control-ui", 1);
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            databaseRequest.addEventListener("success", () => resolve(databaseRequest.result), {
+              once: true,
+            });
+            databaseRequest.addEventListener(
+              "error",
+              () => reject(databaseRequest.error ?? new Error("IndexedDB open failed")),
+              { once: true },
+            );
+          });
+          const deleteTransaction = database.transaction("composerDrafts", "readwrite");
+          deleteTransaction
+            .objectStore("composerDrafts")
+            .delete(
+              JSON.stringify([
+                resetLineageScope.gatewayOwner,
+                resetLineageScope.recoveryScope,
+                resetLineageScope.scopeKey,
+              ]),
+            );
+          await new Promise<void>((resolve, reject) => {
+            deleteTransaction.addEventListener("complete", () => resolve(), { once: true });
+            deleteTransaction.addEventListener(
+              "error",
+              () => reject(deleteTransaction.error ?? new Error("IndexedDB delete failed")),
+              { once: true },
+            );
+          });
+          database.close();
+          resetLineageState.message = "draft after authoritative deletion";
+          resetLineagePersistence.noteUserMutation();
+          await waitFor(async () => {
+            const read = await draftStore.readDurableComposerDraft(resetLineageScope);
+            return read.status === "found" && read.draft.text === resetLineageState.message;
+          });
+          const resetLineageRead = await draftStore.readDurableComposerDraft(resetLineageScope);
+
           const originalNow = Date.now;
           let now = originalNow();
           const expiringScope = scope("expiring");
@@ -383,6 +487,11 @@ suite.define(() => {
             retiredRead: retiredRead.status,
             wrongCredential: wrongCredential.status,
             wrongGateway: wrongGateway.status,
+            wrongLineage: wrongLineage.status,
+            matchingLineage: matchingLineage.status,
+            localLineage: localLineage.status,
+            lineageText: lineageRead.status === "found" ? lineageRead.draft.text : null,
+            missingPredecessor: missingPredecessor.status,
             oversized: oversized.status,
             oversizedRead: oversizedRead.status,
             oversizedText: oversizedRead.status === "found" ? oversizedRead.draft.text : null,
@@ -398,12 +507,16 @@ suite.define(() => {
             missingPayloadText:
               missingPayloadRead.status === "found" ? missingPayloadRead.draft.text : null,
             incognitoRetainedMessage,
+            incognitoAfterToggle: incognitoAfterToggle.status,
             incognitoMessage: incognitoState.message,
             incognitoRead: incognitoRead.status,
             incognitoText: incognitoRead.status === "found" ? incognitoRead.draft.text : null,
             clearRead: clearRead.status,
             staleClearRead: staleClearRead.status,
             staleClearText: staleClearRead.status === "found" ? staleClearRead.draft.text : null,
+            resetLineageRead: resetLineageRead.status,
+            resetLineageText:
+              resetLineageRead.status === "found" ? resetLineageRead.draft.text : null,
             expiredRead: expiredRead.status,
             active: retained.filter((entry) => entry.status === "found").length,
           };
@@ -422,6 +535,11 @@ suite.define(() => {
         retiredRead: "not-found",
         wrongCredential: "not-found",
         wrongGateway: "not-found",
+        wrongLineage: "conflict",
+        matchingLineage: "persisted",
+        localLineage: "persisted",
+        lineageText: "local successor",
+        missingPredecessor: "conflict",
         oversized: "payload-too-large",
         oversizedRead: "found",
         oversizedText: "oversized",
@@ -434,12 +552,15 @@ suite.define(() => {
         missingPayloadRead: "found",
         missingPayloadText: "newer attachment draft",
         incognitoRetainedMessage: "normal before incognito",
+        incognitoAfterToggle: "not-found",
         incognitoMessage: "normal after incognito",
         incognitoRead: "found",
         incognitoText: "normal after incognito",
         clearRead: "not-found",
         staleClearRead: "found",
         staleClearText: "newer other-tab draft",
+        resetLineageRead: "found",
+        resetLineageText: "draft after authoritative deletion",
         expiredRead: "not-found",
         active: 20,
       });
