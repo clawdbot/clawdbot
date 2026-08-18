@@ -290,7 +290,7 @@ describe("runConfigureWizard default-agent ownership", () => {
   });
 
   it("keeps a workspace-less legacy owner on the global workspace", async () => {
-    const baseConfig = retainLegacyDefaultAgentId({
+    const baseConfig = {
       agents: {
         defaults: {
           workspace: "/tmp/global-workspace",
@@ -303,7 +303,8 @@ describe("runConfigureWizard default-agent ownership", () => {
           },
         },
       },
-    } satisfies OpenClawConfig, "ops");
+    } satisfies OpenClawConfig;
+    retainLegacyDefaultAgentId(baseConfig, "ops");
     mocks.state.snapshot = {
       exists: true,
       valid: true,
@@ -330,16 +331,16 @@ describe("runConfigureWizard default-agent ownership", () => {
       }),
     );
     expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/new-global-workspace/ops" }),
+      expect.objectContaining({ workspaceDir: "/tmp/new-global-workspace" }),
     );
     expect(mocks.setupSkills).toHaveBeenCalledWith(
       expect.any(Object),
-      "/tmp/new-global-workspace/ops",
+      "/tmp/new-global-workspace",
       runtime,
       expect.any(Object),
     );
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      "/tmp/new-global-workspace/ops",
+      "/tmp/new-global-workspace",
       runtime,
       expect.objectContaining({ agentId: "ops" }),
     );

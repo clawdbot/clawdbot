@@ -8,7 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
@@ -598,7 +598,6 @@ export async function runConfigureWizard(
       return;
     }
 
-    const legacySetupAgentId = tryResolveLegacyCompatibilityAgentId(baseConfig);
     let nextConfig = { ...baseConfig };
     let mergeBaseConfig = structuredClone(baseConfig);
     let didSetGatewayMode = false;
@@ -617,7 +616,7 @@ export async function runConfigureWizard(
     const resolveSetupTarget = () =>
       nextConfig.agents?.ownership === "explicit"
         ? resolveSystemAgentOnboardingTarget(nextConfig)
-        : resolveOnboardingAgentTarget(nextConfig, legacySetupAgentId);
+        : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
     let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
