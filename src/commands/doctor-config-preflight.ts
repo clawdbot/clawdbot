@@ -527,6 +527,9 @@ export async function runDoctorConfigPreflight(
                 env: process.env,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                ...(gatewayStartupCheckpointRequired
+                  ? { allowLegacyDeviceIdentityImport: true }
+                  : {}),
               }),
             ),
           );

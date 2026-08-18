@@ -1,4 +1,4 @@
-// Doctor-only import for the retired primary device identity JSON.
+// Owner-authorized import for the retired primary device identity JSON.
 import { root, type Root } from "@openclaw/fs-safe";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -507,12 +507,13 @@ async function migrateWithExclusiveStateOwnership(params: {
   };
 }
 
-/** Import the retired primary identity while excluding Gateways that can recreate it. */
+/** Import the retired primary identity under explicit Doctor or startup authority. */
 export async function migrateLegacyDeviceIdentity(params: {
   detected: LegacyDeviceIdentityDetection;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
   beforeClaim?: (sourcePath: string) => void;
   beforeCleanup?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
@@ -520,7 +521,10 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (!params.detected.hasLegacy && !params.detected.hasInvalidCanonical) {
     return { changes: [], warnings: [] };
   }
-  if (params.doctorOnlyStateMigrations !== true) {
+  if (
+    params.doctorOnlyStateMigrations !== true &&
+    params.allowLegacyDeviceIdentityImport !== true
+  ) {
     return { changes: [], warnings: [] };
   }
   let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;

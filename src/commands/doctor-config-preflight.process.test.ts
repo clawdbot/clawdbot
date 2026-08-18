@@ -231,6 +231,7 @@ describe.concurrent("gateway startup-migration refusal", () => {
     const stateDatabaseUrl = new URL("../state/openclaw-state-db.ts", import.meta.url).href;
     const script = `
       const fs = await import("node:fs");
+      const path = await import("node:path");
       const { DatabaseSync } = await import("node:sqlite");
       const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
       const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
@@ -240,6 +241,14 @@ describe.concurrent("gateway startup-migration refusal", () => {
       const oldDatabase = new DatabaseSync(${JSON.stringify(databasePath)});
       oldDatabase.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
       oldDatabase.close();
+      const legacyIdentityPath = path.join(${JSON.stringify(stateDir)}, "identity", "device.json");
+      fs.mkdirSync(path.dirname(legacyIdentityPath), { recursive: true });
+      fs.writeFileSync(legacyIdentityPath, JSON.stringify({
+        deviceId: "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        privateKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        createdAtMs: 1700000000000,
+      }));
       const result = await runDoctorConfigPreflight({
         migrateLegacyConfig: false,
         invalidConfigNote: false,
@@ -250,12 +259,17 @@ describe.concurrent("gateway startup-migration refusal", () => {
       const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
       const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
       const columns = repairedDatabase.prepare("PRAGMA table_info(task_runs)").all();
+      const identity = repairedDatabase
+        .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'")
+        .get();
       repairedDatabase.close();
       console.log("__RESULT__" + JSON.stringify({
         valid: result.snapshot.valid,
         hasLastTouchedAt: Object.hasOwn(config.meta ?? {}, "lastTouchedAt"),
         hasSkipWhenBusy: Object.hasOwn(config.agents?.defaults?.heartbeat ?? {}, "skipWhenBusy"),
         hasToolUseCount: columns.some((column) => column.name === "tool_use_count"),
+        migratedDeviceIdentity: identity?.device_id === "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        removedLegacyDeviceIdentity: !fs.existsSync(legacyIdentityPath),
       }));
     `;
 
@@ -269,6 +283,8 @@ describe.concurrent("gateway startup-migration refusal", () => {
       hasLastTouchedAt: false,
       hasSkipWhenBusy: false,
       hasToolUseCount: true,
+      migratedDeviceIdentity: true,
+      removedLegacyDeviceIdentity: true,
     });
     expect(hasActiveStartupMigrationLease({ env })).toBe(false);
   }, 75_000);
