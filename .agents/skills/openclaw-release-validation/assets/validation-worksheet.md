@@ -1,9 +1,5 @@
 # OpenClaw release validation
 
-> Copy this template to a private local worksheet. Edit that copy directly or
-> tell the agent what to record. Only release-facing sections from the completed
-> copy are summarized on GitHub.
-
 ## Candidate
 
 - Release:
@@ -16,9 +12,8 @@
 
 ## Upgrade findings
 
-Record candidate OpenClaw problems observed while upgrading or starting the
-copied gateway. For each finding, note what you expected, what happened, and
-the affected surface.
+Automatically populated by the agent with candidate OpenClaw problems observed
+while upgrading or starting the copied gateway.
 
 - None yet.
 
