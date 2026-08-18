@@ -22,7 +22,41 @@ function normalizeLlamaServerThinking(
   };
 }
 
-/** Keeps the shared OpenAI transport and adjusts only llama-server template behavior. */
+/** Maps shared structured-output requests to the shape accepted by older llama-server builds. */
+function normalizeLlamaServerResponseFormat(
+  payload: unknown,
+  requestedResponseFormat?: Record<string, unknown>,
+): unknown {
+  if (!isRecord(payload)) {
+    return payload;
+  }
+  const responseFormat = isRecord(payload.response_format)
+    ? payload.response_format
+    : requestedResponseFormat;
+  if (!responseFormat || responseFormat.type === "text") {
+    return payload;
+  }
+  const schema =
+    responseFormat.type === "json_schema"
+      ? isRecord(responseFormat.json_schema)
+        ? responseFormat.json_schema.schema
+        : responseFormat.schema
+      : responseFormat.type === "json_object"
+        ? responseFormat.schema
+        : responseFormat;
+  if (!isRecord(schema)) {
+    return payload;
+  }
+  return {
+    ...payload,
+    response_format: {
+      type: "json_object",
+      schema,
+    },
+  };
+}
+
+/** Keeps the shared OpenAI transport and adjusts llama-server request compatibility. */
 export function wrapLlamaServerStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
   return (model, context, options) => {
@@ -34,7 +68,8 @@ export function wrapLlamaServerStream(ctx: ProviderWrapStreamFnContext): StreamF
       ...options,
       onPayload: async (payload, requestModel) => {
         const customized = (await onPayload?.(payload, requestModel)) ?? payload;
-        return normalizeLlamaServerThinking(customized, ctx.thinkingLevel);
+        const thinkingNormalized = normalizeLlamaServerThinking(customized, ctx.thinkingLevel);
+        return normalizeLlamaServerResponseFormat(thinkingNormalized, options?.responseFormat);
       },
     });
   };

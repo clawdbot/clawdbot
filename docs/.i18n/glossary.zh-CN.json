@@ -1790,5 +1790,21 @@
   {
     "source": "llama-server (external llama.cpp)",
     "target": "llama-server（外部 llama.cpp）"
+  },
+  {
+    "source": "llama-server Provider",
+    "target": "llama-server 提供商"
+  },
+  {
+    "source": "llama.cpp plugin",
+    "target": "llama.cpp 插件"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "LM Studio",
+    "target": "LM Studio"
   }
 ]

@@ -219,9 +219,9 @@ environment value.
 
 ### Structured output fails
 
-Use a current official llama.cpp release. OpenClaw sends the standard OpenAI
-`json_schema` response format, which is supported by the managed b10357 server
-and newer releases.
+Use a current official llama.cpp release. OpenClaw maps JSON Schema requests to
+llama-server's `json_object` schema shape so structured output also works with
+older external server builds.
 
 ## Related
 
