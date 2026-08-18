@@ -555,7 +555,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     }
     // Position outside the complete row, including its trailing actions. Anchoring
     // to the link alone lets the card cover those controls and makes them unclickable.
-    const positionAnchor = anchor.closest<HTMLElement>(".sidebar-recent-session") ?? anchor;
+    const positionAnchor = anchor.parentElement!;
     // Sidebar rows share their hover surface with the progress hovercard: an active
     // progress card owns the row, so the preview opens only without one. A card that
     // appears while the preview is open is not reconciled until the next hover.
