@@ -68,6 +68,31 @@ describe("session mutation reconnect truth", () => {
     },
   );
 
+  it("reports both confirmed completion and replacement refresh failure", async () => {
+    const createResponse = createDeferred<{ key: string }>();
+    let failRefresh = false;
+    const { publish, sessions } = createMutationHarness({
+      "sessions.create": () => createResponse.promise,
+      "sessions.list": () => {
+        if (failRefresh) {
+          throw new Error("replacement roster unavailable");
+        }
+        return sessionsResult([], 1);
+      },
+    });
+
+    const operation = sessions.create({ agentId: "main" });
+    reconnectSameClient(publish);
+    await waitForFast(() => expect(sessions.state.result).not.toBeNull());
+    failRefresh = true;
+    createResponse.resolve({ key: "agent:main:refresh-failed" });
+
+    await expect(operation).resolves.toBe("agent:main:refresh-failed");
+    expect(sessions.state.error).toContain("completed on the previous connection");
+    expect(sessions.state.error).toContain("replacement roster unavailable");
+    sessions.dispose();
+  });
+
   it("does not carry a confirmed create into a different client owner", async () => {
     const createResponse = createDeferred<{ key: string }>();
     const { publish, request, sessions } = createMutationHarness({

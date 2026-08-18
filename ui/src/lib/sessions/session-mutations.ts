@@ -138,14 +138,24 @@ export function createSessionMutations(host: SessionMutationsHost) {
     if (!replacement || replacement.client !== scope.client) {
       return false;
     }
-    await host.refreshReplacement(agentId).catch(() => undefined);
+    let refreshError: string | undefined;
+    try {
+      await host.refreshReplacement(agentId);
+      refreshError = host.readState().error ?? undefined;
+    } catch (error) {
+      refreshError = formatUiError(error);
+    }
     if (!host.connection.isCurrent(replacement)) {
       return false;
     }
     host.publish(
       {
         ...host.readState(),
-        error: t("connection.sessionOperationCompletedPreviousConnection"),
+        error: refreshError
+          ? t("connection.sessionOperationCompletedPreviousConnectionWithRefreshError", {
+              error: refreshError,
+            })
+          : t("connection.sessionOperationCompletedPreviousConnection"),
       },
       "operation",
     );

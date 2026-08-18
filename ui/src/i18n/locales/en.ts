@@ -4084,6 +4084,8 @@ export const en: TranslationMap = {
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
+    sessionOperationCompletedPreviousConnectionWithRefreshError:
+      "The session operation completed on the previous connection, but refreshing the current session list failed: {error}",
     scopeUpgrade: {
       limited: "This browser has limited access.",
       guidance:
