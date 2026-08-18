@@ -686,7 +686,7 @@ export function createOpenClawTools(
     ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({
       sessionId: options?.sessionId,
-      onBeforeYield: createRequesterYieldCallback({
+      claimYield: createRequesterYieldCallback({
         requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
         requesterAgentId: sessionAgentId,
         requesterTurnRunId: options?.runId,

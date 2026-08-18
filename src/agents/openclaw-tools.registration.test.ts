@@ -662,6 +662,42 @@ describe("sessions_yield completion ownership", () => {
       markRequesterTurnYielded.mockRestore();
     }
   });
+
+  it("keeps the turn active when it owns no pending child completion", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(0);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          runSessionKey: "agent:main:main",
+          sessionId: "requester-session",
+          runId: "run-requester",
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      const result = await tool.execute("yield-requester", {});
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error:
+          "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+      });
+      expect(markRequesterTurnYielded).toHaveBeenCalledOnce();
+      expect(onYield).not.toHaveBeenCalled();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
 });
 
 function hasTool(tools: readonly { name: string }[], name: string): boolean {
