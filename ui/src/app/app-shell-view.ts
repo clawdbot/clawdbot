@@ -87,6 +87,7 @@ export interface ShellViewHost {
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly commandPaletteElement: OptionalCustomElement;
+  readonly debugOverlayElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
@@ -469,6 +470,9 @@ export function renderApplicationShell(host: ShellViewHost) {
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`
+      : nothing}
+    ${isOptionalElementDefined(host.debugOverlayElement)
+      ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
       : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed

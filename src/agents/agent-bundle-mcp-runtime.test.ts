@@ -103,6 +103,7 @@ async function writeListToolsMcpServer(params: {
   hangToolCallsUntilRestartMarkerPath?: string;
   notifyListChangedOnInitialized?: boolean;
   notifyListChangedAfterFirstList?: boolean;
+  notifyListChangedReleasePath?: string;
   notifyListChangedBeforeEveryListResponse?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
@@ -140,6 +141,7 @@ const hangToolCallsUntilRestartMarkerPath = ${JSON.stringify(
     )};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
+const notifyListChangedReleasePath = ${JSON.stringify(params.notifyListChangedReleasePath)};
 const notifyListChangedBeforeEveryListResponse = ${params.notifyListChangedBeforeEveryListResponse === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
@@ -278,8 +280,20 @@ function handle(message) {
         },
       });
       if (notifyListChangedAfterFirstList && currentListCount === 1) {
-        log("notify tools/list_changed");
-        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+        void (async () => {
+          while (notifyListChangedReleasePath) {
+            const released = await fs
+              .access(notifyListChangedReleasePath)
+              .then(() => true)
+              .catch(() => false);
+            if (released) {
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          log("notify tools/list_changed");
+          send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+        })();
       }
     };
     void (async () => {
@@ -1794,11 +1808,13 @@ process.on("SIGINT", shutdown);`,
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-refresh-exit-"));
     const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
+    const notifyReleasePath = path.join(tempDir, "notify.release");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
       capabilities: { tools: { listChanged: true } },
       notifyListChangedAfterFirstList: true,
+      notifyListChangedReleasePath: notifyReleasePath,
       exitOnListCall: 2,
     });
 
@@ -1817,6 +1833,7 @@ process.on("SIGINT", shutdown);`,
 
     try {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      await fs.writeFile(notifyReleasePath, "release", "utf8");
       await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,

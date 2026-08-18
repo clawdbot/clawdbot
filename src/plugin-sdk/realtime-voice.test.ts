@@ -263,6 +263,27 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     lifecycle.cancel();
     expect(lifecycle.drainPendingAudio()).toEqual([]);
   });
+
+  it("keeps the freshest queued speech and warns once per overflow episode", () => {
+    const onPendingAudioOverflow = vi.fn();
+    const lifecycle = new RealtimeVoiceSessionLifecycle("Test", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow,
+    });
+
+    for (let index = 0; index < 322; index += 1) {
+      expect(lifecycle.enqueuePendingAudio(Buffer.from([index % 256]))).toBe(true);
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledOnce();
+    expect(lifecycle.drainPendingAudio()).toEqual(
+      Array.from({ length: 320 }, (_, index) => Buffer.from([(index + 2) % 256])),
+    );
+
+    for (let index = 0; index < 321; index += 1) {
+      lifecycle.enqueuePendingAudio(Buffer.from([index % 256]));
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("normalizeRealtimeVoiceResponseOutcome", () => {

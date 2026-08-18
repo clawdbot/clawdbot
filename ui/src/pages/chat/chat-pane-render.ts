@@ -5,7 +5,6 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
-import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -18,6 +17,7 @@ import {
   projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
+import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";

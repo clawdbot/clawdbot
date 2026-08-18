@@ -647,10 +647,23 @@ private actor AsyncStringRecorder {
 
 private actor SessionSubscribeGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var blockedObservers: [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
         await withCheckedContinuation { continuation in
             self.waiters.append(continuation)
+            let observers = self.blockedObservers
+            self.blockedObservers = []
+            for observer in observers {
+                observer.resume()
+            }
+        }
+    }
+
+    func waitUntilBlocked() async {
+        guard self.waiters.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            self.blockedObservers.append(continuation)
         }
     }
 
@@ -8653,9 +8666,8 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         vm.selectModel("openai/gpt-5.4")
-        try await waitUntil("model patch is in flight") {
-            await transport.patchedModels() == ["openai/gpt-5.4"]
-        }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
 
         vm.input = "hello before switch"
         vm.send()
@@ -9778,12 +9790,15 @@ struct ChatViewModelTests {
             initialThinkingLevel: "medium")
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        await MainActor.run { vm.selectModel("openai/reasoning-model") }
-        try await waitUntil("reasoning model patch started") {
-            let pickerShown = await MainActor.run { vm.showsThinkingPicker }
-            let patchedModels = await transport.patchedModels()
-            return pickerShown && patchedModels == ["openai/reasoning-model"]
+        try await waitUntil("model picker bootstrap completed") {
+            await MainActor.run { !vm.isLoading }
         }
+        #expect(await MainActor.run { vm.modelSelectionID == "openai/plain-model" })
+        #expect(await MainActor.run { !vm.showsThinkingPicker })
+        await MainActor.run { vm.selectModel("openai/reasoning-model") }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await MainActor.run { vm.showsThinkingPicker })
+        #expect(await transport.patchedModels() == ["openai/reasoning-model"])
 
         await sendUserMessage(vm, text: "send after rollback")
         try await waitUntil("send waits for model patch") {
@@ -9843,13 +9858,12 @@ struct ChatViewModelTests {
         }
 
         await MainActor.run { vm.selectModel("openai/plain-model") }
-        try await waitUntil("local non-reasoning selection gated") {
-            await MainActor.run {
-                vm.modelSelectionID == "openai/plain-model" &&
-                    !vm.showsThinkingPicker &&
-                    vm.sessions.first?.model == "reasoning-model"
-            }
-        }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await MainActor.run {
+            vm.modelSelectionID == "openai/plain-model" &&
+                !vm.showsThinkingPicker &&
+                vm.sessions.first?.model == "reasoning-model"
+        })
         await modelPatchGate.release()
     }
 
@@ -9883,11 +9897,9 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.showsThinkingPicker })
 
         await MainActor.run { vm.selectModel("openai/model-y") }
-        try await waitUntil("model Y patch started") {
-            await transport.patchedModels() == ["openai/model-y"]
-        }
+        await modelPatchGate.waitUntilBlocked()
+        #expect(await transport.patchedModels() == ["openai/model-y"])
         await MainActor.run { vm.selectModel("openai/model-x") }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(await transport.patchedModels() == ["openai/model-y"])
         await modelPatchGate.release()
         try await waitUntil("model X re-selection patched") {

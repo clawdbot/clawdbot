@@ -269,7 +269,7 @@ describe("subtitleForRoute", () => {
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
-      activity: "Browser-local tool activity summaries.",
+      activity: "Recent sessions across people using this gateway.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",

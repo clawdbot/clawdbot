@@ -136,9 +136,8 @@ describe("Markdown table interactions", () => {
     const { owner } = interactiveOwner();
     const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
     copy.click();
-    await vi.waitFor(() => {
-      expect(copyToClipboard).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
-    });
+    expect(copyToClipboard).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
+    await vi.advanceTimersByTimeAsync(0);
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
 
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;

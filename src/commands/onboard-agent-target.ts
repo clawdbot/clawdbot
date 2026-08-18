@@ -61,7 +61,10 @@ export function applyOnboardingPrimaryModel(
   target: OnboardingAgentTarget,
   model: string,
 ): OpenClawConfig {
-  const entry = config.agents?.entries?.[target.agentId];
+  const authoredEntryKey = Object.keys(config.agents?.entries ?? {}).find(
+    (key) => normalizeAgentId(key) === target.agentId,
+  );
+  const entry = authoredEntryKey ? config.agents?.entries?.[authoredEntryKey] : undefined;
   if (entry?.model === undefined) {
     return applyPrimaryModel(config, model);
   }
@@ -77,7 +80,7 @@ export function applyOnboardingPrimaryModel(
       ...config.agents,
       entries: {
         ...config.agents?.entries,
-        [target.agentId]: {
+        [authoredEntryKey ?? target.agentId]: {
           ...entry,
           model: {
             ...(fallbackValues.length > 0 ? { fallbacks: fallbackValues } : {}),

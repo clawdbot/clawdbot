@@ -91,6 +91,19 @@ function cacheChatMessages(
   });
 }
 
+function cacheEmptyChatSnapshot(host: ChatHost, sessionKey: string): void {
+  cacheChatSessionSnapshot(
+    requireChatMessageCache(host),
+    host,
+    { sessionKey },
+    {
+      messages: [],
+      pagination: { hasMore: false, completeSnapshot: true },
+      sessionId: "cached-session",
+    },
+  );
+}
+
 function createQueuedLocalCommand(
   id: string,
   text: string,
@@ -3873,6 +3886,34 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("sends normally when only a descendant run is active", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { status: "started", runId: "new-parent-run" },
+      },
+      chatMessage: "start another parent turn",
+      chatRunId: null,
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", {
+          hasActiveRun: false,
+          hasActiveSubagentRun: true,
+          status: "done",
+        }),
+      ]),
+      settings: { chatFollowUpMode: "steer" },
+    });
+
+    await handleSendChat(host);
+
+    await waitForFast(() => expect(host.request).toHaveBeenCalled());
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
+    expect(payload.message).toBe("start another parent turn");
+    expect(payload).not.toHaveProperty("queueMode");
+    expect(payload).not.toHaveProperty("expectedRunId");
+    expect(host.chatError).toBeNull();
+  });
+
   it("keeps a steered message visible when only the session row reports an active run", async () => {
     let wireRunId: unknown;
 
@@ -4969,6 +5010,7 @@ describe("handleSendChat", () => {
         requestUpdate: vi.fn(),
       });
     }
+    cacheEmptyChatSnapshot(inactive, item.sessionKey);
     expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
     const event = {
       event: "chat",
@@ -5066,6 +5108,7 @@ describe("handleSendChat", () => {
         requestUpdate: vi.fn(),
       });
     }
+    cacheEmptyChatSnapshot(inactive, item.sessionKey);
     expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
     const event = {
       event: "chat",

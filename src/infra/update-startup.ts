@@ -578,7 +578,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-async function resolveStartupInstallStatus(checkDevGit: boolean) {
+async function resolveStartupInstallStatus(fetchRemoteGit: boolean) {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -593,16 +593,16 @@ async function resolveStartupInstallStatus(checkDevGit: boolean) {
       : undefined;
   const status = await checkUpdateStatus({
     root,
-    timeoutMs: 2500,
-    fetchGit: checkDevGit,
+    ...(fetchRemoteGit ? {} : { timeoutMs: 2500 }),
+    fetchGit: fetchRemoteGit,
     includeRegistry: false,
-    ...(checkDevGit ? { useDetachedDevUpstream: true } : {}),
+    ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
   });
   return { root, status, installReceipt };
 }
 
-/** Starts the process-stable local install inspection owned by the update lifecycle. */
+/** Caches only the fast local install probe; remote Git refresh remains post-ready. */
 export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartupInstallStatus> {
   if (installStatusInitialization) {
     return installStatusInitialization;

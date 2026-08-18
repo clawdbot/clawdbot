@@ -303,7 +303,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "bindings[].session.dmScope":
     'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
   "bindings[].session.groupScope":
-    'Optional group/channel session scope override for this route binding. Use "main" to merge only selected rooms into the agent main session while other rooms keep the global "per-group" default.',
+    'Optional group/channel session scope override for this route binding. "per-group" keeps matched rooms separate and ambiently watched by the agent main session regardless of dmScope; "main" merges their context into main and needs no watch.',
   "bindings[].match":
     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
   "bindings[].match.channel":

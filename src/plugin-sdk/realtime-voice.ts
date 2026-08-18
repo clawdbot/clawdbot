@@ -221,6 +221,7 @@ export {
 } from "../talk/audio-energy.js";
 export {
   convertPcmToMulaw8k,
+  createStreamingPcmResampler,
   mulawToPcm,
   pcmToMulaw,
   resamplePcm,

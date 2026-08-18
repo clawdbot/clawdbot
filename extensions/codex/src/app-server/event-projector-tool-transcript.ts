@@ -188,21 +188,25 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !shouldRecordNativeToolTranscript(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item) || this.resultIds.has(item.id)) {
       return;
     }
     const name = itemName(item);
     if (name) {
+      const status = itemStatus(item);
+      const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
       this.recordToolResult({
         id: item.id,
         name,
         text:
+          approvalTimeoutExplanation ??
           this.rawNativeToolOutputByCallId.get(item.id) ??
           itemTranscriptResultText(item, this.progress.outputTextByItem),
-        isError: isNonSuccessItemStatus(itemStatus(item)),
+        isError: isNonSuccessItemStatus(status),
         details,
         ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
       });
+      this.progress.approvalTimeoutKinds.delete(item.id);
     }
   }
 
@@ -398,7 +402,9 @@ export class CodexToolTranscriptProjection {
     }
     this.trajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
-    const output = itemOutputText(params.item, this.progress.outputTextByItem);
+    const output =
+      this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
+      itemOutputText(params.item, this.progress.outputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
@@ -423,7 +429,9 @@ export class CodexToolTranscriptProjection {
     }
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
-    const error = itemToolError(item, status, this.progress.outputTextByItem);
+    const error =
+      this.progress.approvalTimeoutExplanation(item.id, status) ??
+      itemToolError(item, status, this.progress.outputTextByItem);
     const startedAt = resolveStartedAtFromDurationMs(item.durationMs);
     const hookParams = {
       toolName: name,

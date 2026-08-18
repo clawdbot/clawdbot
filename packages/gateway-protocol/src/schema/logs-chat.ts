@@ -26,12 +26,38 @@ export const LogsTailResultSchema = closedObject({
 export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/**
+ * Bounded forward catch-up response. Clients replay `messages` as `session.message`
+ * payloads. There is no continuation loop: more than 200 raw events or the byte
+ * budget returns `reset`, and the client fetches a fresh tail page.
+ */
+export const ChatHistoryDeltaResultSchema = closedObject({
+  kind: Type.Literal("delta"),
+  messages: Type.Array(Type.Unknown()),
+  deltaCursor: Type.String(),
+  sessionInfo: Type.Unknown(),
+  agentsList: Type.Optional(Type.Unknown()),
+  metadata: Type.Optional(Type.Unknown()),
+});
+
+/** Normal cursor discontinuity; clients recover with a fresh tail request. */
+export const ChatHistoryResetResultSchema = closedObject({
+  kind: Type.Literal("reset"),
+});
+
+/** Closed cursor outcome union. */
+export const ChatHistoryCursorResultSchema = Type.Union([
+  ChatHistoryDeltaResultSchema,
+  ChatHistoryResetResultSchema,
+]);
 
 /** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
 export const ChatMetadataParamsSchema = closedObject({

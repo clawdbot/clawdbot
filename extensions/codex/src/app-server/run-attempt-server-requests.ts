@@ -134,8 +134,8 @@ export function createCodexAttemptServerRequestController(
             nativeHookRelay: resourceState.nativeHookRelay,
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal,
-            onNativeToolFailureDisposition: (itemId, disposition) =>
-              projector?.recordNativeToolApprovalFailure(itemId, disposition),
+            onNativeToolFailureDisposition: (itemId, disposition, approvalKind) =>
+              projector?.recordNativeToolApprovalFailure(itemId, disposition, approvalKind),
           });
         }
         return undefined;

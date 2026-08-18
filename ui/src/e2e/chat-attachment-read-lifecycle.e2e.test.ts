@@ -119,7 +119,8 @@ suite.define(() => {
       await expect
         .poll(() => activeComposer(restoredPage).inputValue())
         .toBe("restart draft A with image");
-      await expect.poll(() => activeAttachments(restoredPage).count()).toBe(1);
+      await activeAttachments(restoredPage).first().waitFor();
+      expect(await activeAttachments(restoredPage).count()).toBe(1);
       if (artifactDir) {
         await restoredPage.screenshot({
           path: path.join(artifactDir, "existing-session-restart-draft-restored.png"),
@@ -130,7 +131,8 @@ suite.define(() => {
       await expect
         .poll(() => activeComposer(restoredPage).inputValue())
         .toBe("restart draft B with removable file");
-      await expect.poll(() => activeAttachments(restoredPage).count()).toBe(1);
+      await activeAttachments(restoredPage).first().waitFor();
+      expect(await activeAttachments(restoredPage).count()).toBe(1);
       await restoredPage
         .locator('openclaw-chat-pane[aria-hidden="false"] .chat-attachment-remove')
         .click();

@@ -203,35 +203,39 @@ function activityAlignmentHtml() {
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
         <div class="chat-group tool chat-group--activity">
-          <div class="chat-avatar tool">A</div>
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
               <button class="chat-inline-disclosure chat-activity-group__summary" type="button" aria-expanded="true">
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
-                <span class="chat-activity-group__label">Activity: 2 tools</span>
-                <span class="chat-inline-disclosure__chevron">${iconSvg()}</span>
+                <span class="chat-tool-disclosure__content">
+                  <span class="chat-activity-group__label">Activity: 2 tools</span>
+                </span>
+                <span class="chat-tool-row__chevron">${iconSvg()}</span>
               </button>
               <div class="chat-activity-group__body">
                 <div class="chat-bubble chat-bubble--tool-shell" data-activity-call-row>
                   <div class="chat-tools-inline">
                     <div class="chat-tool-msg-collapse">
-                      <button class="chat-inline-disclosure chat-tool-msg-summary" type="button" aria-expanded="false">
+                      <button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row" type="button" aria-expanded="false">
                         <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                        <span class="chat-tool-msg-summary__label">Bash</span>
-                        <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
-                        <span class="chat-inline-disclosure__chevron">${iconSvg()}</span>
+                        <span class="chat-tool-disclosure__content">
+                          <span class="chat-tool-msg-summary__label">Bash</span>
+                          <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
+                        </span>
+                        <span class="chat-tool-row__chevron">${iconSvg()}</span>
                       </button>
                     </div>
                   </div>
                 </div>
                 <div class="chat-bubble chat-bubble--tool-shell">
                   <div class="chat-tool-msg-collapse">
-                    <button class="chat-inline-disclosure chat-tool-msg-summary" data-failed-call-row type="button" aria-expanded="false">
+                    <button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row" data-failed-call-row type="button" aria-expanded="false">
                       <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                      <span class="chat-tool-msg-summary__label">Bash</span>
-                      <span class="chat-tool-msg-summary__names">Bash</span>
-                      <span class="chat-inline-disclosure__chevron">${iconSvg()}</span>
-                      <span class="chat-tool-row__badge">failed</span>
+                      <span class="chat-tool-disclosure__content">
+                        <span class="chat-tool-msg-summary__label">Bash</span>
+                        <span class="chat-tool-msg-summary__names">Bash</span>
+                      </span>
+                      <span class="chat-tool-row__chevron">${iconSvg()}</span>
                     </button>
                   </div>
                 </div>
@@ -1198,7 +1202,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const styles = await page.evaluate(() => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
-        const chevron = activity.querySelector<HTMLElement>(".chat-inline-disclosure__chevron")!;
+        const chevron = activity.querySelector<HTMLElement>(".chat-tool-row__chevron")!;
         return {
           activity: getComputedStyle(activity).userSelect,
           activityBackground: getComputedStyle(activity).backgroundColor,
@@ -1210,7 +1214,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(styles).toEqual({
         activity: "text",
         activityBackground: "rgba(0, 0, 0, 0)",
-        chevronGap: 8,
+        // Summary gap (8px) less the chevron's own -3px inset.
+        chevronGap: 5,
         tool: "text",
       });
     } finally {
@@ -1284,7 +1289,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-thread chat-thread--direct" role="log">
             <div class="chat-thread-inner">
               <div class="chat-group tool">
-                <div class="chat-avatar tool">A</div>
                 <div class="chat-group-messages" data-tool-lane>
                   <div class="chat-bubble chat-bubble--tool-shell" data-tool-shell>
                     <div class="chat-tool-msg-collapse">Tool output</div>
@@ -1292,7 +1296,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 </div>
               </div>
               <div class="chat-group tool chat-group--activity">
-                <div class="chat-avatar tool">A</div>
                 <div class="chat-group-messages" data-activity-lane>
                   <div class="chat-activity-group">Activity</div>
                 </div>

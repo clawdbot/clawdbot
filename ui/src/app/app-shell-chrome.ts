@@ -24,6 +24,10 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import {
+  DEBUG_OVERLAY_REQUEST_EVENT,
+  DEBUG_OVERLAY_TOGGLE_EVENT,
+} from "../pages/debug/debug-overlay-contract.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -70,6 +74,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
+  readonly debugOverlayElement: OptionalCustomElement;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
@@ -112,6 +117,7 @@ export class ShellChromeOwner {
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
     window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
+    window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener("dragover", this.handleUnhandledFileDrag);
@@ -134,6 +140,7 @@ export class ShellChromeOwner {
     host.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
     window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
+    window.removeEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
     window.removeEventListener("dragover", this.handleUnhandledFileDrag);
@@ -377,6 +384,19 @@ export class ShellChromeOwner {
     if (event.defaultPrevented) {
       return;
     }
+    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
+    if (settingsModifier && event.shiftKey && resolveAsciiShortcutKey(event) === "d") {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable]:not([contenteditable='false'])")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      this.toggleDebugOverlay();
+      return;
+    }
     const plainKey = !event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey;
     if (plainKey && event.key === "Escape" && this.isSettingsTakeover()) {
       if (host.navDrawerOpen) {
@@ -391,7 +411,6 @@ export class ShellChromeOwner {
       host.exitSettings();
       return;
     }
-    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
       host.navigate("appearance");
@@ -403,6 +422,20 @@ export class ShellChromeOwner {
       this.toggleNavigationSurface();
     }
   };
+
+  private readonly handleDebugOverlayRequest = (): void => {
+    this.toggleDebugOverlay();
+  };
+
+  private toggleDebugOverlay(): void {
+    const host = this.host;
+    void ensureOptionalElementForHost(host, host.debugOverlayElement)
+      .then(async () => {
+        await host.updateComplete;
+        window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_TOGGLE_EVENT));
+      })
+      .catch(() => undefined);
+  }
 
   /** Open overlays and editable controls own Escape before settings can exit. */
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {

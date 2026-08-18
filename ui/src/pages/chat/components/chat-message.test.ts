@@ -747,6 +747,67 @@ describe("grouped chat rendering", () => {
     expect(badge?.getAttribute("aria-label")).toBe("4 consecutive identical messages collapsed");
   });
 
+  it.each([
+    { markdown: "Final paragraph", owner: "p" },
+    { markdown: "- first\n- final", owner: "li:last-child" },
+    { markdown: "> quoted ending", owner: "blockquote p" },
+  ])(
+    "attaches a duplicate marker to the terminal textual owner in $owner",
+    ({ markdown: markdownText, owner }) => {
+      const container = document.createElement("div");
+      markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
+      renderAssistantMessageEntries(container, [
+        {
+          key: "assistant-duplicate",
+          message: createAssistantMessage(markdownText, { timestamp: 1 }),
+          duplicateCount: 3,
+        },
+      ]);
+
+      const target = expectElement(container, owner, HTMLElement);
+      expect(target.querySelector(":scope > .chat-duplicate-count")?.textContent).toBe("×3");
+    },
+  );
+
+  it.each([
+    { label: "fence", markdown: "Paragraph\n\n```ts\nconst value = 1;\n```", terminal: "pre" },
+    {
+      label: "compact details",
+      markdown: "<details><summary>More</summary>body</details>",
+      terminal: "details",
+    },
+    {
+      label: "block details",
+      markdown: "<details>\n<summary>More</summary>\n\nbody\n</details>",
+      terminal: "details",
+    },
+    {
+      label: "table",
+      markdown: "| Name | Value |\n| --- | --- |\n| one | two |",
+      terminal: ".markdown-table",
+    },
+  ])(
+    "keeps a duplicate marker outside terminal $label content",
+    ({ markdown: markdownText, terminal }) => {
+      const container = document.createElement("div");
+      markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
+      renderAssistantMessageEntries(container, [
+        {
+          key: "assistant-duplicate",
+          message: createAssistantMessage(markdownText, { timestamp: 1 }),
+          duplicateCount: 3,
+        },
+      ]);
+
+      const chatText = expectElement(container, ".chat-text", HTMLDivElement);
+      const terminalBlock = expectElement(chatText, terminal, HTMLElement);
+      expect(terminalBlock.querySelector(".chat-duplicate-count")).toBeNull();
+      expect(chatText.querySelector(":scope > .chat-duplicate-count")?.textContent).toBe("×3");
+      expect(chatText.querySelector("summary")?.textContent ?? "").not.toContain("×3");
+      expect(chatText.querySelector("td:last-child")?.textContent ?? "").not.toContain("×3");
+    },
+  );
+
   it("does not render the stale assistant read-aloud footer action", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
@@ -938,11 +999,10 @@ describe("grouped chat rendering", () => {
       HTMLAnchorElement,
     );
     expect(disclosure.classList.contains("is-expanded")).toBe(false);
-    expect(collapsedText.textContent?.trim()).toBe(`${collapsedLines.join("\n")}…`);
-    expect(collapsedText.textContent).not.toContain(expandedTail);
+    expect(collapsedText.textContent).toContain(expandedTail);
     expect(collapsedFileLink.dataset.filePath).toBe("AGENTS.md");
     expect(collapsedFileLink.dataset.fileLine).toBe("188");
-    expect(toggle.textContent?.trim()).toBe("Show more");
+    expect(toggle.getAttribute("aria-label")).toBe("Show more");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     toggle.click();
@@ -970,11 +1030,11 @@ describe("grouped chat rendering", () => {
     expect(expandedText.textContent).toContain(expandedTail);
     expect(expandedFileLink.dataset.filePath).toBe("AGENTS.md");
     expect(expandedFileLink.dataset.fileLine).toBe("188");
-    expect(collapseToggle.textContent?.trim()).toBe("Show less");
+    expect(collapseToggle.getAttribute("aria-label")).toBe("Show less");
     expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("does not split a surrogate pair at the collapsed character limit", () => {
+  it("collapses a long single-line user message without truncating its DOM", () => {
     const container = document.createElement("div");
     const markdownContent = `${"a".repeat(699)}😀`;
 
@@ -985,9 +1045,9 @@ describe("grouped chat rendering", () => {
       { onToggleUserMessageExpanded: vi.fn() },
     );
 
-    expect(expectElement(container, ".chat-text", HTMLDivElement).textContent?.trim()).toBe(
-      `${"a".repeat(699)}…`,
-    );
+    const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    expect(disclosure.querySelector(".chat-message-disclosure__toggle")).not.toBeNull();
+    expect(expectElement(disclosure, ".chat-text", HTMLDivElement).textContent).toContain("😀");
   });
 
   it("does not add prompt disclosure controls to short user or assistant messages", () => {
@@ -1000,7 +1060,10 @@ describe("grouped chat rendering", () => {
       "user",
       { onToggleUserMessageExpanded },
     );
-    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
+    expect(container.querySelector(".chat-message-disclosure")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.hidden,
+    ).toBe(true);
 
     renderAssistantMessage(
       container,
@@ -2362,8 +2425,8 @@ describe("grouped chat rendering", () => {
       ".chat-activity-group__summary",
       HTMLButtonElement,
     );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull();
+    expect(activitySummary.getAttribute("aria-expanded")).toBe("true");
     expect(activitySummary.getAttribute("aria-label")).toBeNull();
     expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
@@ -2428,7 +2491,6 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
     expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
 
     render(
       renderActivityGroup([successful, failed], {
@@ -2594,7 +2656,6 @@ describe("grouped chat rendering", () => {
       "failed",
     );
     expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
     // Command calls render a `$ command` row instead of the tool-name label.
     expect(summaries[0]?.querySelector(".chat-tool-row__cmd")?.textContent).toBe("run fallback");
   });
@@ -2645,9 +2706,8 @@ describe("grouped chat rendering", () => {
     expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
     expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("https://example.com");
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
-    expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool output"]);
+    // Plain output is the block's default content, so it carries no header.
+    expect(blocks[0]?.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
@@ -2898,7 +2958,7 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
-  it("marks status-only standalone tool-result summaries with only a failed badge", () => {
+  it("keeps status-only standalone tool-result summaries neutral until expanded", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onToggleToolMessageExpanded = vi.fn();
@@ -2925,7 +2985,6 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "sessions_spawn",
     );
-    expect(summary.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
     selectText(expectElement(summary, ".chat-tool-msg-summary__label", HTMLElement));
     pointerClick(summary);
     expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
@@ -2941,10 +3000,32 @@ describe("grouped chat rendering", () => {
     summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
     expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    expect(summary.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    // The failure stays recorded: the expanded body closes with the outcome.
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
     expect(
       JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
     ).toEqual({ status: "error" });
+    container.remove();
+  });
+
+  it("surfaces a producer-reported exit code in the expanded failure outcome", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const groups = [
+      createMessageGroup(
+        createToolResultMessage(
+          "call-exit-code",
+          "shell",
+          JSON.stringify({ status: "failed", exitCode: 1 }),
+          { id: "tool-exit-code" },
+        ),
+        "tool",
+      ),
+    ];
+
+    renderMessageGroups(container, groups, { isToolMessageExpanded: () => true });
+
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Exit code 1");
     container.remove();
   });
 

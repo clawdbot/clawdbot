@@ -2,14 +2,14 @@
 
 import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ControlUiBuildInfo } from "../build-info.ts";
 import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
   type PresenceViewer,
-} from "./viewer-facepile.ts";
+} from "../lib/presence-users.ts";
+import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import "./viewer-facepile.ts";
 
 type ViewerAvatarElement = HTMLElement & {
   user: PresenceViewer | null;
@@ -156,108 +156,11 @@ type ViewerFacepileElement = HTMLElement & {
   excludeUserId?: string;
   staticUsers?: readonly PresenceViewer[];
   maxVisible: number;
-  variant: "session" | "footer";
-  buildInfo: ControlUiBuildInfo;
-  gatewayVersion: string | null;
   updateComplete: Promise<boolean>;
 };
 
-const BUILD_INFO: ControlUiBuildInfo = {
-  version: "2026.7.2",
-  commit: "1234567890abcdef1234567890abcdef12345678",
-  commitAt: null,
-  builtAt: "2026-07-20T10:30:00.000Z",
-  branch: "main",
-  dirty: true,
-  release: false,
-  buildId: "test",
-};
-
-function mountFooterFacepile() {
-  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.variant = "footer";
-  facepile.selfUserId = "z-self";
-  facepile.selfInstanceId = "self-instance";
-  facepile.buildInfo = BUILD_INFO;
-  facepile.gatewayVersion = "2026.7.1";
-  facepile.presencePayload = {
-    presence: [
-      {
-        instanceId: "self-instance",
-        user: { id: "z-self", name: "Self User", email: "self@example.test" },
-        watchedSessions: [],
-      },
-      {
-        instanceId: "alice-1",
-        user: { id: "alice", name: "Alice", email: "alice@example.test" },
-        watchedSessions: [],
-      },
-      {
-        instanceId: "bob-1",
-        user: { id: "bob", email: "bob@example.test" },
-        watchedSessions: [],
-      },
-    ],
-  };
-  document.body.append(facepile);
-  return facepile;
-}
-
-it("shows one footer hover card with other online users and server details", async () => {
-  const facepile = mountFooterFacepile();
-
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector(".viewer-facepile-trigger")).not.toBeNull();
-  });
-
-  const tooltip = facepile.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "openclaw-tooltip.sidebar-hover-tooltip",
-  );
-  await tooltip?.updateComplete;
-  const trigger = facepile.querySelector<HTMLElement>(".viewer-facepile-trigger");
-  trigger?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
-
-  expect(
-    tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
-  ).toBe(true);
-  const card = facepile.querySelector('.sidebar-presence-hover-card[slot="content"]');
-  expect(
-    [...facepile.querySelectorAll(".viewer-facepile [data-viewer-id]")].map((avatar) =>
-      avatar.getAttribute("data-viewer-id"),
-    ),
-  ).toEqual(["alice", "bob"]);
-  expect(card?.querySelector(".sidebar-hover-card__heading")?.textContent).toContain("Online · 2");
-  const rows = [...(card?.querySelectorAll(".sidebar-hover-card__person") ?? [])];
-  expect(card?.querySelector(".sidebar-hover-card__people")?.getAttribute("tabindex")).toBe("0");
-  expect(rows.map((row) => row.getAttribute("data-viewer-id"))).toEqual(["alice", "bob"]);
-  expect(card?.querySelector('[data-viewer-id="z-self"]')).toBeNull();
-  // Named users show the email as a subtitle; email-only users don't repeat it.
-  expect(rows[0]?.querySelector(".sidebar-hover-card__person-email")?.textContent).toBe(
-    "alice@example.test",
-  );
-  expect(rows[1]?.querySelector(".sidebar-hover-card__person-name")?.textContent?.trim()).toBe(
-    "bob@example.test",
-  );
-  expect(rows[1]?.querySelector(".sidebar-hover-card__person-email")).toBeNull();
-  expect(rows[0]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
-  expect(card?.textContent).toContain("Server");
-  expect(card?.querySelector(".sidebar-hover-card__summary")?.textContent).toContain(
-    "v2026.7.2 · main · dirty",
-  );
-  expect(
-    card?.querySelector(".sidebar-hover-card__metadata-value--mono")?.textContent?.trim(),
-  ).toBe("1234567890ab");
-  expect(card?.textContent).toContain("2026-07-20T10:30:00.000Z");
-  expect(card?.textContent).toContain("2026.7.1");
-  expect(facepile.querySelector("wa-dropdown")).toBeNull();
-  expect(trigger?.hasAttribute("aria-haspopup")).toBe(false);
-  expect(trigger?.hasAttribute("aria-expanded")).toBe(false);
-});
-
 it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.variant = "session";
   facepile.presencePayload = {
     presence: [
       {
@@ -273,14 +176,13 @@ it("keeps session facepiles as plain non-interactive avatar clusters", async () 
     await facepile.updateComplete;
     expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
   });
-  expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
+  expect(facepile.querySelector("button")).toBeNull();
   expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
 });
 
 it("renders ordered static participant actors without presence filtering", async () => {
   // SAFETY: the registered custom element exposes the tested reactive properties.
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.variant = "session";
   facepile.maxVisible = 2;
   facepile.staticUsers = [
     { id: "profile-ada", name: "Ada", watchedSessions: [] },
@@ -302,7 +204,6 @@ it("renders ordered static participant actors without presence filtering", async
 
 it("excludes the session creator before choosing visible avatars and overflow", async () => {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.variant = "session";
   facepile.sessionKey = "agent:main:active";
   facepile.excludeUserId = "owner";
   facepile.maxVisible = 2;
@@ -390,7 +291,6 @@ it.each([
   },
 ])("excludes authenticated self from session facepiles when $name", async (fixture) => {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
-  facepile.variant = "session";
   facepile.selfUserId = "self";
   facepile.selfInstanceId = fixture.selfInstanceId;
   facepile.sessionKey = "agent:main:active";

@@ -42,7 +42,7 @@ describe("AppSidebar session indicators", () => {
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
-  it("places Home activity in the same trailing endcap as session activity", async () => {
+  it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
     const mainKey = "agent:main:main";
     const workingKey = "agent:main:working";
     const sessions = createSessionsHarness("main", [mainKey, workingKey]);
@@ -58,6 +58,8 @@ describe("AppSidebar session indicators", () => {
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = mainKey;
     sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();

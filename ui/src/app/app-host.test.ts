@@ -15,6 +15,7 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
+import { DEBUG_OVERLAY_TOGGLE_EVENT } from "../pages/debug/debug-overlay-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
@@ -79,6 +80,10 @@ type ShellServerPreferencesState = {
 
 type ShellLazySurfaceState = ShellKeyboardState & {
   commandPaletteElement: TestOptionalCustomElement;
+};
+
+type ShellDebugOverlayState = ShellKeyboardState & {
+  debugOverlayElement: TestOptionalCustomElement;
 };
 
 type ShellApprovalLazyState = {
@@ -854,6 +859,47 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
     expect(event.defaultPrevented).toBe(true);
     await vi.waitFor(() => expect(togglePalette).toHaveBeenCalledOnce());
+  });
+
+  it("loads the debug overlay shortcut and ignores editable targets", async () => {
+    const element = createLazyElementSpec("debug overlay");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellDebugOverlayState;
+    shell.debugOverlayElement = element;
+    Object.defineProperty(shell, "updateComplete", {
+      get: () => Promise.resolve(true),
+    });
+    const toggled = vi.fn();
+    window.addEventListener(DEBUG_OVERLAY_TOGGLE_EVENT, toggled);
+    try {
+      const shortcut = new KeyboardEvent("keydown", {
+        key: "d",
+        code: "KeyD",
+        ctrlKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+      shell.handleDocumentKeydown(shortcut);
+
+      expect(shortcut.defaultPrevented).toBe(true);
+      await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
+
+      const input = document.body.appendChild(document.createElement("input"));
+      input.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+      const editableShortcut = new KeyboardEvent("keydown", {
+        key: "d",
+        code: "KeyD",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      input.dispatchEvent(editableShortcut);
+
+      expect(editableShortcut.defaultPrevented).toBe(false);
+      expect(toggled).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(DEBUG_OVERLAY_TOGGLE_EVENT, toggled);
+    }
   });
 
   it("opens approvals after the modal module loads on demand", async () => {

@@ -45,6 +45,7 @@ export type { SessionTranscriptReadScope };
 
 export type ReadRecentSessionMessagesResult = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   messages: unknown[];
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
@@ -192,6 +193,7 @@ async function readRecentSqliteMessageRecords(
   opts?: Partial<ReadRecentSessionMessagesOptions>,
 ): Promise<{
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   messages: unknown[];
   transcriptEvents: TranscriptEvent[];
   totalMessages: number;
@@ -202,6 +204,7 @@ async function readRecentSqliteMessageRecords(
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
+    ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     totalMessages: page.totalMessages,
@@ -369,7 +372,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const { activeLeafEntryId, messages, transcriptEvents, totalMessages } =
+  const { activeLeafEntryId, deltaCursor, messages, transcriptEvents, totalMessages } =
     await readRecentSqliteMessageRecords(target, opts);
   if (totalMessages === 0 && messages.length === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readRecentWithStats({
@@ -379,6 +382,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
   }
   return {
     ...(activeLeafEntryId !== undefined ? { activeLeafEntryId } : {}),
+    ...(deltaCursor ? { deltaCursor } : {}),
     messages,
     transcriptEvents,
     totalMessages,

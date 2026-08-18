@@ -1084,7 +1084,6 @@ async function initSessionStateAttemptLocked(
       sessionKey,
       agentId,
       entry: sessionEntry,
-      dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
       mainKey,
     });
   }
