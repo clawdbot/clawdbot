@@ -1842,6 +1842,7 @@ button.chat-reply-preview--message:disabled {
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   border-radius: 16px;
   background: var(--task-suggestion-card-bg);
+  user-select: text;
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 5%, transparent),
     0 12px 30px color-mix(in srgb, var(--bg) 38%, transparent);
@@ -1925,6 +1926,7 @@ button.chat-reply-preview--message:disabled {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
+  user-select: none;
   transition:
     background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);
@@ -2096,6 +2098,7 @@ button.chat-reply-preview--message:disabled {
   border-radius: 11px;
   corner-shape: superellipse(1.5);
   background: var(--task-suggestion-action-bg);
+  user-select: none;
 }
 
 .task-suggestion__start {
