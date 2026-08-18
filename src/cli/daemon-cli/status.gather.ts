@@ -25,6 +25,7 @@ import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../..
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceLoadState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
@@ -292,7 +293,7 @@ export type DaemonStatus = {
   logFile?: string;
   service: {
     label: string;
-    loaded: boolean;
+    loadState: GatewayServiceLoadState;
     loadedText: string;
     notLoadedText: string;
     targetRole?: "target" | "diagnostic-only";
@@ -601,7 +602,8 @@ export async function gatherDaemonStatus(
     env: process.env,
     timeoutMs,
   });
-  const { command, env: serviceEnv, loaded, runtime } = serviceState;
+  const { command, env: serviceEnv, loadState, runtime } = serviceState;
+  const loaded = loadState.status === "loaded";
   // A non-default or externally supervised process does not own the host's
   // native service. Keep that service visible, but do not let it retarget probes.
   const useNativeServiceTargetContext =
@@ -805,7 +807,7 @@ export async function gatherDaemonStatus(
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
-      loaded,
+      loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
       targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",

@@ -76,16 +76,15 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
   try {
     // Load daemon diagnostics only on failure; successful setup should not pay
     // the service/log inspection cost or import daemon-specific modules.
-    const { resolveGatewayService } = await import("../../daemon/service.js");
+    const { readGatewayServiceState, resolveGatewayService } =
+      await import("../../daemon/service.js");
     const service = resolveGatewayService();
     const env = process.env as Record<string, string | undefined>;
-    const [loaded, runtime] = await Promise.all([
-      service.isLoaded({ env }).catch(() => false),
-      service.readRuntime(env).catch(() => undefined),
-    ]);
+    const state = await readGatewayServiceState(service, { env });
+    const runtime = state.runtime;
     diagnostics.service = {
       label: service.label,
-      loaded,
+      loadState: state.loadState,
       loadedText: service.loadedText,
       runtimeStatus: runtime?.status,
       state: runtime?.state,

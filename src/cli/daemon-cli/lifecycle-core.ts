@@ -334,10 +334,11 @@ export async function runServiceStart(params: {
       );
       return;
     }
+    const serviceLoaded = startResult.state.loadState.status === "loaded";
     emit({
       ok: true,
       result: "started",
-      service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
       warnings: warnings.length ? warnings : undefined,
     });
   } catch (err) {

@@ -37,6 +37,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
+  GatewayServiceLoadState,
   GatewayServiceManageArgs,
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
@@ -125,7 +126,7 @@ function collectGatewayServiceStartRepairIssues(
   expectedPort?: number,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
-  if (!state.loaded || !command) {
+  if (state.loadState.status !== "loaded" || !command) {
     return [];
   }
   const issues: GatewayServiceStartRepairIssue[] = [];
@@ -188,8 +189,16 @@ export async function readGatewayServiceState(
   // Propagate the status read deadline so a wedged service manager fails soft
   // instead of hanging both probes. readCommand parses local files and needs no
   // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
-  const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
+  const [loadState, runtime] = await Promise.all([
+    service
+      .isLoaded({ env, timeoutMs: args.timeoutMs })
+      .then((loaded): GatewayServiceLoadState => ({ status: loaded ? "loaded" : "not-loaded" }))
+      .catch(
+        (error: unknown): GatewayServiceLoadState => ({
+          status: "unknown",
+          detail: String(error),
+        }),
+      ),
     service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
       (error: unknown) =>
         ({
@@ -200,7 +209,7 @@ export async function readGatewayServiceState(
   ]);
   return {
     installed: command !== null,
-    loaded,
+    loadState,
     running: runtime?.status === "running",
     env,
     command,
@@ -218,14 +227,17 @@ export async function startGatewayService(
     { env: args.env },
     expectedPort,
   );
-  if (!state.loaded && !state.installed) {
+  if (state.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed: ${state.loadState.detail}`);
+  }
+  if (state.loadState.status === "not-loaded" && !state.installed) {
     return {
       outcome: "missing-install",
       state,
     };
   }
 
-  if (state.loaded && state.running) {
+  if (state.loadState.status === "loaded" && state.running) {
     return {
       outcome: "already-running",
       state,

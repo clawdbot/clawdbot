@@ -441,7 +441,7 @@ describe("gatherDaemonStatus", () => {
     const status = {
       service: {
         label: "Scheduled Task",
-        loaded: true,
+        loadState: { status: "loaded" as const },
         loadedText: "registered",
         notLoadedText: "not registered",
       },
@@ -760,7 +760,10 @@ describe("gatherDaemonStatus", () => {
 
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-    expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl is-enabled timed out",
+    });
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Error: systemctl show timed out",
@@ -776,7 +779,10 @@ describe("gatherDaemonStatus", () => {
       }
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
-          loaded: false,
+          loadState: {
+            status: "unknown",
+            detail: "Error: systemctl is-enabled timed out",
+          },
           runtime: {
             status: "unknown",
             detail: "Error: systemctl show timed out",
@@ -792,6 +798,8 @@ describe("gatherDaemonStatus", () => {
     try {
       printDaemonStatus(status, { json: false, deep: true });
       const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Service: LaunchAgent (unknown)");
+      expect(output).not.toContain("Service: LaunchAgent (not loaded)");
       expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
     } finally {
       log.mockRestore();
@@ -810,7 +818,7 @@ describe("gatherDaemonStatus", () => {
     const status = await gatherStatus({ probe: false });
 
     expect(status.service.command).toBeNull();
-    expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({ status: "not-loaded" });
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Gateway service install not supported on aix",

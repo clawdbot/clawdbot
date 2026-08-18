@@ -7,7 +7,7 @@ function createStatus(overrides: Partial<DaemonStatus> = {}): DaemonStatus {
   return {
     service: {
       label: "systemd user",
-      loaded: false,
+      loadState: { status: "not-loaded" },
       loadedText: "enabled",
       notLoadedText: "disabled",
       command: null,
@@ -94,7 +94,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const running = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run"] },
@@ -123,7 +123,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const stopped = createStatus({
       service: {
         label: "systemd user",
-        loaded: false,
+        loadState: { status: "not-loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run"] },
@@ -133,7 +133,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const running = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run"] },
@@ -162,7 +162,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         targetRole: "diagnostic-only",
@@ -212,7 +212,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run"] },
@@ -241,7 +241,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
@@ -274,7 +274,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
@@ -306,7 +306,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
@@ -338,7 +338,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
@@ -369,7 +369,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run"] },
@@ -399,7 +399,7 @@ describe("ensureGatewayReadyForOperation", () => {
     const status = createStatus({
       service: {
         label: "systemd user",
-        loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "enabled",
         notLoadedText: "disabled",
         command: { programArguments: ["openclaw", "gateway", "run"] },

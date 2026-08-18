@@ -401,11 +401,12 @@ export async function finishUpdate(params: {
       const knownForeignService =
         params.preManagedServiceStop?.serviceMatchesMutationRoot === false &&
         serviceMatchesUpdateRoot !== true;
+      const serviceLoaded = serviceState.loadState.status === "loaded";
       skipLegacyServiceRestart =
         knownForeignService ||
         (resultWithPostUpdate.mode === "git" &&
           serviceState.installed &&
-          serviceState.loaded &&
+          serviceLoaded &&
           params.preManagedServiceStop?.stopped !== true &&
           serviceMatchesUpdateRoot === false);
       if (
@@ -413,7 +414,7 @@ export async function finishUpdate(params: {
         shouldPrepareUpdatedInstallRestart({
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
-          serviceLoaded: serviceState.loaded,
+          serviceLoaded,
           serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
           serviceMatchesMutationRoot: serviceOwnershipConfirmed
             ? true

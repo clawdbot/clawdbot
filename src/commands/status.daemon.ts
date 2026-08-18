@@ -9,7 +9,7 @@ import { readServiceStatusSummary } from "./status.service-summary.js";
 type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
-  loaded: boolean;
+  loadState: Awaited<ReturnType<typeof readServiceStatusSummary>>["loadState"];
   managedByOpenClaw: boolean;
   externallyManaged: boolean;
   loadedText: string;
@@ -29,7 +29,7 @@ async function buildDaemonStatusSummary(
   return {
     label: summary.label,
     installed: summary.installed,
-    loaded: summary.loaded,
+    loadState: summary.loadState,
     managedByOpenClaw: summary.managedByOpenClaw,
     externallyManaged: summary.externallyManaged,
     loadedText: summary.loadedText,

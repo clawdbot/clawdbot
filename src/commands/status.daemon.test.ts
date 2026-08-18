@@ -25,7 +25,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "systemd",
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       managedByOpenClaw: true,
       externallyManaged: false,
       loadedText: "enabled",
@@ -48,7 +48,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "systemd user",
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       managedByOpenClaw: true,
       externallyManaged: false,
       loadedText: "enabled",
@@ -80,7 +80,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "systemd user",
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       managedByOpenClaw: true,
       externallyManaged: false,
       loadedText: "enabled",
@@ -104,7 +104,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "Gateway service",
       installed: false,
-      loaded: false,
+      loadState: { status: "unknown", detail: "Gateway service install not supported on aix" },
       managedByOpenClaw: false,
       externallyManaged: false,
       loadedText: "not installed",
