@@ -4,9 +4,14 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
+import { createConfiguredSkillWorkshopTool } from "../agents/tools/skill-workshop-tool-factory.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { inspectSkillProposal } from "../skills/workshop/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { testState } from "./test-helpers.js";
 import {
@@ -86,14 +91,20 @@ test("sessions.create provisions a managed worktree from a registered project at
   const workspace = await initializeRepository(root, "workspace");
   const projectRoot = await initializeRepository(root, "project");
   testState.agentConfig = { workspace };
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
   let worktreeId: string | undefined;
   try {
     const created = await directSessionReq<{
+      key?: string;
       entry?: {
         spawnedCwd?: string;
-        worktree?: { canonicalWorkspaceDir?: string };
+        worktree?: {
+          id: string;
+          branch: string;
+          repoRoot: string;
+          canonicalWorkspaceDir?: string;
+        };
       };
       worktree?: { id: string; path: string };
     }>(
@@ -106,6 +117,56 @@ test("sessions.create provisions a managed worktree from a registered project at
     worktreeId = created.payload?.worktree?.id;
     expect(created.payload?.entry?.spawnedCwd).toBe(created.payload?.worktree?.path);
     expect(created.payload?.entry?.worktree?.canonicalWorkspaceDir).toBe(projectRoot);
+    const sessionKey = created.payload?.key ?? "";
+    const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    if (!entry?.worktree) {
+      throw new Error("expected persisted project worktree session");
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        ...entry,
+        worktree: {
+          id: entry.worktree.id,
+          branch: entry.worktree.branch,
+          repoRoot: entry.worktree.repoRoot,
+        },
+      },
+    );
+    await migrateManagedWorktreeCanonicalWorkspaces({
+      agentId: "main",
+      cfg: getRuntimeConfig(),
+      storePath,
+    });
+    const migrated = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    const canonicalWorkspaceDir = migrated?.worktree?.canonicalWorkspaceDir;
+    const spawnedCwd = migrated?.spawnedCwd;
+    if (!canonicalWorkspaceDir || !spawnedCwd) {
+      throw new Error("expected migrated project worktree session");
+    }
+    expect(canonicalWorkspaceDir).toBe(projectRoot);
+    const proposal = await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, async () => {
+      const tool = createConfiguredSkillWorkshopTool({
+        workspaceDir: spawnedCwd,
+        config: getRuntimeConfig(),
+        agentId: "main",
+        sessionKey,
+      });
+      return await tool.execute("legacy-project-proposal", {
+        action: "create",
+        name: "legacy-project-learning",
+        description: "Preserve learning from a resumed project worktree.",
+        proposal_content: "# Legacy Project Learning\n\nPersist this in the project workspace.\n",
+      });
+    });
+    const proposalDetails = proposal.details as { id: string };
+    const inspected = await inspectSkillProposal(proposalDetails.id, {
+      agentId: "main",
+      workspaceDir: projectRoot,
+    });
+    expect(inspected?.record.target.skillFile).toBe(
+      path.join(projectRoot, "skills", "legacy-project-learning", "SKILL.md"),
+    );
   } finally {
     if (worktreeId) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
