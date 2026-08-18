@@ -111,20 +111,18 @@ describe("widget theme bridge", () => {
 
     vi.stubGlobal("MutationObserver", FakeMutationObserver);
     stubComputedStyles({ "--accent": "#c41e30" });
-    const connectedPost = vi.fn();
-    const detachedPost = vi.fn();
-    const connected = {
-      isConnected: true,
-      contentWindow: { postMessage: connectedPost },
-    } as unknown as HTMLIFrameElement;
-    const detached = {
-      isConnected: false,
-      contentWindow: { postMessage: detachedPost },
-    } as unknown as HTMLIFrameElement;
-    const getFrames = () => [connected, detached];
+    const chatFrame = document.createElement("iframe");
+    chatFrame.className = "chat-tool-card__preview-frame";
+    const boardFrame = document.createElement("iframe");
+    boardFrame.className = "board-widget__frame";
+    const unrelatedFrame = document.createElement("iframe");
+    document.body.append(chatFrame, boardFrame, unrelatedFrame);
+    const chatPost = vi.spyOn(chatFrame.contentWindow!, "postMessage");
+    const boardPost = vi.spyOn(boardFrame.contentWindow!, "postMessage");
+    const unrelatedPost = vi.spyOn(unrelatedFrame.contentWindow!, "postMessage");
 
-    installWidgetThemeObserver(getFrames);
-    installWidgetThemeObserver(getFrames);
+    installWidgetThemeObserver();
+    installWidgetThemeObserver();
 
     expect(FakeMutationObserver.instances).toHaveLength(1);
     expect(FakeMutationObserver.instances[0]?.observe).toHaveBeenCalledWith(
@@ -137,7 +135,8 @@ describe("widget theme bridge", () => {
     FakeMutationObserver.instances[0]?.trigger({
       attributeName: "data-theme",
     } as MutationRecord);
-    expect(connectedPost).toHaveBeenCalledOnce();
-    expect(detachedPost).not.toHaveBeenCalled();
+    expect(chatPost).toHaveBeenCalledOnce();
+    expect(boardPost).toHaveBeenCalledOnce();
+    expect(unrelatedPost).not.toHaveBeenCalled();
   });
 });

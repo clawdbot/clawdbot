@@ -160,9 +160,7 @@ export class BoardWidgetFrameLifecycle {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
       this.visibilityListening = true;
     }
-    installWidgetThemeObserver(() =>
-      this.host.root().querySelectorAll<HTMLIFrameElement>(".board-widget__frame"),
-    );
+    installWidgetThemeObserver();
   }
 
   disconnect(): void {

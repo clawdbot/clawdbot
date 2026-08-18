@@ -72,9 +72,8 @@ export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): v
 }
 
 const widgetThemeObserverWindows = new WeakSet<Window>();
-const widgetFrameProviders = new WeakMap<Window, Set<() => Iterable<HTMLIFrameElement>>>();
 
-export function installWidgetThemeObserver(getFrames: () => Iterable<HTMLIFrameElement>): void {
+export function installWidgetThemeObserver(): void {
   if (
     typeof window === "undefined" ||
     typeof document === "undefined" ||
@@ -82,21 +81,16 @@ export function installWidgetThemeObserver(getFrames: () => Iterable<HTMLIFrameE
   ) {
     return;
   }
-  const providers = widgetFrameProviders.get(window) ?? new Set();
-  providers.add(getFrames);
-  widgetFrameProviders.set(window, providers);
   if (widgetThemeObserverWindows.has(window)) {
     return;
   }
   widgetThemeObserverWindows.add(window);
   const root = document.documentElement;
   new MutationObserver(() => {
-    for (const provider of providers) {
-      for (const frame of provider()) {
-        if (frame.isConnected) {
-          postWidgetTheme(frame);
-        }
-      }
+    for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+      ".chat-tool-card__preview-frame, .board-widget__frame",
+    )) {
+      postWidgetTheme(frame);
     }
   }).observe(root, {
     attributes: true,

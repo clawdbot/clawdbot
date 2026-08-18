@@ -309,7 +309,7 @@ function renderPreviewFrame(params: {
   promptCapable?: boolean;
 }) {
   installWidgetSizeListener();
-  installWidgetThemeObserver(() => widgetFrameRegistry);
+  installWidgetThemeObserver();
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
   const heightKey = params.frameKey || src;
