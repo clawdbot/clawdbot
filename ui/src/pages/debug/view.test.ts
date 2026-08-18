@@ -22,6 +22,7 @@ type TestDebugPage = HTMLElement & {
   debugDiagnosticsError: string | null;
   debugHealth: unknown;
   debugHeartbeat: unknown;
+  debugLanes: unknown[] | null;
   debugModels: unknown[];
   debugStatus: unknown;
   loadDiagnostics: () => Promise<void>;
@@ -68,6 +69,21 @@ function diagnosticResponse(method: string, marker = "initial"): unknown {
       return { models: [{ id: marker }] };
     case "last-heartbeat":
       return { source: marker };
+    case "diagnostics.lanes":
+      return {
+        ts: 1,
+        lanes: [
+          {
+            lane: marker,
+            activeCount: 1,
+            queuedCount: 2,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 0,
+            blockedBy: "lane",
+          },
+        ],
+      };
     default:
       throw new Error(`Unexpected diagnostics method: ${method}`);
   }
@@ -87,6 +103,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
     health: null,
     models: [],
     heartbeat: null,
+    lanes: [],
     diagnosticsError: null,
     eventLog: [],
     methods: [],
@@ -97,6 +114,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
     onCallMethodChange: () => undefined,
     onCallParamsChange: () => undefined,
     onRefresh: () => undefined,
+    onOpenOverlay: () => undefined,
     onCall: () => undefined,
     ...overrides,
   };
@@ -169,6 +187,36 @@ describe("renderDebug", () => {
 
     expect(container.textContent).toContain("gateway");
     expect(container.textContent).not.toContain("Invalid Date");
+  });
+
+  it("renders lane diagnostics as an emphasized table", () => {
+    const container = document.createElement("div");
+    render(
+      renderDebug(
+        createProps({
+          lanes: [
+            {
+              lane: "main",
+              activeCount: 2,
+              queuedCount: 3,
+              maxConcurrent: 2,
+              draining: false,
+              generation: 0,
+              group: "interactive",
+              groupActive: 2,
+              groupBudget: 4,
+              blockedBy: "lane",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const row = container.querySelector(".command-lane-row");
+    expect(row?.classList).toContain("command-lane-row--saturated");
+    expect(row?.classList).toContain("command-lane-row--queued");
+    expect(normalizedText(row)).toContain("main 2/2 3 interactive · 2/4 lane");
   });
 });
 
@@ -268,5 +316,21 @@ describe("DebugPage", () => {
 
     expect(page.debugDiagnosticsError).toContain("background snapshots unavailable");
     expect(page.debugCallError).toContain("manual request failed");
+  });
+
+  it("keeps the page available when lane diagnostics are denied", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "diagnostics.lanes") {
+        throw new Error("operator.read denied");
+      }
+      return diagnosticResponse(method);
+    });
+    const page = await mountDebugPage(request);
+    await page.updateComplete;
+
+    expect(page.debugStatus).toEqual({ version: "initial" });
+    expect(page.debugDiagnosticsError).toBeNull();
+    expect(page.debugLanes).toBeNull();
+    expect(page.textContent).toContain("Lane diagnostics are unavailable");
   });
 });

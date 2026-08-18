@@ -9,11 +9,13 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
+import { type CommandLaneSnapshot, loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/debug.css";
+import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
@@ -26,6 +28,7 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugHealth: HealthSnapshot | null = null;
   @state() private debugModels: unknown[] = [];
   @state() private debugHeartbeat: unknown = null;
+  @state() private debugLanes: CommandLaneSnapshot[] | null = null;
   @state() private debugCallMethod = "";
   @state() private debugCallParams = "{}";
   @state() private debugCallResult: string | null = null;
@@ -60,6 +63,7 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugHealth = result.health;
       this.debugModels = result.models;
       this.debugHeartbeat = result.heartbeat;
+      this.debugLanes = result.lanes;
     },
     onError: (error) => {
       this.diagnosticsTaskActiveClient = null;
@@ -73,6 +77,7 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugHealth = null;
       this.debugModels = [];
       this.debugHeartbeat = null;
+      this.debugLanes = null;
       this.debugCallResult = null;
       this.debugCallError = null;
       this.debugDiagnosticsError = null;
@@ -186,6 +191,7 @@ class DebugPage extends OpenClawLightDomElement {
       health: this.debugHealth,
       models: this.debugModels,
       heartbeat: this.debugHeartbeat,
+      lanes: this.debugLanes,
       diagnosticsError: this.debugDiagnosticsError,
       eventLog: this.eventLog,
       methods: (this.context.gateway.snapshot.hello?.features?.methods ?? []).toSorted(),
@@ -196,6 +202,7 @@ class DebugPage extends OpenClawLightDomElement {
       onCallMethodChange: (next) => (this.debugCallMethod = next),
       onCallParamsChange: (next) => (this.debugCallParams = next),
       onRefresh: () => void this.loadDiagnostics(),
+      onOpenOverlay: requestDebugOverlayToggle,
       onCall: () => void this.callDebugMethod(),
     });
     return html`
