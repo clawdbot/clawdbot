@@ -189,9 +189,12 @@ function filterCompletedWorkspaceBootstrapFile(
   });
 }
 
-async function isWorkspaceSetupCompletedForContext(workspaceDir: string): Promise<boolean> {
+async function isWorkspaceSetupCompletedForContext(
+  workspaceDir: string,
+  readOnlyState = false,
+): Promise<boolean> {
   try {
-    return await isWorkspaceSetupCompleted(workspaceDir);
+    return await isWorkspaceSetupCompleted(workspaceDir, readOnlyState ? { readOnly: true } : {});
   } catch {
     return false;
   }
@@ -227,6 +230,7 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  readOnlyState?: boolean;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
@@ -234,7 +238,10 @@ export async function resolveBootstrapFilesForRun(params: {
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
+  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
+    params.workspaceDir,
+    params.readOnlyState,
+  );
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
@@ -289,6 +296,7 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  readOnlyState?: boolean;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];

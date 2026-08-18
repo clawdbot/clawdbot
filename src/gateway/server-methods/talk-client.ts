@@ -58,6 +58,7 @@ import {
   closeTalkClientGatewayControlSession,
   createTalkClientAgentConsultRunner,
   createTalkClientGatewayControlOwner,
+  resolveTalkAgentConsultAuthority,
 } from "../talk-client-gateway-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
@@ -209,6 +210,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        agentId: requestedAgentId,
         model: launchOptions.model,
         surface: "browser-session",
       });
@@ -298,6 +300,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           agentId,
           sessionKey,
           ...(ownerConnId ? { ownerConnId } : {}),
+          authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
           getVoiceSessionId: () => activeVoiceSessionId,
           initialItems,
         });

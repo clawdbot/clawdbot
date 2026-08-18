@@ -61,7 +61,6 @@ function planHash(input: ReturnType<typeof testWorkerLaunchInput>): string {
   return createHash("sha256")
     .update(
       stableStringify({
-        installKind: input.installKind,
         expectedBundleHash: input.expectedBundleHash,
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
@@ -267,7 +266,7 @@ describe("node worker supervisor recovery", () => {
       spawned.add(workerProcess);
       const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
       ownedProcessGroups.push(worker);
-      await vi.waitFor(() => expect(fs.existsSync(marker)).toBe(true));
+      await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toMatch(/^[1-9]\d*$/u));
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
@@ -349,7 +348,9 @@ describe("node worker supervisor recovery", () => {
       const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
       ownedProcessGroups.push(owned.worker!);
       const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-      await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+      await vi.waitFor(() =>
+        expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u),
+      );
       const grandchild = requireNodeWorkerProcessIdentity(
         Number(fs.readFileSync(grandchildPath, "utf8")),
       );

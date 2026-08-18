@@ -30,17 +30,16 @@ function createArtifactFixture(
   const nativeContents = "accepted native artifact";
   const expectedDigest =
     options.expectedDigest ?? createHash("sha256").update(nativeContents).digest("hex");
-  const pluginManifestPath = path.join(root, "plugin-package.json");
   const sdkManifestPath = path.join(root, "sdk-package.json");
   const platformPackageName = `@trycua/cua-driver-${platformKey}`;
   const platformDir = path.join(root, "platform");
   const platformManifestPath = path.join(platformDir, "package.json");
 
   fs.mkdirSync(platformDir);
-  writeJson(pluginManifestPath, {
+  const pluginManifest = {
     dependencies: { "@trycua/cua-driver": acceptedVersion },
     cuaDriverArtifacts: { [platformKey]: { files: { [nativeFile]: expectedDigest } } },
-  });
+  };
   writeJson(sdkManifestPath, {
     name: "@trycua/cua-driver",
     version: options.sdkVersion ?? acceptedVersion,
@@ -56,7 +55,7 @@ function createArtifactFixture(
     packages.set(platformPackageName, platformManifestPath);
   }
   return {
-    pluginManifestPath,
+    pluginManifest,
     resolvePackageJson: (packageName: string) => packages.get(packageName),
   };
 }

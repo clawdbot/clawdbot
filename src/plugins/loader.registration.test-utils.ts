@@ -49,8 +49,6 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import { listRegisteredMemoryEmbeddingProviderAdapters } from "./memory-embedding-provider-runtime.js";
-import { registerMemoryEmbeddingProvider } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   getMemoryCapabilityRegistration,
@@ -292,7 +290,7 @@ describe("loadOpenClawPlugins", () => {
     clearInternalHooks();
   });
 
-  it("rolls back global side effects when registration fails", async () => {
+  it("preserves load diagnostics while rolling back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-side-effects",
@@ -367,6 +365,14 @@ describe("loadOpenClawPlugins", () => {
     const failedRecord = registry.plugins.find((entry) => entry.id === "failing-side-effects");
     expect(failedRecord?.status).toBe("error");
     expect(failedRecord?.providerIds).toStrictEqual([]);
+    expect(
+      registry.diagnostics
+        .filter((diagnostic) => diagnostic.pluginId === "failing-side-effects")
+        .map(({ level, message }) => ({ level, message })),
+    ).toEqual([
+      { level: "warn", message: "reload registration missing prefixes" },
+      { level: "error", message: "plugin failed during register: Error: boom" },
+    ]);
     expect(getRegisteredEventKeys()).toStrictEqual([]);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
     expect(registry.reloads).toStrictEqual([]);
@@ -780,10 +786,6 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
-    registerMemoryEmbeddingProvider({
-      id: "active",
-      create: async () => ({ provider: null }),
-    });
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
       get: async () => null,
@@ -817,10 +819,6 @@ describe("loadOpenClawPlugins", () => {
           id: "snapshot-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "snapshot",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["snapshot memory section"],
               flushPlanResolver: () => ({
@@ -866,9 +864,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listRegisteredMemoryEmbeddingProviderAdapters().map((adapter) => adapter.id)).toEqual([
-      "active",
-    ]);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
@@ -1015,10 +1010,6 @@ describe("loadOpenClawPlugins", () => {
           id: "failing-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "failed",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["stale failure section"],
               flushPlanResolver: () => ({
@@ -1068,7 +1059,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listRegisteredMemoryEmbeddingProviderAdapters()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {

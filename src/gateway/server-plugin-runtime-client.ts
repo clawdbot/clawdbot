@@ -12,10 +12,15 @@ import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayAgentRunTaskOwner, GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayAgentRunTaskOwner,
+  GatewayRequestOptions,
+  TrustedAgentToolCaller,
+} from "./server-methods/types.js";
 
 export function createSyntheticPluginRuntimeClient(params?: {
   allowModelOverride?: boolean;
+  agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
@@ -47,6 +52,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
     internal: {
       syntheticClient: true,
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
+      ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),

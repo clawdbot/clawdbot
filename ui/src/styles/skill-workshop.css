@@ -277,6 +277,23 @@
   margin-top: 1px;
 }
 
+.sw-row__meta--applied {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.sw-row__revision-count {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .sw-queue__empty {
   padding: 28px 16px;
   text-align: center;
@@ -518,6 +535,61 @@
   letter-spacing: 0.06em;
   color: var(--muted);
   font-weight: 600;
+}
+
+.sw-applied-history {
+  margin-top: 18px;
+}
+
+.sw-applied-history__list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.sw-applied-history__item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+.sw-applied-history__item:last-child {
+  border-bottom: 0;
+}
+
+.sw-applied-history__item:hover {
+  background: var(--bg-hover);
+}
+
+.sw-applied-history__item.is-selected {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg) 92%);
+}
+
+.sw-applied-history__operation {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sw-applied-history__age,
+.sw-applied-history__version {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sw-applied-history__version {
+  font-family: var(--mono);
 }
 
 /* ── Body card (proposal markdown) ─────────────────────────────────── */

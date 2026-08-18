@@ -7,8 +7,7 @@ import {
 import type { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
-import type { attachEventBridge } from "./event-bridge.js";
-import type { SessionLike } from "./event-bridge.js";
+import type { attachEventBridge, SessionLike } from "./event-bridge.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 
 const DEFAULT_STEERING_DELIVERY_TIMEOUT_MS = 120_000;

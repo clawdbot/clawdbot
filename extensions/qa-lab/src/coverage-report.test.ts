@@ -250,9 +250,9 @@ describe("qa coverage report", () => {
         {
           coverageId: TEST_BROWSER_COVERAGE_ID,
           kind: "playwright",
-          path: "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+          path: "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
           role: "secondary",
-          scenarioRefs: ["qa/scenarios/ui/control-ui-plan-replay-reconnect.yaml"],
+          scenarioRefs: ["qa/scenarios/ui/control-ui-progress-card-live-placement.yaml"],
         },
       ]),
     );
@@ -393,7 +393,7 @@ describe("qa coverage report", () => {
     );
     for (const executionPath of [
       "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
-      "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+      "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
     ]) {
       expect(report).toContain(
         `secondary:playwright:${executionPath} (${TEST_BROWSER_COVERAGE_ID})`,

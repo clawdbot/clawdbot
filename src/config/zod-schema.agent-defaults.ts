@@ -115,7 +115,6 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),

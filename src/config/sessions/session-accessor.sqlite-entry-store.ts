@@ -16,11 +16,22 @@ import {
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
+  sqliteLifecycleTargetSnapshotsEqual,
+  sqliteSessionEntriesEqual,
+  sqliteSessionSnapshotRowsEqual,
+} from "./session-accessor.sqlite-entry-equality.js";
+import {
   clearSessionCollaborationForKey,
   deleteSessionDeliveryArtifacts,
   deleteSessionNodeArtifacts,
   rehomeLegacySessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
+import {
+  hasSqliteSessionOwnerColumns,
+  projectSqliteSessionOwner,
+  type SqliteSessionOwnerRow,
+} from "./session-accessor.sqlite-owner-projection.js";
+import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
@@ -50,8 +61,8 @@ import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
-export { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
+export { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]>;
@@ -69,13 +80,18 @@ type SqliteLifecycleTargetSnapshot = {
   rows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
 
-function parseReadableSqliteSessionEntryRow(
+export function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
-  row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at">,
+  row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
+    SqliteSessionOwnerRow,
 ): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
   if (record) {
-    const entry = projectCanonicalSessionEntryShape(record);
+    const entry = projectSqliteSessionParticipants(
+      database.db,
+      row.session_key,
+      projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row),
+    );
     if (resolveDeliveryProvenCanonicalSessionKey(row.session_key, entry) !== row.session_key) {
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${row.session_key}`,
@@ -328,10 +344,7 @@ export function assertLifecycleTargetSnapshotUnchanged(
   current: SqliteLifecycleTargetSnapshot,
   operationLabel: string,
 ): void {
-  const primaryMatches =
-    expected.primary?.key === current.primary?.key &&
-    sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry);
-  if (!primaryMatches || !sqliteSessionSnapshotRowsEqual(expected.rows, current.rows)) {
+  if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
     throw new SqliteSessionMutationConflictError(operationLabel);
   }
 }
@@ -451,6 +464,15 @@ function clearSqliteSessionEntryPreservingWindows(
     last_read_at: null,
     last_interaction_at: null,
     last_activity_at: null,
+    ...(hasSqliteSessionOwnerColumns(database.db)
+      ? {
+          owner_actor_type: null,
+          owner_actor_id: null,
+          owner_assigned_by_type: null,
+          owner_assigned_by_id: null,
+          owner_assigned_at: null,
+        }
+      : {}),
   } as const;
   executeSqliteQuerySync(
     database.db,
@@ -478,30 +500,6 @@ export function deleteLifecycleTargetRows(
       deleteSessionEntryRows(database, trimmed);
     }
   }
-}
-
-export function sqliteSessionEntriesEqual(
-  left: SessionEntry | undefined,
-  right: SessionEntry | undefined,
-): boolean {
-  if (!left || !right) {
-    return left === right;
-  }
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function sqliteSessionSnapshotRowsEqual(
-  left: Array<{ entry: SessionEntry; sessionKey: string }>,
-  right: Array<{ entry: SessionEntry; sessionKey: string }>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (row, index) =>
-        row.sessionKey === right[index]?.sessionKey &&
-        sqliteSessionEntriesEqual(row.entry, right[index]?.entry),
-    )
-  );
 }
 
 function sqliteLifecycleTargetMatchesExpectedEntry(
@@ -679,8 +677,7 @@ export function writeSessionEntry(
             label: sessionNode.label,
             display_name: sessionNode.display_name,
             category: sessionNode.category,
-            // Clear any retired custom icon without requiring a schema-version migration.
-            icon: null,
+            icon: sessionNode.icon,
             pinned_at: sessionNode.pinned_at,
             archived_at: sessionNode.archived_at,
             last_read_at: sessionNode.last_read_at,

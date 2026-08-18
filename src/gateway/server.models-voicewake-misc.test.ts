@@ -545,7 +545,16 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("prepared model RPCs reuse both explicit startup owners without live fallback", async () => {
+  test("prepared agent read RPCs preserve explicit and system owners without live fallback", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    }
+    const workspaceRoot = path.dirname(configPath);
+    const startupModels = [
+      { id: "ops-model", name: "Ops Model", provider: "fixture" },
+      { id: "research-model", name: "Research Model", provider: "fixture" },
+    ];
     const modelConfig = {
       models: {
         providers: {
@@ -554,40 +563,48 @@ describe("gateway server models + voicewake", () => {
             apiKey: "test-fixture-key",
             baseUrl: "https://fixture.example.com/v1",
             models: [
-              { id: "alpha-model", name: "Alpha Model" },
-              { id: "beta-model", name: "Beta Model" },
+              { id: "ops-model", name: "Ops Model" },
+              { id: "research-model", name: "Research Model" },
             ],
           },
         },
       },
       agents: {
         ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
         entries: {
-          alpha: {
-            model: { primary: "fixture/alpha-model" },
-            modelPolicy: { allow: ["fixture/alpha-model"] },
+          ops: {
+            workspace: path.join(workspaceRoot, "ops-workspace"),
+            model: { primary: "fixture/ops-model" },
+            modelPolicy: { allow: ["fixture/ops-model"] },
           },
-          beta: {
-            model: { primary: "fixture/beta-model" },
-            modelPolicy: { allow: ["fixture/beta-model"] },
+          research: {
+            workspace: path.join(workspaceRoot, "research-workspace"),
+            model: { primary: "fixture/research-model" },
+            modelPolicy: { allow: ["fixture/research-model"] },
           },
         },
       },
     };
-
-    await withModelsConfig(modelConfig, async () => {
+    const publishPreparedOwners = async () => {
       await resetPreparedModelCatalogStateForTest();
       agentDiscoveryMock.enabled = true;
-      const startupModels = [
-        { id: "alpha-model", name: "Alpha Model", provider: "fixture" },
-        { id: "beta-model", name: "Beta Model", provider: "fixture" },
-      ];
       agentDiscoveryMock.models = startupModels;
       const { getRuntimeConfig } = await import("../config/io.js");
       await startupTesting.publishStartupModelRuntime({
         cfg: getRuntimeConfig(),
         log: { warn: () => {} },
       });
+    };
+    const readMethods = [
+      "models.list",
+      "models.authStatus",
+      "skills.status",
+      "doctor.memory.status",
+    ] as const;
+
+    await withModelsConfig(modelConfig, async () => {
+      await publishPreparedOwners();
       const discoveryCallsAfterStartup = agentDiscoveryMock.discoverCalls;
 
       let blockedRequestFallback = false;
@@ -607,42 +624,71 @@ describe("gateway server models + voicewake", () => {
         },
       ];
       try {
-        const [alphaModels, betaModels, alphaAuth, betaAuth, health] = await Promise.all([
+        const [
+          opsModels,
+          researchModels,
+          opsAuth,
+          researchAuth,
+          models,
+          auth,
+          emptyAuth,
+          skills,
+          memory,
+          health,
+        ] = await Promise.all([
           rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
-            agentId: "alpha",
+            agentId: "ops",
             view: "configured",
             preparedOnly: true,
           }),
           rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
-            agentId: "beta",
+            agentId: "research",
             view: "configured",
             preparedOnly: true,
           }),
           rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
-            agentId: "alpha",
+            agentId: "ops",
           }),
           rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
-            agentId: "beta",
+            agentId: "research",
           }),
+          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+            view: "configured",
+            preparedOnly: true,
+          }),
+          rpcReq(ws, "models.authStatus", {}),
+          rpcReq(ws, "models.authStatus", { agentId: "" }),
+          rpcReq<{ agentId: string; workspaceDir: string }>(ws, "skills.status", {}),
+          rpcReq<{ agentId: string }>(ws, "doctor.memory.status", {}),
           rpcReq<Record<string, unknown>>(ws, "health", { probe: true }),
         ]);
 
-        expect(alphaModels.ok, JSON.stringify(alphaModels)).toBe(true);
-        expect(betaModels.ok, JSON.stringify(betaModels)).toBe(true);
-        expect(alphaModels.payload?.models).toContainEqual(
-          expect.objectContaining({ id: "alpha-model", provider: "fixture" }),
+        expect(opsModels.ok, JSON.stringify(opsModels)).toBe(true);
+        expect(researchModels.ok, JSON.stringify(researchModels)).toBe(true);
+        expect(opsModels.payload?.models).toContainEqual(
+          expect.objectContaining({ id: "ops-model", provider: "fixture" }),
         );
-        expect(betaModels.payload?.models).toContainEqual(
-          expect.objectContaining({ id: "beta-model", provider: "fixture" }),
+        expect(researchModels.payload?.models).toContainEqual(
+          expect.objectContaining({ id: "research-model", provider: "fixture" }),
         );
-        expect(alphaAuth.ok, JSON.stringify(alphaAuth)).toBe(true);
-        expect(betaAuth.ok, JSON.stringify(betaAuth)).toBe(true);
-        expect(alphaAuth.payload?.providers).toContainEqual(
+        expect(opsAuth.ok, JSON.stringify(opsAuth)).toBe(true);
+        expect(researchAuth.ok, JSON.stringify(researchAuth)).toBe(true);
+        expect(opsAuth.payload?.providers).toContainEqual(
           expect.objectContaining({ provider: "fixture" }),
         );
-        expect(betaAuth.payload?.providers).toContainEqual(
+        expect(researchAuth.payload?.providers).toContainEqual(
           expect.objectContaining({ provider: "fixture" }),
         );
+        expect(models.payload?.models).toEqual([
+          expect.objectContaining({ id: "ops-model", provider: "fixture" }),
+        ]);
+        expect(auth.ok, JSON.stringify(auth)).toBe(true);
+        expect(emptyAuth.ok, JSON.stringify(emptyAuth)).toBe(true);
+        expect(skills.payload).toMatchObject({
+          agentId: "ops",
+          workspaceDir: path.join(workspaceRoot, "ops-workspace"),
+        });
+        expect(memory.payload).toMatchObject({ agentId: "ops" });
         expect(health.ok, JSON.stringify(health)).toBe(true);
       } finally {
         agentDiscoveryMock.models = startupModels;
@@ -650,6 +696,25 @@ describe("gateway server models + voicewake", () => {
 
       expect(agentDiscoveryMock.discoverCalls).toBe(discoveryCallsAfterStartup);
       expect(blockedRequestFallback).toBe(false);
+      for (const method of readMethods) {
+        const response = await rpcReq(ws, method, { agentId: "missing" });
+        expect(response.ok, method).toBe(false);
+        expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    });
+
+    const noSystemAgentConfig = {
+      ...modelConfig,
+      agents: { ownership: modelConfig.agents.ownership, entries: modelConfig.agents.entries },
+    };
+    await withModelsConfig(noSystemAgentConfig, async () => {
+      await publishPreparedOwners();
+
+      for (const method of readMethods) {
+        const response = await rpcReq(ws, method, {});
+        expect(response.ok, method).toBe(false);
+        expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
+      }
     });
   });
 

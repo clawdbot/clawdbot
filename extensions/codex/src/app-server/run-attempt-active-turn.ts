@@ -14,7 +14,8 @@ import {
 } from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
-import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
+import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
+import { isJsonObject, type CodexTurnStartResponse } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -62,6 +63,8 @@ export async function activateCodexAttemptTurn(
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
+  let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
@@ -114,6 +117,33 @@ export async function activateCodexAttemptTurn(
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      ...(progressCardTool
+        ? {
+            onNativePlanUpdate: async (update: {
+              markdown?: string;
+              steps: Array<{
+                step: string;
+                status: "pending" | "in_progress" | "completed";
+              }>;
+            }) => {
+              nativePlanUpdateOrdinal += 1;
+              try {
+                const input = canonicalizeNativeProgressCardInput(update);
+                await progressCardTool.execute(
+                  `codex-native-plan:${activeTurnId}:${nativePlanUpdateOrdinal}`,
+                  input,
+                  runAbortController.signal,
+                );
+              } catch (error) {
+                embeddedAgentLog.warn("failed to persist native Codex plan to progress card", {
+                  runId: params.runId,
+                  threadId: resourceState.thread.threadId,
+                  error: formatErrorMessage(error),
+                });
+              }
+            },
+          }
+        : {}),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: async () => {
@@ -165,13 +195,16 @@ export async function activateCodexAttemptTurn(
     }
   }
   if (!state.completed && isTerminalTurnStatus(turn.turn.status)) {
+    if (!isJsonObject(turn.turn)) {
+      throw new Error("Codex turn completion payload is not a JSON object");
+    }
     await enqueueNotification(
       {
         method: "turn/completed",
         params: {
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
-          turn: turn.turn as unknown as JsonObject,
+          turn: turn.turn,
         },
       },
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },

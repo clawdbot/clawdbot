@@ -11,6 +11,10 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -238,7 +242,7 @@ export async function projectSessionsPatchEntry(params: {
   };
 
   const existing = params.existingEntry
-    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    ? projectCanonicalSessionEntryShape({ ...params.existingEntry })
     : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
@@ -280,6 +284,21 @@ export async function projectSessionsPatchEntry(params: {
         return invalid(`label already in use: ${parsed.label}`);
       }
       next.label = parsed.label;
+    }
+  }
+
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null || raw === "") {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const icon = normalizeSessionIconValue(raw);
+      if (!icon) {
+        return invalid(
+          `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`,
+        );
+      }
+      next.icon = icon;
     }
   }
 
@@ -544,6 +563,13 @@ export async function projectSessionsPatchEntry(params: {
         delete next.execCwd;
       }
       next.execNode = trimmed;
+    }
+  }
+  if ("permissionMode" in patch) {
+    if (patch.permissionMode === null) {
+      delete next.permissionMode;
+    } else if (patch.permissionMode !== undefined) {
+      next.permissionMode = patch.permissionMode;
     }
   }
   if ("model" in patch) {

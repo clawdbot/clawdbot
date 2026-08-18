@@ -43,10 +43,6 @@ function sharingIcon(visibility: SessionVisibility): TemplateResult {
   return visibility === "shared" ? icons.users : icons.lock;
 }
 
-function isChannelIdentity(identityId: string): boolean {
-  return identityId.startsWith("channel:") || identityId.includes(":channel:");
-}
-
 export function canManageChatSessionSharing(
   session: Pick<GatewaySessionRow, "sharingRole">,
 ): boolean {
@@ -69,7 +65,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   }
   const result = props.state?.result;
   const members = new Set(result?.members.map((member) => member.identityId) ?? []);
-  // The shared header owner chip presents createdActor; this picker only manages mutable members.
+  // The shared header owner chip presents effective ownership; this picker manages mutable members.
   const identities =
     result?.identities.filter((identity) => identity.id !== result.owner?.id) ?? [];
   const allowed = result?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility];
@@ -162,7 +158,6 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
                     const disabledReason = members.has(identity.id)
                       ? props.memberRemoveDisabledReason
                       : props.memberAddDisabledReason;
-                    const channelIdentity = isChannelIdentity(identity.id);
                     return html`
                       <wa-dropdown-item
                         class="session-menu__item chat-pane__sharing-member"
@@ -170,18 +165,10 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
                         ?disabled=${Boolean(disabledReason)}
                         title=${disabledReason ?? nothing}
                       >
-                        <span
-                          slot="icon"
-                          class="chat-pane__sharing-member-icon ${channelIdentity
-                            ? "chat-pane__sharing-channel-icon"
-                            : ""}"
-                          aria-hidden="true"
-                        >
-                          ${channelIdentity
-                            ? icons.messageSquare
-                            : identity.type === "human"
-                              ? renderSessionOwnerChip(identity, "header")
-                              : icons.bot}
+                        <span slot="icon" class="chat-pane__sharing-member-icon" aria-hidden="true">
+                          ${identity.type === "human"
+                            ? renderSessionOwnerChip(identity, "header")
+                            : icons.bot}
                         </span>
                         <span
                           class="chat-pane__sharing-member-label"

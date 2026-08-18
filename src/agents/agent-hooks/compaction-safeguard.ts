@@ -2,8 +2,21 @@
 
 import fs from "node:fs";
 import path from "node:path";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  capCompactionSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
+} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import {
+  computeFileLists,
+  formatFileOperations,
+  MAX_FILE_OPS_LIST_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+} from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { isAbortError } from "../../infra/abort-signal.js";
@@ -28,7 +41,6 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
   computeAdaptiveChunkRatio,
-  isOversizedForSummary,
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
@@ -38,7 +50,7 @@ import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
-import type { ExtensionAPI, ExtensionContext, FileOperations } from "../sessions/index.js";
+import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -67,10 +79,6 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
-const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
-const MAX_FILE_OPS_SECTION_CHARS = 2_000;
-const MAX_FILE_OPS_LIST_CHARS = 900;
-const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const CONTEXT_TRUNCATED_MARKER = "\n\n[Earlier compaction context truncated to fit budget]\n\n";
 // Split-turn context supplements the generated summary and must not claim its
 // guaranteed half of the final artifact before common finalization runs.
@@ -298,19 +306,13 @@ function containsRealConversation(messages: AgentMessage[]): boolean {
  * Only called when no compaction provider is available or the provider failed.
  */
 async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]): Promise<string> {
-  const result = await compactionSafeguardDeps.summarizeInStages({
+  // Summarization failure throws CompactionError (b942db4d569b) — there is no
+  // degraded-fallback return shape to preserve a previous summary against.
+  return await compactionSafeguardDeps.summarizeInStages({
     ...params,
     messages: prependPreviousSummaryForRedistill(params),
     previousSummary: undefined,
   });
-  if (result.kind === "summary") {
-    return result.text;
-  }
-
-  // A generic fallback means redistillation never happened. Preserve the
-  // known summary verbatim so a temporary model outage cannot erase it.
-  const previousSummary = params.previousSummary?.trim();
-  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**
@@ -560,75 +562,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
     lines.push(`- ...and ${failures.length - MAX_TOOL_FAILURES} more`);
   }
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
-}
-
-function computeFileLists(fileOps: FileOperations): {
-  readFiles: string[];
-  modifiedFiles: string[];
-} {
-  const modified = new Set([...fileOps.edited, ...fileOps.written]);
-  const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).toSorted();
-  const modifiedFiles = [...modified].toSorted();
-  return { readFiles, modifiedFiles };
-}
-
-function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
-    if (files.length === 0 || maxChars <= 0) {
-      return "";
-    }
-    const openTag = `<${tag}>\n`;
-    const closeTag = `\n</${tag}>`;
-    const lines: string[] = [];
-    let usedChars = openTag.length + closeTag.length;
-
-    for (let i = 0; i < files.length; i++) {
-      const line = `${files[i]}\n`;
-      const remaining = files.length - i - 1;
-      const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
-      const projected = usedChars + line.length + overflowLine.length;
-      if (projected > maxChars) {
-        const overflow = `...and ${files.length - i} more\n`;
-        if (usedChars + overflow.length <= maxChars) {
-          lines.push(overflow);
-        }
-        break;
-      }
-      lines.push(line);
-      usedChars += line.length;
-    }
-
-    return lines.length > 0 ? `${openTag}${lines.join("")}${closeTag}` : "";
-  }
-
-  const sections = [
-    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
-    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
-  ].filter(Boolean);
-  return sections.length > 0
-    ? capCompactionSummary(`\n\n${sections.join("\n\n")}`, MAX_FILE_OPS_SECTION_CHARS)
-    : "";
-}
-
-function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
-  if (maxChars <= 0 || summary.length <= maxChars) {
-    return summary;
-  }
-  const marker = SUMMARY_TRUNCATED_MARKER;
-  if (maxChars < marker.length) {
-    // Marker cannot fit; keep body prefix instead of a partial marker fragment.
-    return truncateUtf16Safe(summary, maxChars);
-  }
-  const budget = maxChars - marker.length;
-  return `${truncateUtf16Safe(summary, budget)}${marker}`;
-}
-
-function capCompactionSummaryPreservingSuffix(
-  summaryBody: string,
-  suffix: string,
-  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
-): string {
-  return budgetCompactionSummary(summaryBody, suffix, maxChars).summary;
 }
 
 function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
@@ -945,10 +878,6 @@ function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
     truncatedLoss: "preserved-turn-head",
   });
-}
-
-function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  return buildPreservedTurnsSection(messages).text;
 }
 
 function buildSplitTurnContextSection(
@@ -1507,7 +1436,7 @@ const testing = {
   collectToolFailures,
   formatToolFailuresSection,
   splitPreservedRecentTurns,
-  formatPreservedTurnsSection,
+  buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
@@ -1517,10 +1446,9 @@ const testing = {
   extractOpaqueIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
-  capCompactionSummaryPreservingSuffix,
+  budgetCompactionSummary,
   formatFileOperations,
   computeAdaptiveChunkRatio,
-  isOversizedForSummary,
   readWorkspaceContextForSummary,
   hasMeaningfulConversationContent,
   isRealConversationMessage,
@@ -1539,5 +1467,3 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.compactionSafeguardTestApi")] =
     testing;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

@@ -28,6 +28,7 @@ export function renderFloatingUpdateCard(params: {
   refreshRequired: boolean;
   onRefresh: () => void;
   onHoldUpdate?: () => Promise<boolean>;
+  onReviewUpdate?: () => void;
 }) {
   // A stale client must always have a visible refresh action, including during
   // onboarding, even though update-available actions stay hidden there.
@@ -48,5 +49,6 @@ export function renderFloatingUpdateCard(params: {
     .refreshRequired=${params.refreshRequired}
     .onRefresh=${params.onRefresh}
     .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
+    .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
   ></openclaw-sidebar-update-card>`;
 }

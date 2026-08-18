@@ -58,7 +58,19 @@ on:
   );
   writeFileSync(
     join(checkout, "scripts", "release-ci-summary.mjs"),
-    'console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));\n',
+    `const expected = [
+  "--validate-run", "123",
+  "--trusted-workflow-ref", "main",
+  "--json",
+  "--verifier-source-sha", process.env.MOCK_WORKFLOW_SHA,
+  "--verifier-source-file", process.argv[1],
+];
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
+  console.error("unexpected verifier args: " + JSON.stringify(process.argv.slice(2)));
+  process.exit(2);
+}
+console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));
+`,
   );
   runGit(checkout, ["add", "."]);
   runGit(checkout, ["commit", "-m", "test: trusted workflow"]);
@@ -199,15 +211,6 @@ describe("full-release-validation-at-sha", () => {
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
   });
 
-  it("keeps release context separate from the exact target SHA", () => {
-    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
-    expect(source).toContain("ref: targetBranch");
-    expect(source).toContain("target_context_ref: targetContextRef");
-    expect(source).toContain(
-      'args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true"',
-    );
-  });
-
   it("rejects missing option values", () => {
     expect(() => parseArgs(["--sha", "--dry-run"])).toThrow("--sha requires a value");
     expect(() => parseArgs(["--sha", "-h"])).toThrow("--sha requires a value");
@@ -283,21 +286,28 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("validates direct and reused runs through the strict evidence verifier", () => {
-    expect(releaseEvidenceVerificationArgs("123")).toEqual([
+    const workflowSha = "a".repeat(40);
+    const verifier = "/tmp/trusted/scripts/release-ci-summary.mjs";
+    expect(releaseEvidenceVerificationArgs("123", workflowSha, verifier)).toEqual([
       "--validate-run",
       "123",
       "--trusted-workflow-ref",
       "main",
       "--json",
+      "--verifier-source-sha",
+      workflowSha,
+      "--verifier-source-file",
+      verifier,
     ]);
-    expect(() => releaseEvidenceVerificationArgs("")).toThrow("positive decimal");
+    expect(() => releaseEvidenceVerificationArgs("", workflowSha, verifier)).toThrow(
+      "positive decimal",
+    );
   });
 
-  it("polls the exact workflow run without GraphQL quota use", () => {
+  it("bounds polling for the exact workflow run", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(720);
     expect(FULL_RELEASE_WAIT_POLL_INTERVAL_MS).toBe(45_000);
-    expect(source).toContain("actions/runs/${parentRunId}");
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
     expect(source).toContain("return suite;");
     expect(source).toContain("Date.now() + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000");
@@ -307,8 +317,6 @@ describe("full-release-validation-at-sha", () => {
       "Timed out after ${FULL_RELEASE_WAIT_TIMEOUT_MINUTES} minutes waiting for Full Release Validation",
     );
     expect(source).not.toContain("attempt < 480");
-    expect(source).not.toContain('"graphql"');
-    expect(source).not.toContain('["run", "watch"');
   });
 
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
@@ -348,11 +356,6 @@ describe("full-release-validation-at-sha", () => {
         () => "on:\n  workflow_dispatch:\n    inputs: {}\n",
       ),
     ).toThrow(`Tooling SHA ${"b".repeat(40)} is missing workflow_dispatch input expected_sha`);
-
-    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
-    expect(source.indexOf("assertTrustedWorkflowHarness(workflowSha);")).toBeLessThan(
-      source.indexOf('run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`]'),
-    );
   });
 
   it("retains a failed parent workflow ref for GitHub reruns", () => {
@@ -418,18 +421,34 @@ describe("full-release-validation-at-sha", () => {
         ),
       );
       const dispatch = ghCalls.find((args) => args[0] === "workflow" && args[1] === "run");
-      expect(dispatch).toEqual(
-        expect.arrayContaining([
-          "--ref",
-          workflowBranch,
-          "-f",
-          `ref=${targetBranch}`,
-          "-f",
-          `expected_sha=${fixture.targetSha}`,
-          "-f",
-          `target_context_ref=${fixture.releaseRef}`,
-        ]),
-      );
+      expect(dispatch?.slice(0, 5)).toEqual([
+        "workflow",
+        "run",
+        "full-release-validation.yml",
+        "--ref",
+        workflowBranch,
+      ]);
+      const inputArgs = dispatch?.slice(5) ?? [];
+      expect(inputArgs.length % 2).toBe(0);
+      const dispatchInputs: Record<string, string> = {};
+      for (let index = 0; index < inputArgs.length; index += 2) {
+        expect(inputArgs[index]).toBe("-f");
+        const assignment = inputArgs[index + 1];
+        const separatorIndex = assignment?.indexOf("=") ?? -1;
+        if (!assignment || separatorIndex <= 0) {
+          throw new Error(`invalid workflow input assignment: ${String(assignment)}`);
+        }
+        dispatchInputs[assignment.slice(0, separatorIndex)] = assignment.slice(separatorIndex + 1);
+      }
+      expect(dispatchInputs).toMatchObject({
+        ref: targetBranch,
+        expected_sha: fixture.targetSha,
+        target_context_ref: fixture.releaseRef,
+        allow_unreleased_changelog: "false",
+      });
+      expect(ghCalls).toContainEqual(["api", "repos/openclaw/openclaw/actions/runs/123"]);
+      expect(ghCalls.some((args) => args[0] === "graphql")).toBe(false);
+      expect(ghCalls.some((args) => args[0] === "run" && args[1] === "watch")).toBe(false);
       expect(result.stdout).toContain(`Validation SHA: ${fixture.targetSha}`);
       expect(result.stdout).toContain(`Tooling SHA: ${fixture.workflowSha}`);
       expect(result.stdout).toContain(

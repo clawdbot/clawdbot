@@ -30,6 +30,7 @@ import {
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
 import type { RuntimeAuthState } from "./helpers.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   resolveEmbeddedRunEffectiveModel,
   selectEmbeddedRunHarness,
@@ -42,7 +43,7 @@ import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 type ApiKeyInfo = ResolvedProviderAuth;
 
 export async function prepareEmbeddedRunRuntime(input: {
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   provider: string;
   modelId: string;
   agentDir: string;
@@ -105,6 +106,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     });
   const initialResolvedRuntimeModel = resolveEffectiveModel(runtimeModel);
   let contextTokenBudget = initialResolvedRuntimeModel.contextTokenBudget;
+  let authoredContextTokenCap = initialResolvedRuntimeModel.authoredContextTokenCap;
   let contextWindowInfo = initialResolvedRuntimeModel.contextWindowInfo;
   let outerContextTokenMeta: { contextTokens?: number } =
     contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
@@ -116,6 +118,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     runtimeModel = candidate;
     effectiveModel = resolved.effectiveModel;
     contextTokenBudget = resolved.contextTokenBudget;
+    authoredContextTokenCap = resolved.authoredContextTokenCap;
     contextWindowInfo = resolved.contextWindowInfo;
     outerContextTokenMeta =
       contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
@@ -327,6 +330,9 @@ export async function prepareEmbeddedRunRuntime(input: {
     attemptedThinking,
     fallbackConfigured: input.fallbackConfigured,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
+    authProfileFailurePolicy: params.authProfileFailurePolicy,
+    authProfileStateMode: params.authProfileStateMode,
+    runId: params.runId,
     getProvider: () => provider,
     getModelId: () => modelId,
     getRuntimeModel: () => runtimeModel,
@@ -572,6 +578,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       pluginHarnessOwnsTransport,
       effectiveModel,
       contextTokenBudget,
+      authoredContextTokenCap,
       contextWindowInfo,
       outerContextTokenMeta,
       activePreparedAuthPlan,

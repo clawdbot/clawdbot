@@ -11,7 +11,7 @@ import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/m
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
-import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
@@ -499,7 +499,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     finalizeAssistantTexts,
     trimMessagingToolSent,
     consumeToolSendReceipt: (toolCallId) =>
-      consumeEmbeddedToolSendReceipt(params.session.sessionManager, toolCallId),
+      consumeEmbeddedToolReceipt(params.session.sessionManager, toolCallId),
     ensureCompactionPromise,
     noteCompactionRetry,
     resolveCompactionRetry,
@@ -660,6 +660,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }),
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
+    getLastToolRecovery: () => (state.lastToolRecovery ? { ...state.lastToolRecovery } : undefined),
     getUsageTotals,
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,

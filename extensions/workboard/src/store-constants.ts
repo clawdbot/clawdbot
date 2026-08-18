@@ -20,6 +20,7 @@ export const MAX_CARD_DIAGNOSTICS = 12;
 export const MAX_CARD_NOTIFICATIONS = 20;
 export const MAX_CARD_METADATA_BYTES = 24 * 1024;
 export const DEFAULT_CLAIM_TTL_MS = 30 * 60 * 1000;
+export const DEFAULT_WORKBOARD_DISPATCH_OWNER = "workboard-dispatcher";
 export const READY_STRANDED_MS = 60 * 60 * 1000;
 export const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 export const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;

@@ -118,7 +118,7 @@ const mocks = vi.hoisted(() => {
     readClawHubSkillsLockfileStatusSyncMock: vi.fn((..._args: unknown[]) => ({ kind: "missing" })),
     resolveClawHubSkillStatusLinkSyncMock: vi.fn(),
     resolveLocalSkillCardStatusSyncMock: vi.fn(),
-    fetchClawHubSkillVerificationMock: vi.fn(),
+    verifySkillWithClawHubMock: vi.fn(),
     fetchClawHubSkillCardMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
     skillStatusReportFixture,
@@ -145,7 +145,7 @@ const {
   readClawHubSkillsLockfileStatusSyncMock,
   resolveClawHubSkillStatusLinkSyncMock,
   resolveLocalSkillCardStatusSyncMock,
-  fetchClawHubSkillVerificationMock,
+  verifySkillWithClawHubMock,
   fetchClawHubSkillCardMock,
   buildWorkspaceSkillStatusMock,
   skillStatusReportFixture,
@@ -156,20 +156,23 @@ const {
 } = mocks;
 
 function primeSkillVerification(overrides: Record<string, unknown> = {}) {
-  return fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-    schema: "clawhub.skill.verify.v1",
+  return verifySkillWithClawHubMock.mockResolvedValueOnce({
     ok: true,
-    decision: "pass",
-    reasons: [],
-    skill: { slug: "agentreceipt" },
-    publisher: null,
-    version: { version: "1.2.3" },
-    card: { available: true },
-    artifact: null,
-    provenance: null,
-    security: { status: "clean" },
-    signature: { status: "unsigned" },
-    ...overrides,
+    value: {
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "agentreceipt" },
+      publisher: null,
+      version: { version: "1.2.3" },
+      card: { available: true },
+      artifact: null,
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+      ...overrides,
+    },
   });
 }
 
@@ -209,6 +212,14 @@ function expectLogger(value: unknown): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected logger object");
   }
+}
+
+function requireCommand(parent: Command, name: string): Command {
+  const command = parent.commands.find((candidate) => candidate.name() === name);
+  if (!command) {
+    throw new Error(`missing command: ${name}`);
+  }
+  return command;
 }
 
 function expectStatusWorkspaceCall(workspaceDir: string): void {
@@ -283,13 +294,13 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
     mocks.resolveClawHubSkillStatusLinkSyncMock(...args),
   resolveLocalSkillCardStatusSync: (...args: unknown[]) =>
     mocks.resolveLocalSkillCardStatusSyncMock(...args),
+  verifySkillWithClawHub: (...args: unknown[]) => mocks.verifySkillWithClawHubMock(...args),
 }));
 
 vi.mock("../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
-  fetchClawHubSkillVerification: (...args: unknown[]) =>
-    mocks.fetchClawHubSkillVerificationMock(...args),
   fetchClawHubSkillCard: (...args: unknown[]) => mocks.fetchClawHubSkillCardMock(...args),
 }));
 
@@ -347,7 +358,7 @@ describe("skills cli commands", () => {
     readClawHubSkillsLockfileStatusSyncMock.mockReset();
     resolveClawHubSkillStatusLinkSyncMock.mockReset();
     resolveLocalSkillCardStatusSyncMock.mockReset();
-    fetchClawHubSkillVerificationMock.mockReset();
+    verifySkillWithClawHubMock.mockReset();
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
 
@@ -385,25 +396,28 @@ describe("skills cli commands", () => {
         installedVersion: "1.2.3",
       },
     });
-    fetchClawHubSkillVerificationMock.mockResolvedValue({
-      schema: "clawhub.skill.verify.v1",
+    verifySkillWithClawHubMock.mockResolvedValue({
       ok: true,
-      decision: "pass",
-      reasons: [],
-      skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
-      publisher: { handle: "openclaw" },
-      version: { version: "1.2.3" },
-      card: {
-        available: true,
-        url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
+      value: {
+        schema: "clawhub.skill.verify.v1",
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
+        publisher: { handle: "openclaw" },
+        version: { version: "1.2.3" },
+        card: {
+          available: true,
+          url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
+        },
+        artifact: {
+          sourceFingerprint: "source-fingerprint",
+          bundleFingerprints: ["generated-bundle-fingerprint"],
+        },
+        provenance: null,
+        security: { status: "clean" },
+        signature: { status: "unsigned" },
       },
-      artifact: {
-        sourceFingerprint: "source-fingerprint",
-        bundleFingerprints: ["generated-bundle-fingerprint"],
-      },
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
     fetchClawHubSkillCardMock.mockResolvedValue("# Agent Receipt\n\nGenerated by ClawHub.\n");
     buildWorkspaceSkillStatusMock.mockReturnValue(skillStatusReportFixture);
@@ -758,6 +772,27 @@ describe("skills cli commands", () => {
     });
   });
 
+  it("declares inherited options on every applicable nested leaf", () => {
+    const program = new Command().enablePositionalOptions();
+    registerSkillsCli(program);
+    const skills = requireCommand(program, "skills");
+    const workshop = requireCommand(skills, "workshop");
+    const curator = requireCommand(skills, "curator");
+
+    for (const command of workshop.commands) {
+      expect(
+        command.options.some((option) => option.long === "--agent"),
+        command.name(),
+      ).toBe(true);
+    }
+    for (const command of curator.commands) {
+      expect(
+        command.options.some((option) => option.long === "--json"),
+        command.name(),
+      ).toBe(true);
+    }
+  });
+
   it("rejects --version for git and local source installs", async () => {
     await expect(
       runCommand(["skills", "install", "git:owner/tools", "--version", "1.2.3"]),
@@ -1070,7 +1105,7 @@ describe("skills cli commands", () => {
       version: undefined,
       tag: undefined,
     });
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+    expect(verifySkillWithClawHubMock).toHaveBeenCalledWith({
       slug: "agentreceipt",
       version: "1.2.3",
       tag: undefined,
@@ -1111,7 +1146,7 @@ describe("skills cli commands", () => {
 
     await runCommand(["skills", "verify", "weather"]);
 
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+    expect(verifySkillWithClawHubMock).toHaveBeenCalledWith({
       slug: "weather",
       ownerHandle: "demo-owner",
       version: "1.2.3",
@@ -1145,7 +1180,7 @@ describe("skills cli commands", () => {
       version: undefined,
       tag: "latest",
     });
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+    expect(verifySkillWithClawHubMock).toHaveBeenCalledWith({
       slug: "weather",
       ownerHandle: "demo-owner",
       version: undefined,
@@ -1281,8 +1316,28 @@ describe("skills cli commands", () => {
 
     await expect(runCommand(["skills", "verify", "agentreceipt"])).rejects.toThrow("__exit__:1");
 
-    const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
-    expect(payload.ok).toBe(false);
+    expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
+      schema: "clawhub.skill.verify.v1",
+      ok: false,
+      decision: "fail",
+      reasons: ["security.status_not_clean"],
+      skill: { slug: "agentreceipt" },
+      publisher: null,
+      version: { version: "1.2.3" },
+      card: { available: true },
+      artifact: null,
+      provenance: null,
+      security: { status: "malicious" },
+      signature: { status: "unsigned" },
+      openclaw: {
+        resolution: {
+          source: "installed",
+          selector: "installed-version",
+          registry: "https://private.example.com/clawhub",
+          installedVersion: "1.2.3",
+        },
+      },
+    });
     expect(runtimeErrors).toStrictEqual([]);
   });
 
@@ -1313,7 +1368,11 @@ describe("skills cli commands", () => {
     await runCommand(["skills", "verify", "agentreceipt", "--global", "--agent", "main"]);
 
     expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Use either --global or --agent, not both.",
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "Use either --global or --agent, not both.",
+      },
     });
     expect(runtimeErrors).toStrictEqual([]);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -1396,7 +1455,15 @@ describe("skills cli commands", () => {
     {
       label: "JSON",
       argv: ["skills", "info", "missing-skill", "--json"],
-      expected: JSON.stringify({ error: "not found", skill: "missing-skill" }, null, 2),
+      expected: JSON.stringify(
+        {
+          ok: false,
+          error: { type: "cli_error", message: 'Skill "missing-skill" not found.' },
+          skill: "missing-skill",
+        },
+        null,
+        2,
+      ),
     },
   ])("exits nonzero for missing skill info in $label mode", async ({ argv, expected }) => {
     vi.stubEnv("OPENCLAW_PROFILE", "");

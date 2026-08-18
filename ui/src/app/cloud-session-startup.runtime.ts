@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   createGatewayConnectionLifecycle,
   type GatewayConnectionScope,
@@ -281,7 +282,7 @@ export default function createApplicationCloudStartupRuntime(
       })
       .catch((error: unknown) => {
         if (findEntry(entry.owner.sessionKey)?.entry === entry) {
-          setEntryState(entry, "failed", { error: String(error), retryable: true });
+          setEntryState(entry, "failed", { error: formatUiError(error), retryable: true });
           if (entry.persistRecovery) {
             entry.recovery = null;
           }

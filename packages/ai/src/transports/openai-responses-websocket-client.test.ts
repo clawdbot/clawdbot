@@ -1,5 +1,4 @@
 import {
-  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type AssistantMessage,
   type Context,
@@ -7,6 +6,7 @@ import {
 } from "@openclaw/llm-core";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
@@ -246,9 +246,13 @@ function toolCallResponse(responseId: string): StreamMessage[] {
 }
 
 function sdkCompletion(responseId: string): SdkResponse {
+  return sdkEvent(completedEvent(responseId));
+}
+
+function sdkEvent(event: Record<string, unknown>): SdkResponse {
   return {
     data: (async function* () {
-      yield completedEvent(responseId);
+      yield event;
     })(),
     response: new Response(null, { status: 200 }),
   };
@@ -727,45 +731,86 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.sdkRequests).toHaveLength(1);
   });
 
-  it("does not replay after an explicit failed response with no output", async () => {
-    transportState.responseBatches.push([
-      message({ type: "response.created", response: { id: "resp_failed" } }),
-      message({
-        type: "response.failed",
-        response: { id: "resp_failed", status: "failed", output: [] },
-      }),
-    ]);
-    const result = await run({ messages: [userMessage("hello", 1)], tools: [] });
+  it("preserves failed terminal semantics across WebSocket and SSE without degradation", async () => {
+    const failedEvent = {
+      type: "response.failed",
+      response: {
+        id: "resp_failed",
+        status: "failed",
+        model: "gpt-5.6-luna-2026-08-01",
+        service_tier: "priority",
+        error: { code: "server_error", message: "503 temporary provider response" },
+        output: [],
+        usage: {
+          input_tokens: 21,
+          output_tokens: 4,
+          total_tokens: 25,
+          input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+          output_tokens_details: { reasoning_tokens: 3 },
+        },
+      },
+    };
+    const pricedModel = {
+      ...model,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
+    transportState.responseBatches.push(
+      [message(failedEvent)],
+      [message(completedEvent("resp_next"))],
+    );
+    transportState.sdkOutcomes.push(sdkEvent(failedEvent));
 
-    expect(result.stopReason).toBe("error");
-    expect(result.errorCode).toBe(PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE);
-    expect(transportState.websocketRequests).toHaveLength(1);
-    expect(transportState.sdkRequests).toEqual([]);
+    const websocket = await run(
+      { messages: [userMessage("websocket", 1)], tools: [] },
+      { model: pricedModel },
+    );
+    const sse = await run(
+      { messages: [userMessage("sse", 2)], tools: [] },
+      { model: pricedModel, transport: "sse" },
+    );
 
-    transportState.sdkOutcomes.push(sdkCompletion("resp_sse"));
-    const next = await run({ messages: [userMessage("next", 2)], tools: [] });
+    const terminalFacts = {
+      stopReason: "error",
+      errorMessage: "server_error: 503 temporary provider response",
+      responseId: "resp_failed",
+      responseModel: "gpt-5.6-luna-2026-08-01",
+      usage: {
+        input: 13,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: 2,
+        reasoningTokens: 3,
+        totalTokens: 25,
+      },
+    };
+    expect(websocket).toMatchObject(terminalFacts);
+    expect(sse).toMatchObject(terminalFacts);
+    expect(websocket.usage.cost.total).toBeCloseTo(0.000401, 10);
+    expect(sse.usage.cost.total).toBeCloseTo(0.000401, 10);
+    expect(isRetryableAssistantError(websocket)).toBe(true);
+    expect(isRetryableAssistantError(sse)).toBe(true);
+
+    const next = await run(
+      { messages: [userMessage("next", 3)], tools: [] },
+      { model: pricedModel },
+    );
     expect(next.stopReason).toBe("stop");
-    expect(transportState.websocketOptions).toHaveLength(1);
+    expect(transportState.websocketOptions).toHaveLength(2);
+    expect(transportState.websocketRequests[1]).not.toHaveProperty("previous_response_id");
     expect(transportState.sdkRequests).toHaveLength(1);
   });
 
-  it("does not fall back after a failed response contains terminal output", async () => {
-    transportState.responseBatches.push([
-      message({ type: "response.created", response: { id: "resp_failed" } }),
-      message({
-        type: "response.failed",
-        response: {
-          id: "resp_failed",
-          status: "failed",
-          output: [{ type: "message", role: "assistant", content: [] }],
-        },
-      }),
-    ]);
+  it("keeps a true post-dispatch connection loss replay-unsafe", async () => {
+    transportState.responseBatches.push([{ type: "close", code: 1006 }]);
 
     const result = await run({ messages: [userMessage("hello", 1)], tools: [] });
 
-    expect(result.stopReason).toBe("error");
-    expect(result.errorCode).toBe(PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE);
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+    });
+    expect(isRetryableAssistantError(result)).toBe(false);
+    expect(transportState.websocketRequests).toHaveLength(1);
     expect(transportState.sdkRequests).toEqual([]);
   });
 

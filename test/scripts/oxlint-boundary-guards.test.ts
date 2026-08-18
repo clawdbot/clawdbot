@@ -18,6 +18,11 @@ const cases = [
     violation: `${FIXTURES}/widen-then-assert-violation.test.ts`,
     violations: 3,
   },
+  {
+    rule: "openclaw-boundaries/no-chained-type-assertions",
+    violation: `${FIXTURES}/chained-type-assertions-violation.ts`,
+    violations: 3,
+  },
 ];
 
 function runGuard(target: string) {

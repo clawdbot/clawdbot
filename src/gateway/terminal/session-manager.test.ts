@@ -633,7 +633,7 @@ describe("TerminalSessionManager agent ownership", () => {
       expect(emit).not.toHaveBeenCalled();
       expect(manager.snapshotAgent("agent:main:main", outcome.sessionId)).toBe("visiblebuffered");
 
-      expect(manager.closeAgent("agent:main:main", outcome.sessionId)).toBe(true);
+      expect(manager.closeAgent("agent:main:main", outcome.sessionId)).toEqual({ ok: true });
       expect(fake.killed).toBe(true);
       expect(manager.size).toBe(0);
     } finally {

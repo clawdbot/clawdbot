@@ -192,6 +192,13 @@ function entryWarnStatuses(
       </span>`,
     );
   }
+  if (entry.node?.workerBundle?.status === "missing") {
+    statuses.push(
+      html`<span title=${t("devices.inventory.workerMissingTitle")}>
+        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.workerMissing") })}
+      </span>`,
+    );
+  }
   if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
     statuses.push(
       html`<span title=${t("devices.inventory.manualWakeTitle")}>
@@ -224,6 +231,9 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
   }
   if (entry.version) {
     parts.push(entry.version);
+  }
+  if (entry.node?.workerBundle?.status === "installed") {
+    parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
   }
   if (entry.connected && entry.presence?.lastInputSeconds != null) {
     parts.push(formatInputRecency(entry.presence.lastInputSeconds));
@@ -295,7 +305,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
       ? entry.node.pendingRequestId
       : undefined;
   const connectionStatus = entry.connected
-    ? renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })
+    ? nothing
     : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
     <div class="settings-row device-entry">
@@ -372,7 +382,6 @@ function renderPresenceRow(
           : nothing}
       </div>
       <div class="settings-row__control">
-        ${renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })}
         ${gateway
           ? renderSettingsStatus({ kind: "accent", label: t("devices.inventory.gateway") })
           : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.unpaired") })}

@@ -163,7 +163,11 @@ class DevicesPage extends OpenClawLightDomElement {
           if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
             void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
           }
-          if (event.event === "node.pair.requested" || event.event === "node.pair.resolved") {
+          if (
+            event.event === "node.pair.requested" ||
+            event.event === "node.pair.resolved" ||
+            event.event === "node.runnerInventory.changed"
+          ) {
             void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
           }
         }),

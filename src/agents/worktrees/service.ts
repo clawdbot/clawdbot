@@ -5,8 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
-import { isMissingPathError } from "../../infra/errors.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import {
   executeGitCommand as runGit,
   requireGitCommand as requireGit,
@@ -240,28 +239,9 @@ async function shouldPreserveOrphanCandidate(
   if (managedPaths.has(targetKey)) {
     return true;
   }
-  const hasOwnGitMarker = await worktreePathExists(path.join(target, ".git"));
-  if (!hasOwnGitMarker) {
-    return false;
-  }
-  // Query from the checkout itself so registered unborn worktrees do not pass
-  // through resolveRepository's intentional HEAD commit requirement.
-  const listed = await listGitWorktrees(target);
-  for (const entry of listed) {
-    let listedKey: string;
-    try {
-      listedKey = await canonicalPathKey(entry.path);
-    } catch (error) {
-      if (isMissingPathError(error)) {
-        continue;
-      }
-      throw error;
-    }
-    if (listedKey === targetKey) {
-      return true;
-    }
-  }
-  return false;
+  // Any top-level .git entry marks uncertain user work; broken indirection only
+  // strengthens preservation and must never abort global orphan cleanup.
+  return await worktreePathExists(path.join(target, ".git"));
 }
 
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {

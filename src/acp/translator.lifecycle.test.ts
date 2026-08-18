@@ -2,6 +2,7 @@ import type {
   CloseSessionRequest,
   InitializeRequest,
   ListSessionsRequest,
+  NewSessionRequest,
   PromptRequest,
   PromptResponse,
   ResumeSessionRequest,
@@ -75,6 +76,14 @@ function createPromptRequest(sessionId: string): PromptRequest {
     prompt: [{ type: "text", text: "hello" }],
     _meta: {},
   } as PromptRequest;
+}
+
+function createNewSessionRequest(): NewSessionRequest {
+  return {
+    cwd: "/tmp/openclaw",
+    mcpServers: [],
+    _meta: {},
+  } as NewSessionRequest;
 }
 
 function createGatewaySessions(rows: GatewaySessionRow[]) {
@@ -495,6 +504,64 @@ describe("acp translator stable lifecycle handlers", () => {
     });
     await expect(pending.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
     expect(sessionStore.hasSession("session-1")).toBe(false);
+  });
+
+  it("drains only its own pending work and sessions during shutdown", async () => {
+    const sentRunIds: string[] = [];
+    const requestA = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        const runId = params?.idempotencyKey;
+        if (typeof runId === "string") {
+          sentRunIds.push(runId);
+        }
+        return { runId, status: "started" };
+      }
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    });
+    const requestB = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    });
+    const agentA = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(requestA as GatewayClient["request"]),
+    );
+    const agentB = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(requestB as GatewayClient["request"]),
+    );
+    const sessionA = await agentA.newSession(createNewSessionRequest());
+    const sessionB = await agentB.newSession(createNewSessionRequest());
+    const pending = await startPendingPrompt({
+      agent: agentA,
+      sentRunIds,
+      sessionId: sessionA.sessionId,
+    });
+
+    await agentA.shutdown();
+
+    await expect(settlePromptQuickly(pending.promptPromise)).resolves.toEqual({
+      stopReason: "cancelled",
+    });
+    const abortCall = requestA.mock.calls.find(([method]) => method === "chat.abort");
+    expect(abortCall?.[1]).toEqual({
+      sessionKey: `acp-bridge:${sessionA.sessionId}`,
+      runId: pending.runId,
+    });
+    await expect(
+      agentA.closeSession(createCloseSessionRequest(sessionA.sessionId)),
+    ).rejects.toThrow(`Session ${sessionA.sessionId} not found`);
+    await expect(
+      agentB.closeSession(createCloseSessionRequest(sessionA.sessionId)),
+    ).rejects.toThrow(`Session ${sessionA.sessionId} not found`);
+    await expect(
+      agentB.closeSession(createCloseSessionRequest(sessionB.sessionId)),
+    ).resolves.toEqual({});
   });
 
   it("rejects close for missing sessions", async () => {

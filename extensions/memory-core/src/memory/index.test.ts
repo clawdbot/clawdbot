@@ -549,6 +549,41 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps indexed memory searchable when source discovery fails", async () => {
+    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    const query = "harbor seal migration ritual";
+    await fs.writeFile(memoryPath, `Remember the ${query}.\n`);
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      await expect(manager.search(query)).resolves.toEqual([
+        expect.objectContaining({ path: "MEMORY.md" }),
+      ]);
+
+      const scanError = Object.assign(new Error("workspace scan failed"), { code: "EIO" });
+      const realReaddir = fs.readdir;
+      const readdirSpy = vi
+        .spyOn(fs, "readdir")
+        .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+          if (path.resolve(String(args[0])) === fixture.paths.workspace) {
+            throw scanError;
+          }
+          return await realReaddir(...args);
+        });
+      try {
+        await expect(manager.sync({ reason: "cli", force: true })).rejects.toBe(scanError);
+      } finally {
+        readdirSpy.mockRestore();
+      }
+
+      await expect(manager.search(query)).resolves.toEqual([
+        expect.objectContaining({ path: "MEMORY.md" }),
+      ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
     const stateDir = path.join(fixture.paths.workspace, "managed-memory-state");
     fixture.setStateDir(stateDir);

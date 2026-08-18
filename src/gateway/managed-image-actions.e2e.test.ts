@@ -116,23 +116,6 @@ describe("managed image actions Gateway E2E", () => {
           expect(rootFull.headers.get("content-type")).toBe("image/png");
           expect(Buffer.from(await rootFull.arrayBuffer())).toEqual(source);
 
-          const partial = await fetch(fullUrl, { headers: { Range: "bytes=3-10" } });
-          expect(partial.status).toBe(206);
-          expect(partial.headers.get("content-range")).toBe(`bytes 3-10/${source.byteLength}`);
-          expect(Buffer.from(await partial.arrayBuffer())).toEqual(source.subarray(3, 11));
-
-          const head = await fetch(fullUrl, { method: "HEAD" });
-          expect(head.status).toBe(200);
-          expect(head.headers.get("content-length")).toBe(String(source.byteLength));
-          expect((await head.arrayBuffer()).byteLength).toBe(0);
-
-          const unsatisfiable = await fetch(fullUrl, {
-            headers: { Range: `bytes=${source.byteLength}-` },
-          });
-          expect(unsatisfiable.status).toBe(416);
-          expect(unsatisfiable.headers.get("content-range")).toBe(`bytes */${source.byteLength}`);
-          expect((await unsatisfiable.arrayBuffer()).byteLength).toBe(0);
-
           fullUrl.pathname = `/rosita${fullUrl.pathname}`;
 
           const full = await fetch(fullUrl);

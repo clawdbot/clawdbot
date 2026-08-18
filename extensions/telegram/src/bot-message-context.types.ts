@@ -5,8 +5,8 @@ import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  OpenClawConfig,
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,

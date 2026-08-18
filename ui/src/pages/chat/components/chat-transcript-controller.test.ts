@@ -2,7 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
   flushDeferredRowPrune,
@@ -72,6 +72,30 @@ describe("chat transcript controller", () => {
     expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
   });
 
+  it("reconciles an implicit end anchor when committed content has no scroll range", () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const messages = Array.from({ length: 18 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index + 1,
+    }));
+    const props = threadProps("pane-underfill-anchor", "agent:main:underfill", messages);
+    render(renderChatThread(props, transcript), container);
+    const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
+    expect(scrollElement).not.toBeNull();
+    Object.defineProperties(scrollElement, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    render(renderChatThread(props, transcript), container);
+    expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
+    expect(container.textContent).toContain("message 0");
+  });
+
   it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -90,11 +114,7 @@ describe("chat transcript controller", () => {
   });
 
   it("settles a restored offset when loaded rows no longer overflow", () => {
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
+    const flushFrames = stubAnimationFrames();
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -106,9 +126,7 @@ describe("chat transcript controller", () => {
 
     for (let index = 0; index <= 60; index += 1) {
       transcript.hostUpdated();
-      for (const frame of frames.splice(0)) {
-        frame(0);
-      }
+      flushFrames();
     }
 
     expect(transcript.pendingScrollOffsetFor(props.sessionKey)).toBeNull();

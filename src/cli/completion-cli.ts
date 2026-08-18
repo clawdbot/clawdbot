@@ -183,9 +183,10 @@ export function registerCompletionCli(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/completion", "docs.openclaw.ai/cli/completion")}\n`,
     )
     .addOption(
-      new Option("-s, --shell <shell>", "Shell to generate completion for (default: zsh)").choices(
-        COMPLETION_SHELLS,
-      ),
+      new Option(
+        "-s, --shell <shell>",
+        "Shell to generate completion for (default: detected)",
+      ).choices(COMPLETION_SHELLS),
     )
     .option("-i, --install", "Install completion script to shell profile")
     .option(
@@ -206,7 +207,7 @@ export function registerCompletionCli(program: Command) {
         return;
       }
 
-      const shell = options.shell ?? "zsh";
+      const shell = options.shell ?? resolveShellFromEnv();
 
       // Completion needs the full Commander command tree (including nested subcommands).
       // Our CLI defaults to lazy registration for perf; force-register core commands here.

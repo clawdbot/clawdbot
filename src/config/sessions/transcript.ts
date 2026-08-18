@@ -740,8 +740,8 @@ function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage):
   );
 }
 
-function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {
-  if (!Array.isArray(message.content)) {
+function extractAssistantMessageText(message: AgentMessage): string | null {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return null;
   }
 
@@ -764,9 +764,7 @@ async function findLatestEquivalentAssistantMessageId(
   message: SessionTranscriptAssistantMessage,
   config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(
-    redactTranscriptMessage(message, config) as unknown as SessionTranscriptAssistantMessage,
-  );
+  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
   if (!expectedText) {
     return undefined;
   }
@@ -783,12 +781,7 @@ async function findLatestEquivalentAssistantMessageId(
       return undefined;
     }
     const candidateText = latest
-      ? extractAssistantMessageText(
-          redactTranscriptMessage(
-            latest.message as AgentMessage,
-            config,
-          ) as unknown as SessionTranscriptAssistantMessage,
-        )
+      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
       : undefined;
     return candidateText === expectedText ? latest?.id : undefined;
   }

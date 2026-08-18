@@ -6,7 +6,9 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  approveDevicePairing,
   createInitialDevicesState,
+  loadDevices,
   loadNodes,
   type InventoryRemovalRequest,
 } from "../../lib/nodes/index.ts";
@@ -145,8 +147,11 @@ function gatewaySnapshot(
   };
 }
 
-function gateway(client: GatewayBrowserClient | null): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
+function gateway(
+  client: GatewayBrowserClient | null,
+  snapshotOverride?: ApplicationGatewaySnapshot,
+): ApplicationContext["gateway"] {
+  const snapshot: ApplicationGatewaySnapshot = snapshotOverride ?? {
     client,
     phase: "stopped",
     offlineStable: false,
@@ -231,6 +236,90 @@ describe("DevicesPage gateway lifecycle", () => {
 
     expect(page.pageState.nodes).toEqual([]);
     expect(page.ensureInitialData).toHaveBeenCalledOnce();
+  });
+
+  it("reloads node status when runner inventory changes", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "node.list" ? { nodes: [] } : { paired: [], pending: [] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, gatewaySnapshot(client, true));
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+
+    onEvent?.({ event: "node.runnerInventory.changed", payload: { nodeId: "node-1" } });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+    page.remove();
+  });
+
+  it("coalesces a device refresh requested while an older list is loading", async () => {
+    const stale = deferred<{
+      paired: [];
+      pending: Array<{ requestId: string; deviceId: string }>;
+    }>();
+    const refreshed = deferred<{ paired: []; pending: [] }>();
+    let listCalls = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "device.pair.list") {
+        listCalls += 1;
+        return listCalls === 1 ? stale.promise : refreshed.promise;
+      }
+      return Promise.resolve({});
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const state = createInitialDevicesState({ client, connected: true });
+
+    const initialLoad = loadDevices(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("device.pair.list", {}));
+    const approval = approveDevicePairing(state, "request-1");
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("device.pair.approve", { requestId: "request-1" }),
+    );
+
+    stale.resolve({ paired: [], pending: [{ requestId: "request-1", deviceId: "device-1" }] });
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+    expect(state.devicesLoading).toBe(true);
+
+    refreshed.resolve({ paired: [], pending: [] });
+    await Promise.all([initialLoad, approval]);
+    expect(state.devicesList).toEqual({ paired: [], pending: [] });
+    expect(state.devicesLoading).toBe(false);
+  });
+
+  it("coalesces a node refresh requested while an older list is loading", async () => {
+    const stale = deferred<{ nodes: Array<Record<string, unknown>> }>();
+    const refreshed = deferred<{ nodes: Array<Record<string, unknown>> }>();
+    const request = vi
+      .fn<(method: string, params?: unknown) => Promise<unknown>>()
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(refreshed.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const state = createInitialDevicesState({ client, connected: true });
+
+    const initialLoad = loadNodes(state);
+    void loadNodes(state, { quiet: true });
+    stale.resolve({ nodes: [{ id: "old" }] });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(state.nodesLoading).toBe(true);
+
+    refreshed.resolve({ nodes: [{ id: "new" }] });
+    await initialLoad;
+    expect(state.nodes).toEqual([{ id: "new" }]);
+    expect(state.nodesLoading).toBe(false);
   });
 
   it("retries a node load after a same-client disconnect", async () => {

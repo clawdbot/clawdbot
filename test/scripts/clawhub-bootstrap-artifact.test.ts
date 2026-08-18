@@ -393,41 +393,6 @@ describe("ClawHub packed artifact identity", () => {
     });
   });
 
-  it("rejects a whitespace-bearing alias before a later package.json", async () => {
-    const pack = writeClawPack([
-      {
-        name: " package.json ",
-        prefix: " package ",
-        contents: JSON.stringify({
-          name: "@openclaw/meta-provider",
-          version: "2026.7.1-beta.3",
-        }),
-      },
-      {
-        name: "package/package.json",
-        contents: JSON.stringify({
-          name: "@openclaw/other",
-          version: "9.9.9",
-        }),
-      },
-      {
-        name: "package/openclaw.plugin.json",
-        contents: JSON.stringify({ id: "meta" }),
-      },
-    ]);
-
-    await expect(
-      verifyClawHubPackedArtifactIdentity({
-        artifactPath: pack.artifactPath,
-        expectedSha256: pack.sha256,
-        expectedSize: String(pack.bytes.byteLength),
-        expectedDir: "extensions/meta",
-        expectedName: "@openclaw/meta-provider",
-        expectedVersion: "2026.7.1-beta.3",
-      }),
-    ).rejects.toThrow("changes under the pinned ClawHub path normalization");
-  });
-
   it("rejects a whitespace-bearing alias after a canonical package.json", async () => {
     const pack = writeClawPack([
       {

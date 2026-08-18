@@ -30,6 +30,7 @@ import {
 } from "./includes.js";
 import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
+import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -297,6 +298,7 @@ type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
   envWarnings: EnvSubstitutionWarning[];
+  resolutionFacts: ConfigResolutionFacts;
 };
 
 export function resolveConfigForRead(
@@ -308,12 +310,14 @@ export function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env, { lowerPrecedenceEnv });
   }
   const envWarnings: EnvSubstitutionWarning[] = [];
+  const resolvedConfigRaw = resolveConfigEnvVars(resolvedIncludes, env, {
+    onMissing: (warning) => envWarnings.push(warning),
+  });
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
-      onMissing: (warning) => envWarnings.push(warning),
-    }),
+    resolvedConfigRaw,
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
     envWarnings,
+    resolutionFacts: createConfigResolutionFacts(envWarnings),
   };
 }
 

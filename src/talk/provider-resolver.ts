@@ -47,6 +47,8 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider capability evaluation. */
+  agentId?: string;
   /** Effective per-session model after request overrides. */
   model?: string;
   surface?: "browser-session" | "gateway-relay" | "bridge";
@@ -84,6 +86,7 @@ export function isRealtimeVoiceProviderConfigured(params: {
   }
   return params.provider.isConfigured({
     cfg: params.cfg,
+    agentId: params.agentId,
     providerConfig: params.providerConfig,
   });
 }

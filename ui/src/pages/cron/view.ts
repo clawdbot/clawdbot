@@ -10,8 +10,11 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
 import type {
+  ChannelUiMetaEntry,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
   CronRunsStatusValue,
@@ -49,6 +52,7 @@ import type {
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { renderSegmented } from "./segmented-control.ts";
@@ -87,7 +91,7 @@ type CronProps = {
   form: CronFormState;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
-  editingJobId: string | null;
+  editingJob: CronJob | null;
   createOpen: boolean;
   listTab: CronListTab;
   detailTab: CronDetailTab;
@@ -414,7 +418,7 @@ function renderToggleRow(
 // ── Main render ──
 
 export function renderCron(props: CronProps) {
-  const mode: CronPanelMode = props.editingJobId ? "job" : props.createOpen ? "create" : "overview";
+  const mode: CronPanelMode = props.editingJob ? "job" : props.createOpen ? "create" : "overview";
   return html`
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
     ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
@@ -449,6 +453,12 @@ function renderListView(props: CronProps) {
     hasAdvancedJobsFilters ||
     props.jobsQuery.trim().length > 0 ||
     props.jobsEnabledFilter !== "all";
+  const showStarterAutomations =
+    !props.loading &&
+    !props.error &&
+    props.jobsTotal === 0 &&
+    !hasAnyJobsFilters &&
+    props.canManage;
   const children = [
     renderSettingsSection({}, renderCronStats(props)),
     renderAdminRequired(props),
@@ -475,7 +485,7 @@ function renderListView(props: CronProps) {
             )
           : [
               renderSettingsSection({}, renderJobsTable(props, hasAnyJobsFilters)),
-              hasAnyJobsFilters || !props.canManage ? nothing : renderSuggestions(props),
+              showStarterAutomations ? renderSuggestions(props) : nothing,
             ]}
       </div>
     `,
@@ -812,7 +822,7 @@ function renderDisabledNote(job: CronJob) {
   return html`<span
     class="cron-table__paused-note cron-table__auto-disabled"
     data-test-id=${`cron-row-auto-disabled-${job.id}`}
-    title=${lastError ?? label}
+    title=${lastError ? formatUiExternalText(lastError) : label}
     >${label}</span
   >`;
 }
@@ -920,8 +930,7 @@ function renderSuggestions(props: CronProps) {
 // ── Detail view ──
 
 function renderDetailView(props: CronProps, mode: CronPanelMode) {
-  const selectedJob =
-    mode === "job" ? props.jobs.find((job) => job.id === props.editingJobId) : undefined;
+  const selectedJob = mode === "job" ? (props.editingJob ?? undefined) : undefined;
   const hasDetailTabs = mode === "job" && Boolean(selectedJob);
   const showHistory = mode === "job" && props.detailTab === "history";
   const children = [

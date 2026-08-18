@@ -1,4 +1,4 @@
-// Control UI E2E tests cover session ownership dormancy and creator filtering.
+// Control UI E2E tests cover session ownership dormancy and owner filtering.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -15,14 +15,14 @@ const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
 
 let page: Page | undefined;
-function sessionsList(creators: [string, string]) {
-  const creatorFacet = [
-    { id: creators[0], label: "Ada" },
-    ...(creators[1] === creators[0] ? [] : [{ id: creators[1], label: "Bob" }]),
+function sessionsList(owners: [string, string]) {
+  const ownerFacet = [
+    { type: "human" as const, id: owners[0], label: "Ada" },
+    ...(owners[1] === owners[0] ? [] : [{ type: "human" as const, id: owners[1], label: "Bob" }]),
   ];
   return {
     count: 2,
-    creators: creatorFacet,
+    owners: ownerFacet,
     defaults: { contextTokens: null, model: null, modelProvider: null },
     path: "",
     sessions: [
@@ -31,7 +31,8 @@ function sessionsList(creators: [string, string]) {
         kind: "direct",
         label: "Ada research",
         category: "Research",
-        createdActor: { type: "human", id: creators[0], label: "Ada" },
+        createdActor: { type: "human", id: owners[0], label: "Ada" },
+        owner: { actor: { type: "human", id: owners[0], label: "Ada" } },
         updatedAt: 2,
       },
       {
@@ -41,8 +42,15 @@ function sessionsList(creators: [string, string]) {
         category: "Operations",
         createdActor: {
           type: "human",
-          id: creators[1],
-          label: creators[1] === creators[0] ? "Ada" : "Bob",
+          id: owners[1],
+          label: owners[1] === owners[0] ? "Ada" : "Bob",
+        },
+        owner: {
+          actor: {
+            type: "human",
+            id: owners[1],
+            label: owners[1] === owners[0] ? "Ada" : "Bob",
+          },
         },
         updatedAt: 1,
       },
@@ -120,10 +128,10 @@ suite.define(() => {
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
-    const creatorMenu = await openSidebarSortMenu(currentPage);
-    await creatorMenu.locator('[value="sort:people"]').waitFor();
+    const ownerMenu = await openSidebarSortMenu(currentPage);
+    await ownerMenu.locator('[value="sort:people"]').waitFor();
     await captureUiProof(currentPage, "00-people-sort-available.png");
-    await creatorMenu.evaluate((element) =>
+    await ownerMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,
@@ -137,12 +145,12 @@ suite.define(() => {
       "true",
     );
     await captureUiProof(currentPage, "01-people-sort-selected.png");
-    await peopleMenu.locator('[value="creator:profile-ada"]').waitFor();
+    await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
     await peopleMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,
-          detail: { item: { value: "creator:profile-ada" } },
+          detail: { item: { value: "owner:profile-ada" } },
         }),
       ),
     );
@@ -158,13 +166,13 @@ suite.define(() => {
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).some(
           (request) =>
-            (request.params as { creatorId?: unknown } | undefined)?.creatorId === "profile-ada",
+            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
         ),
       )
       .toBe(true);
   });
 
-  it("renders zero ownership chrome for a single creator", async () => {
+  it("renders zero ownership chrome for a single owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -179,16 +187,16 @@ suite.define(() => {
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    const creatorMenu = await openSidebarSortMenu(currentPage);
+    const ownerMenu = await openSidebarSortMenu(currentPage);
     await captureUiProof(currentPage, "00-people-sort-hidden.png");
     expect(
-      await creatorMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
+      await ownerMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
     ).toBe(0);
-    expect(await creatorMenu.locator('[value^="creator:"]').count()).toBe(0);
+    expect(await ownerMenu.locator('[value^="owner:"]').count()).toBe(0);
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
   });
 
-  it("keeps grouped single-creator thread actions accessible to keyboard users", async () => {
+  it("keeps grouped single-owner thread actions accessible to keyboard users", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -211,7 +219,7 @@ suite.define(() => {
 
     const menu = currentPage.locator(".sidebar-session-sort-menu");
     await menu.waitFor();
-    expect(await menu.locator('[value^="creator:"]').count()).toBe(0);
+    expect(await menu.locator('[value^="owner:"]').count()).toBe(0);
     await menu.getByRole("menuitemradio", { name: "None" }).click();
 
     await expect
@@ -479,7 +487,7 @@ suite.define(() => {
     }
     Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
     sessions.count = 1;
-    sessions.creators = [{ id: "profile-ada", label: "Ada" }];
+    sessions.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
     sessions.sessions = [activeSession];
     const longMemberLabel =
       "Alexandria Montgomery-Santiago from the International Collaboration Working Group";
@@ -493,9 +501,9 @@ suite.define(() => {
         label: `Member ${index + 1}`,
       })),
     ];
-    const channelIdentities = [
-      { type: "human" as const, id: "channel:chn_design", label: "Design" },
-      { type: "human" as const, id: "discord:channel:operations", label: "Operations" },
+    const nonHumanIdentities = [
+      { type: "agent" as const, id: "agent-design", label: "Design" },
+      { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
@@ -544,7 +552,7 @@ suite.define(() => {
         "session.members.list": {
           sessionKey: "agent:main:ada",
           members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
-          identities: [...humanIdentities, ...channelIdentities],
+          identities: [...humanIdentities, ...nonHumanIdentities],
           role: "owner",
           allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
         },
@@ -677,7 +685,9 @@ suite.define(() => {
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
     ).toHaveCount(30);
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-channel-icon")).toHaveCount(2);
+    // Agent and system identities render the non-human icon from identity.type,
+    // not from an ID-string heuristic; owner-chip presentation is human-only.
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
     expect(
       await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
     ).toBe(longMemberLabel);
@@ -717,7 +727,7 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
-  it("keeps create-as-draft dormant for one creator", async () => {
+  it("keeps create-as-draft dormant for one owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

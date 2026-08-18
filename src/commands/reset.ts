@@ -11,10 +11,10 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isNixMode } from "../config/config.js";
+import { isNixMode, resolveConfigPath } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import {
   listAgentSessionDirs,
   removePath,
@@ -125,23 +125,28 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
-
-  if (scope !== "config") {
-    logBackupRecommendation(runtime);
-    if (dryRun) {
-      runtime.log("[dry-run] stop gateway service");
-    } else if (!(await stopGatewayIfRunning(runtime))) {
-      runtime.exit(1);
-      return;
-    }
-  }
-
   if (scope === "config") {
+    const configPath = resolveConfigPath();
     await removePath(configPath, runtime, { dryRun, label: configPath });
     return;
   }
+
+  logBackupRecommendation(runtime);
+  if (dryRun) {
+    runtime.log("[dry-run] stop gateway service");
+  } else if (!(await stopGatewayIfRunning(runtime))) {
+    runtime.exit(1);
+    return;
+  }
+
+  const cleanupPlan = dryRun
+    ? await resolveCleanupPlanForDryRun()
+    : await resolveCleanupPlanForRemoval(runtime);
+  if (!cleanupPlan) {
+    return;
+  }
+  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+    cleanupPlan;
 
   if (scope === "config+creds+sessions") {
     await removePath(configPath, runtime, { dryRun, label: configPath });

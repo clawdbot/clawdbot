@@ -40,6 +40,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -684,6 +685,60 @@ async function prepareMainHistoryHarness(params: {
 
 describe("gateway server chat", () => {
   test.each(["chat.history", "chat.startup"] as const)(
+    "%s projects the session's durable worker placement",
+    async (method) => {
+      openDirectChatSession();
+      try {
+        await writeMainSessionStore();
+        const placement = {
+          sessionId: "sess-main",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionMode: "worker-turn",
+          state: "active",
+          environmentId: "env-placement",
+          generation: 7,
+          activeOwnerEpoch: 12,
+          workspaceBaseManifestRef: "manifest-base",
+          remoteWorkspaceDir: "/workspace/main",
+          workerBundleHash: "ab".repeat(32),
+          recoveryError: null,
+          terminalReason: null,
+          terminalAtMs: null,
+          turnClaim: null,
+          createdAtMs: 100,
+          updatedAtMs: 300,
+          stateChangedAtMs: 200,
+        };
+        const context = createDirectChatContext({
+          workerSessionPlacementService: {
+            getMany: () => new Map([[placement.sessionId, placement]]),
+            getPlacementMoves: () => new Map(),
+          },
+        } as unknown as Partial<GatewayRequestContext>);
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: makeMainSessionParams(),
+          respond: captureChatResult(responses),
+          context,
+        });
+
+        expect(responses[0]?.ok).toBe(true);
+        // Clients merge this row into the same store sessions.list fills, so a
+        // missing placement here silently erases a live worker placement.
+        expect(
+          (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })
+            ?.sessionInfo?.placement,
+        ).toMatchObject({ state: "active", environmentId: "env-placement" });
+      } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
     "%s replays the active plan snapshot in inFlightRun",
     async (method) => {
       openDirectChatSession();
@@ -1068,7 +1123,9 @@ describe("gateway server chat", () => {
         modelOverride: "gpt-5",
         modelProvider: "openai",
         model: "gpt-5",
+        agentHarnessId: "openclaw",
         contextTokens: 128_000,
+        contextTokensSource: "runtime",
       });
       await writeMainSessionTranscript([
         createTextTranscriptEvent("user", "persisted metadata", { timestamp: updatedAt }),
@@ -1123,7 +1180,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.startup returns chat history with the initial agents list", async () => {
+  test("chat.startup returns chat history with the initial agents list and provenance", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
         agents: {
@@ -1135,7 +1192,7 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: { default: true }, research: {} },
         },
         models: {
           providers: {
@@ -1146,6 +1203,11 @@ describe("gateway server chat", () => {
           },
         },
       });
+      recordAgentProvenance(
+        "research",
+        { createdVia: "agent", creatorAgentId: "main" },
+        { nowMs: 42 },
+      );
       await connectOk(ws);
       await createSessionDir();
       const updatedAt = Date.now();
@@ -1160,7 +1222,12 @@ describe("gateway server chat", () => {
 
       const startup = await rpcReq<{
         agentsList?: {
-          agents?: Array<{ id?: string }>;
+          agents?: Array<{
+            id?: string;
+            createdVia?: string;
+            creatorAgentId?: string | null;
+            createdAt?: number;
+          }>;
           defaultId?: string | null;
           mainKey?: string | null;
         };
@@ -1176,6 +1243,13 @@ describe("gateway server chat", () => {
       expect(startup.payload?.agentsList?.defaultId).toBe("main");
       expect(startup.payload?.agentsList?.mainKey).toBe("main");
       expect(startup.payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(
+        startup.payload?.agentsList?.agents?.find((agent) => agent.id === "research"),
+      ).toMatchObject({
+        createdVia: "agent",
+        creatorAgentId: "main",
+        createdAt: 42,
+      });
       expect(startup.payload?.sessionInfo).toMatchObject({
         key: "agent:main:main",
         sessionId: "sess-main",
@@ -2108,6 +2182,122 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send discards prepared inbound media when a hook blocks the turn", async () => {
+    openDirectChatSession();
+    try {
+      await writeStoredMainSession({
+        modelProvider: "test-provider",
+        model: "vision-model",
+      });
+      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
+      // A before_agent_run block persists only the redacted reason — no media
+      // markers — so dispatch must discard the prepared refs on settle.
+      dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
+        const recorder = (
+          params as {
+            replyOptions?: { userTurnTranscriptRecorder?: { markBlocked: () => void } };
+          }
+        ).replyOptions?.userTurnTranscriptRecorder;
+        recorder?.markBlocked();
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await callDirectChat("chat.send", {
+        id: "blocked-turn-media",
+        params: makeChatSendParams({
+          message: "blocked turn with media",
+          idempotencyKey: "idem-blocked-turn-media",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "notes.txt",
+              content: Buffer.from("offloaded inbound media").toString("base64"),
+            },
+          ],
+        }),
+        client: {
+          connId: "conn-owner",
+          connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+        } as never,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(responses[0]?.ok).toBe(true);
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send discards prepared inbound media when setup throws before the ACK", async () => {
+    openDirectChatSession();
+    try {
+      await writeStoredMainSession({
+        modelProvider: "test-provider",
+        model: "vision-model",
+      });
+      const context = createDirectChatContext({
+        // Throwing from addChatRun exercises handleChatSendSetupError — one of
+        // the pre-persistence exits that previously leaked staged media.
+        addChatRun: vi.fn(() => {
+          throw new Error("setup exploded before ack");
+        }),
+        getRuntimeConfig: () => ({}),
+      });
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await callDirectChat("chat.send", {
+        id: "setup-error-media",
+        params: makeChatSendParams({
+          message: "setup error with media",
+          idempotencyKey: "idem-setup-error-media",
+          attachments: [
+            {
+              // Non-image attachments always offload into the inbound media
+              // store during preparation; the failed send must discard them.
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "notes.txt",
+              content: Buffer.from("offloaded inbound media").toString("base64"),
+            },
+          ],
+        }),
+        client: {
+          connId: "conn-owner",
+          connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+        } as never,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(responses).toEqual([
+        {
+          ok: false,
+          payload: expect.objectContaining({ status: "error" }),
+          error: expect.anything(),
+        },
+      ]);
+      // Prepared inbound media has no transcript reference on this exit; the
+      // admission cleanup owner must discard it or the file is orphaned
+      // forever (the inbound sweep is off unless attachments.ttlHours is set).
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
+    } finally {
       resetDirectChatSession();
     }
   });
@@ -4620,6 +4810,188 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-delivery-dedupe";
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
+      const deliveryTimestamp = Date.parse("2026-03-26T16:29:55.500Z");
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      const homeDir = path.join(sessionDir, "home");
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      const managedAudioUrl = "/api/chat/media/outgoing/main/claude-delivery/full";
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-delivery-ready",
+          timestamp: new Date(deliveryTimestamp).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "CLAUDE DELIVERY READY" }],
+          },
+        }),
+        "utf-8",
+      );
+      setTestEnvValue("HOME", homeDir);
+      try {
+        await writeStoredMainSession(
+          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
+        );
+        await writeMainSessionTranscript(
+          [
+            createTextTranscriptEvent("assistant", "CLAUDE DELIVERY READY", {
+              timestamp: deliveryTimestamp,
+              message: {
+                content: [
+                  {
+                    type: "text",
+                    text: "CLAUDE DELIVERY READY",
+                  },
+                  { type: "audio", url: managedAudioUrl, openUrl: managedAudioUrl },
+                ],
+                openclawDelivery: { replyToId: "delivery-run-1" },
+              },
+            }),
+          ],
+          sessionId,
+        );
+
+        const history = await rpcReq<{
+          messages?: Array<{ role?: unknown; content?: unknown }>;
+        }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
+        expect(history.ok).toBe(true);
+        const assistantMessages = (history.payload?.messages ?? []).filter(
+          (message) => message.role === "assistant",
+        );
+        expect(assistantMessages).toHaveLength(1);
+        const survivingContent = expectDefined(
+          assistantMessages[0]?.content,
+          "surviving assistant content",
+        );
+        expect(Array.isArray(survivingContent)).toBe(true);
+        const contentBlocks = survivingContent as Array<{ type?: unknown; text?: unknown }>;
+        expect(
+          contentBlocks.filter(
+            (block) => block.type === "text" && block.text === "CLAUDE DELIVERY READY",
+          ),
+        ).toHaveLength(1);
+        expect(contentBlocks.filter((block) => block.type === "audio")).toHaveLength(1);
+        expect(JSON.stringify(assistantMessages)).not.toContain("[[reply_to:");
+      } finally {
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
+  test("chat startup and history share a non-blocking large Claude snapshot", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const secondWs = await harness.openWs();
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      try {
+        await connectOk(secondWs);
+        const sessionDir = await createSessionDir();
+        const sessionId = "sess-claude-cli-large-snapshot";
+        const cliSessionId = "7b8b202c-f6bb-4046-9475-d2f15fd07533";
+        const homeDir = path.join(sessionDir, "home");
+        const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+        const secret = "sk-abcdef1234567890-large-snapshot";
+        const oversizedIgnoredLine = JSON.stringify({
+          type: "queue-operation",
+          operation: "enqueue",
+          sessionId: cliSessionId,
+          content: "q".repeat(34 * 1024 * 1024),
+        });
+        const jsonl = `${oversizedIgnoredLine}\n${[
+          JSON.stringify({
+            type: "user",
+            uuid: "large-snapshot-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "large snapshot question" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "large-snapshot-assistant",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: {
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "text", text: `large snapshot answer ${secret}` }],
+            },
+          }),
+        ].join("\n")}`;
+        expect(Buffer.byteLength(jsonl, "utf8")).toBeGreaterThan(32 * 1024 * 1024);
+        expect(Buffer.byteLength(jsonl, "utf8")).toBeLessThan(36 * 1024 * 1024);
+        await fs.mkdir(claudeProjectsDir, { recursive: true });
+        await fs.writeFile(path.join(claudeProjectsDir, `${cliSessionId}.jsonl`), jsonl, "utf8");
+        setTestEnvValue("HOME", homeDir);
+        await writeStoredMainSession(
+          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
+        );
+        await writeMainSessionTranscript(
+          [
+            createTextTranscriptEvent("user", "local sqlite row", {
+              timestamp: Date.parse("2026-03-26T16:29:53.000Z"),
+            }),
+          ],
+          sessionId,
+        );
+
+        let heartbeatTicks = 0;
+        const heartbeat = setInterval(() => {
+          heartbeatTicks += 1;
+        }, 5);
+        const [startup, history] = await Promise.all([
+          rpcReq<{
+            messages?: Array<{ __openclaw?: Record<string, unknown> }>;
+            completeSnapshot?: boolean;
+            hasMore?: boolean;
+            nextOffset?: number;
+            totalMessages?: number;
+          }>(ws, "chat.startup", makeMainSessionParams()),
+          rpcReq<{
+            messages?: Array<{ __openclaw?: Record<string, unknown> }>;
+            completeSnapshot?: boolean;
+            hasMore?: boolean;
+            nextOffset?: number;
+            totalMessages?: number;
+          }>(secondWs, "chat.history", makeMainSessionParams()),
+        ]).finally(() => clearInterval(heartbeat));
+
+        expect(startup.ok).toBe(true);
+        expect(history.ok).toBe(true);
+        expect(heartbeatTicks).toBeGreaterThan(5);
+        expect(startup.payload?.messages).toEqual(history.payload?.messages);
+        const messages = startup.payload?.messages ?? [];
+        expect(messages).toHaveLength(3);
+        expect(JSON.stringify(messages)).not.toContain(secret);
+        for (const externalId of ["large-snapshot-user", "large-snapshot-assistant"]) {
+          expect(messages).toContainEqual(
+            expect.objectContaining({
+              __openclaw: expect.objectContaining({
+                cliSessionId,
+                externalId,
+                importedFrom: "claude-cli",
+              }),
+            }),
+          );
+        }
+        for (const response of [startup, history]) {
+          expect(response.payload?.completeSnapshot).toBe(true);
+          expect(response.payload?.hasMore).toBe(false);
+          expect(response.payload?.nextOffset).toBeUndefined();
+          expect(response.payload?.totalMessages).toBe(3);
+        }
+      } finally {
+        secondWs.close();
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -5666,50 +6038,26 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history strips inline directives from displayed message text", async () => {
+  test("chat.history preserves quoted inline directives verbatim", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
 
       await createSessionDir();
       await writeMainSessionStore();
 
+      const quoted = "Use `[[reply_to_current]]` and `[[tts]]` literally.";
       const lines = [
-        makeTranscriptTextEvent("Hello [[reply_to_current]] world [[audio_as_voice]]", {
-          message: { timestamp: Date.now() },
+        makeTranscriptTextEvent(quoted, {
+          message: { openclawDelivery: { replyToCurrent: true }, timestamp: Date.now() },
         }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: "A [[reply_to:abc-123]] B",
-            timestamp: Date.now() + 1,
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            text: "[[ reply_to : 456 ]] C",
-            timestamp: Date.now() + 2,
-          },
-        }),
-        createTextTranscriptEvent("assistant", "  keep padded  ", { timestamp: Date.now() + 3 }),
       ];
       await writeMainSessionTranscript(lines);
       const messages = await fetchHistoryMessages(ws);
-      expect(messages.length).toBe(4);
-
-      const serialized = JSON.stringify(messages);
-      expect(serialized.includes("[[reply_to")).toBe(false);
-      expect(serialized.includes("[[audio_as_voice]]")).toBe(false);
-
-      const first = messages[0] as { content?: Array<{ text?: string }> };
-      const second = messages[1] as { content?: string };
-      const third = messages[2] as { text?: string };
-      const fourth = messages[3] as { content?: Array<{ text?: string }> };
-
-      expect(first.content?.[0]?.text?.replace(/\s+/g, " ").trim()).toBe("Hello world");
-      expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
-      expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
-      expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        content: [{ text: quoted }],
+        openclawDelivery: { replyToCurrent: true },
+      });
     });
   });
 
@@ -6207,6 +6555,135 @@ describe("gateway server chat", () => {
       expect(secondPage.payload?.nextOffset).toBeUndefined();
     });
   });
+
+  test.each([
+    {
+      boundary: {
+        type: "reset",
+        id: "reset-boundary",
+        reason: "reset",
+        firstKeptEntryId: "kept-one",
+      },
+      expectedFirstSeqs: [3, 4, 12, 20],
+      expectedOlderSeqs: [1, 2],
+      marker: "Reset",
+      totalMessages: 27,
+    },
+    {
+      boundary: {
+        type: "compaction",
+        id: "compaction-boundary",
+        summary: "summary",
+        firstKeptEntryId: "old",
+      },
+      expectedFirstSeqs: [4, 5, 13, 21],
+      expectedOlderSeqs: [1, 2, 3],
+      marker: "Compaction",
+      totalMessages: 28,
+    },
+  ])(
+    "chat.history incrementally fills pages across $boundary.type boundaries",
+    async ({ boundary, expectedFirstSeqs, expectedOlderSeqs, marker, totalMessages }) => {
+      await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+        await prepareMainHistoryHarness({ ws, createSessionDir });
+        const timestamp = Date.now();
+        const events: Array<Record<string, unknown>> = [
+          {
+            type: "message",
+            ...createTextTranscriptEvent("user", "discarded old", {
+              id: "old",
+              parentId: null,
+              timestamp,
+            }),
+          },
+          {
+            type: "message",
+            ...createTextTranscriptEvent("user", "kept one", {
+              id: "kept-one",
+              parentId: "old",
+              timestamp: timestamp + 1,
+            }),
+          },
+          {
+            type: "message",
+            ...createTextTranscriptEvent("assistant", "kept two", {
+              id: "kept-two",
+              parentId: "kept-one",
+              timestamp: timestamp + 2,
+            }),
+          },
+          {
+            ...boundary,
+            parentId: "kept-two",
+            timestamp: new Date(timestamp + 3).toISOString(),
+          },
+        ];
+        let parentId = boundary.id;
+        let eventIndex = 4;
+        for (const label of ["visible one", "visible two", "visible three"]) {
+          const visibleId = `visible-${eventIndex}`;
+          events.push({
+            type: "message",
+            ...createTextTranscriptEvent("user", label, {
+              id: visibleId,
+              parentId,
+              timestamp: timestamp + eventIndex,
+            }),
+          });
+          parentId = visibleId;
+          eventIndex += 1;
+          for (let hidden = 0; hidden < 7; hidden += 1) {
+            const hiddenId = `hidden-${eventIndex}`;
+            events.push({
+              type: "message",
+              ...createTextTranscriptEvent("assistant", "NO_REPLY", {
+                id: hiddenId,
+                parentId,
+                timestamp: timestamp + eventIndex,
+              }),
+            });
+            parentId = hiddenId;
+            eventIndex += 1;
+          }
+        }
+        await writeMainSessionTranscript(events);
+
+        type HistoryPage = {
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          nextOffset?: number;
+          hasMore?: boolean;
+          totalMessages?: number;
+        };
+        const first = await rpcReq<HistoryPage>(
+          ws,
+          "chat.history",
+          makeMainSessionParams({ limit: 4, offset: 0 }),
+        );
+        expect(first.ok).toBe(true);
+        expect(
+          first.payload?.messages?.map(readOpenClawSeq),
+          JSON.stringify(first.payload),
+        ).toEqual(expectedFirstSeqs);
+        expect(JSON.stringify(first.payload?.messages)).toContain(marker);
+        expect(JSON.stringify(first.payload?.messages)).toContain("visible three");
+        expect(first.payload).toMatchObject({
+          hasMore: true,
+          nextOffset: 25,
+          totalMessages,
+        });
+
+        const older = await rpcReq<HistoryPage>(
+          ws,
+          "chat.history",
+          makeMainSessionParams({ limit: 4, offset: first.payload?.nextOffset }),
+        );
+        expect(older.ok).toBe(true);
+        expect(older.payload?.messages?.map(readOpenClawSeq)).toEqual(expectedOlderSeqs);
+        expect(older.payload?.hasMore).toBe(false);
+        expect(older.payload?.nextOffset).toBeUndefined();
+      });
+    },
+  );
 
   test("chat.history first-page metadata pages backward without overlaps or gaps", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {

@@ -34,6 +34,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
   runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
   resolvedSessionKey: string;
   sessionAgentId: string;
+  contextEngineAgentId?: string;
   agentDir: string;
   workspaceDir: string;
   provider: string;
@@ -96,6 +97,7 @@ export async function compactEmbeddedRunForRecovery(
       authProfileIdSource: input.authProfileIdSource,
       runtimeAuthPlan: input.runtimeAuthPlan,
       workspaceDir: input.workspaceDir,
+      bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,
@@ -123,7 +125,7 @@ export async function compactEmbeddedRunForRecovery(
     ...resolveContextEngineCapabilities({
       config: runParams.config,
       sessionKey: runParams.sessionKey,
-      agentId: input.sessionAgentId,
+      explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
       purpose:
         recovery.trigger === "overflow"

@@ -32,6 +32,7 @@ const AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH =
   "scripts/e2e/agents-delete-shared-workspace-docker.sh";
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
 const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
+const ONBOARD_SCENARIO_PATH = "scripts/e2e/lib/onboard/scenario.sh";
 const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
 const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
 const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
@@ -126,6 +127,16 @@ function extractUpgradeSurvivorPayload(script: string) {
     throw new Error("upgrade survivor bash -lc payload not found");
   }
   return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
+}
+
+// Prompt-driving scripts must consume public prompts in the order the CLI renders them.
+function expectOrderedScriptFragments(script: string, fragments: readonly string[]): void {
+  let offset = 0;
+  for (const fragment of fragments) {
+    const index = script.indexOf(fragment, offset);
+    expect(index, `missing ordered script fragment: ${fragment}`).toBeGreaterThanOrEqual(offset);
+    offset = index + fragment.length;
+  }
 }
 const BOUNDED_CLIENT_LOG_DOCKER_E2E_SCRIPTS = [
   "scripts/e2e/cron-mcp-cleanup-docker.sh",
@@ -2449,7 +2460,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
     expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
-    expect(publishedRunner).toContain('if [ "$SCENARIO" = "configured-plugin-installs" ]; then');
+    expect(publishedRunner).toContain("if configured_plugin_installs_enabled; then");
     expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
     expect(publishedRunner).toContain(
       'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
@@ -2482,7 +2493,7 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain(
       [
-        'if [ "$SCENARIO" = "configured-plugin-installs" ]; then',
+        'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
         "fi",
@@ -2617,6 +2628,25 @@ docker_e2e_docker_run_cmd run demo
     expect(script).toContain("--suppress-gateway-token-output");
     expect(script).not.toContain("exec 3>&- 2>/dev/null || true");
     expect(script).not.toContain('"$HOME/.openclaw/agents/main/agent/auth-profiles.json"');
+  });
+
+  it("keeps real-TTY onboarding drivers aligned with the first-agent prompt", () => {
+    expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
+      'wait_for_log "Continue?"',
+      "send $'y\\r'",
+      'wait_for_log "What should we call your first agent?"',
+      "send $'\\r'",
+      'wait_for_log "to search"',
+      "send $'ollama\\r'",
+    ]);
+    expectOrderedScriptFragments(readFileSync(ONBOARD_SCENARIO_PATH, "utf8"), [
+      'wait_for_log "What should we call your first agent?"',
+      "send $'\\r'",
+      'wait_for_log "How should I set things up?"',
+      "send $'\\r'",
+      'wait_for_log "Use Current model?"',
+      "send $'\\r'",
+    ]);
   });
 
   it("keeps append-only mock E2E state under per-run scratch roots", () => {
@@ -2756,6 +2786,80 @@ docker_e2e_docker_run_cmd run demo
     expect(upgradeSurvivor).toContain('timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc');
     for (const script of [multiNode, upgradeSurvivor]) {
       expect(script).not.toContain('timeout "$DOCKER_RUN_TIMEOUT"');
+    }
+  });
+
+  it("records an interrupted upgrade survivor phase as failed", async () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-signal-");
+    const binDir = join(workDir, "bin");
+    const markerPath = join(workDir, "npm-started");
+    const summaryPath = join(workDir, "artifacts", "summary.json");
+    writeExecutables(binDir, {
+      npm: `#!/bin/sh
+touch "$FAKE_NPM_MARKER"
+exec sleep 300
+`,
+      timeout: `#!/bin/sh
+while [ "\${1#--}" != "$1" ]; do shift; done
+shift
+exec "$@"
+`,
+    });
+
+    const child = spawn("bash", [UPGRADE_SURVIVOR_RUN_SCRIPT], {
+      detached: true,
+      env: {
+        ...process.env,
+        FAKE_NPM_MARKER: markerPath,
+        OPENCLAW_TEST_STATE_FUNCTION_B64: Buffer.from(
+          "openclaw_test_state_create() { :; }",
+        ).toString("base64"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
+        OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(workDir, "unused.tgz"),
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: join(workDir, "state-home"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdio: "ignore",
+    });
+    const childPid = child.pid;
+    if (!childPid) {
+      throw new Error("upgrade survivor process did not start");
+    }
+    const exitPromise = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+
+    try {
+      for (let attempt = 0; attempt < 500 && !existsSync(markerPath); attempt += 1) {
+        await delay(10);
+      }
+      expect(existsSync(markerPath)).toBe(true);
+      process.kill(-childPid, "SIGTERM");
+      const exit = await exitPromise;
+
+      expect(exit).toEqual({ code: 143, signal: null });
+      const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+      expect(summary).toMatchObject({
+        failure: {
+          message: "phase install-baseline interrupted by SIGTERM",
+          phase: "install-baseline",
+        },
+        status: "failed",
+      });
+      expect(summary.phases.at(-1)).toMatchObject({
+        phase: "install-baseline",
+        status: "started",
+      });
+      expect(
+        readFileSync(join(workDir, "artifacts", "baseline-install.log"), "utf8"),
+      ).not.toContain("Upgrade survivor summary:");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        process.kill(-childPid, "SIGKILL");
+      }
     }
   });
 
@@ -4401,19 +4505,20 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(runner).not.toMatch(/openclaw_e2e_probe_tcp[^\n]*\|\|[^\n]*gateway-net-e2e\.log/u);
   });
 
-  it("copies root lifecycle scripts before cleanup-smoke installs dependencies", () => {
+  it("copies root lifecycle inputs before cleanup-smoke installs dependencies", () => {
     const dockerfile = readFileSync(CLEANUP_SMOKE_DOCKERFILE_PATH, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
 
-    for (const script of [
+    for (const input of [
+      "node-version.mjs",
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "scripts/prepare-git-hooks.mjs",
     ]) {
-      const copyIndex = dockerfile.indexOf(script);
+      const copyIndex = dockerfile.indexOf(input);
 
-      expect(copyIndex, script).toBeGreaterThanOrEqual(0);
-      expect(copyIndex, script).toBeLessThan(installIndex);
+      expect(copyIndex, input).toBeGreaterThanOrEqual(0);
+      expect(copyIndex, input).toBeLessThan(installIndex);
     }
   });
 

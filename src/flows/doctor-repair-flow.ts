@@ -2,7 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
-import { normalizeHealthCheck } from "./health-check-adapter.js";
+import { defineSplitHealthCheckInput, normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import type {
   HealthCheckInput,
@@ -42,9 +42,8 @@ export async function runDoctorHealthRepairs(
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions = {},
 ): Promise<DoctorRepairRunResult> {
-  const checks: readonly RegisteredHealthCheck[] = (opts.checks ?? listHealthChecks()).map(
-    normalizeHealthCheck,
-  );
+  const inputs = opts.checks ?? listHealthChecks().map(defineSplitHealthCheckInput);
+  const checks: readonly RegisteredHealthCheck[] = inputs.map(normalizeHealthCheck);
   const findings: HealthFinding[] = [];
   const remainingFindings: HealthFinding[] = [];
   const changes: string[] = [];

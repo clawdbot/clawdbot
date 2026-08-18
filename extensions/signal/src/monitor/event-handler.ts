@@ -145,15 +145,17 @@ function resolveSignalStatusReactionTimestamp(params: {
 }
 
 type SignalStatusDispatchResult = {
-  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      { failedBeforeSend: number; failedAfterSend: number }
+    >;
+  };
 };
 
 function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
-  const failedCounts = result.failedCounts;
-  return (
-    (failedCounts?.tool ?? 0) > 0 ||
-    (failedCounts?.block ?? 0) > 0 ||
-    (failedCounts?.final ?? 0) > 0
+  return Object.values(result.settledReceipt?.counts ?? {}).some(
+    (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
   );
 }
 
@@ -747,9 +749,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             async (terminalError: unknown) => {
               // Exhausted retries: release the drain claims so queue retry policy
               // owns redelivery instead of the stall watchdog dead-lettering them.
-              await Promise.all(
-                entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
-              );
+              await lifecycle?.onAbandoned();
               throw terminalError;
             },
           );

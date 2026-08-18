@@ -22,6 +22,13 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
+const retryingCompactionEnd = () =>
+  ({
+    type: "compaction_end",
+    reason: "overflow",
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: true },
+  }) as const;
+
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
     // Block replies can schedule nested microtasks; drain twice before checking
@@ -1437,7 +1444,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       });
     }
 
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emitToolRun({
       emit,
       toolName: "write",
@@ -1591,7 +1598,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { ok: true },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emit({ type: "agent_end" });
 
     expect(subscription.getReplayState()).toEqual({
@@ -1625,7 +1632,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { details: { status: "ok" } },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
@@ -1660,7 +1667,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         },
       },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
 
     expect(subscription.getAcceptedSessionSpawns()).toEqual([
       {
@@ -1679,7 +1686,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
+  it("notifies the runner once when a heartbeat response tool result is accepted", async () => {
     const { session, emit } = createStubSessionHarness();
     const onHeartbeatToolResponse = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -1691,7 +1698,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     const result = {
       details: {
-        status: "recorded",
+        status: "accepted",
         outcome: "no_change",
         notify: false,
         summary: "Nothing needs attention.",

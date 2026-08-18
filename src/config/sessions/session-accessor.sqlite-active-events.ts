@@ -16,6 +16,7 @@ import type {
 import {
   readTranscriptProjectionGeneration,
   readVisibleMessageRange,
+  readVisibleTranscriptStats,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
@@ -46,6 +47,7 @@ export type SessionTranscriptMessageEvent = {
 
 export type SessionTranscriptMessageEventPage = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };
@@ -148,35 +150,12 @@ export function readRecentSessionTranscriptActiveEvents(
   });
 }
 
-/** Reads active-path event count and JSONL byte size without materializing payloads. */
+/** Reads logical transcript event count and JSONL byte size. */
 export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadScope): {
   eventCount: number;
   sizeBytes: number;
 } {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const db = getActiveTranscriptKysely(projection.database);
-    const row = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select((eb) => [
-          eb.fn.count<number>("active.event_seq").as("event_count"),
-          /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
-          sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
-            + COUNT(*)`.as("size_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId),
-    );
-    return {
-      eventCount: row?.event_count ?? 0,
-      sizeBytes: row?.size_bytes ?? 0,
-    };
-  });
+  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */

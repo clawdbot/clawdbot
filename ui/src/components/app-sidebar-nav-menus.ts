@@ -128,7 +128,6 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   position: SidebarMenuPosition | null;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
-  activeWorkboardBoardId: string;
   sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
@@ -137,9 +136,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
 };
 
 function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavRoute) {
-  const active =
-    isSidebarRouteActive(params.activeRouteId, routeId) &&
-    !(routeId === "workboard" && params.activeWorkboardBoardId);
+  const active = isSidebarRouteActive(params.activeRouteId, routeId);
   return html`
     <wa-dropdown-item
       value=${routeId}

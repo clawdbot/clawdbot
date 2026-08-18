@@ -128,6 +128,22 @@ describe("listSelectableAgents", () => {
 });
 
 describe("resolveToolSections", () => {
+  it("derives fallback labels and descriptions from canonical tool ids", () => {
+    const sections = resolveToolSections(null);
+    const tools = sections.flatMap((section) => section.tools);
+
+    expect(tools.find((tool) => tool.id === "apply_patch")).toEqual({
+      id: "apply_patch",
+      label: "apply_patch",
+      description: t("agents.toolCatalog.descriptions.applyPatch"),
+    });
+    expect(tools.find((tool) => tool.id === "view_image")).toEqual({
+      id: "view_image",
+      label: "view_image",
+      description: t("agents.toolCatalog.descriptions.image"),
+    });
+  });
+
   it("keeps English core group labels identical to the gateway catalog", () => {
     const sections = resolveToolSections(TOOLS_CATALOG_RESULT);
     expect(sections.map((section) => section.label)).toEqual(["Files", "Runtime", "My Plugin"]);

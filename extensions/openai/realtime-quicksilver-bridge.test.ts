@@ -85,6 +85,7 @@ function createHarness(params?: {
   const onError = vi.fn();
   const onClose = vi.fn();
   const onEvent = vi.fn();
+  const logger = { warn: vi.fn() };
   const bridge = new OpenAIQuicksilverVoiceBridge({
     providerConfig: {},
     model: "gpt-live-1-codex",
@@ -104,10 +105,12 @@ function createHarness(params?: {
     onError,
     onClose,
     onEvent,
+    logger,
   });
   return {
     bridge,
     connections,
+    logger,
     onAudio,
     onClose,
     onError,
@@ -205,7 +208,11 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     expect(audioEvents).toHaveLength(2);
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
-    ).toEqual([512 * 1024, 512 * 1024]);
+    ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
+    expect(harness.logger.warn).toHaveBeenCalledOnce();
+    expect(harness.logger.warn).toHaveBeenCalledWith(
+      "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
+    );
     harness.bridge.close();
   });
 
@@ -447,13 +454,34 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
 
     const inputEvent = sentEvents(harness.socket).at(-1);
     expect(inputEvent?.type).toBe("input_audio.append");
-    expect(Buffer.from(String(inputEvent?.audio), "base64")).toHaveLength(960);
+    expect(Buffer.from(String(inputEvent?.audio), "base64")).toHaveLength(870);
 
     harness.socket.serverEvent({
       type: "output_audio.delta",
       audio: Buffer.alloc(960).toString("base64"),
     });
-    expect(harness.onAudio).toHaveBeenCalledWith(Buffer.alloc(160, 0xff));
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "assistant", transcript: "first response" },
+    });
+    harness.socket.serverEvent({
+      type: "output_audio.delta",
+      audio: Buffer.alloc(960).toString("base64"),
+    });
+    harness.socket.serverEvent({
+      type: "turn.done",
+      turn: { role: "assistant", transcript: "second response" },
+    });
+
+    expect(harness.onAudio.mock.calls.map(([audio]) => audio)).toEqual([
+      Buffer.alloc(155, 0xff),
+      Buffer.alloc(5, 0xff),
+      Buffer.alloc(155, 0xff),
+      Buffer.alloc(5, 0xff),
+    ]);
+    expect(harness.onAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      harness.onEvent.mock.invocationCallOrder.at(-1) ?? 0,
+    );
   });
 
   it("uses session context for forced consult results without a provider delegation", async () => {

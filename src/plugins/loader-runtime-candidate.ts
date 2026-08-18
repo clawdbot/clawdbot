@@ -521,6 +521,17 @@ export function loadRuntimePluginCandidate(params: {
     }
     return;
   }
+  if (registrationPlan.runFullActivationOnlyRegistrations) {
+    if (definition?.reload) {
+      params.registryBuilder.registerReload(record, definition.reload);
+    }
+    for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+      params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
+    }
+    for (const collector of definition?.securityAuditCollectors ?? []) {
+      params.registryBuilder.registerSecurityAuditCollector(record, collector);
+    }
+  }
   const api = params.registryBuilder.createApi(record, {
     config: context.cfg,
     pluginConfig: validatedConfig.value,

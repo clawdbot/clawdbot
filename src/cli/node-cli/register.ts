@@ -1,5 +1,5 @@
 // Commander registration for foreground node host and node service lifecycle commands.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
@@ -60,20 +60,23 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
+    .addOption(new Option("--ephemeral").hideHelp())
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts) => {
       let pair;
+      let gatewayOptions;
       try {
         pair = opts.pair ? resolveNodePairGatewayOptions(opts.pair) : undefined;
+        const existing = await loadNodeHostConfig();
+        gatewayOptions = resolveNodeGatewayOptions(opts, existing, pair);
       } catch (error) {
         defaultRuntime.error(error instanceof Error ? error.message : String(error));
         defaultRuntime.exit(1);
         return;
       }
-      const existing = await loadNodeHostConfig();
-      const { host, port, contextPath, tls, tlsFingerprint, gatewayCandidates } =
-        resolveNodeGatewayOptions(opts, existing, pair);
+      const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayCandidates } =
+        gatewayOptions;
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);
@@ -90,9 +93,11 @@ export function registerNodeCli(program: Command) {
         gatewayTls: tls,
         gatewayTlsFingerprint: tlsFingerprint,
         gatewayContextPath: contextPath,
+        gatewayCloudflareAccess: cloudflareAccess,
         gatewayCandidates,
         gatewayBootstrapToken: pair?.bootstrapToken,
         preferGatewayBootstrapToken: pair !== undefined,
+        ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
         nodeId: opts.nodeId,
         displayName: opts.displayName,
         installedAppsSharing: opts.shareInstalledApps,

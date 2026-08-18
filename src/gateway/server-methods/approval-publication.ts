@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 // Best-effort legacy approval resolution events after durable CAS wins.
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
@@ -44,7 +45,7 @@ async function runSideEffect(params: {
 
 function runSynchronousSideEffect(params: {
   context: GatewayRequestContext;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   run: () => void;
 }): void {
   try {
