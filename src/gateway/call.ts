@@ -307,27 +307,10 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
 export function formatGatewayClientRequestErrorJson(
   value: unknown,
 ): GatewayClientRequestErrorJson | null {
-  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+  if (!isGatewayClientRequestError(value)) {
     return null;
   }
-  const requestError = value as Error & {
-    gatewayCode?: unknown;
-    details?: unknown;
-    retryable?: unknown;
-    retryAfterMs?: unknown;
-  };
-  if (
-    typeof requestError.gatewayCode !== "string" ||
-    requestError.gatewayCode.length === 0 ||
-    requestError.message.length === 0 ||
-    typeof requestError.retryable !== "boolean" ||
-    (requestError.retryAfterMs !== undefined &&
-      (typeof requestError.retryAfterMs !== "number" ||
-        !Number.isInteger(requestError.retryAfterMs) ||
-        requestError.retryAfterMs < 0))
-  ) {
-    return null;
-  }
+  const requestError = value;
   return {
     ok: false,
     error: {
@@ -341,6 +324,35 @@ export function formatGatewayClientRequestErrorJson(
         : {}),
     },
   };
+}
+
+export function isGatewayClientRequestError(value: unknown): value is Error & {
+  gatewayCode: string;
+  details?: unknown;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = value as Error & {
+    gatewayCode?: unknown;
+    retryable?: unknown;
+    retryAfterMs?: unknown;
+  };
+  if (
+    typeof requestError.gatewayCode !== "string" ||
+    requestError.gatewayCode.length === 0 ||
+    requestError.message.length === 0 ||
+    typeof requestError.retryable !== "boolean" ||
+    (requestError.retryAfterMs !== undefined &&
+      (typeof requestError.retryAfterMs !== "number" ||
+        !Number.isInteger(requestError.retryAfterMs) ||
+        requestError.retryAfterMs < 0))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /** Preserve machine-readable output for auth failures raised before transport startup. */
@@ -1035,7 +1047,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         );
       },
       onConnectError: (err) => {
-        const isGatewayClientRequestError = err.name === "GatewayClientRequestError";
+        const gatewayClientRequestError = err.name === "GatewayClientRequestError";
         const isAgentRuntimeIdentityConnectError =
           Boolean(opts.agentRuntimeIdentityToken) &&
           isRequiredAgentRuntimeIdentityConnectError(err);
@@ -1043,7 +1055,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           isGatewayConnectAssemblyError(err) ||
           isAgentRuntimeIdentityConnectError ||
           isAllowlistedGatewayConnectRequestError(err) ||
-          (surfaceGatewayClientRequestErrors && isGatewayClientRequestError);
+          (surfaceGatewayClientRequestErrors && gatewayClientRequestError);
         if (settled || !shouldSurface) {
           return;
         }

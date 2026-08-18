@@ -123,15 +123,6 @@ type ExecApprovalFollowupResultDeps = {
   logWarn?: typeof logWarn;
 };
 
-/** Common arguments used to build default approval request contexts. */
-type DefaultExecApprovalRequestArgs = {
-  warnings: string[];
-  approvalRunningNoticeMs: number;
-  createApprovalSlug: (approvalId: string) => string;
-  turnSourceChannel?: string;
-  turnSourceAccountId?: string;
-};
-
 /** Builds pending approval state with warnings and a bounded expiry. */
 function createExecApprovalPendingState(params: {
   warnings: string[];
@@ -343,19 +334,6 @@ export async function createAndRegisterDefaultExecApprovalRequest(params: {
   };
 }
 
-/** Builds the shared argument shape passed into default approval registration. */
-export function buildDefaultExecApprovalRequestArgs(
-  params: DefaultExecApprovalRequestArgs,
-): DefaultExecApprovalRequestArgs {
-  return {
-    warnings: params.warnings,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-    createApprovalSlug: params.createApprovalSlug,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceAccountId: params.turnSourceAccountId,
-  };
-}
-
 /** Builds the immutable follow-up target passed to async approval continuations. */
 export function buildExecApprovalFollowupTarget(
   params: ExecApprovalFollowupTarget,
@@ -376,7 +354,7 @@ export function buildExecApprovalFollowupTarget(
 }
 
 /** Builds mutable approval decision state from a raw decision. */
-export function createExecApprovalDecisionState(params: {
+function createExecApprovalDecisionState(params: {
   decision: string | null | undefined;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }) {
@@ -392,7 +370,7 @@ export function createExecApprovalDecisionState(params: {
 }
 
 /** Prevents fallback approval from satisfying strict inline-eval/human-review paths. */
-export function enforceStrictInlineEvalApprovalBoundary(params: {
+function enforceStrictInlineEvalApprovalBoundary(params: {
   baseDecision: {
     timedOut: boolean;
   };
@@ -415,6 +393,69 @@ export function enforceStrictInlineEvalApprovalBoundary(params: {
   return {
     approvedByAsk: false,
     deniedReason: params.deniedReason ?? "approval-timeout",
+  };
+}
+
+/** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
+export async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(params: {
+  decision: string | null;
+  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
+  resolveTimedOut?: (state: {
+    baseDecision: { timedOut: boolean };
+    approvedByAsk: boolean;
+    deniedReason: string | null;
+  }) =>
+    | {
+        approvedByAsk: boolean;
+        deniedReason: string | null;
+        context?: TTimeoutContext;
+      }
+    | Promise<{
+        approvedByAsk: boolean;
+        deniedReason: string | null;
+        context?: TTimeoutContext;
+      }>;
+  requiresExplicitApproval: boolean | ((context: TTimeoutContext | undefined) => boolean);
+  requiresAutoReviewHumanApproval?: boolean;
+}): Promise<{
+  baseDecision: { timedOut: boolean };
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  timeoutContext: TTimeoutContext | undefined;
+}> {
+  const initial = createExecApprovalDecisionState({
+    decision: params.decision,
+    askFallback: params.askFallback,
+  });
+  let approvedByAsk = initial.approvedByAsk;
+  let deniedReason = initial.deniedReason;
+  let timeoutContext: TTimeoutContext | undefined;
+
+  if (initial.baseDecision.timedOut && params.resolveTimedOut) {
+    const timedOut = await params.resolveTimedOut(initial);
+    approvedByAsk = timedOut.approvedByAsk;
+    deniedReason = timedOut.deniedReason;
+    timeoutContext = timedOut.context;
+  } else if (params.decision === "allow-once" || params.decision === "allow-always") {
+    approvedByAsk = true;
+  }
+
+  const requiresExplicitApproval =
+    typeof params.requiresExplicitApproval === "function"
+      ? params.requiresExplicitApproval(timeoutContext)
+      : params.requiresExplicitApproval;
+  const strictDecision = enforceStrictInlineEvalApprovalBoundary({
+    baseDecision: initial.baseDecision,
+    approvedByAsk,
+    deniedReason,
+    requiresInlineEvalApproval: requiresExplicitApproval,
+    requiresAutoReviewHumanApproval: params.requiresAutoReviewHumanApproval,
+  });
+  return {
+    baseDecision: initial.baseDecision,
+    approvedByAsk: strictDecision.approvedByAsk,
+    deniedReason: strictDecision.deniedReason,
+    timeoutContext,
   };
 }
 

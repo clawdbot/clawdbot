@@ -549,7 +549,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
-              ${custodianPanelAvailable
+              ${navCollapsed && custodianPanelAvailable
                 ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
                     <button
                       type="button"

@@ -34,6 +34,15 @@ export default definePluginEntry({
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
     });
     api.session.controls.registerControlUiDescriptor({
+      surface: "tab",
+      id: "workboard",
+      label: "Workboard",
+      placement: "route:workboard",
+      icon: "kanban",
+      group: "control",
+      requiredScopes: ["operator.read"],
+    });
+    api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "board",
       label: "Workboard board",

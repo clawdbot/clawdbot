@@ -393,13 +393,6 @@ export async function executeNodeHostCommand(
 
     if (!inlineApprovedByAsk) {
       // Human approval may complete after this tool call returns, so follow-up delivery owns invocation.
-      const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
-        warnings: params.warnings,
-        approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-        createApprovalSlug,
-        turnSourceChannel: params.turnSourceChannel,
-        turnSourceAccountId: params.turnSourceAccountId,
-      });
       const {
         approvalId,
         approvalSlug,
@@ -410,7 +403,11 @@ export async function executeNodeHostCommand(
         sentApproverDms,
         unavailableReason,
       } = await execHostShared.createAndRegisterDefaultExecApprovalRequest({
-        ...requestArgs,
+        warnings: params.warnings,
+        approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+        createApprovalSlug,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceAccountId: params.turnSourceAccountId,
         register: registerNodeApproval,
       });
       if (
@@ -419,32 +416,23 @@ export async function executeNodeHostCommand(
           preResolvedDecision,
         })
       ) {
-        const {
-          baseDecision,
-          approvedByAsk: initialApprovedByAsk,
-          deniedReason: initialDeniedReason,
-        } = execHostShared.createExecApprovalDecisionState({
-          decision: preResolvedDecision,
+        const inlineDecision = await execHostShared.resolveExecApprovalDecisionState({
+          decision: preResolvedDecision ?? null,
           askFallback,
-        });
-        let approvedByAsk = initialApprovedByAsk;
-        let deniedReason = initialDeniedReason;
-        const currentFallback = baseDecision.timedOut
-          ? await resolveCurrentTimeoutFallback()
-          : null;
-        if (currentFallback) {
-          approvedByAsk = currentFallback.approvedByAsk;
-          deniedReason = currentFallback.deniedReason;
-        }
-        const strictInlineEvalDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
-          baseDecision,
-          approvedByAsk,
-          deniedReason,
-          requiresInlineEvalApproval:
-            currentFallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+          resolveTimedOut: async () => {
+            const fallback = await resolveCurrentTimeoutFallback();
+            return {
+              approvedByAsk: fallback.approvedByAsk,
+              deniedReason: fallback.deniedReason,
+              context: fallback,
+            };
+          },
+          requiresExplicitApproval: (fallback) =>
+            fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
           requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
         });
-        if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
+        const currentFallback = inlineDecision.timeoutContext;
+        if (inlineDecision.deniedReason || !inlineDecision.approvedByAsk) {
           throw new Error(
             execHostShared.buildHeadlessExecApprovalDeniedMessage({
               trigger: params.trigger,
@@ -455,19 +443,15 @@ export async function executeNodeHostCommand(
             }),
           );
         }
-        inlineApprovedByAsk = strictInlineEvalDecision.approvedByAsk;
+        inlineApprovedByAsk = inlineDecision.approvedByAsk;
         inlineApprovalSource = preResolvedDecision === null ? "ask-fallback" : undefined;
         if (inlineApprovalSource) {
           inlineDispatchAuthority = "ask-fallback";
-          inlineFallbackPolicy = currentFallback ?? undefined;
+          inlineFallbackPolicy = currentFallback;
         } else {
           inlineDispatchAuthority = "human-approval";
         }
-        inlineApprovalDecision = inlineApprovalSource
-          ? null
-          : strictInlineEvalDecision.approvedByAsk
-            ? "allow-once"
-            : null;
+        inlineApprovalDecision = inlineApprovalSource ? null : "allow-once";
         inlineApprovalId = approvalId;
       } else {
         const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
@@ -513,47 +497,33 @@ export async function executeNodeHostCommand(
             return;
           }
 
-          const {
-            baseDecision,
-            approvedByAsk: initialApprovedByAsk,
-            deniedReason: baseDeniedReason,
-          } = execHostShared.createExecApprovalDecisionState({
+          const resolvedDecision = await execHostShared.resolveExecApprovalDecisionState({
             decision,
             askFallback,
-          });
-          let approvedByAsk = initialApprovedByAsk;
-          let approvalDecision: "allow-once" | "allow-always" | null = null;
-          const approvalSource = decision === null ? "ask-fallback" : undefined;
-          let deniedReason = baseDeniedReason;
-          const currentFallback = baseDecision.timedOut
-            ? await resolveCurrentTimeoutFallback()
-            : null;
-
-          if (currentFallback) {
-            approvedByAsk = currentFallback.approvedByAsk;
-            deniedReason = currentFallback.deniedReason;
-            approvalDecision = approvedByAsk ? "allow-once" : null;
-          } else if (decision === "allow-once") {
-            approvedByAsk = true;
-            approvalDecision = "allow-once";
-          } else if (decision === "allow-always") {
-            approvedByAsk = true;
-            approvalDecision = "allow-always";
-          }
-
-          const strictBoundaryDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
-            baseDecision,
-            approvedByAsk,
-            deniedReason,
-            requiresInlineEvalApproval:
-              currentFallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+            resolveTimedOut: async () => {
+              const fallback = await resolveCurrentTimeoutFallback();
+              return {
+                approvedByAsk: fallback.approvedByAsk,
+                deniedReason: fallback.deniedReason,
+                context: fallback,
+              };
+            },
+            requiresExplicitApproval: (fallback) =>
+              fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
             requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
           });
-          approvedByAsk = strictBoundaryDecision.approvedByAsk;
-          deniedReason = strictBoundaryDecision.deniedReason;
-          if (deniedReason) {
-            approvalDecision = null;
-          }
+          const { approvedByAsk, deniedReason } = resolvedDecision;
+          const currentFallback = resolvedDecision.timeoutContext;
+          const approvalSource = decision === null ? "ask-fallback" : undefined;
+          const approvalDecision: "allow-once" | "allow-always" | null = deniedReason
+            ? null
+            : currentFallback
+              ? approvedByAsk
+                ? "allow-once"
+                : null
+              : decision === "allow-once" || decision === "allow-always"
+                ? decision
+                : null;
 
           if (deniedReason) {
             await execHostShared.sendExecApprovalFollowupResult(

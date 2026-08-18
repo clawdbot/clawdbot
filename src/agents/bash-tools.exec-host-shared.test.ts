@@ -13,8 +13,7 @@ import {
 import {
   buildExecApprovalPendingToolResult,
   createAndRegisterDefaultExecApprovalRequest,
-  createExecApprovalDecisionState,
-  enforceStrictInlineEvalApprovalBoundary,
+  resolveExecApprovalDecisionState,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
   shouldResolveExecApprovalUnavailableInline,
@@ -487,66 +486,51 @@ describe("resolveExecHostApprovalContext", () => {
   });
 });
 
-describe("enforceStrictInlineEvalApprovalBoundary", () => {
-  it("denies unanswered approvals when ask fallback is fail-closed", () => {
-    expect(
-      createExecApprovalDecisionState({
+describe("resolveExecApprovalDecisionState", () => {
+  it.each([
+    {
+      name: "keeps fail-closed timeout denial",
+      decision: null,
+      askFallback: "deny" as const,
+      requiresExplicitApproval: false,
+      expected: { approvedByAsk: false, deniedReason: "approval-timeout" },
+    },
+    {
+      name: "accepts explicit approval across strict boundaries",
+      decision: "allow-once",
+      askFallback: "deny" as const,
+      requiresExplicitApproval: true,
+      expected: { approvedByAsk: true, deniedReason: null },
+    },
+  ])("$name", async ({ decision, askFallback, requiresExplicitApproval, expected }) => {
+    await expect(
+      resolveExecApprovalDecisionState({
+        decision,
+        askFallback,
+        requiresExplicitApproval,
+      }),
+    ).resolves.toMatchObject(expected);
+  });
+
+  it("applies current timeout policy before enforcing human-only approval", async () => {
+    const timeoutContext = { requiresExplicitApproval: true, policy: "current" };
+
+    await expect(
+      resolveExecApprovalDecisionState({
         decision: null,
-        askFallback: "deny",
+        askFallback: "full",
+        resolveTimedOut: async () => ({
+          approvedByAsk: true,
+          deniedReason: null,
+          context: timeoutContext,
+        }),
+        requiresExplicitApproval: (context) => context?.requiresExplicitApproval === true,
       }),
-    ).toEqual({
-      baseDecision: {
-        approvedByAsk: false,
-        deniedReason: "approval-timeout",
-        timedOut: true,
-      },
+    ).resolves.toEqual({
+      baseDecision: { approvedByAsk: true, deniedReason: null, timedOut: true },
       approvedByAsk: false,
       deniedReason: "approval-timeout",
-    });
-  });
-
-  it("denies timeout-based fallback when strict inline-eval approval is required", () => {
-    expect(
-      enforceStrictInlineEvalApprovalBoundary({
-        baseDecision: { timedOut: true },
-        approvedByAsk: true,
-        deniedReason: null,
-        requiresInlineEvalApproval: true,
-      }),
-    ).toEqual({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
-    });
-  });
-
-  it("denies timeout-based fallback when auto-review defers to human approval", () => {
-    const params = {
-      baseDecision: { timedOut: true },
-      approvedByAsk: true,
-      deniedReason: null,
-      requiresInlineEvalApproval: false,
-      requiresAutoReviewHumanApproval: true,
-    } satisfies Parameters<typeof enforceStrictInlineEvalApprovalBoundary>[0] & {
-      requiresAutoReviewHumanApproval: true;
-    };
-
-    expect(enforceStrictInlineEvalApprovalBoundary(params)).toEqual({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
-    });
-  });
-
-  it("keeps explicit approvals intact for strict inline-eval commands", () => {
-    expect(
-      enforceStrictInlineEvalApprovalBoundary({
-        baseDecision: { timedOut: false },
-        approvedByAsk: true,
-        deniedReason: null,
-        requiresInlineEvalApproval: true,
-      }),
-    ).toEqual({
-      approvedByAsk: true,
-      deniedReason: null,
+      timeoutContext,
     });
   });
 });

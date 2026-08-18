@@ -1659,6 +1659,19 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
+    controlUiTabs:
+      fixture === "workboard"
+        ? [
+            {
+              group: "control",
+              icon: "kanban",
+              id: "workboard",
+              label: "Workboard",
+              placement: "route:workboard",
+              pluginId: "workboard",
+            },
+          ]
+        : [],
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
       ...(fixture === "workboard"
