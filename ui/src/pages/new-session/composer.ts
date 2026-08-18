@@ -19,6 +19,7 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
 import {
@@ -32,7 +33,6 @@ import {
   updateSkillMenu,
   type SkillMenuHost,
 } from "../chat/components/chat-composer-skill-menu.ts";
-import { paneDomId } from "../chat/components/chat-composer-slash-menu.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";

@@ -7,8 +7,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
-import { paneDomId } from "./chat-composer-slash-menu.ts";
+import { paneDomId, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
 
 const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
 

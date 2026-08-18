@@ -13,6 +13,7 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  paneDomId,
   preserveComposerFocusOnPrimaryAction,
   replaceComposerPopoverAnchor,
   scheduleTextareaHeightAdjustment,
@@ -30,7 +31,6 @@ import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
-  paneDomId,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
