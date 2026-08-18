@@ -5,16 +5,35 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import {
+  createOnboardGatewayTimeoutCapture,
+  createOnboardJsonCaptureRuntime,
+  createOnboardLocalDaemonOptions,
+  createOnboardStateDirHarness,
+  createOnboardTestConfigStore,
   createThrowingRuntime,
+  expectOnboardLocalJsonSetupFailure,
   mockOnboardingAgent,
+  prepareOnboardGatewayTestEnv,
+  readOnboardFirstMockCall,
+  runOnboardLocalDaemonSetup,
 } from "./onboard-non-interactive.test-helpers.js";
-import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
+import type {
+  OnboardEnsureWorkspaceOptions,
+  OnboardGatewayHealthCall,
+  OnboardHealthCommandCall,
+  WaitForGatewayReachableMock,
+} from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
-const testConfigStore = new Map<string, OpenClawConfig>();
+const {
+  configStore: testConfigStore,
+  resolveConfigPath: resolveTestConfigPath,
+  readConfig: readTestConfig,
+  readSnapshot: readTestConfigSnapshot,
+} = createOnboardTestConfigStore();
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
 const pluginLifecycleLeaseState = vi.hoisted(() => ({ depth: 0 }));
 const configWritePluginLeaseDepths: number[] = [];
@@ -37,43 +56,6 @@ const readLastGatewayErrorLineMock = vi.hoisted(() =>
   vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
 );
 let waitForGatewayReachableMock: WaitForGatewayReachableMock;
-
-function resolveTestConfigPath() {
-  const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
-  if (override) {
-    return override;
-  }
-  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR must be set before config IO in this test");
-  }
-  return path.join(stateDir, "openclaw.json");
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe stored config shape.
-function readTestConfig<T = OpenClawConfig>(): T {
-  return (testConfigStore.get(resolveTestConfigPath()) ?? {}) as T;
-}
-
-function readTestConfigSnapshot(): ConfigFileSnapshot {
-  const config = testConfigStore.get(resolveTestConfigPath()) ?? {};
-  const exists = testConfigStore.has(resolveTestConfigPath());
-  return {
-    path: resolveTestConfigPath(),
-    exists,
-    raw: exists ? `${JSON.stringify(config, null, 2)}\n` : null,
-    parsed: config,
-    sourceConfig: config,
-    resolved: config,
-    valid: true,
-    runtimeConfig: config,
-    config,
-    ...(exists ? { hash: "test-config-hash" } : {}),
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
-}
 
 readConfigFileSnapshotMock.mockImplementation(async () => readTestConfigSnapshot());
 
@@ -198,6 +180,20 @@ vi.mock("./health.js", () => ({
 }));
 
 vi.mock("../daemon/service.js", () => ({
+  readGatewayServiceState: async () => {
+    const [loaded, runtime] = await Promise.all([
+      gatewayServiceMock.isLoaded(),
+      gatewayServiceMock.readRuntime(),
+    ]);
+    return {
+      installed: true,
+      loadState: { status: loaded ? ("loaded" as const) : ("not-loaded" as const) },
+      running: runtime.status === "running",
+      env: {},
+      command: null,
+      runtime,
+    };
+  },
   resolveGatewayService: () => gatewayServiceMock,
 }));
 
@@ -219,173 +215,12 @@ const getPseudoPort = (base: number): number => base + (process.pid % 1000);
 
 const runtime = createThrowingRuntime();
 
-function createJsonCaptureRuntime() {
-  let capturedJson = "";
-  const runtimeWithCapture: RuntimeEnv = {
-    log: (...args: unknown[]) => {
-      const firstArg = args[0];
-      capturedJson =
-        typeof firstArg === "string"
-          ? firstArg
-          : firstArg instanceof Error
-            ? firstArg.message
-            : (JSON.stringify(firstArg) ?? "");
-    },
-    error: (...args: unknown[]) => {
-      const firstArg = args[0];
-      const capturedError =
-        typeof firstArg === "string"
-          ? firstArg
-          : firstArg instanceof Error
-            ? firstArg.message
-            : (JSON.stringify(firstArg) ?? "");
-      throw new Error(capturedError);
-    },
-    exit: (_code: number) => {
-      throw new Error("exit should not be reached after runtime.error");
-    },
-  };
-
-  return {
-    runtimeWithCapture,
-    readCapturedJson: () => capturedJson,
-  };
-}
-
-type MockWithCalls<TArgs extends unknown[]> = {
-  mock: {
-    calls: TArgs[];
-  };
-};
-
-function readFirstMockCall(mock: unknown, label: string): unknown[] {
-  const calls = (mock as MockWithCalls<unknown[]>).mock.calls;
-  const call = calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
-}
-
-type EnsureWorkspaceOptions = {
-  skipBootstrap?: boolean;
-};
-
-type GatewayHealthCall = {
-  password?: string;
-  token?: string;
-};
-
-type HealthCommandCall = GatewayHealthCall & {
-  config?: OpenClawConfig;
-};
-
-async function expectLocalJsonSetupFailure(stateDir: string, runtimeWithCapture: RuntimeEnv) {
-  await expect(
-    runNonInteractiveSetup(
-      {
-        nonInteractive: true,
-        mode: "local",
-        workspace: path.join(stateDir, "openclaw"),
-        authChoice: "skip",
-        skipSkills: true,
-        skipHealth: false,
-        installDaemon: true,
-        gatewayBind: "loopback",
-        json: true,
-      },
-      runtimeWithCapture,
-    ),
-  ).rejects.toThrow("exit should not be reached after runtime.error");
-}
-
-function createLocalDaemonSetupOptions(stateDir: string) {
-  return {
-    nonInteractive: true,
-    mode: "local" as const,
-    workspace: path.join(stateDir, "openclaw"),
-    authChoice: "skip" as const,
-    skipSkills: true,
-    skipHealth: false,
-    installDaemon: true,
-    gatewayBind: "loopback" as const,
-  };
-}
-
-async function runLocalDaemonSetup(stateDir: string, runtimeEnv: RuntimeEnv = runtime) {
-  await runNonInteractiveSetup(createLocalDaemonSetupOptions(stateDir), runtimeEnv);
-}
-
-function mockGatewayReachableWithCapturedTimeouts() {
-  let capturedDeadlineMs: number | undefined;
-  let capturedProbeTimeoutMs: number | undefined;
-  waitForGatewayReachableMock = vi.fn(
-    async (params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => {
-      capturedDeadlineMs = params.deadlineMs;
-      capturedProbeTimeoutMs = params.probeTimeoutMs;
-      return { ok: true };
-    },
-  );
-  return {
-    get deadlineMs() {
-      return capturedDeadlineMs;
-    },
-    get probeTimeoutMs() {
-      return capturedProbeTimeoutMs;
-    },
-  };
-}
-
 describe("onboard (non-interactive): gateway and remote auth", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;
   let tempHome: string | undefined;
-
-  const initStateDir = async (prefix: string) => {
-    if (!tempHome) {
-      throw new Error("temp home not initialized");
-    }
-    const stateDir = await fs.realpath(await fs.mkdtemp(path.join(tempHome, prefix)));
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    return stateDir;
-  };
-  const withStateDir = async (
-    prefix: string,
-    run: (stateDir: string) => Promise<void>,
-  ): Promise<void> => {
-    const stateDir = await initStateDir(prefix);
-    try {
-      await run(stateDir);
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  };
+  const { withStateDir } = createOnboardStateDirHarness(() => tempHome);
   beforeAll(async () => {
-    envSnapshot = captureEnv([
-      "HOME",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_SKIP_CHANNELS",
-      "OPENCLAW_SKIP_GMAIL_WATCHER",
-      "OPENCLAW_SKIP_CRON",
-      "OPENCLAW_SKIP_CANVAS_HOST",
-      "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_PASSWORD",
-    ]);
-    setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-    setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-    setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    envSnapshot = prepareOnboardGatewayTestEnv();
 
     tempHome = await makeTempWorkspace("openclaw-onboard-");
     setTestEnvValue("HOME", tempHome);
@@ -691,10 +526,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
       expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledOnce();
-      const [workspaceArg, runtimeArg, optionsArg] = readFirstMockCall(
+      const [workspaceArg, runtimeArg, optionsArg] = readOnboardFirstMockCall(
         ensureWorkspaceAndSessionsMock,
         "ensureWorkspaceAndSessions",
-      ) as [string, RuntimeEnv, EnsureWorkspaceOptions];
+      ) as [string, RuntimeEnv, OnboardEnsureWorkspaceOptions];
       expect(workspaceArg).toBe(workspace);
       expect(runtimeArg).toBe(runtime);
       expect(optionsArg.skipBootstrap).toBe(true);
@@ -854,7 +689,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const log = vi.fn();
 
       await runNonInteractiveSetup(
-        { ...createLocalDaemonSetupOptions(stateDir), installDaemon: false },
+        { ...createOnboardLocalDaemonOptions(stateDir), installDaemon: false },
         { ...runtime, log },
       );
 
@@ -873,7 +708,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       await expect(
         runNonInteractiveSetup(
-          { ...createLocalDaemonSetupOptions(stateDir), installDaemon: undefined },
+          { ...createOnboardLocalDaemonOptions(stateDir), installDaemon: undefined },
           runtime,
         ),
       ).rejects.toThrow(
@@ -884,9 +719,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("uses a longer health deadline when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-", async (stateDir) => {
-      const captured = mockGatewayReachableWithCapturedTimeouts();
+      const captured = createOnboardGatewayTimeoutCapture();
+      waitForGatewayReachableMock = captured.mock;
 
-      await runLocalDaemonSetup(stateDir);
+      await runOnboardLocalDaemonSetup({ runSetup: runNonInteractiveSetup, stateDir, runtime });
 
       const cfg = readTestConfig<{
         gateway?: { mode?: string; bind?: string };
@@ -907,23 +743,23 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       await runNonInteractiveSetup(
         {
-          ...createLocalDaemonSetupOptions(stateDir),
+          ...createOnboardLocalDaemonOptions(stateDir),
           gatewayAuth: "token",
           gatewayToken: token,
         },
         runtime,
       );
 
-      const [gatewayHealthCall] = readFirstMockCall(
+      const [gatewayHealthCall] = readOnboardFirstMockCall(
         waitForGatewayReachableMock,
         "waitForGatewayReachable",
-      ) as [GatewayHealthCall];
+      ) as [OnboardGatewayHealthCall];
       expect(gatewayHealthCall.token).toBe(token);
       expect(gatewayHealthCall.password).toBeUndefined();
-      const [healthCall, healthRuntime] = readFirstMockCall(healthCommandMock, "healthCommand") as [
-        HealthCommandCall,
-        RuntimeEnv,
-      ];
+      const [healthCall, healthRuntime] = readOnboardFirstMockCall(
+        healthCommandMock,
+        "healthCommand",
+      ) as [OnboardHealthCommandCall, RuntimeEnv];
       expect(healthCall.token).toBe(token);
       expect(healthCall.password).toBeUndefined();
       expect(healthCall.config?.gateway?.auth?.mode).toBe("token");
@@ -947,7 +783,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         skippedReason: "systemd-user-unavailable",
       });
 
-      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+      const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
 
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", {
@@ -956,7 +792,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       });
 
       try {
-        await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+        await expectOnboardLocalJsonSetupFailure({
+          runSetup: runNonInteractiveSetup,
+          stateDir,
+          runtime: runtimeWithCapture,
+        });
       } finally {
         Object.defineProperty(process, "platform", {
           configurable: true,
@@ -994,8 +834,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
       }));
 
-      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
-      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+      const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+      await expectOnboardLocalJsonSetupFailure({
+        runSetup: runNonInteractiveSetup,
+        stateDir,
+        runtime: runtimeWithCapture,
+      });
 
       const parsed = JSON.parse(readCapturedJson()) as {
         ok: boolean;
@@ -1007,7 +851,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         diagnostics?: {
           service?: {
             label?: string;
-            loaded?: boolean;
+            loadState?: { status?: string };
             runtimeStatus?: string;
             pid?: number;
           };
@@ -1021,7 +865,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.gateway?.wsUrl).toContain("ws://127.0.0.1:");
       expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
       expect(parsed.diagnostics?.service?.label).toBe("LaunchAgent");
-      expect(parsed.diagnostics?.service?.loaded).toBe(true);
+      expect(parsed.diagnostics?.service?.loadState).toEqual({ status: "loaded" });
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
       expect(parsed.diagnostics?.service?.pid).toBe(4242);
       expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
@@ -1041,8 +885,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       });
       readLastGatewayErrorLineMock.mockResolvedValueOnce("");
 
-      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
-      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+      const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+      await expectOnboardLocalJsonSetupFailure({
+        runSetup: runNonInteractiveSetup,
+        stateDir,
+        runtime: runtimeWithCapture,
+      });
 
       const parsed = JSON.parse(readCapturedJson()) as {
         ok: boolean;
