@@ -1690,6 +1690,12 @@ button.chat-reply-preview--message:disabled {
 /* Floating tray pinned to the conversation's top-right (the positioned
    ancestor is .chat-main__conversation); content scrolls underneath it. */
 .task-suggestions {
+  --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
+  --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);
+  --task-suggestion-prompt-bg: var(--panel);
+  --task-suggestion-action-bg: var(--text-strong);
+  --task-suggestion-action-fg: var(--bg);
+
   position: absolute;
   z-index: 24;
   top: 10px;
@@ -1710,7 +1716,7 @@ button.chat-reply-preview--message:disabled {
   height: 18px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 0 0 16px 16px;
-  background: var(--sidebar-bg, var(--panel-strong));
+  background: var(--task-suggestion-card-bg);
   box-shadow: 0 8px 18px color-mix(in srgb, var(--bg) 32%, transparent);
 }
 
@@ -1835,7 +1841,7 @@ button.chat-reply-preview--message:disabled {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   border-radius: 16px;
-  background: var(--sidebar-bg, var(--panel-strong));
+  background: var(--task-suggestion-card-bg);
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--text) 5%, transparent),
     0 12px 30px color-mix(in srgb, var(--bg) 38%, transparent);
@@ -1895,6 +1901,9 @@ button.chat-reply-preview--message:disabled {
 
 .task-suggestion__position {
   flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--task-suggestion-path-bg);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
@@ -2029,7 +2038,7 @@ button.chat-reply-preview--message:disabled {
   min-width: 0;
   margin: 0;
   border: 1px solid var(--border);
-  background: var(--sidebar-bg, var(--panel-strong));
+  background: var(--task-suggestion-card-bg);
   color: var(--text);
   font: 11px/1.4 var(--mono);
   white-space: pre-wrap;
@@ -2046,7 +2055,7 @@ button.chat-reply-preview--message:disabled {
   overflow-x: auto;
   overflow-y: hidden;
   border-radius: 9px 9px 0 0;
-  background: var(--panel-hover);
+  background: var(--task-suggestion-path-bg);
   scrollbar-width: none;
   white-space: nowrap;
 }
@@ -2067,7 +2076,7 @@ button.chat-reply-preview--message:disabled {
   padding: 12px 13px;
   overflow: auto;
   border-radius: 10px;
-  background: var(--panel);
+  background: var(--task-suggestion-prompt-bg);
 }
 
 .task-suggestion__actions {
@@ -2086,7 +2095,7 @@ button.chat-reply-preview--message:disabled {
   border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: 11px;
   corner-shape: superellipse(1.5);
-  background: var(--text-strong);
+  background: var(--task-suggestion-action-bg);
 }
 
 .task-suggestion__start {
@@ -2098,7 +2107,7 @@ button.chat-reply-preview--message:disabled {
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--bg);
+  color: var(--task-suggestion-action-fg);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -2113,8 +2122,8 @@ button.chat-reply-preview--message:disabled {
 .task-suggestion__start:focus-visible,
 .task-suggestion__menu-trigger:hover:not(:disabled),
 .task-suggestion__menu-trigger:focus-visible {
-  background: color-mix(in srgb, var(--bg) 8%, transparent);
-  color: var(--bg);
+  background: color-mix(in srgb, var(--task-suggestion-action-fg) 8%, transparent);
+  color: var(--task-suggestion-action-fg);
 }
 
 .task-suggestion__menu-trigger {
@@ -2125,15 +2134,36 @@ button.chat-reply-preview--message:disabled {
   padding: 0;
   place-items: center;
   border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--bg) 18%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
   border-radius: 0 !important;
   background: transparent;
-  color: var(--bg);
+  color: var(--task-suggestion-action-fg);
 }
 
 .task-suggestion__menu-trigger:hover:not(:disabled),
 .task-suggestion__menu-trigger:focus-visible {
-  border-left-color: color-mix(in srgb, var(--bg) 18%, transparent);
+  border-left-color: color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
+}
+
+:root[data-theme-mode="light"] .task-suggestions {
+  --task-suggestion-card-bg: var(--sidebar-bg, var(--panel));
+  --task-suggestion-path-bg: var(--panel-strong);
+  --task-suggestion-prompt-bg: var(--card);
+  --task-suggestion-action-bg: var(--text-strong);
+  --task-suggestion-action-fg: var(--bg);
+}
+
+:root[data-theme-mode="light"] .task-suggestion__start,
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--task-suggestion-action-fg);
+}
+
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
+  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
 }
 
 .task-suggestion__menu-trigger svg {
