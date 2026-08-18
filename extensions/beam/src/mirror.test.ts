@@ -368,7 +368,7 @@ describe("createBeamMirrorRunner", () => {
     },
   );
 
-  it("resumes delivery after the blocked endpoint changes", async () => {
+  it("rechecks once after runner restart and resumes after the endpoint changes", async () => {
     const requests: string[] = [];
     const server = createServer((req, res) => {
       void readRequestBody(req).then(
@@ -393,21 +393,25 @@ describe("createBeamMirrorRunner", () => {
       const runtime = {
         config: { current: () => mirrorConfig({ endpoint }) },
       } as unknown as PluginRuntime;
-      const runner = createBeamMirrorRunner({
-        runtime,
-        logger: silentLogger,
-        now: () => NOW,
-        listCatalogs: () => [
-          fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
-        ],
-      });
+      const createRunner = () =>
+        createBeamMirrorRunner({
+          runtime,
+          logger: silentLogger,
+          now: () => NOW,
+          listCatalogs: () => [
+            fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+          ],
+        });
+      const runner = createRunner();
 
       await runner.tick();
       await runner.tick();
+      const restartedRunner = createRunner();
+      await restartedRunner.tick();
       endpoint = `${origin}/direct`;
-      await runner.tick();
+      await restartedRunner.tick();
 
-      expect(requests).toEqual(["/redirecting", "/direct"]);
+      expect(requests).toEqual(["/redirecting", "/redirecting", "/direct"]);
     } finally {
       await closeTestServer(server);
     }

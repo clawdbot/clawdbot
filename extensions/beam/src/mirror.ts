@@ -320,8 +320,9 @@ export function createBeamMirrorRunner(params: {
       });
     } catch (error) {
       if (error instanceof GuardedFetchRedirectError) {
-        // Redirect policy cannot recover on a later poll. Hold this exact endpoint
-        // until config changes instead of repeatedly sending the same sensitive POST.
+        // Repeating the same poll cannot satisfy direct-only delivery. Hold this exact
+        // endpoint for this service instance; a fresh instance probes once so a receiver
+        // fixed in place can recover without a meaningless config change.
         redirectBlockedEndpoint = endpoint;
         warnThrottled(
           `beam mirror upload blocked for ${payload.source}: receiver returned redirect (${error.status}); redirects are not followed; configure the final endpoint`,
