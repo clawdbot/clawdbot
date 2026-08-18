@@ -1505,13 +1505,13 @@ struct OnboardingAISetupTests {
         let gateway = makeAISetupGateway(url: url, session: session)
         let appState = AppState(preview: true)
         appState.connectionMode = .local
-        var handoffCount = 0
+        var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" },
-            dashboardOnboardingOpener: { handoffCount += 1 })
+            dashboardHandoffOpener: { handoffs.append($0) })
         view.onboardingVisible = true
         view.currentPage = try #require(view.pageOrder.firstIndex(of: view.aiPageIndex))
 
@@ -1530,7 +1530,8 @@ struct OnboardingAISetupTests {
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "claude-cli")
         #expect(view.finishState.didFinish)
-        #expect(handoffCount == 1)
+        // Fresh activation hands off to the custodian first-run flow.
+        #expect(handoffs == [.custodianOnboarding])
         #expect(await (recorder.snapshot()).methods == [
             "agents.list",
             "openclaw.setup.verify",

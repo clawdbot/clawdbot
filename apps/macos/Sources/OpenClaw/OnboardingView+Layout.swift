@@ -198,13 +198,7 @@ extension OnboardingView {
                     self.waitForPendingInferenceSetup()
                     return
                 case .none:
-                    // A concurrent probe can clear an expired marker while
-                    // the dispatched activation is still returning. Keep the
-                    // setup-owned handoff, and prove inference on this route.
-                    if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingSystemAgent(modelRef: modelRef)
-                        return
-                    }
+                    break
                 }
                 // agents.list projects an effective model even when it only
                 // comes from an implicit runtime default. A label is not proof

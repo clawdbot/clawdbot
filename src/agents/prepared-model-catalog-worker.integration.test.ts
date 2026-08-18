@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -573,6 +573,9 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("makes a post-startup Codex login available to direct models.list", async () => {
+    // A developer's ambient OpenAI key would count as usable openai auth and
+    // mark the route available before the staged Codex login exists.
+    vi.stubEnv("OPENAI_API_KEY", undefined);
     const codexHome = tempDirs.make("openclaw-models-list-codex-");
     const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });
     const route = {
@@ -594,6 +597,16 @@ describe("prepared model catalog worker boundary", () => {
             workspace: fixture.workspaceDir,
           },
         ],
+      },
+      plugins: {
+        ...fixture.config.plugins,
+        entries: {
+          ...fixture.config.plugins?.entries,
+          // This test proves auth-store refresh, not harness discovery. A live
+          // model/list against a developer's real Codex login would mark the
+          // route available before the staged auth.json exists.
+          codex: { config: { discovery: { enabled: false } } },
+        },
       },
     } satisfies OpenClawConfig;
     const owner = Object.freeze({
