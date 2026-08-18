@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Session workspace inheritance:** keep OpenClaw bootstrap files, agent instructions, memory guidance, and skills anchored to the configured agent workspace when a session runs from another folder or managed worktree, while preserving that folder as the execution workspace.
 - **Plugin setup diagnostics:** stop treating metadata-only provider setup descriptors as missing runtime registrations while retaining undeclared runtime and CLI drift warnings. Fixes #125506. Thanks @shakkernerd.
 - **Onboarding model browsing:** keep preferred-provider model discovery scoped to the selected provider, preserve route variants, and avoid loading unrelated provider setup surfaces. Fixes #125363. Thanks @shakkernerd.
 - **Codex subagent fan-out:** settle successful terminal yields immediately and preserve requester ownership so completed children reliably resume their parent.

@@ -197,6 +197,41 @@ describe("Codex app-server attempt context", () => {
     }
   });
 
+  it("inherits agent workspace instructions when Codex executes in another folder", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-execution-workspace-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Canonical agent instructions");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical agent soul");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Canonical agent memory");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: ["memory_search", "memory_get"],
+      });
+
+      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent instructions");
+      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
+      expect(context.turnScopedDeveloperInstructions).toContain(
+        path.join(workspaceDir, "AGENTS.md"),
+      );
+      expect(context.memoryToolRouted).toBe(true);
+      expect(context.promptContext).not.toContain("Canonical agent memory");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
+    }
+  });
+
   it("reads and compares thread-bootstrap context-engine projections", () => {
     const projection = readContextEngineThreadBootstrapProjection({
       mode: "thread_bootstrap",

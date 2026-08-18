@@ -12,6 +12,7 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
+import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
@@ -499,6 +500,26 @@ describe("runPreparedReply media-only handling", () => {
       loadAgentRunnerRuntime(),
       loadSessionUpdatesRuntime(),
     ]);
+  });
+
+  it("loads skills from the configured agent workspace for sessions running elsewhere", async () => {
+    const params = baseParams({
+      workspaceDir: "/tmp/agent-workspace",
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        spawnedCwd: "/tmp/session-worktree",
+      },
+    });
+    const context = await prepareReplyRunContext(params);
+    expect(context).toMatchObject({
+      kind: "ready",
+      workspaceDir: "/tmp/session-worktree",
+      skillsWorkspaceDir: "/tmp/agent-workspace",
+    });
+
+    await runPreparedReply(params);
+    expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
   });
 
   beforeEach(async () => {

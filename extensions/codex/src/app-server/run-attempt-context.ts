@@ -141,7 +141,8 @@ export async function prepareCodexAttemptContext(
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
-    resolvedWorkspace,
+    resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
+    executionWorkspace: resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: contextSessionKey,
     sessionAgentId,

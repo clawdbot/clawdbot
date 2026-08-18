@@ -24,6 +24,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
   attempt: EmbeddedRunAttemptParams;
+  bootstrapWorkspaceDir?: string;
   effectiveWorkspace: string;
   hasReadTool: boolean;
   isRawModelRun: boolean;
@@ -33,12 +34,19 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   sessionLabel: string;
 }) {
   const { attempt } = params;
+  const bootstrapWorkspaceDir = params.bootstrapWorkspaceDir ?? params.resolvedWorkspace;
+  // The selected session workspace owns execution. Bootstrap files remain owned
+  // by the configured agent workspace and keep honest paths when those differ.
+  const bootstrapPromptWorkspaceDir =
+    bootstrapWorkspaceDir === params.resolvedWorkspace
+      ? params.effectiveWorkspace
+      : bootstrapWorkspaceDir;
   const suppressAmbientContext =
     params.isRawModelRun || attempt.operation === "settled-tool-finalization";
   const contextInjectionMode = resolveContextInjectionMode(attempt.config, params.sessionAgentId);
   const bootstrapWarn = makeBootstrapWarn({
     sessionLabel: params.sessionLabel,
-    workspaceDir: params.resolvedWorkspace,
+    workspaceDir: bootstrapWorkspaceDir,
     warn: (message) => log.warn(message),
   });
   let completedBootstrapTurn: boolean | undefined;
@@ -56,7 +64,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
       isCanonicalWorkspace: attempt.isCanonicalWorkspace,
       effectiveWorkspace: params.effectiveWorkspace,
-      resolvedWorkspace: params.resolvedWorkspace,
+      resolvedWorkspace: bootstrapWorkspaceDir,
       hasBootstrapFileAccess: params.hasReadTool,
     });
   const shouldProbeContinuationSkip =
@@ -75,7 +83,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
     preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
-      workspaceDir: params.resolvedWorkspace,
+      workspaceDir: bootstrapWorkspaceDir,
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
@@ -105,7 +113,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       const bootstrapFiles =
         preloadedBootstrapFiles ??
         (await resolveBootstrapFilesForRun({
-          workspaceDir: params.resolvedWorkspace,
+          workspaceDir: bootstrapWorkspaceDir,
           config: attempt.config,
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
@@ -128,8 +136,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   params.markStage("bootstrap-context");
   const remappedContextFiles = remapInjectedContextFilesToWorkspace({
     files: resolvedContextFiles,
-    sourceWorkspaceDir: params.resolvedWorkspace,
-    targetWorkspaceDir: params.effectiveWorkspace,
+    sourceWorkspaceDir: bootstrapWorkspaceDir,
+    targetWorkspaceDir: bootstrapPromptWorkspaceDir,
   });
   const contextFiles = bootstrapRouting.includeBootstrapInSystemContext
     ? remappedContextFiles
