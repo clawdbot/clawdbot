@@ -33,6 +33,35 @@ function isHtmlElement(element: unknown): element is HTMLElement {
   );
 }
 
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === Node.ELEMENT_NODE;
+}
+
+function collectVisibleText(element: Element): string {
+  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (
+    (isHtmlElement(element) && element.hidden) ||
+    style?.display === "none" ||
+    style?.contentVisibility === "hidden"
+  ) {
+    return "";
+  }
+  const rendersOwnText =
+    style?.visibility !== "hidden" &&
+    style?.visibility !== "collapse" &&
+    (style?.display === "contents" ||
+      typeof element.checkVisibility !== "function" ||
+      element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+  return [...element.childNodes]
+    .map((node) => {
+      if (isElementNode(node)) {
+        return collectVisibleText(node);
+      }
+      return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
+    })
+    .join(" ");
+}
+
 function hasTooltipOverflow(element: HTMLElement) {
   return (
     element.matches("[data-tooltip-overflow]") ||
@@ -46,9 +75,7 @@ function isTooltipTextRedundant(content: string, trigger: HTMLElement) {
   if (!tooltipText || !normalizeTooltipText(trigger.textContent ?? "").includes(tooltipText)) {
     return false;
   }
-  /* oxlint-disable unicorn/prefer-dom-node-text-content -- Hidden text must not make a tooltip redundant. */
-  const triggerText = normalizeTooltipText(trigger.innerText);
-  /* oxlint-enable unicorn/prefer-dom-node-text-content */
+  const triggerText = normalizeTooltipText(collectVisibleText(trigger));
   if (!triggerText.includes(tooltipText)) {
     return false;
   }

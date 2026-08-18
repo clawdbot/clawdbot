@@ -13,16 +13,11 @@ type TooltipProviderElement = HTMLElement & {
   skipDelay: number;
 };
 
-function defineVisibleText(element: HTMLElement, text: string) {
-  Object.defineProperty(element, "innerText", { value: text, configurable: true });
-}
-
 function createTooltip(content: string, triggerText = "trigger") {
   const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
   tooltip.content = content;
   const trigger = document.createElement("button");
   trigger.textContent = triggerText;
-  defineVisibleText(trigger, triggerText);
   tooltip.append(trigger);
   return { tooltip, trigger };
 }
@@ -31,7 +26,6 @@ function createRichTooltip(content: string, triggerText = "trigger") {
   const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
   const trigger = document.createElement("button");
   trigger.textContent = triggerText;
-  defineVisibleText(trigger, triggerText);
   const card = document.createElement("div");
   card.slot = "content";
   card.textContent = content;
@@ -243,7 +237,6 @@ describe("openclaw-tooltip", () => {
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
     const label = document.createElement("span");
     label.textContent = "Claude Opus 4.7 Anthropic";
-    defineVisibleText(trigger, label.textContent);
     Object.defineProperty(label, "scrollWidth", { value: 160, configurable: true });
     Object.defineProperty(label, "clientWidth", { value: 80, configurable: true });
     trigger.append(label);
@@ -428,7 +421,6 @@ describe("native title guard", () => {
     const label = document.createElement("span");
     label.textContent = "GPT-5.6 Sol";
     trigger.append(label);
-    defineVisibleText(trigger, label.textContent);
     shadowRoot.append(trigger);
     document.body.append(host);
 
@@ -461,7 +453,6 @@ describe("native title guard", () => {
       text: "Open settings",
       prepare: (trigger: HTMLElement) => {
         trigger.firstElementChild?.setAttribute("hidden", "");
-        defineVisibleText(trigger, "");
       },
     },
   ])("keeps $name native titles", ({ title, text, prepare }) => {
@@ -470,7 +461,6 @@ describe("native title guard", () => {
     const label = document.createElement("span");
     label.textContent = text;
     trigger.append(label);
-    defineVisibleText(trigger, text);
     prepare(trigger);
     document.body.append(trigger);
 
@@ -483,7 +473,6 @@ describe("native title guard", () => {
     const removedTrigger = document.createElement("button");
     removedTrigger.title = "High";
     removedTrigger.textContent = "High";
-    defineVisibleText(removedTrigger, "High");
     document.body.append(removedTrigger);
     removedTrigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
     expect(removedTrigger.getAttribute("title")).toBe("");
@@ -491,7 +480,6 @@ describe("native title guard", () => {
 
     const nextTrigger = document.createElement("button");
     nextTrigger.title = "Open settings";
-    defineVisibleText(nextTrigger, "");
     document.body.append(nextTrigger);
     nextTrigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
 
@@ -507,7 +495,6 @@ describe("native title guard", () => {
     const trigger = document.createElement("button");
     trigger.title = "High";
     trigger.textContent = "High";
-    defineVisibleText(trigger, "High");
     document.body.append(trigger);
     trigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
     expect(trigger.getAttribute("title")).toBe("");
