@@ -631,7 +631,7 @@ wa-popover.new-session-page__project-popover::part(body) {
 }
 
 .new-session-page__start-submit[aria-busy="true"] svg {
-  animation: new-session-start-spin 0.75s linear infinite;
+  animation: new-session-start-spin 2.25s linear infinite;
 }
 
 @keyframes new-session-start-spin {
