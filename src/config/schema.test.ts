@@ -130,9 +130,11 @@ describe("config schema", () => {
     expect(groupPolicyLabel).toBeTypeOf("string");
     expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["mcp.servers.*.volatileHeaders.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.env.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["nodeHost.mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["nodeHost.mcp.servers.*.volatileHeaders.*"]).toBeUndefined();
     expect(res.uiHints["nodeHost.mcp.servers.*.env.*"]?.sensitive).toBe(true);
     expect(res.uiHints["nodeHost.mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
@@ -210,6 +212,7 @@ describe("config schema", () => {
         }
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("volatileHeaders");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("requestTimeoutMs");
@@ -220,6 +223,19 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("clientCert");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+
+    const nodeHostNode = schema.properties?.nodeHost as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const nodeHostMcpNode = nodeHostNode?.properties?.mcp as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const nodeHostServersNode = nodeHostMcpNode?.properties?.servers as
+      | { additionalProperties?: { properties?: Record<string, unknown> } }
+      | undefined;
+    expect(nodeHostServersNode?.additionalProperties?.properties).not.toHaveProperty(
+      "volatileHeaders",
+    );
   });
 
   it("accepts node-host MCP servers with the shared MCP server schema", () => {
@@ -231,12 +247,16 @@ describe("config schema", () => {
               command: "node",
               args: ["server.mjs"],
               toolFilter: { include: ["read_*"] },
+              volatileHeaders: { traceparent: "00-embedded-only" },
             },
           },
         },
       },
     });
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.nodeHost?.mcp?.servers?.local).not.toHaveProperty("volatileHeaders");
+    }
     const invalid = OpenClawSchema.safeParse({
       nodeHost: { mcp: { servers: { broken: { transport: "stdio" } } } },
     });

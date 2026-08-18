@@ -132,7 +132,7 @@ hooks.gmail.model hooks.gmail.serve.port hooks.internal.entries.*.enabled
 hooks.mappings.*.agentId hooks.mappings.*.model hooks.token
 mcp.apps.enabled mcp.servers.*.args mcp.servers.*.auth mcp.servers.*.command
 mcp.servers.*.cwd mcp.servers.*.enabled mcp.servers.*.env mcp.servers.*.headers
-mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url
+mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url mcp.servers.*.volatileHeaders
 memory.search.enabled memory.search.model memory.search.provider memory.search.rememberAcrossConversations
 memory.search.remote.apiKey
 memory.search.sources models.providers.*.api models.providers.*.apiKey

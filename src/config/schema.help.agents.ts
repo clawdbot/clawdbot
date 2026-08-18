@@ -211,6 +211,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded OpenClaw and other runtime adapters can consume these servers without storing them inside runtime-owned project settings.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+  "mcp.servers.*.volatileHeaders":
+    "Embedded-runtime-only per-request HTTP headers read from the latest config snapshot without changing cached MCP identity. External runners and node hosts omit this field. Use it for tracing or short-lived audit context; keep stable and authentication headers in headers.",
   "mcp.servers.*.codex":
     "OpenClaw projection metadata for Codex app-server threads only. It does not affect ACP sessions or generic Codex harness config. Omit this block to keep the server available to every Codex app-server agent with Codex's default MCP approval behavior.",
   "mcp.servers.*.toolFilter":

@@ -121,6 +121,28 @@ function buildSseEventSourceFetch(
   };
 }
 
+function withVolatileMcpHttpHeaders(params: {
+  fetchFn: FetchLike;
+  getHeaders: () => Record<string, string> | undefined;
+  resourceUrl: string;
+}): FetchLike {
+  const resourceOrigin = new URL(params.resourceUrl).origin;
+  return (url, init) => {
+    if (new URL(url).origin !== resourceOrigin) {
+      return params.fetchFn(url, init);
+    }
+    const volatileHeaders = params.getHeaders();
+    if (!volatileHeaders || Object.keys(volatileHeaders).length === 0) {
+      return params.fetchFn(url, init);
+    }
+    const headers = new Headers(init?.headers);
+    for (const [key, value] of Object.entries(volatileHeaders)) {
+      headers.set(key, value);
+    }
+    return params.fetchFn(url, { ...init, headers });
+  };
+}
+
 /** Resolves a configured MCP server into a live SDK transport instance. */
 export function resolveMcpTransport(
   serverName: string,
@@ -130,6 +152,8 @@ export function resolveMcpTransport(
     agentDir?: string;
     prepareDataDir?: string;
     requesterScope?: SessionMcpRequesterScope;
+    getVolatileHeaders?: () => Record<string, string> | undefined;
+    getLatestVolatileHeaders?: () => Record<string, string> | undefined;
   },
 ): ResolvedMcpTransport | null {
   const resolved = resolveMcpTransportConfig(serverName, rawServer);
@@ -178,31 +202,47 @@ export function resolveMcpTransport(
     resolved.auth === "oauth" || authProfileId
       ? withoutMcpAuthorizationHeader(resolved.headers)
       : resolved.headers;
-  const resourceFetch = withSameOriginMcpHttpHeaders({
+  // Volatile headers are an embedded session-runtime contract. Consumers such
+  // as node-host omit the provider and never freeze config values.
+  const getVolatileHeaders = options?.getVolatileHeaders ?? (() => undefined);
+  const stableResourceFetch = withSameOriginMcpHttpHeaders({
     fetchFn: baseFetch,
     headers,
     resourceUrl: resolved.url,
   });
-  const httpFetch = authProfileId
-    ? withMcpAuthProfileBearer({
-        fetchFn: baseFetch,
-        serverName,
-        resourceUrl: resolved.url,
-        headers,
-        authProfileId,
-        cfg: options?.cfg,
-        agentDir: options?.agentDir,
-      })
-    : resolved.auth === "oauth"
-      ? withMcpOAuthBearer({
-          fetchFn: resourceFetch,
-          // Protected-resource discovery lives at the resource origin and may
-          // require the same routing headers. Cross-origin auth calls stay scrubbed.
-          authFetchFn: resourceFetch,
-          identity: oauthIdentity,
-          config: resolved.oauth,
+  const buildHttpFetch = (getHeaders: () => Record<string, string> | undefined): FetchLike => {
+    const volatileFetch = withVolatileMcpHttpHeaders({
+      // Static non-OAuth headers keep flowing through SDK requestInit. OAuth
+      // discovery is the one path that needs them applied by the fetch wrapper.
+      fetchFn: resolved.auth === "oauth" ? stableResourceFetch : baseFetch,
+      getHeaders:
+        resolved.auth === "oauth" || authProfileId
+          ? () => withoutMcpAuthorizationHeader(getHeaders())
+          : getHeaders,
+      resourceUrl: resolved.url,
+    });
+    return authProfileId
+      ? withMcpAuthProfileBearer({
+          fetchFn: volatileFetch,
+          serverName,
+          resourceUrl: resolved.url,
+          headers,
+          authProfileId,
+          cfg: options?.cfg,
+          agentDir: options?.agentDir,
         })
-      : baseFetch;
+      : resolved.auth === "oauth"
+        ? withMcpOAuthBearer({
+            fetchFn: volatileFetch,
+            // Protected-resource discovery lives at the resource origin and may
+            // require the same routing headers. Cross-origin auth calls stay scrubbed.
+            authFetchFn: volatileFetch,
+            identity: oauthIdentity,
+            config: resolved.oauth,
+          })
+        : volatileFetch;
+  };
+  const httpFetch = buildHttpFetch(getVolatileHeaders);
   if (resolved.transportType === "streamable-http") {
     return {
       transport: new OpenClawStreamableHTTPClientTransport(new URL(resolved.url), {
@@ -218,12 +258,20 @@ export function resolveMcpTransport(
   }
   const sseHeaders: Record<string, string> = { ...headers };
   const hasHeaders = Object.keys(sseHeaders).length > 0;
+  // EventSource reconnect timers can inherit the turn that created the stream.
+  // Reconnects are background work, so bypass that store and read the latest snapshot.
+  const eventSourceFetch = options?.getLatestVolatileHeaders
+    ? buildHttpFetch(options.getLatestVolatileHeaders)
+    : httpFetch;
   return {
     transport: new OpenClawSSEClientTransport(new URL(resolved.url), {
       requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
       fetch: httpFetch,
       eventSourceInit: {
-        fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
+        fetch: buildSseEventSourceFetch(
+          resolved.auth === "oauth" ? {} : sseHeaders,
+          eventSourceFetch,
+        ),
       },
     }),
     description: resolved.description,

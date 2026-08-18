@@ -117,6 +117,43 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("omits embedded-runtime volatile headers from external runner config", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-volatile-headers-",
+    );
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude" },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            docs: {
+              transport: "streamable-http",
+              url: "https://mcp.example.com/mcp",
+              headers: { "X-Tenant": "docs" },
+              volatileHeaders: { traceparent: "00-turn-context" },
+            },
+          },
+        },
+      },
+    });
+
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<
+        string,
+        { headers?: Record<string, string>; volatileHeaders?: Record<string, string> }
+      >;
+    };
+    expect(raw.mcpServers?.docs?.headers).toEqual({ "X-Tenant": "docs" });
+    expect(raw.mcpServers?.docs).not.toHaveProperty("volatileHeaders");
+
+    await prepared.cleanup?.();
+  });
+
   it("carries Agent Plugins data-dir and transport contracts into external projections", async () => {
     const pluginId = "agent-cli-projection";
     const pluginRoot = resolveBundlePluginRoot(cliBundleMcpHarness.bundleProbeHomeDir, pluginId);

@@ -1,5 +1,7 @@
 // Defines node-host-local capability configuration types.
 import type { McpServerConfig } from "./types.mcp.js";
+export type NodeHostMcpServerConfig = Omit<McpServerConfig, "volatileHeaders">;
+
 export type NodeHostBrowserProxyConfig = {
   /** Enable the browser proxy on the node host (default: true). */
   enabled?: boolean;
@@ -30,7 +32,7 @@ export type NodeHostConfig = {
   browserProxy?: NodeHostBrowserProxyConfig;
   /** MCP servers started and exposed by the headless node host. */
   mcp?: {
-    servers?: Record<string, McpServerConfig>;
+    servers?: Record<string, NodeHostMcpServerConfig>;
   };
   /** Skills published by the headless node host. */
   skills?: {

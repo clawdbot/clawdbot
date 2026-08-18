@@ -245,6 +245,27 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("resolves volatile HTTP headers separately from stable headers", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      headers: { "X-Tenant": "docs" },
+      volatileHeaders: {
+        traceparent: "00-trace",
+        "X-Audit-Sequence": 42,
+      },
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        headers: { "X-Tenant": "docs" },
+        volatileHeaders: {
+          traceparent: "00-trace",
+          "X-Audit-Sequence": "42",
+        },
+      }),
+    );
+  });
+
   it("keeps HTTP header parsing unchanged for env-like names", () => {
     // Header names are not process environment keys, so env safety filtering
     // must not rewrite or drop them.

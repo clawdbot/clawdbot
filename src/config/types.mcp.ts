@@ -36,6 +36,8 @@ export type McpServerConfig = {
   transport?: "stdio" | "sse" | "streamable-http";
   /** HTTP transport: extra HTTP headers sent with every request. */
   headers?: Record<string, string | number | boolean>;
+  /** HTTP transport: request-time headers excluded from cached runtime identity. */
+  volatileHeaders?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
   /** Optional per-request timeout in milliseconds. */

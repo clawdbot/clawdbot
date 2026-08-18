@@ -2883,6 +2883,76 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).not.toContain("session-a");
   });
 
+  it("reuses the catalog across volatile header changes and disposes on stable changes", async () => {
+    const created: SessionMcpRuntime[] = [];
+    const disposed = vi.fn(async () => {});
+    const volatileUpdates: Array<Record<string, Record<string, unknown>>> = [];
+    const catalog = makeRuntime([
+      { toolName: "bundle_probe", description: "Bundle MCP probe" },
+    ]).getCatalog();
+    const createRuntime: RuntimeFactory = (params) => {
+      const base = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      const runtime = {
+        ...base,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        getCatalog: () => catalog,
+        updateVolatileHeaders: (servers: Record<string, Record<string, unknown>>) => {
+          volatileUpdates.push(structuredClone(servers));
+        },
+        captureVolatileHeadersForTurn: () => ({
+          run: <T>(task: () => T): T => task(),
+        }),
+        dispose: disposed,
+      };
+      created.push(runtime);
+      return runtime;
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const config = (traceparent: string, tenant: string) => ({
+      mcp: {
+        servers: {
+          docs: {
+            url: "https://mcp.example.test",
+            transport: "streamable-http" as const,
+            headers: { "X-Tenant": tenant },
+            volatileHeaders: { traceparent },
+          },
+        },
+      },
+    });
+
+    const first = await manager.getOrCreate({
+      sessionId: "session-volatile-headers",
+      workspaceDir: "/workspace",
+      cfg: config("first", "docs"),
+    });
+    const firstCatalog = await first.getCatalog();
+    const second = await manager.getOrCreate({
+      sessionId: "session-volatile-headers",
+      workspaceDir: "/workspace",
+      cfg: config("second", "docs"),
+    });
+
+    expect(second).toBe(first);
+    expect(await second.getCatalog()).toBe(firstCatalog);
+    expect(created).toHaveLength(1);
+    expect(disposed).not.toHaveBeenCalled();
+    expect(volatileUpdates.at(-1)?.docs?.volatileHeaders).toEqual({ traceparent: "second" });
+
+    const third = await manager.getOrCreate({
+      sessionId: "session-volatile-headers",
+      workspaceDir: "/workspace",
+      cfg: config("third", "other"),
+    });
+
+    expect(third).not.toBe(first);
+    expect(created).toHaveLength(2);
+    expect(disposed).toHaveBeenCalledTimes(1);
+    await manager.disposeAll();
+  });
+
   it("preserves agentDir scope when creating and reusing session MCP runtimes", async () => {
     const created: Array<{ sessionId: string; agentDir?: string }> = [];
     const disposed: Array<{ sessionId: string; agentDir?: string }> = [];
@@ -5680,6 +5750,141 @@ process.stdin.on("end", () => {
         expect(callSessionIds).toEqual([undefined, undefined, undefined]);
         expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
       } finally {
+        await runtime?.dispose();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it(
+    "binds volatile headers to the turn that materialized each tool",
+    { timeout: 15_000 },
+    async () => {
+      let initializeCount = 0;
+      let toolsListCount = 0;
+      const toolCallHeaders: string[] = [];
+      const server = http.createServer((req, res) => {
+        if (req.method === "GET") {
+          res.writeHead(405).end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.writeHead(405).end();
+          return;
+        }
+
+        let body = "";
+        req.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const message = JSON.parse(body) as {
+            id?: number | string;
+            method?: string;
+            params?: { protocolVersion?: string };
+          };
+          if (message.method === "notifications/initialized") {
+            res.writeHead(202).end();
+            return;
+          }
+
+          res.setHeader("content-type", "application/json");
+          if (message.method === "initialize") {
+            initializeCount += 1;
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "volatile-turn-server", version: "1.0.0" },
+                },
+              }),
+            );
+            return;
+          }
+          if (message.method === "tools/list") {
+            toolsListCount += 1;
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+                },
+              }),
+            );
+            return;
+          }
+          if (message.method === "tools/call") {
+            const header = req.headers["x-turn-context"];
+            toolCallHeaders.push(Array.isArray(header) ? header.join(",") : (header ?? ""));
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: { content: [{ type: "text", text: "ok" }] },
+              }),
+            );
+            return;
+          }
+          res.writeHead(405).end();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address() as { port: number };
+      const config = (turn: string) => ({
+        mcp: {
+          servers: {
+            probe: {
+              url: `http://127.0.0.1:${address.port}/mcp`,
+              transport: "streamable-http" as const,
+              volatileHeaders: { "x-turn-context": turn },
+            },
+          },
+        },
+      });
+      let runtime: SessionMcpRuntime | undefined;
+      let turnA: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+      let turnB: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+
+      try {
+        runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: "session-volatile-turn-binding",
+          workspaceDir: "/workspace",
+          cfg: config("turn-a"),
+        });
+        turnA = await materializeBundleMcpToolsForRun({ runtime });
+
+        const reused = await getOrCreateSessionMcpRuntime({
+          sessionId: "session-volatile-turn-binding",
+          workspaceDir: "/workspace",
+          cfg: config("turn-b"),
+        });
+        turnB = await materializeBundleMcpToolsForRun({ runtime: reused });
+
+        expect(reused).toBe(runtime);
+        expect(initializeCount).toBe(1);
+        expect(toolsListCount).toBe(1);
+        await expectDefined(turnA.tools[0], "turn A MCP tool test invariant").execute(
+          "call-turn-a",
+          {},
+        );
+        await expectDefined(turnB.tools[0], "turn B MCP tool test invariant").execute(
+          "call-turn-b",
+          {},
+        );
+
+        expect(toolCallHeaders).toEqual(["turn-a", "turn-b"]);
+      } finally {
+        await turnA?.dispose();
+        await turnB?.dispose();
         await runtime?.dispose();
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));

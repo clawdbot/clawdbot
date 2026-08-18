@@ -106,6 +106,21 @@ export type McpRequestOptions = {
   failureBackoff?: "track" | "ignore";
 };
 
+/** Immutable volatile-header context captured for one materialized turn. */
+export type SessionMcpVolatileHeaderTurn = {
+  run<T>(task: () => T): T;
+};
+
+type SessionMcpVolatileHeaderRuntime =
+  | {
+      updateVolatileHeaders: (servers: Record<string, Record<string, unknown>>) => void;
+      captureVolatileHeadersForTurn: () => SessionMcpVolatileHeaderTurn;
+    }
+  | {
+      updateVolatileHeaders?: undefined;
+      captureVolatileHeadersForTurn?: undefined;
+    };
+
 /** Trusted requester identity used to scope per-user MCP connections. */
 export type SessionMcpRequesterScope = {
   requesterSenderId: string;
@@ -156,7 +171,7 @@ export type SessionMcpRuntime = {
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;
-};
+} & SessionMcpVolatileHeaderRuntime;
 
 /** One requester call's runtime and immutable catalog publication version. */
 export type RequesterScopedMcpRuntimeHandle = {

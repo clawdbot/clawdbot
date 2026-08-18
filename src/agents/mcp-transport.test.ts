@@ -1,4 +1,5 @@
 // Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
@@ -10,6 +11,8 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
+type TestFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 const {
   lookupMock,
   runtimeFetchMock,
@@ -20,7 +23,7 @@ const {
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
   oauthBearerMock: vi.fn(
-    (params: { fetchFn: unknown; identity: McpOAuthIdentity }) => params.fetchFn,
+    (params: { fetchFn: TestFetch; identity: McpOAuthIdentity }) => params.fetchFn,
   ),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
@@ -173,6 +176,72 @@ describe("resolveMcpTransport", () => {
     expect(redirectedHeaders.get("x-api-key")).toBeNull();
     expect(redirectedHeaders.get("accept")).toBe("application/json, text/event-stream");
     expect(redirectedHeaders.get("user-agent")).toBe("node");
+  });
+
+  it("reads volatile headers for every streamable HTTP request", async () => {
+    runtimeFetchMock.mockImplementation(async () => new Response("ok"));
+    let volatileHeaders = { traceparent: "first" };
+
+    resolveMcpTransport(
+      "probe",
+      {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        headers: { "X-Tenant": "docs" },
+        volatileHeaders,
+      },
+      { getVolatileHeaders: () => volatileHeaders },
+    );
+
+    const request = latestStreamableFetch();
+    await request("https://mcp.example.com/mcp", { method: "POST" });
+    volatileHeaders = { traceparent: "second" };
+    await request("https://mcp.example.com/mcp", { method: "POST" });
+    await request("https://auth.example.com/token", { method: "POST" });
+
+    expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("traceparent")).toBe("first");
+    expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("traceparent")).toBe("second");
+    expect(new Headers(runtimeFetchCall(2)?.[1]?.headers).get("traceparent")).toBeNull();
+  });
+
+  it("uses latest volatile headers for SSE reconnects outside the creating turn", async () => {
+    runtimeFetchMock.mockImplementation(async () => new Response("ok"));
+    const turnHeaders = new AsyncLocalStorage<Record<string, string>>();
+    const creatingTurnHeaders = { traceparent: "first" };
+    let latestHeaders = creatingTurnHeaders;
+
+    resolveMcpTransport(
+      "probe",
+      {
+        url: "https://mcp.example.com/sse",
+        transport: "sse",
+        volatileHeaders: creatingTurnHeaders,
+      },
+      {
+        getVolatileHeaders: () => turnHeaders.getStore() ?? latestHeaders,
+        getLatestVolatileHeaders: () => latestHeaders,
+      },
+    );
+
+    const request = latestSseEventSourceFetch();
+    await turnHeaders.run(creatingTurnHeaders, () => request("https://mcp.example.com/sse"));
+    const reconnect = turnHeaders.run(
+      creatingTurnHeaders,
+      () =>
+        new Promise<void>((resolve, reject) => {
+          // EventSource schedules reconnects with setTimeout, which retains the
+          // async context active when its connection was constructed.
+          setTimeout(
+            () => void request("https://mcp.example.com/sse").then(() => resolve(), reject),
+            0,
+          );
+        }),
+    );
+    latestHeaders = { traceparent: "second" };
+    await reconnect;
+
+    expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("traceparent")).toBe("first");
+    expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("traceparent")).toBe("second");
   });
 
   it("blocks streamable HTTP redirects to private network targets", async () => {
@@ -378,6 +447,48 @@ describe("resolveMcpTransport", () => {
     expect(transport).toBeNull();
     expect(oauthBearerMock).not.toHaveBeenCalled();
     expect(streamableTransportConstructorMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let volatile Authorization displace the managed OAuth bearer", async () => {
+    runtimeFetchMock.mockResolvedValue(new Response("ok"));
+    oauthBearerMock.mockImplementationOnce(
+      ({ fetchFn }) =>
+        async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const headers = new Headers(init?.headers);
+          headers.set("authorization", "Bearer managed-value");
+          return await fetchFn(input, { ...init, headers });
+        },
+    );
+
+    resolveMcpTransport(
+      "probe",
+      {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      },
+      { getVolatileHeaders: () => ({ Authorization: "attacker-value" }) },
+    );
+
+    await latestStreamableFetch()("https://mcp.example.com/mcp");
+
+    expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("authorization")).toBe(
+      "Bearer managed-value",
+    );
+  });
+
+  it("ignores volatile config without an embedded session header provider", async () => {
+    runtimeFetchMock.mockResolvedValue(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      volatileHeaders: { traceparent: "00-frozen-context" },
+    });
+
+    await latestStreamableFetch()("https://mcp.example.com/mcp");
+
+    expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("traceparent")).toBeNull();
   });
 
   it("keeps OAuth runtime headers scoped to the MCP resource origin", async () => {
