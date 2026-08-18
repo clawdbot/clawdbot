@@ -113,6 +113,19 @@ cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
 
+### Auth profile cooldown classifications
+
+`AuthProfileStore.usageStats[*].cooldownReason` is a host diagnostic
+classification. It currently includes the canonical `AuthProfileFailureReason`
+values plus `wham_token_expired` and `wham_account_dead`.
+
+Treat cooldown classifications as additive: plugin code should keep a fallback
+path instead of exhaustively assuming the original failure-reason set. For
+canonical failover policy, call `resolveProfilesUnavailableReason`, which
+projects `wham_token_expired` to `auth` and `wham_account_dead` to
+`auth_permanent`. Detailed cooldown values are diagnostic and presentation
+facts, not a new authorization signal.
+
 ### Channel prompt-context identifier aliases
 
 New channel plugins should use `MsgContext.ChannelPromptContext`,
