@@ -594,9 +594,7 @@ function validateSubmittedConfigOrRespond(params: {
       }),
     );
   };
-  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate, {
-    semanticValidation: "strict",
-  });
+  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
   if (!sourceValidated.ok) {
     respondInvalid(sourceValidated.issues);
     return null;
@@ -1083,6 +1081,17 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = resolveControlPlaneActor(client);
+    if (restoredChangedPaths.length === 0) {
+      respondConfigPatchNoop({
+        snapshot,
+        config: snapshot.config,
+        uiHints: schemaPatch.uiHints,
+        actor,
+        context,
+        respond,
+      });
+      return;
+    }
     const validatedSubmission = validateSubmittedConfigOrRespond({
       candidate: restoredMerge.result,
       sourceConfig: snapshot.sourceConfig,
