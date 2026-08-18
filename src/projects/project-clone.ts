@@ -11,7 +11,9 @@ import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
   registerClonedProjectRegistry,
+  removeProjectCheckoutReference,
   type ProjectRegistryRecord,
+  withProjectCheckoutLifecycle,
 } from "./project-registry.js";
 
 const PROJECT_CLONE_LEASE_MS = 30_000;
@@ -93,11 +95,10 @@ export async function materializeProjectClone(
   );
 }
 
-/** Deletes a checkout only when it still occupies its exact managed project slot. */
-export async function deleteClonedProjectCheckout(
+async function resolveClonedProjectCheckout(
   project: ProjectRegistryRecord,
   options: { env?: NodeJS.ProcessEnv } = {},
-): Promise<void> {
+): Promise<string> {
   if (project.source !== "cloned") {
     throw new ProjectCloneError(
       "clone_failed",
@@ -125,6 +126,31 @@ export async function deleteClonedProjectCheckout(
       "The cloned project is outside the Gateway-managed projects area, so its checkout was not deleted.",
     );
   }
-  await fs.rm(checkout, { recursive: true });
-  await fs.rmdir(path.dirname(checkout)).catch(() => {});
+  return checkout;
+}
+
+/** Removes one cloned-project reference and deletes its checkout only after the final reference. */
+export async function removeClonedProjectCheckout(
+  project: ProjectRegistryRecord,
+  assertUnreferenced: () => void | Promise<void>,
+  options: OpenClawStateDatabaseOptions & { env?: NodeJS.ProcessEnv } = {},
+): Promise<boolean> {
+  return await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
+    const checkout = await resolveClonedProjectCheckout(project, options);
+    await assertUnreferenced();
+    const result = removeProjectCheckoutReference(project, lease, options);
+    if (result === "missing") {
+      return false;
+    }
+    if (result === "changed") {
+      throw new ProjectCloneError("clone_failed", "The cloned project changed before deletion.");
+    }
+    if (result === "remaining") {
+      return true;
+    }
+    lease.assertOwned();
+    await fs.rm(checkout, { recursive: true });
+    await fs.rmdir(path.dirname(checkout)).catch(() => {});
+    return true;
+  });
 }
