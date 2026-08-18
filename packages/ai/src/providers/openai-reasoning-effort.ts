@@ -103,6 +103,13 @@ function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
 
+function readCompatProperty(compat: unknown, key: string): unknown {
+  if (!compat || typeof compat !== "object" || !Object.hasOwn(compat, key)) {
+    return undefined;
+  }
+  return Reflect.get(compat, key);
+}
+
 /** Resolve the reasoning efforts accepted by a specific OpenAI-compatible model. */
 export function resolveOpenAISupportedReasoningEfforts(
   model: OpenAIReasoningModel,
@@ -189,13 +196,10 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   const compat = params.model.compat;
   const hasDisabledReasoningEffort =
-    compat !== null &&
-    typeof compat === "object" &&
-    (compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false;
-  const hasExplicitSupportedEfforts =
-    compat !== null &&
-    typeof compat === "object" &&
-    Array.isArray((compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts);
+    readCompatProperty(compat, "supportsReasoningEffort") === false;
+  const hasExplicitSupportedEfforts = Array.isArray(
+    readCompatProperty(compat, "supportedReasoningEfforts"),
+  );
   if (
     mapped !== undefined &&
     normalized.length > 0 &&
