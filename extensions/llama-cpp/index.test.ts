@@ -40,6 +40,8 @@ import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+  DEFAULT_LLAMA_CPP_MODEL_ID,
+  DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
 } from "./src/defaults.js";
@@ -245,6 +247,53 @@ describe("llama.cpp provider plugin", () => {
       provider: "local",
       model: "/models/custom-embedding.gguf",
     });
+  });
+
+  it("keeps registered text setup chat-capable when local memory is enabled", async () => {
+    const provider = registerTextProvider();
+    const method = expectDefined(provider.auth[0], "llama.cpp setup method");
+    const options = configuredOptions();
+    options.config.models.providers[LLAMA_CPP_PROVIDER_ID].models = [];
+    const config = {
+      ...options.config,
+      memory: {
+        search: {
+          provider: "local" as const,
+        },
+      },
+    };
+    const ram = vi.spyOn(os, "totalmem").mockReturnValue(16 * 1024 ** 3);
+    mocks.ensureModel.mockImplementation(async ({ source, download }) => {
+      if (!download) {
+        throw new Error("not cached");
+      }
+      return source === DEFAULT_LLAMA_CPP_MODEL_URI
+        ? "/models/chat.gguf"
+        : "/models/embedding.gguf";
+    });
+
+    try {
+      const result = await method.run({
+        config,
+        prompter: {
+          confirm: vi.fn(async () => true),
+          note: vi.fn(async () => {}),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        },
+        runtime: {},
+      } as never);
+
+      expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`);
+      expect(mocks.prepareServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatModelId: DEFAULT_LLAMA_CPP_MODEL_ID,
+          chatModelPath: "/models/chat.gguf",
+          embeddingModelPath: "/models/embedding.gguf",
+        }),
+      );
+    } finally {
+      ram.mockRestore();
+    }
   });
 
   it("preserves default local index identity across old and managed cache paths", () => {

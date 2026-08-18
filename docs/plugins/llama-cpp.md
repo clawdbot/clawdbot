@@ -28,9 +28,7 @@ OpenClaw then:
 
 1. Selects the verified llama-server build for the Gateway platform.
 2. Verifies the archive SHA-256 and the extracted server version.
-3. Downloads and verifies the required models after consent. Chat plus embedding
-   models are installed for chat configurations; memory-only configurations
-   install only the configured embedding model.
+3. Downloads and verifies the default chat and embedding models after consent.
 4. Writes a durable OpenAI-compatible provider with a loopback `baseUrl` and
    `localService` process definition.
 5. Live-tests the candidate before saving it.
@@ -43,14 +41,6 @@ Gemma 4 E4B IT Q4_K_M is about 5.0 GB. OpenClaw offers that download only on
 machines with at least 16 GiB of RAM. The default context cap is 65,536 tokens,
 which the full agent system prompt requires. The bundled EmbeddingGemma model is
 about 0.3 GB.
-
-When `memory.search.provider` is `"local"` and no llama.cpp chat model is
-configured, guided setup creates an embedding-only provider: it does not
-download the roughly 5 GB Gemma chat model and does not write a chat default.
-The managed server still starts from the same verified llama-server release and
-serves `/v1/embeddings`. If an existing llama.cpp chat model is configured but
-its GGUF is unavailable, setup keeps that configuration and does not silently
-replace it with the default Gemma download.
 
 Discovery is read-only. It reports a prepared choice only when the managed
 binary, server preset, and selected model already exist; it never installs or

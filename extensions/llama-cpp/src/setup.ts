@@ -14,6 +14,7 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   DEFAULT_LLAMA_CPP_MODEL_ID,
+  DEFAULT_LLAMA_CPP_MODEL_REF,
   LLAMA_CPP_PROVIDER_ID,
   buildLlamaCppProviderConfig,
   meetsLlamaCppDefaultModelRamFloor,
@@ -52,11 +53,6 @@ function formatRamGb(totalmemBytes: number): string {
 function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
   const model = config.agents?.defaults?.model;
   return typeof model === "string" ? model : model?.primary;
-}
-
-function readConfiguredEmbeddingModel(config: ProviderAuthContext["config"]): string | undefined {
-  const modelPath = config.memory?.search?.local?.modelPath;
-  return typeof modelPath === "string" && modelPath.trim() ? modelPath.trim() : undefined;
 }
 
 function configuredCandidates(
@@ -125,11 +121,10 @@ function buildSetupResult(params: {
   config: ProviderAppGuidedSetupContext["config"];
   managed: ManagedLlamaServer;
   defaultModel?: string;
-  includeDefaultChatModel?: boolean;
 }): ProviderAuthResult {
   return {
     profiles: [],
-    ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
+    defaultModel: params.defaultModel ?? DEFAULT_LLAMA_CPP_MODEL_REF,
     configPatch: {
       models: {
         mode: params.config.models?.mode ?? "merge",
@@ -137,7 +132,6 @@ function buildSetupResult(params: {
           [LLAMA_CPP_PROVIDER_ID]: buildLlamaCppProviderConfig(
             params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID],
             params.managed,
-            { includeDefaultModel: params.includeDefaultChatModel },
           ),
         },
       },
@@ -201,18 +195,9 @@ export async function prepareLlamaCppSetup(
 export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const candidates = configuredCandidates(ctx.config);
-  const hasConfiguredChatModels = (existing?.models?.length ?? 0) > 0;
-  const embeddingOnly = ctx.config.memory?.search?.provider === "local" && !hasConfiguredChatModels;
-  let selected = embeddingOnly ? undefined : candidates[0];
+  let selected = candidates[0];
   let chatModelPath = selected ? await resolveCachedCandidate(selected) : undefined;
-  if (!embeddingOnly && !chatModelPath) {
-    if (hasConfiguredChatModels && selected?.model.id !== DEFAULT_LLAMA_CPP_MODEL_ID) {
-      await ctx.prompter.note(
-        "The configured llama.cpp chat model is not available locally. Setup skipped without downloading the default Gemma model.",
-        "Setup skipped",
-      );
-      return { profiles: [] };
-    }
+  if (!chatModelPath) {
     selected = candidates.find((candidate) => candidate.model.id === DEFAULT_LLAMA_CPP_MODEL_ID);
     const totalmemBytes = os.totalmem();
     if (!selected || !meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
@@ -224,7 +209,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     }
     const consent = await ctx.prompter.confirm({
       message:
-        "OpenClaw will install a verified llama.cpp server and download the selected chat model plus the configured local embedding model. Continue?",
+        "OpenClaw will install a verified llama.cpp server and download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) plus the local embedding model (about 0.3 GB). Continue?",
       initialValue: false,
     });
     if (!consent) {
@@ -233,55 +218,37 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     }
   }
 
-  if (!selected && !embeddingOnly) {
+  if (!selected) {
     throw new Error("llama.cpp setup could not resolve a chat model");
-  }
-
-  if (embeddingOnly) {
-    const consent = await ctx.prompter.confirm({
-      message:
-        "OpenClaw will install a verified llama.cpp server and download the configured local embedding model. Continue?",
-      initialValue: false,
-    });
-    if (!consent) {
-      await ctx.prompter.note("Local model setup skipped.", "Setup skipped");
-      return { profiles: [] };
-    }
   }
 
   const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
   try {
     const cacheDir = resolveLlamaCppModelCacheDir(existing);
-    if (selected) {
-      chatModelPath ??= await ensureLlamaCppModel({
-        source: resolveLlamaCppModelSource(selected.model),
-        cacheDir,
-        download: true,
-        signal: ctx.signal,
-        onProgress: (status) =>
-          progress.update(formatDownloadProgress("llama.cpp chat model", status)),
-      });
-    }
-    const embeddingSource =
-      readConfiguredEmbeddingModel(ctx.config) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
-    const embeddingModelPath = await ensureLlamaCppModel({
-      source: embeddingSource,
+    chatModelPath ??= await ensureLlamaCppModel({
+      source: resolveLlamaCppModelSource(selected.model),
       cacheDir,
       download: true,
       signal: ctx.signal,
-      onProgress: (status) =>
-        progress.update(formatDownloadProgress("local embedding model", status)),
+      onProgress: (status) => progress.update(formatDownloadProgress("Gemma 4 E4B", status)),
     });
-    const configuredContext = selected?.model.params?.contextSize;
+    const embeddingModelPath = await ensureLlamaCppModel({
+      source: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      cacheDir,
+      download: true,
+      signal: ctx.signal,
+      onProgress: (status) => progress.update(formatDownloadProgress("EmbeddingGemma", status)),
+    });
+    const configuredContext = selected.model.params?.contextSize;
     const contextSize =
       typeof configuredContext === "number" && configuredContext > 0
         ? Math.floor(configuredContext)
-        : selected?.model.contextTokens;
+        : selected.model.contextTokens;
     const managed = await prepareManagedLlamaServer({
-      ...(selected ? { chatModelId: selected.model.id } : {}),
+      chatModelId: selected.model.id,
       chatModelPath,
       contextSize,
-      maxTokens: selected?.model.maxTokens,
+      maxTokens: selected.model.maxTokens,
       embeddingModelPath,
       port: readConfiguredPort(existing),
     });
@@ -289,8 +256,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     return buildSetupResult({
       config: ctx.config,
       managed,
-      ...(selected ? { defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${selected.model.id}` } : {}),
-      includeDefaultChatModel: !embeddingOnly,
+      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${selected.model.id}`,
     });
   } catch (error) {
     progress.stop("llama.cpp setup failed");

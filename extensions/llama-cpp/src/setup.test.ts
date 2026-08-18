@@ -27,8 +27,7 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
 }));
 
 import {
-  DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-  DEFAULT_LLAMA_CPP_MODEL_ID,
+  DEFAULT_LLAMA_CPP_MODEL_REF,
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
@@ -174,7 +173,7 @@ describe("llama.cpp managed setup", () => {
 
     await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
       profiles: [],
-      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`,
+      defaultModel: DEFAULT_LLAMA_CPP_MODEL_REF,
       configPatch: {
         models: {
           providers: {
@@ -201,74 +200,5 @@ describe("llama.cpp managed setup", () => {
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       }),
     );
-  });
-
-  it("uses the configured local embedding model instead of downloading the default", async () => {
-    const ctx = authContext(true);
-    ctx.config.memory = {
-      search: {
-        provider: "local",
-        local: { modelPath: "/models/custom-embedding.gguf" },
-      },
-    };
-
-    await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({ profiles: [] });
-
-    expect(mocks.ensureModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "/models/custom-embedding.gguf",
-        download: true,
-      }),
-    );
-  });
-
-  it("sets up an embedding-only server without adding a chat model", async () => {
-    const ctx = authContext(true);
-    ctx.config.memory = { search: { provider: "local" } };
-
-    await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
-      profiles: [],
-      configPatch: {
-        models: {
-          providers: {
-            [LLAMA_CPP_PROVIDER_ID]: { models: [] },
-          },
-        },
-      },
-    });
-    expect(mocks.ensureModel).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureModel).toHaveBeenCalledWith(
-      expect.objectContaining({ download: true, source: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL }),
-    );
-    expect(mocks.prepareServer).toHaveBeenCalledWith(
-      expect.objectContaining({ chatModelPath: undefined }),
-    );
-  });
-
-  it("does not replace an unavailable configured chat model with default Gemma", async () => {
-    const ctx = authContext(true);
-    const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-    if (!provider) {
-      throw new Error("missing fixture provider");
-    }
-    provider.models = [
-      {
-        id: "small-chat",
-        name: "Small chat",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-        params: { modelPath: "/models/small-chat.gguf" },
-      },
-    ];
-
-    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
-    expect(ctx.prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("without downloading the default Gemma model"),
-      "Setup skipped",
-    );
-    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });
 });
