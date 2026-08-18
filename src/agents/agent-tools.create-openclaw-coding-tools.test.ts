@@ -404,6 +404,7 @@ describe("createOpenClawCodingTools", () => {
     expect(
       toolNameList(createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false })),
     ).not.toContain("automations");
+  });
 
   it("marks memory writes untrusted after a result-only network tool outcome", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-result-taint-"));

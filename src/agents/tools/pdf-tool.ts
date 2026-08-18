@@ -576,11 +576,9 @@ export function createPdfTool(options?: {
           base64,
           buffer: media.buffer,
           filename,
-          resolvedPath: resolvedPathInfo.resolved,
+          resolvedPath,
           ...(isHttpUrl ? { remoteSource: true } : {}),
-          ...(resolvedPathInfo.rewrittenFrom
-            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
-            : {}),
+          ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 
