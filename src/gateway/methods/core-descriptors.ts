@@ -38,6 +38,7 @@ type CoreGatewayMethodSpecRow = readonly [
 const CORE_GATEWAY_METHOD_SPECS = [
   ["health", "health", "operator.read", "<=2026.7"],
   ["diagnostics.stability", "diagnostics", "operator.read", "<=2026.7"],
+  ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   ["doctor.memory.status", "doctor", "operator.read", "<=2026.7"],
   ["doctor.memory.dreamDiary", "doctor", "operator.read", "<=2026.7"],
   ["doctor.memory.backfillDreamDiary", "doctor", "operator.write", "<=2026.7"],

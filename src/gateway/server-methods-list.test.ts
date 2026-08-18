@@ -222,14 +222,15 @@ describe("listGatewayMethods", () => {
   it("preserves the legacy advertised method order", () => {
     const methods = listGatewayMethods();
     const coreMethods = listCoreGatewayMethodNames();
-    expect(methods.slice(0, 5)).toEqual([
+    expect(methods.slice(0, 6)).toEqual([
       "health",
       "diagnostics.stability",
+      "diagnostics.lanes",
       "doctor.memory.status",
       "doctor.memory.dreamDiary",
       "doctor.memory.backfillDreamDiary",
     ]);
-    expect(methods.slice(31, 36)).toEqual([
+    expect(methods.slice(32, 37)).toEqual([
       "exec.approvals.get",
       "exec.approvals.set",
       "exec.approvals.node.get",

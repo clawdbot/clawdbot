@@ -13,6 +13,11 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
+import {
+  enqueueCommandInLane,
+  getAllCommandLaneSnapshots,
+  setCommandLaneConcurrency,
+} from "../../process/command-queue.js";
 import { diagnosticsHandlers } from "./diagnostics.js";
 
 describe("diagnostics gateway methods", () => {
@@ -129,5 +134,77 @@ describe("diagnostics gateway methods", () => {
         },
       ],
     ]);
+  });
+
+  it("returns every command lane in sorted order with live capacity counts", async () => {
+    const lane = "diagnostics-test-throttled";
+    const siblingLane = "diagnostics-test-aardvark";
+    setCommandLaneConcurrency(lane, 1);
+    setCommandLaneConcurrency(siblingLane, 2);
+
+    let releaseActive!: () => void;
+    let markActive!: () => void;
+    const activeStarted = new Promise<void>((resolve) => {
+      markActive = resolve;
+    });
+    const activeRelease = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const active = enqueueCommandInLane(lane, async () => {
+      markActive();
+      await activeRelease;
+    });
+    await activeStarted;
+    const queued = enqueueCommandInLane(lane, async () => undefined);
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          getAllCommandLaneSnapshots().find((snapshot) => snapshot.lane === lane),
+        ).toMatchObject({ activeCount: 1, queuedCount: 1 });
+      });
+      const respond = vi.fn();
+      await expectDefined(
+        diagnosticsHandlers["diagnostics.lanes"],
+        'diagnosticsHandlers["diagnostics.lanes"] test invariant',
+      )({
+        req: { type: "req", id: "lanes", method: "diagnostics.lanes", params: {} },
+        params: {},
+        client: null,
+        isWebchatConnect: () => false,
+        context: {} as never,
+        respond,
+      });
+
+      const payload = respond.mock.calls[0]?.[1] as {
+        ts: number;
+        lanes: ReturnType<typeof getAllCommandLaneSnapshots>;
+      };
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(payload.ts).toBeGreaterThan(0);
+      expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual(
+        payload.lanes.map((snapshot) => snapshot.lane).toSorted(),
+      );
+      expect(payload.lanes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            lane,
+            activeCount: 1,
+            queuedCount: 1,
+            maxConcurrent: 1,
+            blockedBy: "lane",
+          }),
+          expect.objectContaining({
+            lane: siblingLane,
+            activeCount: 0,
+            queuedCount: 0,
+            maxConcurrent: 2,
+          }),
+        ]),
+      );
+    } finally {
+      releaseActive();
+      await Promise.all([active, queued]);
+    }
   });
 });
