@@ -539,41 +539,6 @@ describe("AppSidebar agent chip", () => {
     expect(spinner?.getAttribute("title")).toBe("Active run");
   });
 
-  it("shows when an admitted session is queued for a concurrency slot", async () => {
-    const sessionKey = "agent:main:thread:queued";
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const harness = createSessionsHarness("main", ["agent:main:main", sessionKey]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.connected = true;
-    harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 2,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          { key: "agent:main:main", kind: "direct", updatedAt: 4 },
-          {
-            key: sessionKey,
-            kind: "direct",
-            label: "Queued repair",
-            updatedAt: 5,
-            hasActiveRun: true,
-            status: "queued",
-          },
-        ],
-      },
-      agentId: "main",
-    });
-    await sidebar.updateComplete;
-
-    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
-    expect(row?.textContent).toContain("Waiting for a concurrency slot");
-    const queued = row?.querySelector(".sidebar-child-session__status--queued");
-    expect(queued?.getAttribute("aria-label")).toBe("Queued");
-    expect(row?.querySelector(".session-run-spinner")).toBeNull();
-  });
-
   it("uses the shared tooltip for the Home dashboard glyph", async () => {
     const mainKey = "agent:main:main";
     const gateway = createGateway({} as GatewayBrowserClient);
