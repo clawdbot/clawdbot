@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./parse": "./src/parse.ts"
+    "./parse": "./src/parse.ts",
+    "./share": "./src/share.ts"
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*"

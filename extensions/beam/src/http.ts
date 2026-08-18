@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { buildControlUiCatalogSessionUrl } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { buildControlUiCatalogSharePath } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -8,7 +8,7 @@ import {
   readJsonWebhookBodyOrReject,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, BEAM_MAX_BODY_BYTES, parseBeamUpload } from "./types.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_ROUTE_SEGMENT, parseBeamUpload } from "./types.js";
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status;
@@ -43,7 +43,7 @@ export function createBeamRequestHandler(params: {
   store: BeamStore;
   now?: () => number;
   resolveClient?: (req: IncomingMessage) => BeamRequestClient;
-  resolveControlUiTarget: () => { agentId: string; basePath?: string };
+  resolveControlUiBasePath: () => string | undefined;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
@@ -107,12 +107,10 @@ export function createBeamRequestHandler(params: {
       sendJson(res, 200, {
         ok: true,
         beamId: parsed.value.beamId,
-        url: buildControlUiCatalogSessionUrl({
-          namespace: "chat",
-          ...params.resolveControlUiTarget(),
-          catalog: "beam",
-          host: BEAM_HOST_ID,
-          thread: parsed.value.beamId,
+        url: buildControlUiCatalogSharePath({
+          routeSegment: BEAM_ROUTE_SEGMENT,
+          threadId: parsed.value.beamId,
+          basePath: params.resolveControlUiBasePath(),
         }),
       });
       return true;

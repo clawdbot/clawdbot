@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildControlUiCatalogSharePath,
   buildControlUiCatalogSessionUrl,
   buildControlUiSessionPath,
   controlUiSessionSlug,
@@ -67,6 +68,48 @@ describe("buildControlUiCatalogSessionUrl", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("buildControlUiCatalogSharePath", () => {
+  it.each([
+    {
+      label: "root path",
+      basePath: undefined,
+      expected: "/beam/0123456789ab",
+    },
+    {
+      label: "nested base path",
+      basePath: "/admin/openclaw/",
+      expected: "/admin/openclaw/beam/0123456789ab",
+    },
+  ])("builds a lowercase 12-character share id for $label", ({ basePath, expected }) => {
+    expect(
+      buildControlUiCatalogSharePath({
+        routeSegment: "beam",
+        threadId: "0123456789ABCDEF0123456789ABCDEF",
+        basePath,
+      }),
+    ).toBe(expected);
+  });
+
+  it("can retain the full id for an unambiguous fallback", () => {
+    expect(
+      buildControlUiCatalogSharePath({
+        routeSegment: "beam",
+        threadId: "0123456789abcdef0123456789abcdef",
+        shortIdLength: 32,
+      }),
+    ).toBe("/beam/0123456789abcdef0123456789abcdef");
+  });
+
+  it.each([
+    { routeSegment: "Beam", threadId: "0123456789abcdef0123456789abcdef" },
+    { routeSegment: "beam/extra", threadId: "0123456789abcdef0123456789abcdef" },
+    { routeSegment: "beam", threadId: "0123456789ab" },
+    { routeSegment: "beam", threadId: "not-hex" },
+  ])("rejects invalid catalog share input %#", (params) => {
+    expect(buildControlUiCatalogSharePath(params)).toBeNull();
+  });
 });
 
 describe("buildControlUiSessionPath", () => {

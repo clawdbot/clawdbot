@@ -310,6 +310,118 @@ suite.define(() => {
     },
   );
 
+  it("opens and refreshes a base-path Beam share without replacing its pretty URL", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/beam-share-url");
+    await fs.mkdir(artifactDir, { recursive: true });
+    const context = await suite.newBrowserContext({
+      recordVideo: { dir: artifactDir, size: { width: 1280, height: 720 } },
+      viewport: { width: 1280, height: 720 },
+    });
+    const page = await context.newPage();
+    const fullId = "0123456789abcdef0123456789abcdef";
+    const prettyPath = "/openclaw/beam/0123456789ab";
+    const gateway = await installMockGateway(page, {
+      basePath: "/openclaw",
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.catalog.list",
+        "sessions.catalog.read",
+      ],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "beam",
+              label: "Beam",
+              capabilities: { continueSession: false, archive: false },
+              shareRoute: { routeSegment: "beam", hostId: "gateway" },
+              hosts: [
+                {
+                  hostId: "gateway",
+                  label: "Beamed sessions",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: fullId,
+                      name: "Pretty Beam route",
+                      status: "live",
+                      archived: false,
+                      canContinue: false,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        "sessions.catalog.read": {
+          hostId: "gateway",
+          label: "Pretty Beam route",
+          threadId: fullId,
+          items: [
+            { type: "userMessage", text: "Keep this Beam URL readable." },
+            { type: "agentMessage", text: "The pretty route stayed put." },
+          ],
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(new URL(prettyPath, suite.server.baseUrl).href);
+      expect(response?.status()).toBe(200);
+      const transcript = page.getByText("The pretty route stayed put.", { exact: true });
+      await transcript.waitFor();
+      expect(new URL(page.url()).pathname).toBe(prettyPath);
+      expect(new URL(page.url()).search).toBe("");
+      await page
+        .locator(".sidebar-recent-session--active", { hasText: "Pretty Beam route" })
+        .waitFor();
+      await page
+        .locator(".chat-pane__session-title-text", { hasText: "Pretty Beam route" })
+        .waitFor();
+      expect(
+        await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible textarea")
+          .isDisabled(),
+      ).toBe(true);
+      const resolution = (await gateway.getRequests("sessions.catalog.list")).find(
+        (request) => (request.params as { search?: string } | undefined)?.search,
+      );
+      expect(resolution?.params).toEqual({
+        agentId: "main",
+        search: "0123456789ab",
+        limitPerHost: 2,
+      });
+      expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
+        catalogId: "beam",
+        hostId: "gateway",
+        threadId: fullId,
+      });
+
+      await page.reload();
+      await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
+      expect(new URL(page.url()).pathname).toBe(prettyPath);
+      expect(new URL(page.url()).search).toBe("");
+
+      await page.goto(new URL("/openclaw/chat", suite.server.baseUrl).href);
+      const beamRow = page.locator("a", { hasText: "Pretty Beam route" }).first();
+      await beamRow.waitFor();
+      await beamRow.click();
+      await page.getByText("The pretty route stayed put.", { exact: true }).waitFor();
+      expect(new URL(page.url()).pathname).toBe(prettyPath);
+      expect(new URL(page.url()).search).toBe("");
+      await page.screenshot({
+        path: path.join(artifactDir, "beam-pretty-route.png"),
+        fullPage: true,
+      });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("shows both paired-node catalogs and opens their view-only transcripts", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
     const gateway = await installMockGateway(page, {

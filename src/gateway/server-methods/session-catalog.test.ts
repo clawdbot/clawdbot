@@ -143,6 +143,27 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("projects plugin-owned share routes with catalog results", async () => {
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("beam", {
+          shareRoute: { routeSegment: "beam", hostId: "gateway" },
+        }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.list", { catalogId: "beam" });
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          id: "beam",
+          shareRoute: { routeSegment: "beam", hostId: "gateway" },
+        }),
+      ],
+    });
+  });
+
   it("streams completed hosts to only the requesting connection", async () => {
     const broadcastToConnIds = vi.fn();
     const host = {

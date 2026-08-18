@@ -44,6 +44,25 @@ describe("sessionNavigationTarget", () => {
     expect(first.options).not.toEqual(second.options);
   });
 
+  it("uses a catalog-owned pretty route for shareable and in-app navigation", () => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: buildCatalogSessionKey({
+        catalogId: "beam",
+        hostId: "gateway",
+        threadId: "0123456789abcdef0123456789abcdef",
+      }),
+      fallbackAgentId: "main",
+      basePath: "/openclaw",
+      catalogShareRoute: { routeSegment: "beam", hostId: "gateway" },
+    });
+
+    expect(target).toEqual({
+      href: "/openclaw/beam/0123456789ab",
+      options: { pathname: "/openclaw/beam/0123456789ab" },
+    });
+  });
+
   it("requires the destination face while preserving catalog identity", () => {
     const catalogKey = {
       catalogId: "claude",

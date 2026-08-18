@@ -431,7 +431,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      title: this.paneTitle,
+      title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
       showOwnerChip,
       ownerViewing,

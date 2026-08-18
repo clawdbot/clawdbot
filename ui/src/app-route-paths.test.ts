@@ -59,6 +59,15 @@ const DYNAMIC_STARTUP_CASES = [
     },
   },
   {
+    label: "Beam share",
+    routeId: "chat",
+    location: {
+      pathname: "/beam/0123456789ab",
+      search: "",
+      hash: "#message",
+    },
+  },
+  {
     label: "workboard board",
     routeId: "workboard",
     location: {
@@ -92,6 +101,15 @@ const DYNAMIC_STARTUP_CASES = [
 }[];
 
 describe("Dynamic route startup bridge", () => {
+  it("keeps generic catalog share paths on chat without stealing existing routes", () => {
+    expect(routeIdFromPath("/beam/0123456789ab")).toBe("chat");
+    expect(routeIdFromPath("/beam/not-valid")).toBe("chat");
+    expect(routeIdFromPath("/openclaw/beam/0123456789ab", "/openclaw")).toBe("chat");
+    expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
+    expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
+  });
+
   it("registers the Updates settings path", () => {
     expect(pathForRoute("updates")).toBe("/settings/updates");
     expect(routeIdFromPath("/settings/updates")).toBe("updates");

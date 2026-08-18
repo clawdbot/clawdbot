@@ -3,8 +3,9 @@ import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
+import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, type BeamStoredSession } from "./types.js";
+import { BEAM_HOST_ID, BEAM_ROUTE_SEGMENT, type BeamStoredSession } from "./types.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -86,12 +87,23 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
   return {
     id: "beam",
     label: "Beam",
+    shareRoute: { routeSegment: BEAM_ROUTE_SEGMENT, hostId: BEAM_HOST_ID },
     supportsProcessHomeIsolation: true,
     async list(params) {
       const search = params.search?.trim().toLowerCase();
+      const shareId = search && isControlUiCatalogShareId(search) ? search : undefined;
       const sessions = (await store.list())
-        .filter((session) => !search || searchableText(session).includes(search))
-        .toSorted((left, right) => right.receivedAt - left.receivedAt);
+        .filter(
+          (session) =>
+            !search ||
+            (shareId
+              ? session.beamId.startsWith(shareId)
+              : searchableText(session).includes(search)),
+        )
+        .toSorted(
+          (left, right) =>
+            right.receivedAt - left.receivedAt || left.beamId.localeCompare(right.beamId),
+        );
       const offset = cursorOffset(params.cursors?.[BEAM_HOST_ID]);
       const limit = boundedLimit(params.limitPerHost);
       const page = sessions.slice(offset, offset + limit);

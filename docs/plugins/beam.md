@@ -90,9 +90,15 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 {
   "ok": true,
   "beamId": "0123456789abcdef0123456789abcdef",
-  "url": "/chat/main?catalog=beam&host=gateway&thread=<beamId>"
+  "url": "/beam/0123456789ab"
 }
 ```
+
+The returned URL uses a 12-character lowercase hexadecimal prefix and keeps
+that readable path in the browser while the existing read-only Beam catalog
+renders the transcript. A configured Control UI base path prefixes the route,
+for example `/openclaw/beam/0123456789ab`. Longer prefixes through the full
+32-character Beam id also work.
 
 Uploading the same `beamId` updates the existing catalog row. A completed upload sets the row status to `completed`; earlier updates display as `live`.
 
@@ -177,6 +183,7 @@ The mirror applies the same redaction contract as the beam skill before anything
 ## Related
 
 - [Control UI](/web/control-ui)
+- [Control UI URLs](/web/urls)
 - [Operator scopes](/gateway/operator-scopes)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth)
 - [Plugin management](/plugins/manage-plugins)

@@ -199,6 +199,31 @@ paths, and the removed desktop and dashboard query forms are not accepted.
 `/focus` and unsupported `/focus/*` targets show an error without the ordinary
 application shell. They do not open a normal application route.
 
+### Beam share URLs
+
+Beam uploads return a dedicated share path such as:
+
+```text
+/beam/0123456789ab
+```
+
+This route is an adapter into the existing read-only Beam session catalog, not
+a separate transcript or storage path. It stays in the browser address bar
+while the catalog transcript renders. Normal Gateway authentication still
+applies; the URL identifies a Beam row but does not authorize access.
+
+New URLs use the first 12 lowercase hexadecimal characters of the 32-character
+Beam id. Twelve characters provide 48 bits; against Beam's 500-row retention
+bound, the probability that any pair shares that prefix is about 1 in 2.26
+billion. Resolution still never assumes uniqueness: exactly one retained row
+must match. A missing prefix shows an unavailable-session error, while an
+ambiguous prefix shows the matching rows and asks for a longer id. Any longer
+lowercase hexadecimal prefix through the full 32-character id is accepted.
+Uppercase, non-hexadecimal, shorter, longer, and extra-segment forms are invalid.
+
+With `gateway.controlUi.basePath: "/openclaw"`, use
+`/openclaw/beam/0123456789ab`.
+
 ## Route table
 
 This table lists every Control UI application route. A dash means the route has
@@ -208,6 +233,7 @@ no route-specific URL parameters.
 | ------------------- | --------------------------- | ------------------------- | -------------------------------------------------------------- |
 | Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`                |
 | Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`                |
+| Beam transcript     | `/beam/<beam-id>`           | -                         | 12-32 lowercase hexadecimal characters                         |
 | Dashboards          | `/dashboards`               | -                         | -                                                              |
 | Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`                           |
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                     |
@@ -317,5 +343,6 @@ or password explicitly, and use `wss://` behind TLS.
 ## Related
 
 - [Control UI](/web/control-ui)
+- [Beam plugin](/plugins/beam)
 - [Dashboard](/web/dashboard)
 - [Session dashboards](/web/dashboards)

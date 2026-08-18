@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildControlUiSessionPath } from "./index.js";
-import { parseControlUiSessionPath, type ControlUiSessionPathTarget } from "./parse.js";
+import {
+  matchControlUiCatalogSharePath,
+  parseControlUiSessionPath,
+  type ControlUiSessionPathTarget,
+} from "./parse.js";
 
 type ParseCase = {
   name: string;
@@ -282,4 +286,42 @@ describe("parseControlUiSessionPath", () => {
 
     expect(parseControlUiSessionPath(new URL(url).pathname, "/control")).toEqual(expected);
   });
+});
+
+describe("matchControlUiCatalogSharePath", () => {
+  it.each([
+    ["/beam/0123456789ab", undefined, "0123456789ab"],
+    [
+      "/openclaw/beam/0123456789abcdef0123456789abcdef",
+      "/openclaw",
+      "0123456789abcdef0123456789abcdef",
+    ],
+  ] as const)("parses %s", (pathname, basePath, shortId) => {
+    expect(matchControlUiCatalogSharePath({ pathname, basePath })).toEqual({
+      routeSegment: "beam",
+      shortId,
+      valid: true,
+    });
+  });
+
+  it.each([
+    "/beam/0123456789a",
+    "/beam/0123456789AB",
+    "/beam/0123456789abcdef0123456789abcdef0",
+    "/beam/not-hex-value",
+    "/beam/0123456789ab/extra",
+  ])("classifies strict invalid form %s", (pathname) => {
+    expect(matchControlUiCatalogSharePath({ pathname })).toEqual({
+      routeSegment: "beam",
+      shortId: pathname.slice("/beam/".length),
+      valid: false,
+    });
+  });
+
+  it.each(["/other/0123456789ab", "/beam/0123456789ab", "/wrong/openclaw/beam/0123456789ab"])(
+    "ignores unrelated or outside-base path %s",
+    (pathname) => {
+      expect(matchControlUiCatalogSharePath({ pathname, basePath: "/openclaw" })).toBeNull();
+    },
+  );
 });

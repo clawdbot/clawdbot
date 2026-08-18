@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
   SessionsCatalogContinueParams,
   SessionsCatalogReadParams,
@@ -172,6 +173,8 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Optional plugin-owned pretty route backed by exact prefix search on one catalog host. */
+  shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
