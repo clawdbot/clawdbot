@@ -69,9 +69,18 @@ vi.mock("./config-write-flow.js", async () => {
   };
 });
 
-const { execOpenPathMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+const {
+  execOpenPathMock,
+  loadGatewayRuntimeConfigSchemaMock,
+  buildRuntimeConfigSchemaForConfigMock,
+} = vi.hoisted(() => ({
   execOpenPathMock: vi.fn(),
   loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
+    schema: { type: "object" },
+    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
+    version: "test-schema",
+  })),
+  buildRuntimeConfigSchemaForConfigMock: vi.fn(() => ({
     schema: { type: "object" },
     uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
     version: "test-schema",
@@ -85,6 +94,9 @@ vi.mock("./open-path.js", async () => {
 
 vi.mock("../../config/runtime-schema.js", () => ({
   loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
+  // Write acknowledgements build redaction hints from the committed config, so the mock must
+  // answer for an exact config the same way it answers for the active one.
+  buildRuntimeConfigSchemaForConfig: buildRuntimeConfigSchemaForConfigMock,
 }));
 
 function mockOpenPathError(error: Error) {

@@ -62,6 +62,22 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   );
 }
 
+/**
+ * Builds the schema for an exact config rather than the active runtime one.
+ *
+ * Write acknowledgements need this: ownership follows the operator's selection, so a write that
+ * activates a replacement changes which plugin owns the channel. Redacting the committed config
+ * with hints captured before the write can describe the previous owner and return a field the new
+ * owner marks sensitive.
+ */
+export function buildRuntimeConfigSchemaForConfig(config: OpenClawConfig): ConfigSchemaResponse {
+  const registry = loadManifestRegistry(config);
+  return buildRuntimeConfigSchemaFromRegistry(
+    registry,
+    createConfiguredChannelOwnershipPolicy({ config, registry, env: process.env }),
+  );
+}
+
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
   const snapshot = await readConfigFileSnapshot({ observe: false });
   const config = snapshot.valid

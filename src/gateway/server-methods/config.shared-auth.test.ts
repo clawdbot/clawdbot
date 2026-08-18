@@ -72,6 +72,8 @@ vi.mock("../../config/validation.js", async () => {
 
 vi.mock("../../config/runtime-schema.js", () => ({
   loadGatewayRuntimeConfigSchema: () => ({ uiHints: undefined }),
+  // Write acknowledgements redact under the committed config's owner, so this must answer too.
+  buildRuntimeConfigSchemaForConfig: () => ({ uiHints: undefined }),
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({

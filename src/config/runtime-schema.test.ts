@@ -19,6 +19,7 @@ const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
+let buildRuntimeConfigSchemaForConfig: typeof import("./runtime-schema.js").buildRuntimeConfigSchemaForConfig;
 
 function explicitMainRoster(): OpenClawConfig {
   return { agents: { list: [{ id: "main" }] } };
@@ -188,8 +189,11 @@ function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | und
 }
 
 beforeAll(async () => {
-  ({ readBestEffortRuntimeConfigSchema, loadGatewayRuntimeConfigSchema } =
-    await import("./runtime-schema.js"));
+  ({
+    readBestEffortRuntimeConfigSchema,
+    loadGatewayRuntimeConfigSchema,
+    buildRuntimeConfigSchemaForConfig,
+  } = await import("./runtime-schema.js"));
 });
 
 afterEach(() => {
@@ -560,5 +564,86 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(getActivePluginRegistry()).toBe(activeRegistry);
     expect(getActivePluginRegistryKey()).toBe("startup-registry");
     expect(getActivePluginRegistryVersion()).toBe(versionBefore);
+  });
+});
+
+describe("buildRuntimeConfigSchemaForConfig", () => {
+  // Write acknowledgements redact the committed config. If the schema followed the active runtime
+  // config instead of the one passed in, a write that activates a replacement would be redacted
+  // under the previous owner's hints and could return a field the new owner marks sensitive.
+  function twoClaimantRegistry() {
+    return {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-plus",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          id: "clickclack-core",
+          origin: "workspace",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { coreToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    };
+  }
+
+  function clickclackProperties(result: { schema: unknown }) {
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+    return (channels?.properties?.clickclack as { properties?: Record<string, unknown> })
+      ?.properties;
+  }
+
+  it("follows the config it is given, not the active runtime config", () => {
+    // Active runtime config denies the replacement, so ambient ownership is the fallback.
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: { deny: ["clickclack-plus"] },
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue(twoClaimantRegistry());
+
+    expect(clickclackProperties(loadGatewayRuntimeConfigSchema())).toHaveProperty("coreToken");
+
+    // The committed config does not deny it, so the acknowledgement must describe the replacement.
+    const committed = { ...explicitMainRoster() };
+    const properties = clickclackProperties(buildRuntimeConfigSchemaForConfig(committed));
+
+    expect(properties).toHaveProperty("plusToken");
+    expect(properties).not.toHaveProperty("coreToken");
+  });
+
+  it("describes the fallback when the committed config denies the replacement", () => {
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    mockLoadPluginManifestRegistry.mockReturnValue(twoClaimantRegistry());
+
+    const committed = {
+      ...explicitMainRoster(),
+      plugins: { deny: ["clickclack-plus"] },
+    };
+    const properties = clickclackProperties(buildRuntimeConfigSchemaForConfig(committed));
+
+    expect(properties).toHaveProperty("coreToken");
+    expect(properties).not.toHaveProperty("plusToken");
   });
 });

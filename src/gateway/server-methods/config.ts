@@ -34,7 +34,10 @@ import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-norm
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
-import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
+import {
+  buildRuntimeConfigSchemaForConfig,
+  loadGatewayRuntimeConfigSchema,
+} from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -685,10 +688,13 @@ async function respondWithConfigRestartWrite(params: {
   actor: ReturnType<typeof resolveControlPlaneActor>;
   context: GatewayRequestContext | undefined;
   respond: RespondFn;
-  uiHints: ConfigRedactionHints;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
+  // Redact under the owner the committed config selects. Hints captured before the write describe
+  // the previous owner, so a write that activates a replacement could return a field that owner
+  // marks sensitive. Clearing the cache above is not enough: the caller already holds stale hints.
+  const uiHints = buildRuntimeConfigSchemaForConfig(params.writeResult.config).uiHints;
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
@@ -707,7 +713,7 @@ async function respondWithConfigRestartWrite(params: {
       // Additive ack hash: matches the hash config.get would report for the
       // persisted bytes, so writers can adopt it without a reload.
       ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
-      config: redactConfigObject(params.writeResult.config, params.uiHints),
+      config: redactConfigObject(params.writeResult.config, uiHints),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
       sentinel: {
@@ -946,7 +952,10 @@ export const configHandlers: GatewayRequestHandlers = {
         // Additive ack hash: matches the hash config.get would report for the
         // persisted bytes, so writers can adopt it without a reload.
         ...(writeResult.hash ? { hash: writeResult.hash } : {}),
-        config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
+        config: redactConfigObject(
+          writeResult.config,
+          buildRuntimeConfigSchemaForConfig(writeResult.config).uiHints,
+        ),
         ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
       },
       undefined,
@@ -1159,7 +1168,6 @@ export const configHandlers: GatewayRequestHandlers = {
       actor,
       context,
       respond,
-      uiHints: schemaPatch.uiHints,
       preparedSecretsSnapshot,
     });
   },
@@ -1222,7 +1230,6 @@ export const configHandlers: GatewayRequestHandlers = {
       actor,
       context,
       respond,
-      uiHints: parsed.schema.uiHints,
       preparedSecretsSnapshot,
     });
   },
