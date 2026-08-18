@@ -19,7 +19,7 @@ seven phases. Keep exactly one phase in progress and check each off visibly:
 1. Resolve candidate and shared campaign issue.
 2. Choose fixture and, for copied state, choose the source gateway.
 3. Prepare the isolated candidate runtime.
-4. Create or import the fixture and upgrade it.
+4. Create or import the fixture, upgrade it, and present the upgrade results.
 5. Choose the subsystem scope and complete only those missions.
 6. On exit, collect feedback and the promotion vote, stop the fixture, and
    publish the run comment.
@@ -98,6 +98,24 @@ the verified exact runtime. Run copy, import, and upgrade as separate
 long-running commands; wait for each authoritative receipt and read back OCM
 state before continuing. Verify service status, `--version`, logs, HTTP health,
 and `gateway probe --json`; OCM `running` alone is not proof.
+
+Before showing the subsystem menu, present an **Upgrade results** checkpoint:
+
+1. Reconcile every copy, import, upgrade, repair, plugin-preflight, startup, and
+   readiness error into `releaseIssues` or `operationalFindings`. Retain
+   recovered errors even when a retry later succeeds.
+2. Tell the tester the verified candidate version/commit and whether the
+   fixture is ready for subsystem testing.
+3. Show **Release issues found during upgrade** and list each candidate problem,
+   or say `None`.
+4. Show **OCM/setup issues encountered** and list each operational problem, or
+   say `None`. Keep this section local; it never enters the GitHub comment.
+5. Write both categories to `run.json` before phase 5. Never wait until
+   `finish validation` to disclose an upgrade error.
+
+Continue to subsystem selection only after the candidate binding, version, and
+fixture readiness are verified. If the upgrade or readiness remains unresolved,
+keep phase 4 in progress and offer the tester a retry or `finish validation`.
 
 ## 5. Subsystem missions
 
