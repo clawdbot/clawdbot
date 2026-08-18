@@ -270,12 +270,40 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      const menuBoxBeforeFocus = await page.locator(".chat-controls__model-menu").boundingBox();
-      const actionBoxBeforeFocus = await secondModel
-        .locator(".chat-controls__model-option-action")
-        .boundingBox();
-      expect(menuBoxBeforeFocus).not.toBeNull();
-      expect(actionBoxBeforeFocus).not.toBeNull();
+      // wa-popup positions asynchronously: a freshly opened menu can rest at a
+      // stale offset for several frames before autoUpdate applies the anchored
+      // position, so raw boundingBox baselines race that settlement under CI
+      // load. Measure geometry relative to the trigger and gate the baseline on
+      // the anchored-overlay contract (menu bottom sits `distance` = 6px above
+      // its anchor; see syncAnchoredOverlay).
+      const modelMenu = page.locator(".chat-controls__model-menu");
+      const menuGeometry = async () => {
+        const [menuBox, triggerBox, actionBox] = await Promise.all([
+          modelMenu.boundingBox(),
+          modelSelect.boundingBox(),
+          secondModel.locator(".chat-controls__model-option-action").boundingBox(),
+        ]);
+        if (!menuBox || !triggerBox || !actionBox) {
+          return null;
+        }
+        return {
+          anchorGap: Math.round(triggerBox.y - (menuBox.y + menuBox.height)),
+          menu: {
+            width: menuBox.width,
+            height: menuBox.height,
+            left: menuBox.x - triggerBox.x,
+          },
+          action: {
+            width: actionBox.width,
+            height: actionBox.height,
+            left: actionBox.x - menuBox.x,
+            top: actionBox.y - menuBox.y,
+          },
+        };
+      };
+      await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+      const geometryBeforeFocus = await menuGeometry();
+      expect(geometryBeforeFocus).not.toBeNull();
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
@@ -287,12 +315,9 @@ suite.define(() => {
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
-      expect(await page.locator(".chat-controls__model-menu").boundingBox()).toEqual(
-        menuBoxBeforeFocus,
-      );
-      expect(
-        await secondModel.locator(".chat-controls__model-option-action").boundingBox(),
-      ).toEqual(actionBoxBeforeFocus);
+      // Hiding the shortcut badges is opacity-only: the menu must not move or
+      // resize relative to its anchor, and the action cell must hold its slot.
+      expect(await menuGeometry()).toEqual(geometryBeforeFocus);
       await search.press("1");
       await expect.poll(() => search.inputValue()).toBe("1");
       await expect.poll(() => picker.getAttribute("open")).toBe("");
