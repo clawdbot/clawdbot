@@ -503,6 +503,20 @@ describe("agent harness host capability", () => {
     }
   });
 
+  it("preserves the gateway decision and terminal reason at the host boundary", async () => {
+    const { attempt } = await admittedAttempt("run-approval-timeout-result");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-1",
+      decision: "deny",
+      terminalReason: "timeout",
+    });
+
+    await expect(
+      host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
+    ).resolves.toEqual({ decision: "deny", terminalReason: "timeout" });
+  });
+
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {
     const first = await admittedAttempt("run-replaced");
     const { tool, execute } = testTool();
