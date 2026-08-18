@@ -459,12 +459,23 @@ function buildCodexBootstrapInjectionStats(params: {
       ? undefined
       : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
         readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
-    let injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
-    let truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
-    if (injected === undefined && CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)) {
-      injectedChars = rawChars;
-      truncated = false;
+    if (
+      !file.missing &&
+      injected === undefined &&
+      CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)
+    ) {
+      return {
+        name: displayName,
+        path: pathValue,
+        missing: false,
+        rawChars,
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
+      };
     }
+    const injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
+    const truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
     return {
       name: displayName,
       path: pathValue,

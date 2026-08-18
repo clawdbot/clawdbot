@@ -266,6 +266,10 @@ This byte budget is separate from the character-based workspace bootstrap
 limits configured through `agents.defaults.bootstrapMaxChars` and
 `agents.defaults.bootstrapTotalMaxChars`.
 
+`/context` reports native project documents as unverified because app-server
+exposes their source paths but not the retained byte counts needed to tell
+whether any individual file was fully loaded or truncated.
+
 ### Compaction
 
 Do not set `compaction.model` or `compaction.provider` on Codex-backed
