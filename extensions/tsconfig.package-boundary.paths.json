@@ -113,6 +113,9 @@
       "openclaw/plugin-sdk/tts-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/tts-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-secret-owner-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-owner-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/channel-secret-tts-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts"
       ],
