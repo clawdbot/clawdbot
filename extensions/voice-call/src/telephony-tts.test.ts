@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { VoiceCallTtsConfig } from "./config.js";
-import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "./telephony-tts.js";
+import {
+  createTelephonyTtsProvider,
+  type TelephonyTtsRuntime,
+  UnsupportedTelephonyTtsOutputFormatError,
+} from "./telephony-tts.js";
 
 function createCoreConfig(): OpenClawConfig {
   const tts: VoiceCallTtsConfig = {
@@ -36,6 +40,61 @@ function createRuntime(
 }
 
 describe("createTelephonyTtsProvider", () => {
+  it.each([
+    ["Azure", "raw-8khz-8bit-mono-mulaw"],
+    ["Gradium", "ulaw_8000"],
+  ])("passes through %s 8 kHz mu-law output", async (providerName, outputFormat) => {
+    const audioBuffer = Buffer.from([0x00, 0x7f, 0xff]);
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer,
+        outputFormat,
+        sampleRate: 8_000,
+        provider: providerName.toLowerCase(),
+      })),
+    });
+
+    await expect(provider.synthesizeForTelephony("hello")).resolves.toBe(audioBuffer);
+  });
+
+  it("converts provider PCM output to 8 kHz mu-law", async () => {
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer: Buffer.alloc(480 * 2),
+        outputFormat: "pcm",
+        sampleRate: 24_000,
+        provider: "openai",
+      })),
+    });
+
+    await expect(provider.synthesizeForTelephony("hello")).resolves.toEqual(
+      Buffer.alloc(160, 0xff),
+    );
+  });
+
+  it("rejects unsupported container output with provider context", async () => {
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer: Buffer.from("container"),
+        outputFormat: "mp3",
+        sampleRate: 24_000,
+        provider: "example-provider",
+      })),
+    });
+
+    const synthesis = provider.synthesizeForTelephony("hello");
+    await expect(synthesis).rejects.toBeInstanceOf(UnsupportedTelephonyTtsOutputFormatError);
+    await expect(synthesis).rejects.toThrow(
+      'Unsupported telephony TTS output format "mp3" from provider "example-provider"',
+    );
+  });
+
   it("uses shared preparation for the surface override and request text", async () => {
     const effectiveConfig: OpenClawConfig = {
       tts: { provider: "openai", timeoutMs: 15_000 },
