@@ -288,6 +288,21 @@ describe("isDeliveredMessagingToolResult", () => {
     ).toBe(true);
   });
 
+  it("detects delivery evidence nested under the sendResult envelope key", () => {
+    // MessageActionResult nests the send result under sendResult; probing
+    // must recurse into it or real deliveries are missed (duplicate sends).
+    expect(
+      isDeliveredMessagingToolResult({
+        toolName: "message",
+        args: { action: "send", to: "chat-1" },
+        result: {
+          kind: "send",
+          sendResult: { messageId: "m-proof-1", deliveryStatus: "sent" },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects successful plugin broadcast wrappers around suppressed sends", () => {
     expect(
       isDeliveredMessagingToolResult({

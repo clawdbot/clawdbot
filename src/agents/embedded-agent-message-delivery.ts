@@ -14,7 +14,17 @@ type EmbeddedMessageDeliveryFact = {
 
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
-const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
+// "sendResult" is the canonical nesting key of MessageActionResult
+// ({ kind: "send", sendResult?: MessageSendResult }); without it, delivery
+// evidence embedded in action results is invisible to envelope probing.
+const PLUGIN_ENVELOPE_KEYS = [
+  "details",
+  "payload",
+  "result",
+  "results",
+  "sendResult",
+  "toolResult",
+];
 
 const EMPTY_DELIVERY_FACT: Pick<
   EmbeddedMessageDeliveryFact,
