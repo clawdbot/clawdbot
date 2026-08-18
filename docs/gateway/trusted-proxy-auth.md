@@ -298,6 +298,9 @@ Use one TLS termination point and apply HSTS there.
 
 ## Proxy setup examples
 
+Cloudflare Access is covered end to end, including the tunnel and node routes, in
+[Cloudflare Tunnel and Access](/gateway/cloudflare-access).
+
 <AccordionGroup>
   <Accordion title="Pomerium">
     Pomerium passes identity in `x-pomerium-claim-email` (or other claim headers) and a JWT in `x-pomerium-jwt-assertion`.
