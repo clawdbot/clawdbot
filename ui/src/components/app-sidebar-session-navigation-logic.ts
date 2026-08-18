@@ -51,7 +51,7 @@ import {
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { listAssignableSessionOwners, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -628,13 +628,23 @@ export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
   selectedOwnerId: string | null;
+  self?: { id: string; name?: string; avatarUrl?: string } | null;
 }): {
   rows: SidebarRecentSession[];
   ownerOptions: readonly SessionOwnerOption[];
   ownershipVisible: boolean;
   activeOwnerId: string | null;
 } {
-  const ownerOptions = input.ownerFacet ?? [];
+  const facetOwners = input.ownerFacet ?? [];
+  const selfId = input.self?.id;
+  const selfOwner = selfId
+    ? listAssignableSessionOwners({ facet: facetOwners, self: input.self }).find(
+        (owner) => owner.type === "human" && owner.id === selfId,
+      )
+    : undefined;
+  const ownerOptions = selfOwner
+    ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
+    : facetOwners;
   let hasParticipants = false;
   if (ownerOptions.length < 2) {
     const pending = [...input.projected];

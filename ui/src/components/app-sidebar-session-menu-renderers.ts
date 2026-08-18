@@ -65,6 +65,7 @@ function renderSidebarOwnerFilter(
   owners: readonly SessionOwnerOption[],
   ownerFilterId: string | null,
   involvingMe: boolean,
+  selfOwnerId: string | null,
 ) {
   if (owners.length === 0) {
     return nothing;
@@ -86,7 +87,10 @@ function renderSidebarOwnerFilter(
       renderSidebarMenuRadioItem({
         value: `owner:${owner.id}`,
         checked: ownerFilterId === owner.id,
-        label: owner.label ?? owner.id,
+        label:
+          owner.id === selfOwnerId
+            ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
+            : (owner.label ?? owner.id),
         owner,
       }),
     )}
@@ -193,6 +197,7 @@ export function renderSidebarCatalogViewMenu(params: {
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
   involvingMe: boolean;
+  selfOwnerId: string | null;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
   onOwnerFilterChange: (ownerId: string | null, involvingMe?: boolean) => void;
   onHide: () => void;
@@ -244,7 +249,12 @@ export function renderSidebarCatalogViewMenu(params: {
               label: option.label,
             }),
           )}
-          ${renderSidebarOwnerFilter(params.owners, params.ownerFilterId, params.involvingMe)}
+          ${renderSidebarOwnerFilter(
+            params.owners,
+            params.ownerFilterId,
+            params.involvingMe,
+            params.selfOwnerId,
+          )}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
             <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
@@ -267,6 +277,7 @@ export function renderSidebarSessionSortMenu(params: {
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
   involvingMe: boolean;
+  selfOwnerId: string | null;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
@@ -353,7 +364,12 @@ export function renderSidebarSessionSortMenu(params: {
                     : t("sessionsView.all"),
             }),
           )}
-          ${renderSidebarOwnerFilter(params.owners, params.ownerFilterId, params.involvingMe)}
+          ${renderSidebarOwnerFilter(
+            params.owners,
+            params.ownerFilterId,
+            params.involvingMe,
+            params.selfOwnerId,
+          )}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item
             class="sidebar-session-sort-menu__item"

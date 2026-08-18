@@ -379,6 +379,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -426,6 +427,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

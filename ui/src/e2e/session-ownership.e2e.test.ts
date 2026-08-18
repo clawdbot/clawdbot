@@ -116,6 +116,15 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage, {
       hasMultipleSessionSharingIdentities: true,
       sessionKey: "agent:main:ada",
+      presenceUsers: [
+        {
+          self: true,
+          id: "profile-patrick",
+          name: "Patrick",
+          avatarUrl:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+        },
+      ],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
     });
@@ -129,6 +138,11 @@ suite.define(() => {
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
     await ownerMenu.locator('[value="sort:people"]').waitFor();
+    const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
+    await expectBrowser(ownerRows).toHaveCount(3);
+    await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
+    await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
+    await expectBrowser(ownerRows.first().locator("openclaw-session-owner-chip")).toHaveText("P");
     await captureUiProof(currentPage, "00-people-sort-available.png");
     await ownerMenu.evaluate((element) =>
       element.dispatchEvent(

@@ -251,6 +251,42 @@ describe("AppSidebar session ownership", () => {
     expect(harness.setOwnerFilter).toHaveBeenLastCalledWith(null);
   });
 
+  it("shows the authenticated user first in the owner filter", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({
+      selfUser: {
+        id: "profile-patrick",
+        name: "Patrick",
+        avatarUrl: "/api/users/profile-patrick/avatar",
+      },
+    });
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    result.owners = [
+      { type: "human", id: "profile-ayaan", label: "Ayaan" },
+      { type: "human", id: "profile-colin", label: "Colin" },
+    ];
+
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    const menu = await openOwnerMenu(sidebar);
+    const ownerRows = [
+      ...menu.querySelectorAll<HTMLElement>('wa-dropdown-item[value^="owner:"]'),
+    ].filter((row) => row.getAttribute("value") !== "owner:");
+    expect(ownerRows.map((row) => row.getAttribute("value"))).toEqual([
+      "owner:profile-patrick",
+      "owner:profile-ayaan",
+      "owner:profile-colin",
+    ]);
+    expect(ownerRows[0]?.querySelector(".session-menu__text")?.textContent).toBe("Patrick (You)");
+    expect(ownerRows[0]?.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+  });
+
   it("shows and requests Involving me for a participant session", async () => {
     // SAFETY: this sidebar fixture only needs the Gateway client surface supplied by its harness.
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
