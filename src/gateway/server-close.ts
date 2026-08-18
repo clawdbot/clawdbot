@@ -664,6 +664,50 @@ async function waitForHttpClose(params: {
   }
 }
 
+async function closeHttpListener(params: {
+  server: HttpServer;
+  label: string;
+  warnings: string[];
+}): Promise<void> {
+  const { server, label, warnings } = params;
+  server.closeIdleConnections?.();
+  const closePromise = new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (!err || isServerNotRunningError(err)) {
+        resolve();
+        return;
+      }
+      reject(err);
+    });
+  });
+  void closePromise.catch(() => undefined);
+  const closedWithinGrace = await waitForHttpClose({
+    closePromise,
+    timeoutMs: HTTP_CLOSE_GRACE_MS,
+    label,
+    warnings,
+  });
+  if (closedWithinGrace) {
+    return;
+  }
+  shutdownLog.warn(
+    `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
+  );
+  recordShutdownWarning(warnings, label);
+  server.closeAllConnections?.();
+  const closedAfterForce = await waitForHttpClose({
+    closePromise,
+    timeoutMs: HTTP_CLOSE_FORCE_WAIT_MS,
+    label,
+    warnings,
+  });
+  if (!closedAfterForce) {
+    throw new Error(
+      `${label} close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,
+    );
+  }
+}
+
 export function createGatewayCloseHandler(
   params: {
     bonjourStop: (() => Promise<void>) | null;
@@ -1021,50 +1065,20 @@ export function createGatewayCloseHandler(
       try {
         if (transportServers.length > 0) {
           await measureCloseStep("http-server", async () => {
-            const servers = transportServers;
-            for (let i = 0; i < servers.length; i++) {
-              const httpServer = servers[i] as HttpServer & {
-                closeAllConnections?: () => void;
-                closeIdleConnections?: () => void;
-              };
-              const label = servers.length > 1 ? `http-server[${i}]` : "http-server";
-              if (typeof httpServer.closeIdleConnections === "function") {
-                httpServer.closeIdleConnections();
-              }
-              const closePromise = new Promise<void>((resolve, reject) => {
-                httpServer.close((err) => {
-                  if (!err || isServerNotRunningError(err)) {
-                    resolve();
-                    return;
-                  }
-                  reject(err);
-                });
-              });
-              void closePromise.catch(() => undefined);
-              const closedWithinGrace = await waitForHttpClose({
-                closePromise,
-                timeoutMs: HTTP_CLOSE_GRACE_MS,
-                label,
-                warnings,
-              });
-              if (!closedWithinGrace) {
-                shutdownLog.warn(
-                  `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
-                );
-                recordShutdownWarning(warnings, label);
-                httpServer.closeAllConnections?.();
-                const closedAfterForce = await waitForHttpClose({
-                  closePromise,
-                  timeoutMs: HTTP_CLOSE_FORCE_WAIT_MS,
-                  label,
+            const results = await Promise.allSettled(
+              transportServers.map((server, index) =>
+                closeHttpListener({
+                  server,
+                  label: transportServers.length > 1 ? `http-server[${index}]` : "http-server",
                   warnings,
-                });
-                if (!closedAfterForce) {
-                  throw new Error(
-                    `${label} close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,
-                  );
-                }
-              }
+                }),
+              ),
+            );
+            const failure = results.find(
+              (result): result is PromiseRejectedResult => result.status === "rejected",
+            );
+            if (failure) {
+              throw failure.reason;
             }
           });
         }

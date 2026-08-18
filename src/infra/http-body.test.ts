@@ -1,10 +1,11 @@
 // Tests HTTP body reading and size-limit handling.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
+  closeRequestAfterResponse,
   installRequestBodyLimitGuard,
   RequestBodyLimitError,
   type RequestBodyLimitErrorCode,
@@ -329,5 +330,28 @@ describe("http body limits", () => {
 
     expect(req.destroyed).toBe(false);
     expect(pause).toHaveBeenCalledOnce();
+  });
+
+  it("closes a limited request only after its response finishes", () => {
+    const req = createMockRequest({ emitEnd: false });
+    const res = new EventEmitter() as ServerResponse;
+    const setHeader = vi.fn();
+    res.setHeader = setHeader;
+
+    closeRequestAfterResponse(req, res);
+
+    expect(setHeader).toHaveBeenCalledWith("Connection", "close");
+    expect(req.destroyed).toBe(false);
+    res.emit("finish");
+    expect(req.destroyed).toBe(true);
+  });
+
+  it("allows lightweight responses without finish listeners", () => {
+    const req = createMockRequest({ emitEnd: false });
+    const res = createMockServerResponse();
+
+    expect(() => closeRequestAfterResponse(req, res)).not.toThrow();
+    expect(res.getHeader("connection")).toBe("close");
+    expect(req.destroyed).toBe(false);
   });
 });

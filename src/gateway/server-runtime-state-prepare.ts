@@ -364,6 +364,7 @@ export async function prepareGatewayKernelState(params: {
     pendingReason: "startup-sidecars",
     dispatchReady: false,
   };
+  const lifecycle = { closePreludeStarted: false };
   let releaseStartupAccountStarts = () => {};
   const startupAccountStartsReady = new Promise<void>((resolve) => {
     releaseStartupAccountStarts = resolve;
@@ -401,7 +402,7 @@ export async function prepareGatewayKernelState(params: {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupState.pendingReason,
-    getGatewayDraining: isGatewayDraining,
+    getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
   const getReadiness = createReadinessChecker({
@@ -544,6 +545,7 @@ export async function prepareGatewayKernelState(params: {
     gatewayTls,
     readinessEventLoopHealth,
     startupState,
+    lifecycle,
     releaseStartupAccountStarts,
     gatewayInstanceRuntimeRef,
     channelManager,

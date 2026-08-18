@@ -1960,6 +1960,36 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("attempts every HTTP listener before rejecting a stuck close", async () => {
+    vi.useFakeTimers();
+
+    const stuckServer = {
+      close: vi.fn(() => undefined),
+      closeAllConnections: vi.fn(),
+      closeIdleConnections: vi.fn(),
+    };
+    const laterServer = {
+      close: vi.fn((cb: (err?: Error | null) => void) => cb(null)),
+      closeIdleConnections: vi.fn(),
+    };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        httpServers: [stuckServer as never, laterServer as never],
+      }),
+    );
+
+    const closePromise = close({ reason: "test shutdown" });
+    const closeExpectation = expect(closePromise).rejects.toThrow(
+      "http-server[0] close still pending after forced connection shutdown (5000ms)",
+    );
+    await vi.waitFor(() => expect(stuckServer.close).toHaveBeenCalledOnce());
+    expect(laterServer.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
+    await closeExpectation;
+
+    expect(stuckServer.closeAllConnections).toHaveBeenCalledOnce();
+  });
+
   it("labels warnings for multiple HTTP servers with their index", async () => {
     const okServer = {
       close: (cb: (err?: Error | null) => void) => cb(null),

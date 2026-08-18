@@ -2965,7 +2965,7 @@ src/gateway/server-broadcast.ts	2
 src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	5
-src/gateway/server-close.ts	2
+src/gateway/server-close.ts	1
 src/gateway/server-core-runtime.ts	2
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	5

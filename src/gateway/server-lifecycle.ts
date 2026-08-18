@@ -86,6 +86,7 @@ export async function prepareGatewayLifecycle(params: {
     nodeDesktopStreamBroker,
     bindDeviceNodeControl,
     workerPlacementRuntime,
+    lifecycle,
   } = runtime;
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
@@ -346,7 +347,6 @@ export async function prepareGatewayLifecycle(params: {
     },
   };
 
-  const lifecycle = { closePreludeStarted: false };
   const cronReconciliation = createGatewayCronReconciliation({
     port,
     workspaceDir: defaultWorkspaceDir,
@@ -387,6 +387,9 @@ export async function prepareGatewayLifecycle(params: {
     return mediaCleanupStopPromise;
   };
   const markClosePreludeStarted = () => {
+    if (lifecycle.closePreludeStarted) {
+      return;
+    }
     lifecycle.closePreludeStarted = true;
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
@@ -487,6 +490,7 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
+    markClosePreludeStarted();
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const transport = transportBridge.current();
     await transport?.portalService.closeAll();

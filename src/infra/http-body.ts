@@ -155,6 +155,20 @@ function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean
   req.pause();
 }
 
+/** Close a limited request only after its response bytes have flushed. */
+export function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
+  res.setHeader("Connection", "close");
+  const once = Reflect.get(res, "once");
+  if (typeof once !== "function") {
+    return;
+  }
+  once.call(res, "finish", () => {
+    if (!req.destroyed) {
+      req.destroy();
+    }
+  });
+}
+
 type ReadResponsePrefixResult = {
   buffer: Buffer;
   size: number;
