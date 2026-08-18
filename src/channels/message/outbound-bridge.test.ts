@@ -115,6 +115,23 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     });
   });
 
+  it("preserves target-only routing metadata without fabricating delivery identity", async () => {
+    const target = { kind: "channel" as const, id: "route-only" };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: vi.fn(async () => ({ target })),
+      },
+    });
+
+    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "hello" });
+
+    expect(result?.target).toEqual(target);
+    expect(result).not.toHaveProperty("messageId");
+    expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(result?.receipt.platformMessageIds).toEqual([]);
+    expect(result?.receipt.parts).toEqual([]);
+  });
+
   it("preserves contracted delivery facts without exposing private provider fields", async () => {
     const sourceResult = (messageId: string) => ({
       channel: "forged-channel",
