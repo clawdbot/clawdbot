@@ -76,6 +76,46 @@ describe("external llama-server registration", () => {
     });
   });
 
+  it("preserves existing managed config when the provider takes ownership", () => {
+    const { provider } = captureProvider();
+    const config = {
+      agents: {
+        defaults: { model: { primary: "llama-server/model" } },
+      },
+      models: {
+        providers: {
+          "llama-server": {
+            ...configuredProvider(),
+            apiKey: "existing-key",
+            headers: { "X-Tenant": "one" },
+            localService: {
+              command: "/usr/local/bin/llama-server",
+              args: ["--model", "/models/model.gguf"],
+              healthUrl: "http://localhost:8080/health",
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "llama-server",
+        providerConfig: config.models.providers["llama-server"],
+      }),
+    ).toMatchObject({
+      baseUrl: "http://localhost:8080/v1",
+      apiKey: "existing-key",
+      headers: { "X-Tenant": "one" },
+      localService: {
+        command: "/usr/local/bin/llama-server",
+        args: ["--model", "/models/model.gguf"],
+        healthUrl: "http://localhost:8080/health",
+      },
+    });
+    expect(config.agents.defaults.model.primary).toBe("llama-server/model");
+  });
+
   it("uses synthetic auth unless a real API key is configured", () => {
     const { provider } = captureProvider();
     expect(
