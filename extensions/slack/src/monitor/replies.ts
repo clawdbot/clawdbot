@@ -308,6 +308,13 @@ export async function deliverReplies(params: {
           ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
         });
         delivered = true;
+        // #41966: structured blocks can still surface fenced MEDIA as visible
+        // authored/fallback text — latch after accepted block send.
+        const blockVisibleProjection =
+          baseText || accessibilityText || buildSlackBlocksFallbackText(segment.blocks) || "";
+        if (blockVisibleProjection) {
+          fencedMediaWarn.afterAcceptedVisibleText(blockVisibleProjection);
+        }
       }
 
       if (outsideText && !reply.hasMedia) {

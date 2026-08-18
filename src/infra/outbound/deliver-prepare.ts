@@ -90,6 +90,11 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
     replyToId,
     replyToTag,
     text: _text,
+    // #41966: never persist plan-time fenced-MEDIA diagnostics inside nested
+    // durable payload JSON. Entry-level facts are rebuilt post-policy below;
+    // rest-spread would otherwise retain pre-redaction MEDIA paths/URLs.
+    mediaTokenSkippedInFence: _mediaTokenSkippedInFence,
+    fencedSkippedMediaDirectives: _fencedSkippedMediaDirectives,
     ...rest
   } = payload;
   return copyReplyPayloadMetadata(

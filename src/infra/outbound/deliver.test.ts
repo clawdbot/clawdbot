@@ -1084,6 +1084,11 @@ describe("deliverOutboundPayloads", () => {
       mediaTokenSkippedInFence: true,
       fencedSkippedMediaDirectives: ["MEDIA:/home/user/screenshot.png"],
     });
+    if (fencedEntry?.status === "accepted") {
+      // Entry-level diagnostics only — nested payload stays queue-safe.
+      expect(fencedEntry.payload).not.toHaveProperty("mediaTokenSkippedInFence");
+      expect(fencedEntry.payload).not.toHaveProperty("fencedSkippedMediaDirectives");
+    }
     expect(plainEntry).toMatchObject({ status: "accepted" });
     if (plainEntry?.status === "accepted") {
       expect(plainEntry.mediaTokenSkippedInFence).toBeUndefined();
@@ -1240,6 +1245,10 @@ describe("deliverOutboundPayloads", () => {
       // Post-policy durable custody must not retain pre-redaction MEDIA paths.
       expect(accepted[0].mediaTokenSkippedInFence).toBeUndefined();
       expect(accepted[0].fencedSkippedMediaDirectives).toBeUndefined();
+      // Nested payload must also be clean (compactPreparedPayload strips rest-spread).
+      expect(accepted[0].payload).not.toHaveProperty("mediaTokenSkippedInFence");
+      expect(accepted[0].payload).not.toHaveProperty("fencedSkippedMediaDirectives");
+      expect(JSON.stringify(accepted[0].payload)).not.toMatch(/screenshot\.png/);
     }
     expect(fencedMediaLogWarn).not.toHaveBeenCalled();
   });

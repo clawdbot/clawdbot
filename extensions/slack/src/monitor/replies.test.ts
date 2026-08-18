@@ -1465,4 +1465,30 @@ describe("deliverReplies fenced MEDIA warn (#41966)", () => {
     );
     expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
   });
+
+  it("latches fenced MEDIA after accepted structured block delivery (#41966)", async () => {
+    const fenced = "```\nMEDIA:/tmp/slack-fenced-blocks.png\n```";
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: fenced,
+            channelData: {
+              slack: {
+                blocks: [{ type: "divider" }],
+              },
+            },
+          },
+        ],
+      }),
+    );
+    expect(sendMock).toHaveBeenCalled();
+    // At least one send should carry blocks (structured path).
+    const hadBlocks = sendMock.mock.calls.some((call) => {
+      const options = call[2] as { blocks?: unknown } | undefined;
+      return Array.isArray(options?.blocks) && options.blocks.length > 0;
+    });
+    expect(hadBlocks).toBe(true);
+    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
+  });
 });
