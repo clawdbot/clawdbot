@@ -34,30 +34,46 @@ When the issue does not exist, become the campaign creator:
 
 1. Read the GitHub release notes for the exact tag. If they are empty or
    incomplete, also read that tag's section of `CHANGELOG.md`.
-2. Read the complete release notes and group every user-visible or
-   upgrade-sensitive item under the subsystem headings in
-   `assets/validation-worksheet.md`; one item may support multiple subsystems.
-   Select the three to five subsystems with the broadest changed surface or
-   highest regression risk.
-3. Move each selected subsystem from **Other subsystems** into **Priority for
-   this release**, leaving all others under **Other subsystems**. Replace every
-   subsystem's hidden guidance comment with `#### What changed` and `####
-Notes`. Add `#### Recommended testing` between them whenever release changes
-   justify a targeted exercise; every priority subsystem must include it. When
-   no release item is relevant, write `No notable changes in this release.`
-   under **What changed** and omit **Recommended testing**.
+2. Fetch the live scorecard Markdown from
+   `https://docs.openclaw.ai/maturity/scorecard.md`. From its **All surfaces**
+   table, extract each unique surface's display name, taxonomy link, M-level,
+   and maturity label. Also extract the score bands. Treat this live response as
+   the complete catalog; do not use a cached or hardcoded surface list. Stop
+   before issue creation when the scorecard is unavailable or cannot be parsed.
+3. Read the complete release notes and group every user-visible or
+   upgrade-sensitive item under one or more live scorecard surfaces. Use linked
+   PR or commit metadata privately when it helps estimate change size, but never
+   publish cherry-picked examples.
+4. Rank exactly five priority surfaces using all of: change count and breadth,
+   change size and complexity, upgrade sensitivity, scope of user impact, and
+   maturity expectations. A touched Stable or Clawesome surface carries more
+   regression risk than an equally changed early-stage surface because users
+   rely on its stronger quality promise. Keep the ranking qualitative; do not
+   expose a fake-precision score.
+5. Generate one section for every live scorecard surface. Put the five selected
+   surfaces under **Priority for this release** and all remaining surfaces under
+   **Other surfaces**. Format each heading as
+   `### [<surface>](<taxonomy-url>) — <maturity-label>`, then add `#### What
+changed` and `#### Notes`. Add `#### Recommended testing` between them when
+   release changes justify a targeted exercise; every priority surface must
+   include it. When no release item is relevant, write
+   `No notable changes in this release.` under **What changed** and omit
+   **Recommended testing**.
 
    For each **What changed**, synthesize the dominant themes across the
-   subsystem's complete group instead of listing a few fixes. Do not include
+   surface's complete group instead of listing a few fixes. Do not include
    issue, PR, commit, or workflow examples; a handful of links misrepresents the
    full release surface. Each **Recommended testing** is one concise human-driven
    exercise.
 
-4. Make a working copy of the worksheet asset and fill it with the exact
-   candidate identity, release-notes URL, and priority subsystem sections.
-   Remove the campaign-creator comment and ensure no template placeholder
-   remains.
-5. Create the issue with the stable marker, a short participation note, and the
+6. Make a working copy of the worksheet asset and fill it with the exact
+   candidate identity, release-notes URL, live scorecard and taxonomy URLs,
+   score-band guidance, and generated surface sections. The issue callout must
+   say that its catalog and labels come from the live maturity taxonomy and that
+   priority reflects release change volume, size, impact, upgrade risk, and
+   maturity expectations. Remove the campaign-creator comment and ensure no
+   template placeholder remains.
+7. Create the issue with the stable marker, a short participation note, and the
    completed worksheet verbatim between the worksheet markers. Re-query open
    issues for the marker after creation and fail on duplicates.
 
@@ -91,8 +107,8 @@ stop the current credential owner and restore it when validation ends.
 Copy the canonical worksheet between the shared issue's markers to
 `.artifacts/openclaw-release-validation/<tag>-<timestamp>.md`. Fill in the
 source, shared issue URL, and local upgrade result without changing the campaign
-priorities. Give the tester a clickable link and briefly point out the three to
-five priority subsystems.
+priorities. Give the tester a clickable link and briefly point out the five
+priority surfaces.
 
 This worksheet is the only checklist and note store. The tester may edit it in
 their editor or tell the agent what to record.
@@ -128,8 +144,8 @@ upgrade or gateway readiness is unresolved.
 ## 5. Human-driven testing
 
 Ask: **What do you want to test first?** Recommend starting with a release
-priority, but let the tester choose one subsystem at a time in any order. After
-each item, add their notes under that subsystem's `#### Notes`, then ask what
+priority, but let the tester choose one surface at a time in any order. After
+each item, add their notes under that surface's `#### Notes`, then ask what
 they want to test next.
 
 The tester drives interactive surfaces such as the TUI, Control UI, onboarding,
@@ -137,10 +153,10 @@ channels, pairing, and approvals. Provide the command or URL and explain what
 to look for, then wait for their result. Take control only when explicitly
 asked. Do not turn the checklist into an automated scenario runner.
 
-A subsystem counts as tested only when tester-authored text appears beneath its
+A surface counts as tested only when tester-authored text appears beneath its
 `#### Notes`. **What changed** and **Recommended testing** never count as test
 evidence. An empty or comment-only note area means untouched. Add candidate
-problems found during subsystem testing to that subsystem's notes.
+problems found during surface testing to that surface's notes.
 
 ## 6. Finish and publish
 
@@ -151,7 +167,7 @@ When the tester says `finish validation`:
 2. Stop the copied gateway and restore any source gateway stopped for channel
    ownership. Ask before destroying the disposable environment.
 3. Build one GitHub issue comment containing only candidate identity, source
-   version/commit, subsystem names with non-empty note sections, upgrade
+   version/commit, surface names with non-empty note sections, upgrade
    findings, tester feedback, and the yes/no promotion vote.
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.

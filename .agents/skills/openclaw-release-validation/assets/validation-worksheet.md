@@ -18,99 +18,32 @@
 
 Record candidate OpenClaw problems observed while upgrading or starting the
 copied gateway. For each finding, note what you expected, what happened, and
-the affected subsystem.
+the affected surface.
 
 - None yet.
 
-## Subsystem notes
+## Surface notes
 
-> **Operator notes**
-> Add notes under **Notes** for each subsystem you tested. Leave untested note
+> [!NOTE]
+> Add notes under **Notes** for each surface you tested. Leave untested note
 > sections empty. Start with **Priority for this release** when possible.
-
-[Release notes]({{RELEASE_NOTES_URL}})
+>
+> This surface catalog and its maturity labels are derived from the live
+> [OpenClaw maturity scorecard]({{SCORECARD_URL}}) and
+> [maturity taxonomy]({{TAXONOMY_URL}}). Priority reflects this release's change
+> volume, change size, impact scope, upgrade risk, and maturity expectations.
+>
+> **Score bands:** Experimental 0–50%; Alpha 50–70%; Beta 70–80%; Stable
+> 80–95%; Clawesome 95–100%. Higher maturity means a stronger regression
+> expectation.
 
 ## Priority for this release
 
-<!-- Campaign creator: move 3-5 selected subsystem sections here; add What changed, optional Recommended testing, and Notes to all 19 sections; then remove this comment. -->
+<!-- Campaign creator: generate exactly five priority surface sections from the live scorecard, then remove this comment. -->
 
-## Other subsystems
+## Other surfaces
 
-### Pairing
-
-<!-- Pair a client or sender and confirm it can act. Add notes below. -->
-
-### Channels
-
-<!-- Use the channel you know best and confirm one reply per message. Add notes below. -->
-
-### Control UI
-
-<!-- Hold a real conversation with tools, reload, and continue. Add notes below. -->
-
-### TUI
-
-<!-- Drive history, streaming, shortcuts, and reconnect yourself. Add notes below. -->
-
-### Onboarding
-
-<!-- Complete setup and reach a working conversation. Add notes below. -->
-
-### Slash commands
-
-<!-- Try familiar commands and check their results. Add notes below. -->
-
-### Memory
-
-<!-- Retrieve old memory, add new memory, and retrieve it later. Add notes below. -->
-
-### Subagents
-
-<!-- Spawn a child, receive its result, and confirm it exits. Add notes below. -->
-
-### Agents
-
-<!-- Create or switch agents and confirm their state stays separate. Add notes below. -->
-
-### Cron
-
-<!-- Create, run, inspect, and remove one disposable job. Add notes below. -->
-
-### Sessions
-
-<!-- Restart or reconnect and confirm conversation continuity. Add notes below. -->
-
-### Context Engine
-
-<!-- Confirm relevant context appears without obvious excess. Add notes below. -->
-
-### Skill Workshop
-
-<!-- Invoke a skill, revise it, and invoke the revision. Add notes below. -->
-
-### MCP
-
-<!-- Discover a familiar server and complete one real call. Add notes below. -->
-
-### Models
-
-<!-- List, select, use, and persist a model. Add notes below. -->
-
-### Approvals
-
-<!-- Deny once and approve once; confirm each action happens once. Add notes below. -->
-
-### Compaction
-
-<!-- Compact a real conversation and confirm continuity. Add notes below. -->
-
-### Codex harness
-
-<!-- Complete useful tool work and inspect its artifacts. Add notes below. -->
-
-### OpenClaw harness
-
-<!-- Complete a real task and inspect its artifacts. Add notes below. -->
+<!-- Campaign creator: generate every remaining live scorecard surface here, then remove this comment. -->
 
 ## Final feedback
 
