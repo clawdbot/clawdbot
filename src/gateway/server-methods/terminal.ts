@@ -27,6 +27,7 @@ import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.j
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -34,6 +35,7 @@ import {
   TerminalOpenDeadlineError,
   waitForTerminalOpenDeadline,
 } from "../terminal/open-deadline.js";
+import type { AgentTerminalOwner } from "../terminal/session-manager.types.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeCatalogTerminalNode,
@@ -346,7 +348,7 @@ export async function openTerminalSession(
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
   }
-  let agentSessionKey: string | undefined;
+  let agentOwner: AgentTerminalOwner | undefined;
   if (request.sessionKey) {
     const runtimeConfig = context.getRuntimeConfig();
     const requestedOwner = resolveRequestedSessionAgentId(
@@ -358,11 +360,36 @@ export async function openTerminalSession(
       respond(false, undefined, requestedOwner.error);
       return;
     }
-    agentSessionKey = resolveStoredSessionKeyForAgentStore({
+    const agentSessionKey = resolveStoredSessionKeyForAgentStore({
       cfg: runtimeConfig,
       agentId: requestedOwner.agentId,
       sessionKey: request.sessionKey,
     });
+    const { entry } = loadGatewaySessionEntryReadOnly(agentSessionKey, {
+      agentId: requestedOwner.agentId,
+      clone: false,
+    });
+    const agentSessionId = entry?.sessionId?.trim();
+    if (!agentSessionId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          terminalFailureMessage(
+            "session is no longer available; refresh and retry",
+            request.failureHint,
+          ),
+        ),
+      );
+      return;
+    }
+    agentOwner = {
+      kind: "agent",
+      agentSessionKey,
+      agentSessionId,
+      agentId: requestedOwner.agentId,
+    };
   }
   if (nodeRelay) {
     const relay = nodeRelay;
@@ -410,18 +437,14 @@ export async function openTerminalSession(
         ])
       : buildTerminalEnv(process.env);
   const closeOpenedSession = (sessionId: string) =>
-    agentSessionKey
-      ? manager.closeAgent(agentSessionKey, sessionId, spawnPlan.agentId)
-      : manager.close(connId, sessionId);
+    agentOwner ? manager.closeAgent(agentOwner, sessionId) : manager.close(connId, sessionId);
   let openingTerminal: ReturnType<typeof manager.open> | undefined;
   let outcome: Awaited<ReturnType<typeof manager.open>>;
   try {
     outcome = await waitForTerminalOpenDeadline(() => {
       openingTerminal = manager.open({
-        owner: agentSessionKey
-          ? { kind: "agent", agentSessionKey, agentId: spawnPlan.agentId }
-          : { kind: "conn", connId },
-        ...(agentSessionKey ? { viewerConnId: connId } : {}),
+        owner: agentOwner ?? { kind: "conn", connId },
+        ...(agentOwner ? { viewerConnId: connId } : {}),
         agentId: spawnPlan.agentId,
         cwd: spawnPlan.cwd,
         shell: spawnPlan.shell,

@@ -21,6 +21,7 @@ import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
+import { TerminalConnectionIndex } from "./session-connection-index.js";
 import {
   DEFAULT_MAX_DETACHED_SESSIONS,
   DEFAULT_MAX_SESSIONS,
@@ -39,6 +40,11 @@ import type {
   TerminalSessionManagerOptions,
   TerminalOwner,
 } from "./session-manager.types.js";
+import {
+  terminalAttachSummary,
+  terminalSessionRecipientIds,
+  terminalSessionSummary,
+} from "./session-projection.js";
 import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
 export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
@@ -50,13 +56,12 @@ const log = createSubsystemLogger("gateway/terminal");
  */
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
-  private readonly byConn = new Map<string, Set<string>>();
   private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
   private readonly agentSessionDrain = new AgentTerminalSessionDrainTracker();
+  private readonly connections = new TerminalConnectionIndex();
   // Connection-backed opens still awaiting spawn. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
-  private readonly pendingByConn = new Map<string, Set<TerminalPendingOpen>>();
   private readonly emit: TerminalEventSink;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly spawn?: LocalTerminalBackendSpawner;
@@ -186,9 +191,7 @@ export class TerminalSessionManager {
       // The request was cancelled while the shell was spawning; kill it now
       // rather than register an unreachable orphan.
       releaseEvictionClaim();
-      backend.onExit(() =>
-        this.untrackPendingOpen(request.owner, pending, request.viewerConnId),
-      );
+      backend.onExit(() => this.untrackPendingOpen(request.owner, pending, request.viewerConnId));
       try {
         backend.kill();
       } catch {
@@ -242,7 +245,7 @@ export class TerminalSessionManager {
     // so the forward reference from this closure is safe.
     const output = new TerminalOutputController({
       backend,
-      getConnIds: () => this.sessionConnIds(session),
+      getConnIds: () => terminalSessionRecipientIds(session),
       getBufferedAmount: this.getBufferedAmount,
       record: (chunk) => buffer.push(chunk),
       emit: (connIds, data, seq) => {
@@ -277,10 +280,10 @@ export class TerminalSessionManager {
     };
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
-      this.indexByConn(request.owner.connId, session.id);
+      this.connections.addSession(request.owner.connId, session.id);
     }
     if (request.viewerConnId) {
-      this.indexByConn(request.viewerConnId, session.id);
+      this.connections.addSession(request.viewerConnId, session.id);
     }
     if (request.owner.kind === "conn" || request.viewerConnId) {
       session.output.push(composeTerminalIntroBanner());
@@ -491,8 +494,8 @@ export class TerminalSessionManager {
       // snapshot. This prevents the newcomer from receiving those bytes twice.
       session.output.prepareViewerAttach();
       session.viewers.add(connId);
-      this.indexByConn(connId, session.id);
-      return this.attachSummary(session);
+      this.connections.addSession(connId, session.id);
+      return terminalAttachSummary(session);
     }
     if (session.reaper) {
       clearTimeout(session.reaper);
@@ -502,7 +505,7 @@ export class TerminalSessionManager {
     session.detachedAtMs = null;
     const previousConnId = session.owner?.kind === "conn" ? session.owner.connId : null;
     if (previousConnId !== null && previousConnId !== connId) {
-      this.unindexByConn(previousConnId, session.id);
+      this.connections.removeSession(previousConnId, session.id);
       this.emit(previousConnId, TERMINAL_EVENT_EXIT, {
         sessionId: session.id,
         exitCode: null,
@@ -511,40 +514,15 @@ export class TerminalSessionManager {
       });
     }
     session.owner = { kind: "conn", connId };
-    this.indexByConn(connId, session.id);
-    return this.attachSummary(session);
-  }
-
-  private attachSummary(session: TerminalSession): TerminalAttachSummary {
-    return {
-      sessionId: session.id,
-      agentId: session.agentId,
-      cwd: session.cwd,
-      shell: session.shell,
-      buffer: session.buffer.snapshot(),
-      seq: session.output.endOffset,
-    };
+    this.connections.addSession(connId, session.id);
+    return terminalAttachSummary(session);
   }
 
   /** Every live session, oldest first; all admin connections see the same list. */
   list(): TerminalSessionSummary[] {
     return [...this.sessions.values()]
       .filter((session) => !session.closed)
-      .map((session) => {
-        const owner: TerminalSessionSummary["owner"] =
-          session.owner?.kind === "agent" ? `agent:${session.owner.agentSessionKey}` : "conn";
-        return {
-          sessionId: session.id,
-          agentId: session.agentId,
-          shell: session.shell,
-          cwd: session.cwd,
-          attached:
-            session.owner?.kind === "conn" ||
-            (session.owner?.kind === "agent" && session.viewers.size > 0),
-          owner,
-          createdAtMs: session.createdAtMs,
-        };
-      })
+      .map(terminalSessionSummary)
       .toSorted((a, b) => a.createdAtMs - b.createdAtMs);
   }
 
@@ -582,12 +560,7 @@ export class TerminalSessionManager {
     if (!connId) {
       return;
     }
-    let set = this.pendingByConn.get(connId);
-    if (!set) {
-      set = new Set();
-      this.pendingByConn.set(connId, set);
-    }
-    set.add(pending);
+    this.connections.addPendingOpen(connId, pending);
   }
 
   private hasAgentSessionWork(owner: AgentTerminalOwner): boolean {
@@ -623,13 +596,7 @@ export class TerminalSessionManager {
     if (!connId) {
       return;
     }
-    const set = this.pendingByConn.get(connId);
-    if (set) {
-      set.delete(pending);
-      if (set.size === 0) {
-        this.pendingByConn.delete(connId);
-      }
-    }
+    this.connections.removePendingOpen(connId, pending);
   }
 
   /**
@@ -641,18 +608,18 @@ export class TerminalSessionManager {
     // Abort opens still awaiting spawn so they don't register orphaned PTYs.
     // These stay kill-on-disconnect even with detach enabled: the open RPC
     // never answered, so the client has no session id to reattach.
-    const opens = this.pendingByConn.get(connId);
+    const opens = this.connections.pendingFor(connId);
     if (opens) {
       for (const pending of opens) {
         pending.abort("connection closed during open");
       }
     }
-    const ids = this.byConn.get(connId);
+    const ids = this.connections.sessionIds(connId);
     if (!ids) {
       return;
     }
     // Snapshot first: finalize()/detach() mutate the same set during iteration.
-    for (const id of Array.from(ids)) {
+    for (const id of ids) {
       const session = this.sessions.get(id);
       if (!session) {
         continue;
@@ -674,7 +641,7 @@ export class TerminalSessionManager {
         this.finalize(session, "disconnected", {}, { silent: true });
       }
     }
-    this.byConn.delete(connId);
+    this.connections.clearSessions(connId);
   }
 
   /** Closes live and pending sessions whose agent no longer permits a host shell. */
@@ -741,23 +708,6 @@ export class TerminalSessionManager {
     }
   }
 
-  private indexByConn(connId: string, sessionId: string): void {
-    let connSessions = this.byConn.get(connId);
-    if (!connSessions) {
-      connSessions = new Set();
-      this.byConn.set(connId, connSessions);
-    }
-    connSessions.add(sessionId);
-  }
-
-  private unindexByConn(connId: string, sessionId: string): void {
-    const sessions = this.byConn.get(connId);
-    sessions?.delete(sessionId);
-    if (sessions?.size === 0) {
-      this.byConn.delete(connId);
-    }
-  }
-
   /**
    * Claims the longest-idle agent-owned session as an eviction candidate when
    * the pool is exhausted. Viewer-attached and connection-owned sessions are
@@ -790,7 +740,7 @@ export class TerminalSessionManager {
     if (!session.viewers.delete(connId)) {
       return false;
     }
-    this.unindexByConn(connId, session.id);
+    this.connections.removeSession(connId, session.id);
     if (session.viewers.size === 0) {
       // With no socket pressure left, resume immediately. Buffered bytes stay
       // in the replay ring and the next viewer starts at its high-water mark.
@@ -839,14 +789,6 @@ export class TerminalSessionManager {
     delete session.unadoptedViewerConnId;
   }
 
-  private sessionConnIds(session: TerminalSession): string[] {
-    const connIds = new Set(session.viewers);
-    if (session.owner?.kind === "conn") {
-      connIds.add(session.owner.connId);
-    }
-    return [...connIds];
-  }
-
   private finalize(
     session: TerminalSession,
     reason: TerminalExitReason,
@@ -856,7 +798,7 @@ export class TerminalSessionManager {
     if (session.closed) {
       return;
     }
-    const recipients = this.sessionConnIds(session);
+    const recipients = terminalSessionRecipientIds(session);
     session.output.dispose({ flush: !opts?.silent && recipients.length > 0 });
     session.closed = true;
     if (session.reaper) {
@@ -873,10 +815,10 @@ export class TerminalSessionManager {
     }
     this.sessions.delete(session.id);
     if (session.owner?.kind === "conn") {
-      this.unindexByConn(session.owner.connId, session.id);
+      this.connections.removeSession(session.owner.connId, session.id);
     }
     for (const viewerConnId of session.viewers) {
-      this.unindexByConn(viewerConnId, session.id);
+      this.connections.removeSession(viewerConnId, session.id);
     }
     session.viewers.clear();
     // A disconnect already dropped the socket, so emitting there is pointless;

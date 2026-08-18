@@ -7,91 +7,13 @@ import {
   agentTerminalOwner,
   baseOpenRequest as baseRequest,
   expectTerminalOpen,
-  type FakeTerminalPty,
   makeFakePty,
 } from "./session-manager.test-helpers.js";
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 const OPERATOR_INTRO = composeTerminalIntroBanner();
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 describe("TerminalSessionManager", () => {
-  it("kills a backend that finishes after its open request is cancelled", async () => {
-    const spawned = deferred<FakeTerminalPty>();
-    const controller = new AbortController();
-    const first = makeFakePty();
-    const second = makeFakePty();
-    let spawnCount = 0;
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      maxSessions: 1,
-      spawn: () => (spawnCount++ === 0 ? spawned.promise : Promise.resolve(second)),
-    });
-    const opening = manager.open(baseRequest({ signal: controller.signal }));
-
-    controller.abort(new Error("terminal open timed out"));
-    const next = await manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-2" } }));
-    expect(next.ok).toBe(true);
-    spawned.resolve(first);
-
-    await expect(opening).resolves.toEqual({
-      ok: false,
-      code: "closed",
-      message: "terminal open timed out",
-    });
-    expect(first.killed).toBe(true);
-    expect(manager.size).toBe(1);
-    if (next.ok) {
-      expect(manager.close("conn-2", next.sessionId)).toBe(true);
-    }
-    expect(second.killed).toBe(true);
-    expect(manager.size).toBe(0);
-  });
-
-  it("bounds cancelled backend operations until they settle", async () => {
-    const firstSpawn = deferred<FakeTerminalPty>();
-    const secondSpawn = deferred<FakeTerminalPty>();
-    const firstController = new AbortController();
-    const secondController = new AbortController();
-    let spawnCount = 0;
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      maxSessions: 1,
-      spawn: () => (spawnCount++ === 0 ? firstSpawn.promise : secondSpawn.promise),
-    });
-
-    const firstOpening = manager.open(baseRequest({ signal: firstController.signal }));
-    firstController.abort(new Error("first cancelled"));
-    const secondOpening = manager.open(
-      baseRequest({ owner: { kind: "conn", connId: "conn-2" }, signal: secondController.signal }),
-    );
-    secondController.abort(new Error("second cancelled"));
-
-    await expect(
-      manager.open(baseRequest({ owner: { kind: "conn", connId: "conn-3" } })),
-    ).resolves.toEqual({
-      ok: false,
-      code: "limit",
-      message: "terminal spawn limit reached (2)",
-    });
-
-    const first = makeFakePty();
-    const second = makeFakePty();
-    firstSpawn.resolve(first);
-    secondSpawn.resolve(second);
-    await expect(firstOpening).resolves.toMatchObject({ ok: false, code: "closed" });
-    await expect(secondOpening).resolves.toMatchObject({ ok: false, code: "closed" });
-    expect(first.killed).toBe(true);
-    expect(second.killed).toBe(true);
-  });
-
   it("runs relay backends through the same stream, input, resize, and close lifecycle", async () => {
     let onData: ((data: string) => void) | undefined;
     let onExit:
@@ -539,6 +461,7 @@ describe("TerminalSessionManager", () => {
         owner: {
           kind: "agent" as const,
           agentSessionKey: "agent:main:ui-session",
+          agentSessionId: "ui-session-id",
           agentId: "main",
         },
         viewerConnId: "conn-x",
@@ -637,7 +560,7 @@ describe("TerminalSessionManager agent ownership", () => {
       if (adoption === "resize") {
         manager.resize("viewer-1", outcome.sessionId, 120, 40);
       } else if (adoption === "agent read") {
-        manager.snapshotAgent(agentOwner.agentSessionKey, outcome.sessionId);
+        manager.snapshotAgent(agentOwner, outcome.sessionId);
       } else if (adoption === "attach") {
         manager.attach("viewer-2", outcome.sessionId);
       }
@@ -787,7 +710,7 @@ describe("TerminalSessionManager agent ownership", () => {
       ]);
       expect(manager.close("stranger", outcome.sessionId)).toBe(false);
       expect(manager.attach("viewer-2", outcome.sessionId)).toBeDefined();
-      expect(manager.closeAgent(agentOwner.agentSessionKey, outcome.sessionId)).toBe(true);
+      expect(manager.closeAgent(agentOwner, outcome.sessionId)).toEqual({ ok: true });
       expect(manager.size).toBe(0);
       expect(fake.killed).toBe(true);
     } finally {

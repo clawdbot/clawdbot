@@ -28,6 +28,13 @@ const policyMocks = vi.hoisted(() => ({
     async () => null,
   ),
 }));
+const sessionMocks = vi.hoisted(() => ({
+  loadGatewaySessionEntryReadOnly: vi.fn(
+    (_sessionKey: string, _opts?: unknown): { entry?: { sessionId?: string } } => ({
+      entry: { sessionId: "ui-session-id" },
+    }),
+  ),
+}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -44,6 +51,11 @@ vi.mock("../node-command-policy.js", () => ({
 
 vi.mock("../node-invoke-plugin-policy.js", () => ({
   applyPluginNodeInvokePolicy: policyMocks.applyPluginNodeInvokePolicy,
+}));
+
+vi.mock("../session-utils.js", async () => ({
+  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
+  loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
 
 function makeOpts(
@@ -123,6 +135,9 @@ afterEach(() => {
   policyMocks.resolveNodeCommandAllowlist.mockReset();
   policyMocks.isNodeCommandAllowed.mockReset().mockReturnValue({ ok: true });
   policyMocks.applyPluginNodeInvokePolicy.mockReset().mockResolvedValue(null);
+  sessionMocks.loadGatewaySessionEntryReadOnly.mockReset().mockReturnValue({
+    entry: { sessionId: "ui-session-id" },
+  });
 });
 
 describe("terminal gateway policy", () => {
@@ -130,6 +145,12 @@ describe("terminal gateway policy", () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
     const agentSessionKey = "agent:main:ui-session";
+    const agentOwner = {
+      kind: "agent",
+      agentSessionKey,
+      agentSessionId: "ui-session-id",
+      agentId: "main",
+    } as const;
     const { opts, respond } = makeOpts({}, { enabled: true });
     opts.context.terminalSessions = manager;
 
@@ -144,18 +165,43 @@ describe("terminal gateway policy", () => {
       true,
       expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
     );
-    const owned = manager.listAgent(agentSessionKey, "main");
+    const owned = manager.listAgent(agentOwner);
     expect(owned).toHaveLength(1);
     const session = expectDefined(owned[0], "session-owned UI terminal");
     expect(session).toMatchObject({ attached: true, owner: `agent:${agentSessionKey}` });
     expect(manager.write("conn-1", session.sessionId, "operator input\n")).toBe(true);
 
     backend.emitData("ui session output");
-    expect(manager.snapshotAgent(agentSessionKey, session.sessionId, "main")).toContain(
-      "ui session output",
+    expect(manager.snapshotAgent(agentOwner, session.sessionId)).toContain("ui session output");
+    expect(
+      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:main:other-session" }),
+    ).toEqual([]);
+    expect(
+      manager.snapshotAgent({ ...agentOwner, agentId: "research" }, session.sessionId),
+    ).toBeUndefined();
+    expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
+      agentId: "main",
+      clone: false,
+    });
+  });
+
+  it("rejects UI ownership when the durable session identity is unavailable", async () => {
+    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry: undefined });
+    const { opts, sessions, respond } = makeOpts({}, { enabled: true });
+
+    await openTerminalSession(opts, {
+      agentId: "main",
+      sessionKey: "agent:main:missing",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
     );
-    expect(manager.listAgent("agent:main:other-session", "main")).toEqual([]);
-    expect(manager.snapshotAgent(agentSessionKey, session.sessionId, "research")).toBeUndefined();
   });
 
   it("lists agent-owned sessions with their owner marker", async () => {
