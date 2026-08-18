@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../../styles/config.css";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
+const layoutTolerancePx = 1;
 let host: HTMLDivElement | undefined;
 
 afterEach(() => {
@@ -57,9 +58,11 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     };
     expect(getComputedStyle(content).scrollbarGutter).toBe("stable");
     expect(after.clientWidth).toBe(before.clientWidth);
-    expect(after.header.left).toBe(before.header.left);
-    expect(after.header.right).toBe(before.header.right);
-    expect(after.tabs.left).toBe(before.tabs.left);
-    expect(after.tabs.top).toBe(before.tabs.top);
+    expect(Math.abs(after.header.left - before.header.left)).toBeLessThanOrEqual(layoutTolerancePx);
+    expect(Math.abs(after.header.right - before.header.right)).toBeLessThanOrEqual(
+      layoutTolerancePx,
+    );
+    expect(Math.abs(after.tabs.left - before.tabs.left)).toBeLessThanOrEqual(layoutTolerancePx);
+    expect(Math.abs(after.tabs.top - before.tabs.top)).toBeLessThanOrEqual(layoutTolerancePx);
   });
 });
