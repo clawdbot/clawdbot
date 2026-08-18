@@ -14,6 +14,7 @@ import {
   buildExecApprovalPendingToolResult,
   createAndRegisterDefaultExecApprovalRequest,
   resolveExecApprovalDecisionState,
+  resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
   shouldResolveExecApprovalUnavailableInline,
@@ -37,6 +38,8 @@ const mocks = vi.hoisted(() => ({
     file: { version: 1, agents: {} },
     hash: "approvals-hash",
   })),
+  approvalRunAbortedError: new Error("approval owning run aborted"),
+  resolveRegisteredExecApprovalDecision: vi.fn(async (): Promise<string | null> => "allow-once"),
 }));
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
@@ -44,6 +47,15 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return {
     ...mod,
     resolveExecApprovalsLocked: mocks.resolveExecApprovals,
+  };
+});
+
+vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./bash-tools.exec-approval-request.js")>();
+  return {
+    ...mod,
+    isExecApprovalRunAbortedError: (error: unknown) => error === mocks.approvalRunAbortedError,
+    resolveRegisteredExecApprovalDecision: mocks.resolveRegisteredExecApprovalDecision,
   };
 });
 
@@ -532,6 +544,96 @@ describe("resolveExecApprovalDecisionState", () => {
       deniedReason: "approval-timeout",
       timeoutContext,
     });
+  });
+});
+
+describe("resolveExecApprovalWaitOutcome", () => {
+  beforeEach(() => {
+    mocks.resolveRegisteredExecApprovalDecision.mockReset();
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue("allow-once");
+  });
+
+  it.each([
+    ["allow-once", true, null],
+    ["allow-always", true, null],
+    ["deny", false, "user-denied"],
+  ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(decision);
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-1",
+        preResolvedDecision: undefined,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toMatchObject({
+      kind: "resolved",
+      decision,
+      state: { approvedByAsk, deniedReason },
+    });
+  });
+
+  it("applies timeout policy before returning a resolved outcome", async () => {
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(null);
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-timeout",
+        preResolvedDecision: undefined,
+        askFallback: "full",
+        resolveTimedOut: async () => ({ approvedByAsk: false, deniedReason: "policy-revoked" }),
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toMatchObject({
+      kind: "resolved",
+      decision: null,
+      state: { approvedByAsk: false, deniedReason: "policy-revoked" },
+    });
+  });
+
+  it("classifies an approval waiter failure", async () => {
+    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(new Error("store unavailable"));
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-failed",
+        preResolvedDecision: undefined,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toEqual({ kind: "request-failed" });
+  });
+
+  it("classifies owning-run cancellation", async () => {
+    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(mocks.approvalRunAbortedError);
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-aborted",
+        preResolvedDecision: undefined,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toEqual({ kind: "run-aborted" });
+  });
+
+  it("does not consume a decision after the owning signal aborts", async () => {
+    const controller = new AbortController();
+    mocks.resolveRegisteredExecApprovalDecision.mockImplementation(async () => {
+      controller.abort(new Error("run stopped"));
+      return "allow-once";
+    });
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-aborted-after-wait",
+        preResolvedDecision: undefined,
+        signal: controller.signal,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toEqual({ kind: "run-aborted" });
   });
 });
 

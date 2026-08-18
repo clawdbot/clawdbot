@@ -238,26 +238,6 @@ export async function resolveExecHostApprovalContext(params: {
   return { approvals, hostSecurity, hostAsk, askFallback };
 }
 
-/** Waits for approval while converting wait failures to an undefined sentinel. */
-export async function resolveApprovalDecisionOrUndefined(params: {
-  approvalId: string;
-  preResolvedDecision: string | null | undefined;
-  onFailure: () => void;
-}): Promise<string | null | undefined> {
-  try {
-    return await resolveRegisteredExecApprovalDecision({
-      approvalId: params.approvalId,
-      preResolvedDecision: params.preResolvedDecision,
-    });
-  } catch (error) {
-    if (isExecApprovalRunAbortedError(error)) {
-      throw error;
-    }
-    params.onFailure();
-    return undefined;
-  }
-}
-
 /** Resolves approval delivery availability for the initiating channel/account. */
 function resolveExecApprovalUnavailableState(params: {
   turnSourceChannel?: string;
@@ -396,8 +376,7 @@ function enforceStrictInlineEvalApprovalBoundary(params: {
   };
 }
 
-/** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
-export async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(params: {
+type ExecApprovalDecisionParams<TTimeoutContext> = {
   decision: string | null;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
   resolveTimedOut?: (state: {
@@ -417,12 +396,16 @@ export async function resolveExecApprovalDecisionState<TTimeoutContext = undefin
       }>;
   requiresExplicitApproval: boolean | ((context: TTimeoutContext | undefined) => boolean);
   requiresAutoReviewHumanApproval?: boolean;
-}): Promise<{
-  baseDecision: { timedOut: boolean };
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-  timeoutContext: TTimeoutContext | undefined;
-}> {
+};
+
+type ExecApprovalDecisionState<TTimeoutContext> = ReturnType<
+  typeof createExecApprovalDecisionState
+> & { timeoutContext: TTimeoutContext | undefined };
+
+/** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
+export async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
+  params: ExecApprovalDecisionParams<TTimeoutContext>,
+): Promise<ExecApprovalDecisionState<TTimeoutContext>> {
   const initial = createExecApprovalDecisionState({
     decision: params.decision,
     askFallback: params.askFallback,
@@ -457,6 +440,38 @@ export async function resolveExecApprovalDecisionState<TTimeoutContext = undefin
     deniedReason: strictDecision.deniedReason,
     timeoutContext,
   };
+}
+
+/** Waits for an approval and normalizes cancellation, request failure, and resolved policy. */
+export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined>(
+  params: Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
+    approvalId: string;
+    preResolvedDecision: string | null | undefined;
+    signal?: AbortSignal;
+  },
+): Promise<
+  | { kind: "request-failed" }
+  | { kind: "run-aborted" }
+  | {
+      kind: "resolved";
+      decision: string | null;
+      state: ExecApprovalDecisionState<TTimeoutContext>;
+    }
+> {
+  let decision: string | null;
+  try {
+    decision = await resolveRegisteredExecApprovalDecision({
+      approvalId: params.approvalId,
+      preResolvedDecision: params.preResolvedDecision,
+    });
+  } catch (error) {
+    return { kind: isExecApprovalRunAbortedError(error) ? "run-aborted" : "request-failed" };
+  }
+  if (params.signal?.aborted) {
+    return { kind: "run-aborted" };
+  }
+  const state = await resolveExecApprovalDecisionState({ ...params, decision });
+  return params.signal?.aborted ? { kind: "run-aborted" } : { kind: "resolved", decision, state };
 }
 
 /** Returns true when registration proved no approval decision can arrive later. */
