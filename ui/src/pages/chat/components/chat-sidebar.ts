@@ -5,10 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  updateMarkdownCodeBlockOverflow,
-} from "../../../components/markdown-code-blocks.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -1364,8 +1361,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         class=${fillHost ? "sidebar-panel-host--fill" : ""}
         @click=${this.handlePanelClick}
         @keydown=${this.handlePanelKeyDown}
-        @pointerover=${updateMarkdownCodeBlockOverflow}
-        @scroll=${{ handleEvent: updateMarkdownCodeBlockOverflow, capture: true }}
       >
         ${renderMarkdownSidebar({
           content: this.visibleContent,

@@ -1,12 +1,7 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  initializeMarkdownCodeBlockOverflow,
-  updateMarkdownCodeBlockOverflow,
-} from "../../../components/markdown-code-blocks.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -113,25 +108,16 @@ function renderTranscriptShell(
           </div>
         `
       : projection.renderRows(historySentinel);
-  const handleScroll = (event: Event) => {
-    props.onChatScroll?.(event);
-    updateMarkdownCodeBlockOverflow(event);
-  };
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
-      ${ref((element) => {
-        if (element instanceof HTMLElement) {
-          requestAnimationFrame(() => initializeMarkdownCodeBlockOverflow(element));
-        }
-      })}
       role="log"
       aria-live="off"
       aria-relevant="additions"
       tabindex="0"
       @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
       @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
-      @scroll=${{ handleEvent: handleScroll, capture: true }}
+      @scroll=${props.onChatScroll}
       @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
       @keydown=${(event: KeyboardEvent) => {
         const target = markdownFileLinkFromKeyboardEvent(event);
@@ -159,7 +145,6 @@ function renderTranscriptShell(
         : null}
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
-      @pointerover=${updateMarkdownCodeBlockOverflow}
       @click=${(event: MouseEvent) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);

@@ -24,36 +24,6 @@ const JSON_COLLAPSE_LINE_THRESHOLD = 40;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
-function updateCodeBlockOverflow(pre: HTMLElement): void {
-  const wrapper = pre.closest<HTMLElement>(".code-block-wrapper");
-  if (!wrapper) {
-    return;
-  }
-  const maxScroll = pre.scrollWidth - pre.clientWidth;
-  wrapper.classList.toggle("has-scroll-left", pre.scrollLeft > 1);
-  wrapper.classList.toggle("has-scroll-right", pre.scrollLeft < maxScroll - 1);
-}
-
-export function initializeMarkdownCodeBlockOverflow(root: ParentNode): void {
-  for (const pre of root.querySelectorAll<HTMLElement>(".code-block-wrapper pre")) {
-    updateCodeBlockOverflow(pre);
-  }
-}
-
-export function updateMarkdownCodeBlockOverflow(event: Event): void {
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return;
-  }
-  const pre = target.matches(".code-block-wrapper pre")
-    ? target
-    : target.closest<HTMLElement>(".code-block-wrapper")?.querySelector("pre");
-  if (!(pre instanceof HTMLElement)) {
-    return;
-  }
-  updateCodeBlockOverflow(pre);
-}
-
 for (const [language, definition] of Object.entries({
   bash,
   cpp,
@@ -98,7 +68,6 @@ function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
 }
 
 export function handleMarkdownCodeBlockCopy(event: Event): void {
-  updateMarkdownCodeBlockOverflow(event);
   const target = event.target;
   if (!(target instanceof Element)) {
     return;
