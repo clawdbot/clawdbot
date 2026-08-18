@@ -404,35 +404,33 @@ function renderSessionListToolbar(host: SidebarSessionListHost) {
   const filtered = host.sessionCreatorFilterActive || host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
-      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.sessionsHeading")}</span>
-      <span class="sidebar-session-toolbar__actions">
-        <button
-          type="button"
-          class="sidebar-session-toolbar__button sidebar-session-sort ${filtered
-            ? "sidebar-session-sort--filtered"
-            : ""}"
-          title=${t("chat.sidebar.filterAndSort")}
-          aria-label=${t("chat.sidebar.filterAndSort")}
-          aria-haspopup="menu"
-          aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
-          @click=${(event: MouseEvent) =>
-            host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
-        >
-          ${icons.listFilter}
-        </button>
-        <button
-          type="button"
-          class="sidebar-session-toolbar__button sidebar-new-session"
-          title=${newSessionAccess.allowed
-            ? t("chat.runControls.newSession")
-            : newSessionAccess.reason}
-          aria-label=${t("chat.runControls.newSession")}
-          ?disabled=${!newSessionAccess.allowed}
-          @click=${() => host.openNewSession()}
-        >
-          ${icons.plus}
-        </button>
-      </span>
+      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+      <button
+        type="button"
+        class="sidebar-session-toolbar__button sidebar-session-sort ${filtered
+          ? "sidebar-session-sort--filtered"
+          : ""}"
+        title=${t("chat.sidebar.sortSessions")}
+        aria-label=${t("chat.sidebar.sortSessions")}
+        aria-haspopup="menu"
+        aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
+        @click=${(event: MouseEvent) =>
+          host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
+      >
+        ${icons.listFilter}
+      </button>
+      <button
+        type="button"
+        class="sidebar-session-toolbar__button sidebar-new-session"
+        title=${newSessionAccess.allowed
+          ? t("chat.runControls.newSession")
+          : newSessionAccess.reason}
+        aria-label=${t("chat.runControls.newSession")}
+        ?disabled=${!newSessionAccess.allowed}
+        @click=${() => host.openNewSession()}
+      >
+        ${icons.plus}
+      </button>
     </div>
   `;
 }

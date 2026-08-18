@@ -292,7 +292,7 @@ export function renderSidebarSessionSortMenu(params: {
           .open=${true}
           placement="bottom-start"
           .distance=${0}
-          aria-label=${t("chat.sidebar.filterAndSort")}
+          aria-label=${t("chat.sidebar.sortSessions")}
           @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
             event.preventDefault();
             const value = event.detail.item.value;
@@ -319,7 +319,7 @@ export function renderSidebarSessionSortMenu(params: {
           @wa-after-hide=${(event: Event) =>
             params.onClose(consumeDropdownKeyboardDismissal(event))}
         >
-          ${renderSidebarMenuTrigger(position, t("chat.sidebar.filterAndSort"))}
+          ${renderSidebarMenuTrigger(position, t("chat.sidebar.sortSessions"))}
           <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
           ${groupingOptions.map((option) =>
             renderSidebarMenuRadioItem({

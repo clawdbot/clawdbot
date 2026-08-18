@@ -1424,16 +1424,10 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 2px;
   min-height: 24px;
   margin-inline: -8px 0;
   padding: 0 10px 0 var(--sidebar-text-offset);
-}
-
-.sidebar-session-toolbar__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
 }
 
 .sidebar-session-toolbar__button {
@@ -1453,6 +1447,10 @@ body.update-dialog-open .sidebar-update-card__status {
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+.sidebar-session-toolbar__button:first-of-type {
+  margin-left: auto;
 }
 
 .sidebar-session-toolbar__button:hover,
