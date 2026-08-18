@@ -31,8 +31,13 @@ export type TuiResult = {
   systemAgentMessage?: string;
 };
 
+export type TuiHistoryRunOutcome =
+  | { state: "active"; runId: string }
+  | { state: "completed" | "interrupted" }
+  | { state: "failed"; errorMessage: string };
+
 export type TuiHistoryLoadResult =
-  | { loaded: true; inFlightRunId: string | null }
+  | { loaded: true; runOutcome: TuiHistoryRunOutcome }
   | { loaded: false };
 
 export type ChatEvent = {
