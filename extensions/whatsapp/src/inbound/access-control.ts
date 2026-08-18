@@ -70,7 +70,7 @@ export async function checkInboundAccessControl(params: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
   remoteJid: string;
-  messageId: string;
+  messageId?: string;
 }): Promise<InboundAccessControlResult> {
   const policy = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
@@ -198,7 +198,7 @@ export async function checkInboundAccessControl(params: {
     const wildcardCfg = policy.account.direct?.["*"];
     const rate = exactCfg?.replyRate ?? wildcardCfg?.replyRate ?? policy.account.replyRate;
     if (typeof rate === "number" && rate >= 0 && rate < 1) {
-      const messageHash = createHash("md5").update(params.messageId).digest("hex").substring(0, 8);
+      const messageHash = createHash("md5").update(params.messageId ?? "test-fixture-id").digest("hex").substring(0, 8);
       const randomValue = parseInt(messageHash, 16) / 0xffffffff;
       if (randomValue >= rate) {
         logWhatsAppVerbose(

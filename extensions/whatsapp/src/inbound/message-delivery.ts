@@ -419,15 +419,15 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       preparedInboundByDurableId.delete(durableId);
     }
     if (context.skipRecentOutboundEcho === true) {
-      return "completed";
+      return { kind: "completed" };
     }
     const prepared = await preparation;
     if (prepared === null) {
-      return "completed";
+      return { kind: "completed" };
     }
     const inbound = prepared ?? (await normalizeInboundMessage(msg));
     if (!inbound) {
-      return "completed";
+      return { kind: "completed" };
     }
     if ("blocked" in inbound) {
       return inbound.reason ? { kind: "completed", reason: inbound.reason } : "completed";
@@ -442,13 +442,13 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
       })
     ) {
-      return "completed";
+      return { kind: "completed" };
     }
     const readReceipt = buildReadReceiptTarget(inbound);
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
     if (context.skipStaleAppend === true) {
       await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
-      return "completed";
+      return { kind: "completed" };
     }
 
     const enriched = await enrichWhatsAppInboundMessage({
@@ -459,7 +459,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      return "completed";
+      return { kind: "completed" };
     }
 
     recordAcceptedInboundActivity(options.accountId);
