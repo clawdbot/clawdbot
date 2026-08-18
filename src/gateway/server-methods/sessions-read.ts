@@ -211,6 +211,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const identityId = gatewayClientSessionCreator(client)?.id;
+    const preparedModelCatalog = await measureDiagnosticsTimelineSpan(
+      "gateway.sessions.list.model_catalog",
+      () =>
+        readPreparedServerMethodModelCatalog(
+          context,
+          p.agentId ? { agentId: p.agentId } : undefined,
+        ),
+      {
+        config: cfg,
+        phase: "sessions.list",
+      },
+    );
     const run = () =>
       measureDiagnosticsTimelineSpan(
         "gateway.sessions.list",
@@ -226,18 +238,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
           let loaded = options.loaded;
           if (!loaded) {
-            const modelCatalog = await measureDiagnosticsTimelineSpan(
-              "gateway.sessions.list.model_catalog",
-              () =>
-                readPreparedServerMethodModelCatalog(
-                  context,
-                  p.agentId ? { agentId: p.agentId } : undefined,
-                ),
-              {
-                config: cfg,
-                phase: "sessions.list",
-              },
-            );
             const loadedStore = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
               () =>
@@ -255,7 +255,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 },
               },
             );
-            loaded = { ...loadedStore, modelCatalog };
+            loaded = { ...loadedStore, modelCatalog: preparedModelCatalog };
           }
           if (!loaded) {
             throw new Error("sessions.list store input was not loaded");
@@ -473,7 +473,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           },
         },
       );
-    await respondWithCachedSessionList({ client, config: cfg, context, request: p, respond, run });
+    await respondWithCachedSessionList({
+      client,
+      config: cfg,
+      context,
+      modelCatalog: preparedModelCatalog,
+      request: p,
+      respond,
+      run,
+    });
   },
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {

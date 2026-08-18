@@ -209,6 +209,14 @@ export function getPreparedModelCatalogSnapshot(
   return getPreparedModelCatalogOwnerSnapshot(params)?.modelCatalog;
 }
 
+/** Returns the newest completed catalog for the current generation without starting discovery. */
+export function getAvailablePreparedModelCatalogSnapshot(
+  params: LoadPreparedModelCatalogParams = {},
+): ModelCatalogSnapshot | undefined {
+  const owner = getPreparedModelCatalogOwnerSnapshot(params);
+  return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
+}
+
 async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,

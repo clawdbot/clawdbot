@@ -11,7 +11,7 @@ import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
@@ -472,11 +472,20 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
   });
+  const catalogEntry =
+    params.modelCatalog && rowModelProvider && rowModel
+      ? findModelCatalogEntry(params.modelCatalog, {
+          provider: rowModelProvider,
+          modelId: rowModel,
+        })
+      : undefined;
   const resolvedCurrentContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
       provider: rowModelProvider,
       model: rowModel,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: catalogEntry?.contextWindow,
       allowAsyncLoad: false,
     }),
   );

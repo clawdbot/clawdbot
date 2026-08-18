@@ -1,4 +1,5 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
@@ -21,6 +22,7 @@ type SessionListFence = {
   agentDatabaseRegistryToken: symbol;
   incognitoDatabaseGeneration: number;
   lifecyclePersistenceVersion: number;
+  modelCatalogRevision: number;
   sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
@@ -38,13 +40,32 @@ type SessionListState = {
 
 const SESSIONS_LIST_COMPLETED_CACHE_LIMIT = 64;
 const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListState>();
+const modelCatalogRevisions = new WeakMap<readonly ModelCatalogEntry[], number>();
+let nextModelCatalogRevision = 1;
 
-function readSessionListFence(context: GatewayRequestContext): SessionListFence {
+function readModelCatalogRevision(modelCatalog: readonly ModelCatalogEntry[] | undefined): number {
+  if (!modelCatalog) {
+    return 0;
+  }
+  const existing = modelCatalogRevisions.get(modelCatalog);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const revision = nextModelCatalogRevision++;
+  modelCatalogRevisions.set(modelCatalog, revision);
+  return revision;
+}
+
+function readSessionListFence(
+  context: GatewayRequestContext,
+  modelCatalog: readonly ModelCatalogEntry[] | undefined,
+): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
     agentDatabaseRegistryToken: readOpenClawAgentDatabaseRegistryToken(),
     incognitoDatabaseGeneration: readOpenIncognitoAgentDatabaseGeneration(),
     lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
+    modelCatalogRevision: readModelCatalogRevision(modelCatalog),
     sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
@@ -62,6 +83,7 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.agentDatabaseRegistryToken === fence.agentDatabaseRegistryToken &&
     value.incognitoDatabaseGeneration === fence.incognitoDatabaseGeneration &&
     value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
+    value.modelCatalogRevision === fence.modelCatalogRevision &&
     value.sessionAutomationVersion === fence.sessionAutomationVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
@@ -137,6 +159,7 @@ export async function respondWithCachedSessionList(params: {
   client: GatewayClient | null;
   config: OpenClawConfig;
   context: GatewayRequestContext;
+  modelCatalog?: readonly ModelCatalogEntry[];
   request: SessionsListParams;
   respond: RespondFn;
   run: () => Promise<SessionsListResult>;
@@ -145,7 +168,7 @@ export async function respondWithCachedSessionList(params: {
   const state = sessionListState(params.context, params.config);
   // Every input that can change a projected row must fence reuse. Session identity,
   // Gateway projection, and live-run mutations have separate monotonic owners.
-  const fence = readSessionListFence(params.context);
+  const fence = readSessionListFence(params.context, params.modelCatalog);
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.
   const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
@@ -169,7 +192,10 @@ export async function respondWithCachedSessionList(params: {
   const promise = Promise.resolve()
     .then(params.run)
     .then((result) => {
-      if (cacheCompleted && matchesSessionListFence(readSessionListFence(params.context), fence)) {
+      if (
+        cacheCompleted &&
+        matchesSessionListFence(readSessionListFence(params.context, params.modelCatalog), fence)
+      ) {
         const expiresAt = resolveSessionListExpiration(result);
         if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
           rememberCompletedSessionList(state, workKey, { ...fence, result, expiresAt });
