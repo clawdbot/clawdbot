@@ -327,6 +327,10 @@ export function partitionSidebarVisibleSections(input: {
   const ungroupedHasPeerHeader = sections.some(
     (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
   );
+  // Accepted tradeoff: headerless means no collapse control, so a stored
+  // ungrouped-collapsed preference is deliberately inert here — honoring it
+  // would blank the whole list with no affordance to undo. It re-applies
+  // unchanged once a peer section returns.
   const expandedRows: SidebarRecentSession[] = [];
   const visibleRows: SidebarRecentSession[] = [];
   // totalRowCount is the pre-pagination size: headers and empty-zone
