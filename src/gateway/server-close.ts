@@ -611,7 +611,7 @@ async function disposeRuntimeWithShutdownGrace(params: {
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   clearSkillsRefreshTimer?: () => void;
-  skillsChangeUnsub?: () => void;
+  skillsChangeUnsub?: () => void | Promise<void>;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
@@ -620,7 +620,7 @@ export async function runGatewayClosePrelude(params: {
 }): Promise<void> {
   params.stopDiagnostics?.();
   params.clearSkillsRefreshTimer?.();
-  params.skillsChangeUnsub?.();
+  await params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
   await params.stopChannelHealthMonitor?.();

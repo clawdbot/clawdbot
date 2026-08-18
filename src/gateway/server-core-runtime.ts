@@ -236,7 +236,7 @@ export async function startGatewayCoreRuntime(input: {
     start: async () => await discoveryResident.start(),
     stop: async () => {
       const earlyRuntime = await startEarlyRuntime();
-      earlyRuntime.skillsChangeUnsub();
+      await earlyRuntime.skillsChangeUnsub();
       shutdownRuntime.stopTaskRegistryMaintenance();
     },
   });

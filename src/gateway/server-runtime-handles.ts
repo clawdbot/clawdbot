@@ -39,7 +39,7 @@ export type GatewayServerMutableState = {
   gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[];
   skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
   skillsRefreshDelayMs: number;
-  skillsChangeUnsub: () => void;
+  skillsChangeUnsub: () => Promise<void>;
   channelHealthMonitor: ChannelHealthMonitor | null;
   mcpServer: { port: number; close: () => Promise<void> } | undefined;
   configReloader: GatewayConfigReloaderHandle;
@@ -78,7 +78,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     gatewayLifetimeSidecars: [],
     skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
     skillsRefreshDelayMs: 30_000,
-    skillsChangeUnsub: () => {},
+    skillsChangeUnsub: async () => {},
     channelHealthMonitor: null as ChannelHealthMonitor | null,
     mcpServer: undefined as { port: number; close: () => Promise<void> } | undefined,
     configReloader: {

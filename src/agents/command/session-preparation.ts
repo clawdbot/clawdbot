@@ -25,6 +25,7 @@ export async function prepareEmbeddedSessionState(params: {
   runId: string;
   workspaceDir: string;
   executionSkillsDir: string;
+  watchSkills: boolean;
   isNewSession: boolean;
   isSubagentLaneTurn: boolean;
   suppressVisibleSessionEffects: boolean;
@@ -78,7 +79,7 @@ export async function prepareEmbeddedSessionState(params: {
         advertiseExecNode: nodeSkillsEligibility.canExec,
       }),
     },
-    watch: false,
+    watch: params.watchSkills,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),
