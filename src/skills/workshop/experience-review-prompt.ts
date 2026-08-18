@@ -102,7 +102,7 @@ function renderExistingSkillsSection(
   const omitted = existingSkills.length - shown.length;
   return [
     "",
-    "Existing workspace skills (update targets):",
+    "Workshop-owned workspace skills (update targets):",
     ...shown.map((skill) =>
       truncateUtf16Safe(
         `- ${skill.name}${skill.description ? ` — ${skill.description}` : ""}`,
@@ -133,7 +133,7 @@ function renderUsedSkillsSection(
     .slice(0, EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES);
   const header = "Skills actually used in this trajectory (authoritative runtime receipt):";
   const preference =
-    "Prefer improving a used writable workspace skill when it governs the learning.";
+    "Prefer improving a used Workshop-owned workspace skill when it governs the learning.";
   const reservedOmission = `(+${usedSkills.length} more used skills omitted)`;
   const entries: string[] = [];
   for (const skill of shown) {
@@ -176,7 +176,7 @@ export function buildSkillExperienceReviewPrompt(
     "",
     SKILL_AUTHORING_STANDARDS_PROMPT,
     "",
-    "Choose the smallest mutation, in order: (1) revise a pending proposal on the same topic — use list/inspect to check; (2) patch a used writable workspace skill that governs this work, otherwise the best existing workspace skill — read it first, then quote the exact text to change in old_string with your replacement in new_string, or use an empty old_string to append a new section; place the learning where it belongs and match the skill's style; (3) update with a full replacement body only when the whole skill needs restructuring — read it first and preserve everything still useful; (4) create one new class-level skill only when no existing skill covers this class of work. Make at most one create/patch/update/revise call. Every mutation starts as a pending proposal; nothing writes a live skill during this review, and the configured pipeline decides whether to apply it afterward. If nothing genuinely clears the bar, answer NOTHING_TO_LEARN.",
+    "Choose the smallest mutation, in order: (1) revise a pending proposal on the same topic — use list/inspect to check; (2) patch a used Workshop-owned workspace skill that governs this work, otherwise the best Workshop-owned workspace skill — read it first, then quote the exact text to change in old_string with your replacement in new_string, or use an empty old_string to append a new section; place the learning where it belongs and match the skill's style; (3) update with a full replacement body only when the whole Workshop-owned skill needs restructuring — read it first and preserve everything still useful; (4) create one new class-level skill only when no Workshop-owned skill covers this class of work. Make at most one create/patch/update/revise call. Every mutation starts as a pending proposal; nothing writes a live skill during this review, and the configured pipeline decides whether to apply it afterward. If nothing genuinely clears the bar, answer NOTHING_TO_LEARN.",
     "",
     candidate.turnAborted === true
       ? `Interrupted run (stopped before completion): ${candidate.ctx.runId ?? "unknown"}`

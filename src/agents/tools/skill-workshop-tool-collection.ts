@@ -63,7 +63,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     {
       maxItems: MAX_RECONCILED_SKILLS,
       description:
-        "Exactly one decision for every current writable skill, plus optional new write decisions. write requires description and complete SKILL.md content; drop requires a reason.",
+        "Exactly one decision for every current skill, plus optional new write decisions. Skills not created by Skill Workshop are read-only and require keep. write requires description and complete SKILL.md content; drop requires a reason.",
     },
   ),
 );

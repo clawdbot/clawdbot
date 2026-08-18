@@ -23,7 +23,12 @@ import {
 import { stageSkillCollectionDrop } from "./collection-rollback.js";
 import { getArchivedSkillFiles } from "./curator.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
-import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
+import {
+  applySkillProposal,
+  inspectSkillProposal,
+  listSkillProposals,
+  proposeCreateSkill,
+} from "./service.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 
 type CopyDirectoryHook = (
@@ -81,6 +86,57 @@ afterEach(async () => {
 });
 
 describe("skill collection reconciliation", () => {
+  it("keeps skills without an applied Workshop create proposal read-only", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "handwritten", description: "Operator-owned procedure", body: "# Original\n" },
+    ]);
+    const receipt = await readCollectionReceipt();
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        plan: [
+          {
+            action: "write",
+            name: "handwritten",
+            description: "Rewritten procedure",
+            content: "# Rewritten\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: handwritten");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "handwritten", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Original");
+  });
+
+  it("records collection-created skills as applied create proposals", async () => {
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      readSkillHashes: new Map(),
+      readSkillTreeHashes: new Map(),
+      plan: [
+        {
+          action: "write",
+          name: "learned",
+          description: "Learned procedure",
+          content: "# Learned\n",
+        },
+      ],
+    });
+
+    const proposals = await listSkillProposals({ workspaceDir, env: testState.env });
+    expect(proposals.proposals).toEqual([
+      expect.objectContaining({ kind: "create", skillKey: "learned", status: "applied" }),
+    ]);
+    expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
+      expect.objectContaining({ name: "learned", workshopOwned: true }),
+    ]);
+  });
+
   it.runIf(process.platform !== "win32")(
     "keeps trusted external symlink targets outside the autonomous collection",
     async () => {
@@ -187,7 +243,7 @@ describe("skill collection reconciliation", () => {
   );
 
   it("consolidates a collection atomically and preserves one recoverable backup", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "deploy-one", description: "First deploy notes", body: "# Deploy one\n" },
       { name: "deploy-two", description: "Second deploy notes", body: "# Deploy two\n" },
       { name: "tiny-fragment", description: "One narrow fact", body: "# Tiny\n" },
@@ -275,7 +331,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("invalidates skill snapshots before backup pruning fails", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
     ]);
     await reconcileSkillCollection({
@@ -365,7 +421,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("preserves a concurrent skill-tree edit made before mutation", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Procedure", body: "# Original\n" },
     ]);
     const skillDir = path.join(workspaceDir, "skills", "procedure");
@@ -401,7 +457,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("preserves an external edit made after backup validation", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Procedure", body: "# Original\n" },
     ]);
     const skillDir = path.join(workspaceDir, "skills", "procedure");
@@ -437,9 +493,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("waits behind the same collection commit lock used by proposal apply", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "obsolete", description: "Obsolete procedure" },
-    ]);
+    await writeWorkshopOwnedSkills([{ name: "obsolete", description: "Obsolete procedure" }]);
     const aliasParent = await tempDirs.make("openclaw-skill-collection-lock-alias-");
     const workspaceAlias = path.join(aliasParent, "workspace-alias");
     await fs.symlink(
@@ -485,7 +539,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("rejects the whole collection before a dangerous rewrite is applied", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "safe", description: "Safe procedure", body: "# Safe\n" },
     ]);
 
@@ -511,7 +565,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("refuses to restore over a skill changed after cleanup", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
     ]);
     await reconcileSkillCollection({
@@ -536,8 +590,42 @@ describe("skill collection reconciliation", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
   });
 
-  it("preserves an edit made while restore artifacts are captured", async () => {
+  it("restores an owned skill without rewriting a kept external skill", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "owned", description: "Workshop procedure", body: "# Owned original\n" },
+    ]);
     await writeWorkspaceSkills(workspaceDir, [
+      { name: "external", description: "Operator procedure", body: "# External original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [
+        {
+          action: "write",
+          name: "owned",
+          description: "Updated Workshop procedure",
+          content: "# Owned updated\n",
+        },
+        { action: "keep", name: "external" },
+      ],
+    });
+    const externalFile = path.join(workspaceDir, "skills", "external", "SKILL.md");
+    await fs.appendFile(externalFile, "\nOperator edit after cleanup.\n");
+
+    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
+
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "owned", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Owned original");
+    await expect(fs.readFile(externalFile, "utf8")).resolves.toContain(
+      "Operator edit after cleanup.",
+    );
+  });
+
+  it("preserves an edit made while restore artifacts are captured", async () => {
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
     ]);
     await reconcileSkillCollection({
@@ -566,7 +654,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("rolls back a failed restore so the backup remains retryable", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
     ]);
     await reconcileSkillCollection({
@@ -616,7 +704,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("invalidates skill snapshots when restore and rollback both fail", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
     ]);
     await reconcileSkillCollection({
@@ -652,7 +740,7 @@ describe("skill collection reconciliation", () => {
     await expect(fs.access(skillDir)).rejects.toThrow();
   });
 
-  it("restores project-agent skills from their writable root", async () => {
+  it("keeps project-agent skills read-only without Workshop create provenance", async () => {
     const skillDir = path.join(workspaceDir, ".agents", "skills", "project-procedure");
     await writeSkill({
       dir: skillDir,
@@ -660,24 +748,21 @@ describe("skill collection reconciliation", () => {
       description: "Project procedure",
       body: "# Project procedure\n",
     });
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [{ action: "drop", name: "project-procedure", reason: "cleanup test" }],
-    });
-    await expect(fs.access(skillDir)).rejects.toThrow();
-
-    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
-
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...(await readCollectionReceipt()),
+        plan: [{ action: "drop", name: "project-procedure", reason: "cleanup test" }],
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: project-procedure");
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "# Project procedure",
     );
   });
 
   it("rejects a plan whose resulting collection exceeds the aggregate byte limit", async () => {
-    await writeWorkspaceSkills(
-      workspaceDir,
+    await writeWorkshopOwnedSkills(
       Array.from({ length: 7 }, (_, index) => ({
         name: `large-${index}`,
         description: `Large procedure ${index}`,
@@ -704,7 +789,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("preserves archived lifecycle state when backup commit fails", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "archived", description: "Archived procedure", body: "# Original\n" },
     ]);
     const skillFile = path.join(workspaceDir, "skills", "archived", "SKILL.md");
@@ -807,7 +892,9 @@ describe("skill collection reconciliation", () => {
       releaseCommit?.();
       await expect(reconciliation).rejects.toThrow("forced backup commit failure");
       await expect(listing).resolves.toMatchObject({
-        proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+        proposals: expect.arrayContaining([
+          expect.objectContaining({ id: proposal.record.id, status: "pending" }),
+        ]),
       });
       await expect(inspection).resolves.toMatchObject({
         record: { id: proposal.record.id, status: "pending" },
@@ -874,7 +961,7 @@ describe("skill collection reconciliation", () => {
   }, 15_000);
 
   it("restores a staged drop when backup commit fails", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "obsolete", description: "Obsolete procedure", body: "# Original\n" },
     ]);
     const skillFile = path.join(workspaceDir, "skills", "obsolete", "SKILL.md");
@@ -903,7 +990,7 @@ describe("skill collection reconciliation", () => {
   });
 
   it("preserves a concurrent edit when backup commit and rollback fail", async () => {
-    await writeWorkspaceSkills(workspaceDir, [
+    await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
     ]);
     const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
@@ -938,7 +1025,7 @@ describe("skill collection reconciliation", () => {
 });
 
 async function readCollectionReceipt(config?: OpenClawConfig) {
-  const skills = listWritableSkillCollection(workspaceDir, { config });
+  const skills = listWritableSkillCollection(workspaceDir, { config, env: testState.env });
   return {
     readSkillHashes: new Map(
       await Promise.all(
@@ -957,4 +1044,26 @@ async function readCollectionReceipt(config?: OpenClawConfig) {
       ),
     ),
   };
+}
+
+async function writeWorkshopOwnedSkills(
+  skills: ReadonlyArray<{ name: string; description: string; body?: string }>,
+): Promise<void> {
+  for (const skill of skills) {
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      env: testState.env,
+      name: skill.name,
+      description: skill.description,
+      content: skill.body ?? `# ${skill.name}\n`,
+    });
+    await applySkillProposal({
+      workspaceDir,
+      env: testState.env,
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+  }
+  dispatchCommittedSkillChangeBestEffort.mockClear();
+  snapshotCommittedSkillArtifactBestEffort.mockClear();
 }

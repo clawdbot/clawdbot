@@ -26,11 +26,16 @@ import {
 import {
   MAX_RECONCILED_SKILL_BYTES,
   MAX_RECONCILED_SKILLS,
+  type SkillCollectionChange,
   type SkillCollectionPlanEntry,
   type SkillCollectionReconcileResult,
   type SkillCollectionRestoreResult,
   type WritableSkillCollectionEntry,
 } from "./collection-contracts.js";
+import {
+  prepareCollectionCreateProposals,
+  promoteCollectionCreateProposal,
+} from "./collection-create-proposal.js";
 import {
   canonicalSkillCollectionWorkspace,
   pruneOlderSkillCollectionBackups,
@@ -47,13 +52,13 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { assertWorkshopOwnedSkillDirs, listWorkshopOwnedSkillDirs } from "./ownership.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 import { assertWritableSkillTarget, isWorkspaceOwnedSkillTarget } from "./workspace-skill-read.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
-
 type CollectionBackupManifest = {
   schema: typeof BACKUP_SCHEMA;
   id: string;
@@ -63,12 +68,20 @@ type CollectionBackupManifest = {
   resultSkillDirs: string[];
   resultSkillHashes: Record<string, string>;
 };
-
 export function listWritableSkillCollection(
   workspaceDir: string,
-  options: { agentId?: string; agentIds?: readonly string[]; config?: OpenClawConfig } = {},
+  options: {
+    agentId?: string;
+    agentIds?: readonly string[];
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): WritableSkillCollectionEntry[] {
   const byFile = new Map<string, WritableSkillCollectionEntry>();
+  const ownedDirs = listWorkshopOwnedSkillDirs(
+    workspaceDir,
+    options.env ? { env: options.env } : {},
+  );
   const agentIds = options.agentIds?.length ? options.agentIds : [options.agentId];
   for (const agentId of agentIds) {
     const status = buildWorkspaceSkillStatus(workspaceDir, {
@@ -94,6 +107,7 @@ export function listWritableSkillCollection(
         name: skill.skillKey,
         baseDir: path.resolve(skill.baseDir),
         filePath,
+        workshopOwned: ownedDirs.has(path.resolve(skill.baseDir)),
         ...(skill.description ? { description: skill.description } : {}),
       });
     }
@@ -120,6 +134,7 @@ export async function reconcileSkillCollection(params: {
         config: params.config,
         agentId: params.agentId,
         agentIds: params.agentIds,
+        env: params.env,
       });
       const currentByName = new Map(current.map((skill) => [skill.name, skill]));
       if (currentByName.size !== current.length) {
@@ -183,6 +198,15 @@ export async function reconcileSkillCollection(params: {
         plan,
         config: params.config,
       });
+      const createProposals = await prepareCollectionCreateProposals({
+        workspaceDir,
+        current,
+        plan,
+        prepared,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.env,
+      });
       await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
       const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
       const shouldDispatch = hasCommittedSkillChangeHooks();
@@ -217,6 +241,14 @@ export async function reconcileSkillCollection(params: {
         for (const mutation of prepared) {
           await applyWorkspaceSkillMutation(mutation);
           appliedWrites.push(mutation);
+          const proposal = createProposals.get(mutation.skillFile.filePath);
+          if (proposal) {
+            await promoteCollectionCreateProposal({
+              proposal,
+              workspaceDir,
+              env: params.env,
+            });
+          }
         }
         for (const entry of plan) {
           if (entry.action !== "drop") {
@@ -325,6 +357,11 @@ export async function restoreLatestSkillCollectionBackup(params: {
         backupId,
         workspaceDir,
       });
+      assertWorkshopOwnedSkillDirs(
+        workspaceDir,
+        [...manifest.skillDirs, ...manifest.resultSkillDirs],
+        params.env ? { env: params.env } : {},
+      );
       await assertCollectionResultUnchanged(workspaceDir, manifest);
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];
       const shouldDispatch = hasCommittedSkillChangeHooks();
@@ -407,12 +444,6 @@ export async function restoreLatestSkillCollectionBackup(params: {
   return commit.result;
 }
 
-type SkillCollectionChange = {
-  action: "created" | "updated" | "removed";
-  before?: PluginHookSkillArtifact;
-  after?: PluginHookSkillArtifact;
-};
-
 async function prepareWrites(params: {
   workspaceDir: string;
   current: readonly WritableSkillCollectionEntry[];
@@ -480,10 +511,20 @@ async function createCollectionBackup(params: {
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
-  const skillDirs = [
-    ...new Set(params.current.map((skill) => path.relative(params.workspaceDir, skill.baseDir))),
-  ].toSorted();
   const currentByName = new Map(params.current.map((skill) => [skill.name, skill]));
+  // A restore must never rewrite a kept, externally owned skill. Back up only paths
+  // this transaction may mutate; newly created result paths are removed on restore.
+  const skillDirs = [
+    ...new Set(
+      params.plan.flatMap((entry) => {
+        if (entry.action === "keep") {
+          return [];
+        }
+        const existing = currentByName.get(entry.name);
+        return existing ? [path.relative(params.workspaceDir, existing.baseDir)] : [];
+      }),
+    ),
+  ].toSorted();
   const manifest: CollectionBackupManifest = {
     schema: BACKUP_SCHEMA,
     id,
@@ -491,7 +532,7 @@ async function createCollectionBackup(params: {
     workspaceDir: params.workspaceDir,
     skillDirs,
     resultSkillDirs: params.plan
-      .filter((entry) => entry.action !== "drop")
+      .filter((entry) => entry.action === "write")
       .map((entry) => {
         const existing = currentByName.get(entry.name);
         return path.relative(

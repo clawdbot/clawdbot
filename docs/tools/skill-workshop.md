@@ -23,8 +23,10 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
   `SKILL.md`.
 - **Apply is the only live write:** create, update, and revise never change
   active skills.
-- **Workspace scoped:** creates target the workspace `skills/` root; updates
-  are allowed only for writable workspace skills.
+- **Workshop-owned updates:** creates target the workspace `skills/` root;
+  updates are allowed only when an applied Workshop `create` proposal owns the
+  workspace-relative skill directory. Handwritten and externally installed
+  workspace skills remain read-only.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
@@ -51,14 +53,19 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 ## Collection review
 
 In `auto` mode, the Gateway starts one isolated collection-review session per
-writable agent workspace each day. The session can only read skills and submit
+agent workspace each day. The session can only read skills and submit
 one complete collection reconciliation. It keeps distinct useful skills,
 rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
 Choosing `auto` intentionally authorizes those rewrites and drops without a
-second approval; `propose` and `off` do not run collection review.
+second approval **for Workshop-owned paths only**; `propose` and `off` do not
+run collection review.
 
-Every eligible writable skill must be read and receive exactly one `keep`,
-`write`, or `drop` decision. Disabled and agent-filtered skills stay untouched.
+Every eligible workspace skill must be read and receive exactly one decision.
+Skills without applied Workshop create provenance are read-only and must receive
+`keep`; Workshop-owned skills may receive `keep`, `write`, or `drop`. A new
+skill created during collection review is recorded as an automatically applied
+`create` proposal, which makes that directory Workshop-owned. Disabled and
+agent-filtered skills stay untouched.
 Shared workspaces use the union of each agent's allowed skills only when
 provider, model, and resolved auth identity match. Reconciliation must leave
 every sharing agent at least one visible skill.
@@ -342,13 +349,13 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting                    | Default  | Effect                                                                                                                                                                             |
-| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs daily cleanup that can rewrite or drop eligible writable skills. |
-| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                                |
-| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.                |
-| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                      |
-| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                                    |
+| Setting                    | Default  | Effect                                                                                                                                                                          |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs daily cleanup that can rewrite or drop Workshop-owned skills. |
+| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                             |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.             |
+| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                   |
+| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                                 |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
 completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
