@@ -165,15 +165,21 @@ export function applyResponsesServiceTierPricing(
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
-function resolveResponsesApiReasoningEffort<TApi extends Api>(
-  model: Model<TApi>,
-  reasoning: ModelThinkingLevel,
-): string | undefined {
+function isResponsesReasoningEffortDisabled<TApi extends Api>(model: Model<TApi>): boolean {
   const compat =
     model.api === "openai-responses" && model.compat && typeof model.compat === "object"
       ? model.compat
       : undefined;
-  if (compat && "supportsReasoningEffort" in compat && compat.supportsReasoningEffort === false) {
+  return Boolean(
+    compat && "supportsReasoningEffort" in compat && compat.supportsReasoningEffort === false,
+  );
+}
+
+function resolveResponsesApiReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: ModelThinkingLevel,
+): string | undefined {
+  if (isResponsesReasoningEffortDisabled(model)) {
     return undefined;
   }
   if (model.thinkingLevelMap?.[reasoning] === null) {
@@ -231,7 +237,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
     }
   }
 
-  if (!model.reasoning) {
+  if (!model.reasoning || isResponsesReasoningEffortDisabled(model)) {
     return;
   }
 
