@@ -453,7 +453,9 @@ export function syncToolCardExpansionState(
         if (initialized.has(disclosureId)) {
           continue;
         }
-        setExpansionState(expanded, disclosureId, autoExpandToolCalls);
+        if (autoExpandToolCalls) {
+          setExpansionState(expanded, disclosureId, true);
+        }
         initialized.add(disclosureId);
       }
       if (!isStandaloneToolMessageForDisplay(entry.message)) {
@@ -464,7 +466,9 @@ export function syncToolCardExpansionState(
       if (initialized.has(disclosureId)) {
         continue;
       }
-      setExpansionState(expanded, disclosureId, autoExpandToolCalls);
+      if (autoExpandToolCalls) {
+        setExpansionState(expanded, disclosureId, true);
+      }
       initialized.add(disclosureId);
     }
   }

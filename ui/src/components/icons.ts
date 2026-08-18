@@ -26,6 +26,9 @@ export const icons = {
     <path d="M7 6h1v4" />
     <path d="m16.71 13.88.7.71-2.82 2.82" />`),
   activity: strokeIcon(svg` <path d="M22 12h-4l-3 9L9 3l-3 9H2" />`),
+  squareTerminal: strokeIcon(svg` <path d="m7 11 2-2-2-2" />
+    <path d="M11 13h4" />
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />`),
   clock: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
     <polyline points="12 6 12 12 16 14" />`),
   link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />

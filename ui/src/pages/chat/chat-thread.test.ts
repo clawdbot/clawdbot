@@ -3708,7 +3708,7 @@ describe("tool expansion state", () => {
     };
 
     syncToolCardExpansionState("main", [group], false);
-    expect(getExpandedToolCards("main").get("assistant-1:toolcard:0")).toBe(false);
+    expect(getExpandedToolCards("main").get("assistant-1:toolcard:0")).toBeUndefined();
 
     syncToolCardExpansionState("main", [group], true);
     expect(getExpandedToolCards("main").get("assistant-1:toolcard:0")).toBe(true);

@@ -2442,6 +2442,37 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("keeps an explicitly collapsed running activity group closed", () => {
+    const container = document.createElement("div");
+    const group = createToolGroup(
+      "running-collapsed",
+      [
+        createMessageEntry("running-command", {
+          role: "assistant",
+          __openclawToolStreamLive: true,
+          __openclawToolStreamResultReceived: false,
+          content: [createToolCall("call-running", "bash", { command: "pnpm test" })],
+        }),
+      ],
+      { isStreaming: true },
+    );
+
+    render(
+      renderActivityGroup([group], {
+        showReasoning: true,
+        showToolCalls: true,
+        runActive: true,
+        isToolMessageExpanded: () => false,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
+    expect(
+      container.querySelector(".chat-activity-group__summary")?.getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
   it("keeps cross-group activity neutral while retaining failed child badges", () => {
     const container = document.createElement("div");
     const failedMessage = (id: string) =>

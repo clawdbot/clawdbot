@@ -238,8 +238,12 @@ export function projectChatTranscript(
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
+  const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
+    setExpansionState(
+      expandedToolCards,
+      toolCardId,
+      !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
+    );
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
@@ -385,7 +389,7 @@ export function projectChatTranscript(
       loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
       getAssistantMessageExpansion: (messageId: string) => expandedAssistantMessages.get(messageId),
       onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
-      isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
+      isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId),
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
