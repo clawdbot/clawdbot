@@ -434,7 +434,8 @@ function handleWidgetExportAction(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
     toggle?.click();
-    const label = dropdown instanceof HTMLElement ? dropdown.querySelector("[data-raw-label]") : null;
+    const label =
+      dropdown instanceof HTMLElement ? dropdown.querySelector("[data-raw-label]") : null;
     label?.replaceChildren(
       t(
         toggle && toggle.getAttribute("aria-expanded") === "true"
