@@ -1064,6 +1064,7 @@ npm_lifecycle_allow_arg() {
         identity="openclaw"
     fi
     if [[ "$identity" == /* ]]; then
+        # shellcheck disable=SC2016 # JavaScript source must not expand in the installer shell.
         identity="$(node -e '
 const path = require("node:path");
 const relative = path.relative(process.argv[1], process.argv[2]) || ".";

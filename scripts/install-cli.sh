@@ -1300,6 +1300,7 @@ npm_lifecycle_allow_arg() {
     identity="openclaw"
   fi
   if [[ "$identity" == /* ]]; then
+    # shellcheck disable=SC2016 # JavaScript source must not expand in the installer shell.
     identity="$("$(node_bin)" -e '
 const path = require("node:path");
 const relative = path.relative(process.argv[1], process.argv[2]) || ".";
@@ -1379,9 +1380,9 @@ install_openclaw() {
     fix_npm_prefix_if_needed
   fi
 
-  local installed_entry
+  local installed_entry install_guard
   installed_entry="$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
-  local install_guard="$(node_dir)/lib/node_modules/openclaw/dist/openclaw-install-guard"
+  install_guard="$(node_dir)/lib/node_modules/openclaw/dist/openclaw-install-guard"
   local npm_install_args=(install -g --prefix "$(node_dir)" "${npm_args[@]}")
   [[ -z "$lifecycle_arg" ]] || npm_install_args+=("$lifecycle_arg")
   npm_install_args+=("$install_spec")
