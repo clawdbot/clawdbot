@@ -94,10 +94,7 @@ function renderChatTaskSuggestions(props: {
     ? props.activeId
     : props.suggestions[0]?.id;
   return html`
-    <div
-      class="task-suggestions ${multiple ? "task-suggestions--stack" : ""}"
-      aria-live="polite"
-    >
+    <div class="task-suggestions ${multiple ? "task-suggestions--stack" : ""}" aria-live="polite">
       ${props.suggestions.map((suggestion, index) => {
         const busy = props.busyIds.has(suggestion.id);
         const title = sanitizeTaskSuggestionText(suggestion.title);
@@ -191,7 +188,8 @@ function renderChatTaskSuggestions(props: {
                         requestAnimationFrame(() => updateTaskSuggestionPathFade(element));
                       }
                     })}
-                    @scroll=${(event: Event) => updateTaskSuggestionPathFade(event.currentTarget as Element)}
+                    @scroll=${(event: Event) =>
+                      updateTaskSuggestionPathFade(event.currentTarget as Element)}
                     >${cwd}</code
                   >
                   <pre>${prompt}</pre>

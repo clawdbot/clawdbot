@@ -47,9 +47,10 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     const offset = direction === "next" ? 1 : -1;
-    const next = this.taskSuggestions[
-      (current + offset + this.taskSuggestions.length) % this.taskSuggestions.length
-    ];
+    const next =
+      this.taskSuggestions[
+        (current + offset + this.taskSuggestions.length) % this.taskSuggestions.length
+      ];
     if (!next) {
       return;
     }
