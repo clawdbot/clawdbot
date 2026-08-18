@@ -4,7 +4,6 @@ import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { toolIcons } from "./icons-tools.ts";
 import { icons } from "./icons.ts";
-import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
@@ -19,17 +18,26 @@ type TableOwnerState = {
   observedViewports: Set<HTMLElement>;
 };
 
+function tableInteractionsEnabled(env: unknown): boolean {
+  return (
+    typeof env === "object" &&
+    env !== null &&
+    "tableInteractions" in env &&
+    env.tableInteractions === "enabled"
+  );
+}
+
 export function installMarkdownTables(markdownParser: MarkdownIt): void {
   const defaultTableOpen = markdownParser.renderer.rules.table_open;
   const defaultTableClose = markdownParser.renderer.rules.table_close;
   markdownParser.renderer.rules.table_open = (tokens, index, options, env, renderer) => {
-    if ((env as Partial<MarkdownRenderEnv>).tableInteractions !== "enabled") {
+    if (!tableInteractionsEnabled(env)) {
       return defaultTableOpen?.(tokens, index, options, env, renderer) ?? "<table>\n";
     }
     return '<div class="markdown-table" data-table-interactions><div class="markdown-table__viewport"><table>';
   };
   markdownParser.renderer.rules.table_close = (tokens, index, options, env, renderer) => {
-    if ((env as Partial<MarkdownRenderEnv>).tableInteractions !== "enabled") {
+    if (!tableInteractionsEnabled(env)) {
       return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
     }
     return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
