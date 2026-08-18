@@ -268,10 +268,13 @@ enter_worktree() {
 
 pr_meta_json() {
   local pr="$1"
-  local metadata files expected_file_count actual_file_count head_before head_after
-  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files)
-  head_before=$(printf '%s\n' "$metadata" | jq -r .headRefOid)
-  expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
+  local metadata files expected_file_count actual_file_count head_before head_after head_after_json
+  metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files") || return 1
+  head_before=$(pr_view_string_field "$metadata" "headRefOid" "$pr" "Retry review initialization.") || return 1
+  if ! expected_file_count=$(printf '%s\n' "$metadata" | jq -er '.changedFiles | if type == "number" and . >= 0 and . == floor then . else error("invalid changed file count") end' 2>/dev/null); then
+    echo "Invalid PR metadata for #$pr: changedFiles must be a non-negative integer." >&2
+    return 1
+  fi
 
   # `gh pr view --json files` is cacheable but stops at 100 entries. Use it
   # when complete; only large or incomplete responses spend uncached REST quota.
@@ -327,7 +330,8 @@ pr_meta_json() {
     fi
   fi
 
-  head_after=$(gh pr view "$pr" --json headRefOid | jq -r .headRefOid)
+  head_after_json=$(read_pr_view_json "$pr" "headRefOid") || return 1
+  head_after=$(pr_view_string_field "$head_after_json" "headRefOid" "$pr" "Retry review initialization.") || return 1
   if [ "$head_after" != "$head_before" ]; then
     echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
     return 1
