@@ -10,12 +10,19 @@ import UIKit
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
 
+    @State private var showsCopiedFeedback = false
+    @State private var copyFeedbackResetTask: Task<Void, Never>?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let language = self.block.language {
-                Text(language)
-                    .font(OpenClawChatTypography.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let language = self.block.language {
+                    Text(language)
+                        .font(OpenClawChatTypography.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                self.copyButton
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
@@ -33,6 +40,26 @@ struct ChatCodeBlockView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private var copyButton: some View {
+        Button {
+            ChatClipboard.copy(self.block.code)
+            self.showsCopiedFeedback = true
+            self.copyFeedbackResetTask?.cancel()
+            self.copyFeedbackResetTask = Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
+                self.showsCopiedFeedback = false
+            }
+        } label: {
+            Image(systemName: self.showsCopiedFeedback ? "checkmark" : "doc.on.doc")
+                .font(OpenClawChatTypography.caption2)
+                .foregroundStyle(self.showsCopiedFeedback ? OpenClawChatTheme.success : Color.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.showsCopiedFeedback ? Text("Copied") : Text("Copy code"))
     }
 
     private var attributedCode: AttributedString {

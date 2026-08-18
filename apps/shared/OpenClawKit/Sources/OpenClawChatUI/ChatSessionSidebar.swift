@@ -303,8 +303,7 @@ struct ChatSessionSidebar: View {
         }
         Divider()
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.key, forType: .string)
+            ChatClipboard.copy(session.key)
         } label: {
             self.actionLabel(String(localized: "Copy Session Key"), systemImage: "doc.on.doc")
         }

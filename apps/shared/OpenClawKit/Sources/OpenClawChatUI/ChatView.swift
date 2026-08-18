@@ -1175,7 +1175,7 @@ extension OpenClawChatView {
         let text = ChatMessageVisibleText.copyText(in: message)
         if !text.isEmpty {
             Button {
-                Self.copyToClipboard(text)
+                ChatClipboard.copy(text)
             } label: {
                 Label {
                     Text("Copy Message")
@@ -1279,15 +1279,6 @@ extension OpenClawChatView {
         guard role == "assistant" else { return String(localized: "You") }
         let name = self.assistantName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? String(localized: "Assistant") : name
-    }
-
-    fileprivate static func copyToClipboard(_ text: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #else
-        UIPasteboard.general.string = text
-        #endif
     }
 }
 
