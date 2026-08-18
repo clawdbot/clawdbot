@@ -635,6 +635,57 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(lastUpdate).not.toContain("completed");
   });
 
+  it("forwards plain detail mode through tool, item, and command-output progress", async () => {
+    vi.useFakeTimers();
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({
+      toolCallId: "call-1",
+      name: "exec",
+      phase: "start",
+      args: { command: "git status" },
+      detailMode: "plain",
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await dispatcher.replyOptions.onItemEvent?.({
+      itemId: "tool:call-2",
+      toolCallId: "call-2",
+      kind: "command",
+      name: "exec",
+      phase: "start",
+      status: "running",
+      progressText: "Running the tests.",
+      detailMode: "plain",
+    });
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "tool:call-2-output",
+      toolCallId: "call-2",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+      title: "All checks passed.",
+      detailMode: "plain",
+    });
+
+    const updates = getStreamMock()
+      .update.mock.calls.map((call) => call[0])
+      .join("\n");
+    // Plain survives the Teams boundary: the stream card shows the plain
+    // sentences, never exec chrome (emoji/label) or raw argv.
+    expect(updates).toContain("I'm checking the current state of the project.");
+    expect(updates).toContain("All checks passed.");
+    expect(updates).not.toContain("🛠️");
+    expect(updates).not.toContain("Exec");
+    expect(updates).not.toContain("git status");
+  });
+
   it("preserves command output text when raw command progress is configured", async () => {
     vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {

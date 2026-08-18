@@ -560,6 +560,16 @@ export function createMSTeamsReplyDispatcher(params: {
   // optional-property unions for this signature, so we cast at the boundary.
   type PipelinePayload = Record<string, unknown>;
 
+  // detailMode is pipeline-internal and core already widens it to include
+  // "plain"; the public Plugin SDK ToolProgressDetailMode stays explain|raw,
+  // so gate the accepted values here at this boundary.
+  const resolveProgressDetailModeOption = (
+    detailMode: string | undefined,
+  ): { detailMode: "explain" | "raw" | "plain" } | undefined =>
+    detailMode === "explain" || detailMode === "raw" || detailMode === "plain"
+      ? { detailMode }
+      : undefined;
+
   const progressCallbacks = streamController.hasStream()
     ? {
         onReasoningStream: async (payload: PipelinePayload) => {
@@ -601,31 +611,37 @@ export function createMSTeamsReplyDispatcher(params: {
                   ? { args: payload.args as Record<string, unknown> }
                   : {}),
               },
-              detailMode === "explain" || detailMode === "raw" ? { detailMode } : undefined,
+              resolveProgressDetailModeOption(detailMode),
             ),
             name ? { toolName: name } : undefined,
           );
           return false;
         },
         onItemEvent: async (payload: PipelinePayload) => {
+          const detailMode =
+            typeof payload?.detailMode === "string" ? payload.detailMode : undefined;
           await streamController.pushProgressLine(
-            buildChannelProgressDraftLineForEntry(msteamsCfg, {
-              event: "item",
-              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
-              ...(typeof payload?.toolCallId === "string"
-                ? { toolCallId: payload.toolCallId }
-                : {}),
-              ...(typeof payload?.kind === "string" ? { itemKind: payload.kind } : {}),
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
-              ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
-              ...(typeof payload?.status === "string" ? { status: payload.status } : {}),
-              ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
-              ...(typeof payload?.progressText === "string"
-                ? { progressText: payload.progressText }
-                : {}),
-              ...(typeof payload?.meta === "string" ? { meta: payload.meta } : {}),
-            }),
+            buildChannelProgressDraftLineForEntry(
+              msteamsCfg,
+              {
+                event: "item",
+                ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+                ...(typeof payload?.toolCallId === "string"
+                  ? { toolCallId: payload.toolCallId }
+                  : {}),
+                ...(typeof payload?.kind === "string" ? { itemKind: payload.kind } : {}),
+                ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
+                ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
+                ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
+                ...(typeof payload?.status === "string" ? { status: payload.status } : {}),
+                ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
+                ...(typeof payload?.progressText === "string"
+                  ? { progressText: payload.progressText }
+                  : {}),
+                ...(typeof payload?.meta === "string" ? { meta: payload.meta } : {}),
+              },
+              resolveProgressDetailModeOption(detailMode),
+            ),
           );
           return false;
         },
@@ -658,19 +674,25 @@ export function createMSTeamsReplyDispatcher(params: {
           if (payload?.phase !== "end") {
             return false;
           }
+          const detailMode =
+            typeof payload?.detailMode === "string" ? payload.detailMode : undefined;
           await streamController.pushProgressLine(
-            buildChannelProgressDraftLineForEntry(msteamsCfg, {
-              event: "command-output",
-              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
-              ...(typeof payload?.toolCallId === "string"
-                ? { toolCallId: payload.toolCallId }
-                : {}),
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
-              ...(typeof payload?.status === "string" ? { status: payload.status } : {}),
-              ...(typeof payload?.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
-            }),
+            buildChannelProgressDraftLineForEntry(
+              msteamsCfg,
+              {
+                event: "command-output",
+                ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+                ...(typeof payload?.toolCallId === "string"
+                  ? { toolCallId: payload.toolCallId }
+                  : {}),
+                phase: payload.phase as string,
+                ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
+                ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
+                ...(typeof payload?.status === "string" ? { status: payload.status } : {}),
+                ...(typeof payload?.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
+              },
+              resolveProgressDetailModeOption(detailMode),
+            ),
           );
           return false;
         },

@@ -178,6 +178,31 @@ describe("buildChannelProgressDraftLine", () => {
     expect(line?.text).not.toContain("git");
     expect(line?.text).not.toContain("/workspace");
     expect(line?.text).not.toContain("🛠️");
+    // Structured presentation carries the sentence alone: no tool-name label,
+    // no emoji icon, no duplicated detail, no toolName chrome for renderers
+    // that compose "icon label: detail" from the line fields.
+    expect(line?.label).toBe(line?.text);
+    expect(line?.icon).toBeUndefined();
+    expect(line?.detail).toBeUndefined();
+    expect(line?.toolName).toBeUndefined();
+  });
+
+  it("drops rich metadata from non-command tool lines in plain mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "web_search",
+        phase: "start",
+        args: { query: "openclaw docs" },
+      },
+      { detailMode: "plain" },
+    );
+    expect(line?.text).toBe("I'm looking up information about that online.");
+    expect(line?.label).toBe(line?.text);
+    expect(line?.icon).toBeUndefined();
+    expect(line?.detail).toBeUndefined();
+    expect(line?.toolName).toBeUndefined();
   });
 
   it("keeps plain sentences when command start is replaced by command-output", () => {
@@ -225,6 +250,15 @@ describe("buildChannelProgressDraftLine", () => {
     expect(failed?.text).not.toContain("exit");
     expect(failed?.text).not.toContain("git status");
     expect(failed?.text).not.toContain("/workspace");
+    // Completion/failure replacements keep the sentence-only presentation:
+    // the label mirrors the sentence and no icon/detail/toolName chrome
+    // comes back (status stays as lifecycle metadata for task renderers).
+    for (const line of [start, done, failed]) {
+      expect(line?.label).toBe(line?.text);
+      expect(line?.icon).toBeUndefined();
+      expect(line?.detail).toBeUndefined();
+      expect(line?.toolName).toBeUndefined();
+    }
   });
 
   it("uses a plain-language failure when no safe sentence is available", () => {

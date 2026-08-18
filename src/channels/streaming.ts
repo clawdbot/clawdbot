@@ -330,15 +330,19 @@ function buildNamedProgressLine(
     { markdown: options?.markdown, detailMode: options?.detailMode },
   );
   const display = resolveToolDisplay({ name: normalizedName });
+  // Plain mode keeps the sentence as the label and drops the tool emoji,
+  // tool name, and detail: rich renderers that compose "icon label: detail"
+  // then surface only the sentence, so no tool chrome leaks next to it.
+  const plain = options?.detailMode === "plain";
   const line = {
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
     text,
-    label: display.label,
-    icon: display.emoji,
-    ...(detail ? { detail } : {}),
+    label: plain ? text : display.label,
+    ...(plain ? {} : { icon: display.emoji }),
+    ...(detail && !plain ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
-    toolName: display.name,
+    ...(plain ? {} : { toolName: display.name }),
   };
   setProgressDraftLineCorrelationKey(line, fields?.correlationKey);
   return line;
@@ -470,7 +474,6 @@ function buildCommandOutputProgressLine(
     );
     const statusLine = {
       ...line,
-      detail: plainText,
       text: plainText,
     };
     setProgressDraftLineCorrelationKey(statusLine, correlationKey);
