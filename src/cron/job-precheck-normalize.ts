@@ -88,6 +88,17 @@ export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | unde
   const cwd = normalizeOptionalString(rec.cwd);
   const workStdoutPrefix = normalizeOptionalString(rec.workStdoutPrefix);
   const noWorkStdoutPrefix = normalizeOptionalString(rec.noWorkStdoutPrefix);
+  if (workStdoutPrefix && noWorkStdoutPrefix) {
+    if (
+      workStdoutPrefix === noWorkStdoutPrefix ||
+      workStdoutPrefix.startsWith(noWorkStdoutPrefix) ||
+      noWorkStdoutPrefix.startsWith(workStdoutPrefix)
+    ) {
+      throw new Error(
+        "precheck.workStdoutPrefix and precheck.noWorkStdoutPrefix must not be equal or prefix-overlapping",
+      );
+    }
+  }
   return {
     kind: "exec",
     command,

@@ -285,9 +285,9 @@ export async function authorizeCronJobPrecheckCommand(params: {
   // Mirror resolveEffectiveSystemRunExecPolicy / resolveExecHostApprovalContext:
   // 1) start from OpenClaw defaults (full/off) or an explicit security ceiling
   // 2) layer global + per-agent tools.exec (canonical system.run path)
-  // 3) resolveExecModePolicy
+  // 3) resolveExecModePolicy — preserve effective ask (do not force off)
   // 4) approvals file may only tighten via minSecurity
-  // Unattended cron → ask="off" (no interactive path).
+  // Unattended cron cannot prompt: if effective ask is not off, fail closed.
   const normalizeLayer = (
     layer: ExecToolConfigLayer | undefined,
   ): ExecToolConfigLayer | undefined => {
@@ -337,24 +337,44 @@ export async function authorizeCronJobPrecheckCommand(params: {
       layered.mode === "full")
       ? layered.mode
       : undefined;
+  const layeredAsk: ExecAsk =
+    "ask" in layered &&
+    (layered.ask === "off" || layered.ask === "on-miss" || layered.ask === "always")
+      ? layered.ask
+      : "off";
   const modePolicy = resolveExecModePolicy({
     mode: layeredMode,
     security: ceilingSecurity ?? "allowlist",
-    ask: "off",
+    ask: layeredAsk,
   });
   const approvals = await resolveExecApprovalsLocked(params.authz.agentId, {
     security: modePolicy.security,
-    ask: "off",
+    ask: modePolicy.ask,
   });
   const hostSecurity = minSecurity(
     modePolicy.security,
     normalizeExecSecurity(approvals.agent.security) ?? "deny",
   );
+  const effectiveAsk: ExecAsk =
+    approvals.agent.ask === "off" ||
+    approvals.agent.ask === "on-miss" ||
+    approvals.agent.ask === "always"
+      ? approvals.agent.ask
+      : modePolicy.ask;
 
   if (hostSecurity === "deny") {
     return {
       allowed: false,
       reason: `${PRECHECK_POLICY_DENIED_REASON}: exec denied host=gateway security=deny`,
+    };
+  }
+
+  // Cron precheck is unattended — never spawn a host shell when ask would require
+  // interactive confirmation (ClawSweeper P1 / security).
+  if (effectiveAsk !== "off") {
+    return {
+      allowed: false,
+      reason: `${PRECHECK_POLICY_DENIED_REASON}: unattended precheck denied host=gateway ask=${effectiveAsk}`,
     };
   }
 
@@ -373,7 +393,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
   const isWindows = process.platform === "win32";
   const decision = evaluateSystemRunPolicy({
     security: hostSecurity,
-    ask: "off",
+    ask: effectiveAsk,
     analysisOk: allowlistEval.analysisOk,
     allowlistSatisfied: hostSecurity === "allowlist" ? allowlistEval.allowlistSatisfied : true,
     durableApprovalSatisfied: false,

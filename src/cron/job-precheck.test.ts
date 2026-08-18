@@ -130,14 +130,35 @@ describe("normalizeCronJobPrecheck", () => {
 
   it("rejects fractional persisted exit codes (no silent trunc)", () => {
     expect(() =>
-      normalizeCronJobPrecheck(
-        { command: "true", workExitCodes: [0.5] },
-        { requireCommand: true },
-      ),
+      normalizeCronJobPrecheck({ command: "true", workExitCodes: [0.5] }, { requireCommand: true }),
     ).toThrow(/workExitCodes must contain only integers/);
     expect(() => normalizeCronJobPrecheck({ command: "echo hi", noWorkExitCodes: [] })).toThrow(
       /noWorkExitCodes must be a non-empty array/,
     );
+  });
+
+  it("rejects equal or prefix-overlapping stdout prefixes (ClawSweeper P1)", () => {
+    expect(() =>
+      normalizeCronJobPrecheck({
+        command: "echo hi",
+        workStdoutPrefix: "NO_WORK",
+        noWorkStdoutPrefix: "NO_WORK",
+      }),
+    ).toThrow(/prefix-overlapping|must not be equal/i);
+    expect(() =>
+      normalizeCronJobPrecheck({
+        command: "echo hi",
+        workStdoutPrefix: "NO",
+        noWorkStdoutPrefix: "NO_WORK",
+      }),
+    ).toThrow(/prefix-overlapping|must not be equal/i);
+    expect(() =>
+      normalizeCronJobPrecheck({
+        command: "echo hi",
+        workStdoutPrefix: "WORK_NEEDED",
+        noWorkStdoutPrefix: "WORK",
+      }),
+    ).toThrow(/prefix-overlapping|must not be equal/i);
   });
 });
 
@@ -209,6 +230,34 @@ describe("authorizeCronJobPrecheckCommand", () => {
     expect(result.allowed).toBe(false);
     if (!result.allowed) {
       expect(result.reason).toMatch(/security=deny/i);
+    }
+  });
+
+  it("denies unattended precheck when tools.exec.ask is always (ClawSweeper P1)", async () => {
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "echo WORK_NEEDED",
+      authz: {
+        triggersEnabled: true,
+        toolsExec: { ask: "always", security: "full" },
+      },
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toMatch(/ask=always/i);
+    }
+  });
+
+  it("denies unattended precheck when tools.exec.ask is on-miss", async () => {
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "echo WORK_NEEDED",
+      authz: {
+        triggersEnabled: true,
+        toolsExec: { ask: "on-miss", security: "full" },
+      },
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toMatch(/ask=on-miss/i);
     }
   });
 
