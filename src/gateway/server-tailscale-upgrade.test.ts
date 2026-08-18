@@ -32,7 +32,7 @@ describe("managed Tailscale upgrade", () => {
   };
 
   it.each(["serve", "funnel"] as const)(
-    "replaces the exact legacy persistent %s route with a foreground claim",
+    "does not infer ownership from a matching persistent %s route",
     async (mode) => {
       const env = captureEnv([
         "OPENCLAW_TEST_TAILSCALE_BINARY",
@@ -41,17 +41,18 @@ describe("managed Tailscale upgrade", () => {
         "VITEST",
       ]);
       const marker = await installFixture(legacyRoute(mode === "funnel"), mode);
+      const before = await readFile(marker, "utf8");
 
       try {
-        const cleanup = await startGatewayTailscaleExposure({
-          tailscaleMode: mode,
-          port: 18789,
-          backend: { host: "127.0.0.1", port: 19000 },
-          logTailscale: { info: () => undefined, warn: () => undefined },
-        });
-
-        expect(await readFile(marker, "utf8")).toBe("cleared");
-        await cleanup?.();
+        await expect(
+          startGatewayTailscaleExposure({
+            tailscaleMode: mode,
+            port: 18789,
+            backend: { host: "127.0.0.1", port: 19000 },
+            logTailscale: { info: () => undefined, warn: () => undefined },
+          }),
+        ).rejects.toThrow("ownership OpenClaw cannot prove; it was not modified");
+        expect(await readFile(marker, "utf8")).toBe(before);
       } finally {
         env.restore();
       }
@@ -78,50 +79,6 @@ describe("managed Tailscale upgrade", () => {
 
       expect(await readFile(marker, "utf8")).toBe(before);
       await cleanup?.();
-    } finally {
-      env.restore();
-    }
-  });
-
-  it.each([
-    ["mode mismatch", legacyRoute(true)],
-    ["custom target", legacyRoute(false, 9000)],
-    [
-      "extra path",
-      {
-        ...legacyRoute(),
-        Web: {
-          "fixture.tailnet.ts.net:443": {
-            Handlers: {
-              "/": { Proxy: "http://127.0.0.1:18789/" },
-              "/other": { Proxy: "http://127.0.0.1:9000/" },
-            },
-          },
-        },
-      },
-    ],
-    ["foreground route", { ...legacyRoute(), Foreground: { session: legacyRoute() } }],
-    ["same-port Service", { ...legacyRoute(), Services: { "svc:other": legacyRoute() } }],
-  ])("leaves an ambiguous %s route unchanged and explains the conflict", async (_name, config) => {
-    const env = captureEnv([
-      "OPENCLAW_TEST_TAILSCALE_BINARY",
-      "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
-      "OPENCLAW_TEST_TAILSCALE_FIXTURE_MODE",
-      "VITEST",
-    ]);
-    const marker = await installFixture(config, "serve");
-    const before = await readFile(marker, "utf8");
-
-    try {
-      await expect(
-        startGatewayTailscaleExposure({
-          tailscaleMode: "serve",
-          port: 18789,
-          backend: { host: "127.0.0.1", port: 19000 },
-          logTailscale: { info: () => undefined, warn: () => undefined },
-        }),
-      ).rejects.toThrow("cannot safely migrate");
-      expect(await readFile(marker, "utf8")).toBe(before);
     } finally {
       env.restore();
     }

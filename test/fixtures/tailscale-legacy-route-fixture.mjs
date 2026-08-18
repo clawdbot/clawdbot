@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 
 const args = process.argv.slice(2);
 const marker = process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER;
@@ -9,19 +9,6 @@ if (!marker || (mode !== "serve" && mode !== "funnel")) {
   process.exit(2);
 }
 
-if (JSON.stringify(args) === JSON.stringify(["serve", "status", "--json"])) {
-  const state = await readFile(marker, "utf8");
-  process.stdout.write(state === "cleared" ? "{}" : state);
-  process.exit(0);
-}
-
-if (
-  JSON.stringify(args) === JSON.stringify([mode, "--yes", "--https=443", "--set-path=/", "off"])
-) {
-  await writeFile(marker, "cleared");
-  process.exit(0);
-}
-
 if (JSON.stringify(args) === JSON.stringify(["status", "--json"])) {
   process.stdout.write(JSON.stringify({ Self: { DNSName: "fixture.tailnet.ts.net." } }));
   process.exit(0);
@@ -29,7 +16,7 @@ if (JSON.stringify(args) === JSON.stringify(["status", "--json"])) {
 
 if (JSON.stringify(args) === JSON.stringify([mode, "--yes", "--bg=false", "19000"])) {
   const state = await readFile(marker, "utf8");
-  const status = state === "cleared" ? {} : JSON.parse(state);
+  const status = JSON.parse(state);
   if (status.TCP?.["443"]) {
     process.stderr.write("listener already exists for port 443\n");
     process.exit(1);

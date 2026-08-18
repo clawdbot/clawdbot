@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { TailscaleRouteMigrationRequiredError } from "../../infra/tailscale-route-migration-error.js";
+import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
 
@@ -24,7 +24,7 @@ function createLogger() {
 describe("supervised gateway lock recovery", () => {
   it("uses exit 78 for an ambiguous persistent Tailscale route", () => {
     expect(
-      testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteMigrationRequiredError()),
+      testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteOwnershipConflictError()),
     ).toBe(78);
   });
 
