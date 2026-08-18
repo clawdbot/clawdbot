@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
@@ -195,7 +197,7 @@ describe("AppSidebar viewer presence", () => {
     ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
     const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Self User",
     );
     expect(identityCard?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
@@ -208,7 +210,7 @@ describe("AppSidebar viewer presence", () => {
     expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
     expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
       "openclaw-tooltip",
-      "span",
+      "openclaw-tooltip",
     ]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
@@ -217,14 +219,16 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
 
     // Profile mutations update gateway state directly; no presence event follows them.
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Augusta Ada",
     );
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
 
     sidebar.connected = false;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Augusta Ada");
+    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
+      "Augusta Ada",
+    );
   });
 
   it("renders an Account fallback for an unidentified connection", async () => {
@@ -244,7 +248,7 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
 
     const identityCard = sidebar.querySelector(".sidebar-identity-card");
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
       "Account",
     );
     expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
@@ -292,6 +296,49 @@ describe("AppSidebar brand actions", () => {
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
     expect(headerButton?.getAttribute("aria-label")).toBe("New session");
+  });
+});
+
+describe("AppSidebar footer actions", () => {
+  it("gates Ask OpenClaw on the advertised method and admin scope", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.chat"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    const toggle = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__custodian");
+    expect(toggle?.getAttribute("aria-label")).toBe("Ask OpenClaw");
+    const toggleListener = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
+    toggle?.click();
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
+    expect(toggleListener).toHaveBeenCalledOnce();
+
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: [] as string[] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
+
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["openclaw.chat"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
   });
 });
 
@@ -431,7 +478,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = true;
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Account");
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
+      "Account",
+    );
     expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
       "Reconnecting…",
     );

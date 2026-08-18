@@ -20,6 +20,7 @@ type ControlUiPluginTab = {
   description?: string;
   icon?: string;
   path?: string;
+  placement?: string;
   group?: "control" | "agent";
   order?: number;
   requiresGatewayAuth?: boolean;
@@ -94,6 +95,7 @@ function projectControlUiPluginTabs(
       description: descriptor.description,
       icon: descriptor.icon,
       path: descriptor.path,
+      placement: descriptor.placement,
       group: descriptor.group,
       order: descriptor.order,
     });

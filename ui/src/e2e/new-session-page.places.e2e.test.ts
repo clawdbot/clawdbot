@@ -174,9 +174,9 @@ suite.define(() => {
       expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
       await incognitoToggle.click();
-      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
       await incognitoToggle.click();
-      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("false");
 
       // Unified layout: the trigger row (menus above the composer) sits
       // inside the start-screen welcome, below the hero.

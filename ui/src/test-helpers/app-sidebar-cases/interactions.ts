@@ -219,7 +219,7 @@ describe("AppSidebar multi-select", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
-  it("archives serially when an older Gateway omits method metadata and rejects patchMany", async () => {
+  it("disables batch archive when method metadata is missing", async () => {
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "unknown method: sessions.patchMany",
@@ -234,36 +234,14 @@ describe("AppSidebar multi-select", () => {
 
     const menu = await sessionMenu(sidebar);
     const archive = menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]');
-    expect(archive?.disabled).toBe(false);
+    expect(archive?.disabled).toBe(true);
     archive?.click();
+    await Promise.resolve();
 
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:a",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:a",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:b",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:b",
-        deferListRefresh: true,
-      },
-    );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toHaveLength(
-      1,
-    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
+    expect(harness.refreshReplacement).not.toHaveBeenCalled();
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {

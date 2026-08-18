@@ -34,7 +34,6 @@ describe("gateway worker environment startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => ({ workerProviders: new Map() }),
-        resolveWorkerGateway: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
         log: { child: () => ({ warn: () => {} }) },
@@ -95,7 +94,6 @@ describe("gateway worker environment startup", () => {
 
         const runtime = await createGatewayWorkerEnvironmentRuntime({
           getPluginRegistry: () => ({ workerProviders: new Map() }),
-          resolveWorkerGateway: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
           log: { child: () => ({ warn: () => {} }) },

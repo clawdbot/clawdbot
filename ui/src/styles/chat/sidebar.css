@@ -427,6 +427,7 @@ openclaw-chat-sidebar-region,
   align-items: center;
   justify-content: flex-start;
   gap: 7px;
+  padding-block: 0;
   padding-inline: 8px 0;
   border: 0;
   border-radius: var(--radius-md);
@@ -511,7 +512,7 @@ openclaw-chat-sidebar-region,
   width: max-content;
   max-width: 100%;
   min-width: 24px;
-  align-self: stretch;
+  align-self: center;
   align-items: center;
   flex: 1 1 auto;
 }

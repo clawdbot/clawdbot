@@ -421,6 +421,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     startupBinding,
     startupContextTokens: startupBindingResolution.startupContextTokens,
     pluginAppServer: appServer,
+    // Captured before rotation: a rotated-away thread's observed density is the
+    // best available sample for sizing the fresh thread's continuity projection.
+    continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
   };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;

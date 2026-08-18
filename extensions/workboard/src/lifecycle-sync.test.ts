@@ -91,10 +91,12 @@ async function runSessionSweep(params: {
     ...(now === undefined ? {} : { now: () => now }),
   });
   await service.start({ logger: { warn: vi.fn() } } as never);
+  service.onGatewayStart();
   await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+  service.onGatewayStop();
   await service.stop?.({ logger: { warn: vi.fn() } } as never);
 }
 
@@ -565,9 +567,11 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
+    service.onGatewayStart();
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+    service.onGatewayStop();
     await service.stop?.(context);
 
     expect(readSessions).not.toHaveBeenCalled();
@@ -586,9 +590,11 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
+    service.onGatewayStart();
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+    service.onGatewayStop();
     await service.stop?.(context);
 
     expect(readSessions).not.toHaveBeenCalled();
@@ -620,7 +626,9 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
+    service.onGatewayStart();
     await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    service.onGatewayStop();
     await service.stop?.(context);
 
     expect(readSessions).toHaveBeenCalledWith({ includeUnknown: true });
@@ -742,6 +750,77 @@ describe("Workboard gateway lifecycle sync", () => {
     expect((await store.get(card.id))?.status).toBe("review");
   });
 
+  it("waits for gateway startup before beginning the lifecycle sweep", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:startup-ready";
+    const card = await createLinkedCard(store, { status: "todo", sessionKey });
+    let gatewayReady = false;
+    const readSessions = vi.fn(async () => {
+      if (!gatewayReady) {
+        throw new Error("sessions.list unavailable during gateway startup");
+      }
+      return {
+        sessions: [{ key: sessionKey, status: "done" as const, updatedAt: card.updatedAt + 1 }],
+        complete: true,
+      };
+    });
+    const warn = vi.fn();
+    const service = createWorkboardLifecycleService({ store, readSessions });
+    const context = { logger: { warn } } as never;
+
+    await service.start(context);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(readSessions).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+
+    gatewayReady = true;
+    service.onGatewayStart();
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    service.onGatewayStop();
+    await service.stop?.(context);
+
+    expect(readSessions).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("begins immediately when the lifecycle service reloads after gateway startup", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:plugin-reload";
+    const card = await createLinkedCard(store, { status: "todo", sessionKey });
+    const readSessions = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessions: [
+          { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+        ],
+        complete: true,
+      })
+      .mockResolvedValueOnce({
+        sessions: [{ key: sessionKey, status: "done", updatedAt: card.updatedAt + 2 }],
+        complete: true,
+      });
+    const warn = vi.fn();
+    const context = { logger: { warn } } as never;
+    const original = createWorkboardLifecycleService({ store, readSessions });
+
+    await original.start(context);
+    original.onGatewayStart();
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("running"));
+    await original.stop?.(context);
+
+    const replacement = createWorkboardLifecycleService({ store, readSessions });
+    await replacement.start(context);
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    replacement.onGatewayStop();
+    await replacement.stop?.(context);
+
+    expect(readSessions).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("runs the bounded session reconciliation from the lifecycle-owned service interval", async () => {
     vi.useFakeTimers();
     const store = new WorkboardStore(createMemoryStore());
@@ -763,6 +842,7 @@ describe("Workboard gateway lifecycle sync", () => {
       });
     const service = createWorkboardLifecycleService({ store, readSessions });
     await service.start({ logger: { warn: vi.fn() } } as never);
+    service.onGatewayStart();
     await vi.waitFor(async () => {
       expect((await store.get(card.id))?.status).toBe("running");
     });
@@ -771,6 +851,7 @@ describe("Workboard gateway lifecycle sync", () => {
     await vi.waitFor(async () => {
       expect((await store.get(card.id))?.status).toBe("review");
     });
+    service.onGatewayStop();
     await service.stop?.({ logger: { warn: vi.fn() } } as never);
 
     expect(readSessions).toHaveBeenCalledTimes(2);

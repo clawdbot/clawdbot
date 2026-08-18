@@ -16,6 +16,7 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -229,8 +230,8 @@ function cloneSecretOwnerRefState(owner: SecretOwnerRefState): SecretOwnerRefSta
 
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
-    sourceConfig: structuredClone(snapshot.sourceConfig),
-    config: structuredClone(snapshot.config),
+    sourceConfig: cloneConfigWithResolutionFacts(snapshot.sourceConfig),
+    config: cloneConfigWithResolutionFacts(snapshot.config),
     authStores: snapshot.authStores.map((entry) => ({
       agentDir: entry.agentDir,
       store: structuredClone(entry.store),
@@ -1073,8 +1074,8 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   if (activeSnapshotRevision !== params.expectedSecretsRevision) {
     return false;
   }
-  const nextRuntimeSourceConfig = structuredClone(params.runtimeSourceConfig);
-  const nextSecretsSourceConfig = structuredClone(params.secretsSourceConfig);
+  const nextRuntimeSourceConfig = cloneConfigWithResolutionFacts(params.runtimeSourceConfig);
+  const nextSecretsSourceConfig = cloneConfigWithResolutionFacts(params.secretsSourceConfig);
   if (
     !setRuntimeConfigSourceSnapshotIfCurrent({
       expectedRevision: params.expectedRuntimeConfigRevision,
@@ -1121,12 +1122,12 @@ export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
   if (
     !setRuntimeConfigSourceSnapshotIfCurrent({
       expectedRevision: runtimeMetadata.revision,
-      sourceConfig: structuredClone(params.runtimeSourceConfig),
+      sourceConfig: cloneConfigWithResolutionFacts(params.runtimeSourceConfig),
     })
   ) {
     return false;
   }
-  advanceSecretsRuntimeSourceSnapshot(structuredClone(params.secretsSourceConfig));
+  advanceSecretsRuntimeSourceSnapshot(cloneConfigWithResolutionFacts(params.secretsSourceConfig));
   return true;
 }
 

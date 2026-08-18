@@ -1,3 +1,4 @@
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
@@ -54,11 +55,17 @@ export function startManagedGatewayConfigReloader(
     ownership?: GatewayConfigReloadTransactionOwnership,
   ): OpenClawConfig => {
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
+    copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
-    return params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
+    const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
+    copyConfigResolutionFacts(candidateConfig, prepared);
+    return prepared;
   };
-  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig =>
-    params.applyRuntimeConfigOverrides?.(config) ?? config;
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
+    copyConfigResolutionFacts(config, applied);
+    return applied;
+  };
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 

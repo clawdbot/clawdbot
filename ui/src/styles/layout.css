@@ -10,6 +10,8 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
+     while the nav is collapsed, which is exactly when this width applies. */
   --shell-chrome-controls-collapsed-width: calc(
     var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
       var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
@@ -998,13 +1000,15 @@ openclaw-settings-save-indicator {
   stroke-linejoin: round;
 }
 
-.sidebar-brand__new-thread {
+.sidebar-brand__new-thread,
+.sidebar-footer-bar__custodian {
   width: 32px;
   height: 32px;
   color: var(--text);
 }
 
-.sidebar-brand__new-thread svg {
+.sidebar-brand__new-thread svg,
+.sidebar-footer-bar__custodian svg {
   width: 18px;
   height: 18px;
 }
@@ -3353,12 +3357,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 6px 12px;
 }
 
 .sidebar-identity-card {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 8px;
   width: 100%;
   min-width: 0;
@@ -3407,6 +3413,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-identity-card__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;

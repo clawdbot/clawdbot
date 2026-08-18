@@ -33,6 +33,9 @@ type MemoryManagerParams = {
 let workspaceDir = "/workspace";
 let statusDirty = false;
 let customStatus: Record<string, unknown> | undefined;
+let sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }> = [
+  { source: "memory", files: 1, chunks: 1 },
+];
 let searchImpl: SearchImpl = async () => [];
 let closeImpl: () => Promise<void> = async () => {};
 let getManagerImpl:
@@ -63,7 +66,7 @@ const stubManager = {
     model: "builtin",
     requestedProvider: "builtin",
     sources: ["memory" as const],
-    sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
+    sourceCounts,
     custom: customStatus,
   }),
   sync: vi.fn(),
@@ -94,6 +97,12 @@ export function setMemoryCustomStatus(next: Record<string, unknown> | undefined)
 
 export function setMemoryStatusDirty(next: boolean): void {
   statusDirty = next;
+}
+
+export function setMemorySourceCounts(
+  next: Array<{ source: MemorySource; files: number; chunks: number }>,
+): void {
+  sourceCounts = next;
 }
 
 export function setMemorySearchImpl(next: SearchImpl): void {
@@ -127,6 +136,7 @@ export function resetMemoryToolMockState(overrides?: {
   workspaceDir = "/workspace";
   statusDirty = false;
   customStatus = undefined;
+  sourceCounts = [{ source: "memory", files: 1, chunks: 1 }];
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
   closeImpl = async () => {};

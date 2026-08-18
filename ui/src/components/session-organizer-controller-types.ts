@@ -1,5 +1,8 @@
 import type { ReactiveControllerHost } from "lit";
-import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  FsListDirResult,
+  WorktreeRepositoryStatus,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
   SidebarRecentSession,
@@ -26,6 +29,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
   listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
+  inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus>;
   sessionGroupDefaults(name: string): { cwd: string; worktree: boolean } | null;
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];

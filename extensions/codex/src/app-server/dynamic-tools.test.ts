@@ -2416,6 +2416,12 @@ describe("createCodexDynamicToolBridge", () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "imessage-6264",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         receipt: {
           primaryPlatformMessageId: "imessage-6264",
           platformMessageIds: ["imessage-6264"],

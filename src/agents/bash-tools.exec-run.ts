@@ -679,7 +679,7 @@ export function createExecTool(
         };
 
         const onYieldNow = () => {
-          if (yielded || toolAborted) {
+          if (yielded || toolAborted || run.session.finalizing) {
             return;
           }
           if (settledOutcome) {

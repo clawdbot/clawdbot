@@ -1,6 +1,6 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -207,6 +207,7 @@ async function runSessionsLifecycleCommand(
   try {
     sessions = await listRequestedSessions(keys.filter(Boolean), opts.agent, rpcOptions);
   } catch (error) {
+    rethrowExpectedCliError(error);
     const message = formatErrorMessage(error);
     outputLifecycleResults(
       operation,

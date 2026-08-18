@@ -531,6 +531,13 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: timeoutMs.map(Double.init) ?? self.defaultTimeoutMs)
     }
 
+    public static func progressCardGet(sessionKey: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "progressCard.get",
+            params: ["sessionKey": AnyCodable(sessionKey)],
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
     public static func commandsList(
         sessionKey: String?,
         fallbackAgentID: String?) -> OpenClawChatGatewayRequest

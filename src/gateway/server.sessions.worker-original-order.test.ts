@@ -28,7 +28,7 @@ import {
   type WorkerEnvironmentService,
 } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
-import type { WorkerSshProcess, WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
+import type { WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { prepareLocalWorkspaceRsyncBoundary } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
@@ -106,25 +106,8 @@ function argvPort(argv: readonly string[]): number {
   return port!;
 }
 
-class ConnectedProcess implements WorkerSshProcess {
-  readonly ready = Promise.resolve();
-  readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
-  private resolveExit!: (exit: { code: number | null; signal: NodeJS.Signals | null }) => void;
-
-  constructor() {
-    this.exited = new Promise((resolve) => {
-      this.resolveExit = resolve;
-    });
-  }
-
-  async stop(): Promise<void> {
-    this.resolveExit({ code: null, signal: "SIGTERM" });
-  }
-}
-
 class OriginalOrderSshRunner implements WorkerSshRunner {
   readonly events: string[] = [];
-  readonly starts: string[][] = [];
   private bootstrapOperationToken: string | undefined;
 
   constructor(private readonly remoteHome: string) {}
@@ -149,10 +132,8 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
     return path.join(this.remoteHome, ".openclaw-worker", BUNDLE_HASH, "bootstrap-receipt.json");
   }
 
-  start(argv: string[]): WorkerSshProcess {
-    this.starts.push(argv);
-    this.events.push(`tunnel:start:${argvPort(argv)}`);
-    return new ConnectedProcess();
+  start(): never {
+    throw new Error("remote-exec workspace transport must not start a persistent SSH process");
   }
 
   async run(argv: string[], options: CommandOptions): Promise<SpawnResult> {
@@ -185,10 +166,6 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
     if (argv[0] === "ssh" && input.includes("operation_token=$2")) {
       this.events.push(`bootstrap:cleanup:${port}`);
       return success();
-    }
-    if (argv[0] === "ssh" && input.includes("unsafe worker tunnel directory")) {
-      this.events.push(`tunnel:prepare:${port}`);
-      return port === PRIMARY_PORT ? transportFailure() : success();
     }
     if (argv[0] === "rsync") {
       this.events.push(`workspace:transfer:${port}`);
@@ -348,10 +325,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
   const environmentStore = createWorkerEnvironmentStore({ database, now: () => 2_000 });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
-  tunnelManager = createWorkerTunnelManager({
-    runner,
-    backoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-  });
+  tunnelManager = createWorkerTunnelManager({ runner });
   const environmentService = createWorkerEnvironmentService({
     store: environmentStore,
     getConfig: () => ({
@@ -397,7 +371,6 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     },
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
     tunnelManager,
-    resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
     generateWorkerCredential: () => "original-order-credential",
     liveEvents: {
       apply: () => ({ ok: true, result: { ackedSeq: 1 } }),
@@ -455,7 +428,6 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     executionMode: "remote-exec",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
-  expect(runner.starts).toHaveLength(1);
   await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
     `${JSON.stringify(RECEIPT)}\n`,
@@ -502,10 +474,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     `bootstrap:transfer:${FALLBACK_PORT}`,
     `bootstrap:install:${FALLBACK_PORT}`,
     `bootstrap:cleanup:${FALLBACK_PORT}`,
-    `tunnel:prepare:${PRIMARY_PORT}`,
-    `tunnel:prepare:${FALLBACK_PORT}`,
-    `tunnel:start:${FALLBACK_PORT}`,
-    `workspace:transfer:${FALLBACK_PORT}`,
+    `workspace:transfer:${PRIMARY_PORT}`,
     "placement:active",
     "workspace:quiesce",
     "workspace:renew-quiescence",

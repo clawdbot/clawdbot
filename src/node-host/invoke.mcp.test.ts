@@ -36,7 +36,7 @@ function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMc
 }
 
 describe("mcp.tools.call.v1", () => {
-  it("dispatches validated params and preserves text/image content", async () => {
+  it("dispatches validated params and preserves raw MCP content for one final projection", async () => {
     const callMcpTool = vi.fn<NodeHostMcpManager["callMcpTool"]>().mockResolvedValue({
       content: [
         { type: "text", text: "pong" },
@@ -67,7 +67,12 @@ describe("mcp.tools.call.v1", () => {
       content: [
         { type: "text", text: "pong" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        { type: "text", text: "[Report] https://example.com/report" },
+        {
+          type: "resource_link",
+          uri: "https://example.com/report",
+          name: "report",
+          title: "Report",
+        },
       ],
       structuredContent: { ok: true },
     });

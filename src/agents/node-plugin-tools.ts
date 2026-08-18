@@ -9,7 +9,7 @@ import {
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
-import { projectMcpCallToolResultContent } from "./mcp-content.js";
+import { projectMcpCallToolResult } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -37,14 +37,7 @@ function mapMcpPayloadToAgentToolResult(payload: unknown): AgentToolResult<unkno
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  const content = projectMcpCallToolResultContent({
-    content: payload.content,
-    structuredContent: payload.structuredContent,
-  });
-  return {
-    content,
-    details: payload.isError === true ? { ...payload, status: "error" } : payload,
-  };
+  return projectMcpCallToolResult(payload, payload);
 }
 
 function normalizePolicyNames(values: readonly string[] | undefined): Set<string> {

@@ -5248,20 +5248,49 @@ describe("chat model controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("does not describe an empty prepared catalog as an authentication failure", () => {
+  it("shows a successful empty catalog without authentication guidance", () => {
+    const { state } = createChatHeaderState({ models: [] });
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      onModelSetup,
+    });
+
+    expect(
+      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
+    ).toContain("No models available");
+    expect(container.textContent).not.toContain("Authentication failed");
+    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["offline", "Offline"],
+    ["error", "Couldn’t refresh models"],
+  ] as const)("gives %s precedence over a stale all-cold catalog", (status, expected) => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
       modelProvider: "openai",
-      models: [],
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          available: false,
+        },
+      ],
     });
     const container = renderModelControls(state, {
-      agentDefaultModel: "openai/gpt-5.6-sol",
+      modelCatalogState: {
+        hasSnapshot: true,
+        status,
+        ...(status === "error" ? { onRetry: vi.fn() } : {}),
+      },
     });
 
-    expect(getChatModelSelect(container).textContent).not.toContain("Authentication failed");
-    expect(
-      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-    ).toContain("Models unavailable");
+    expect(container.textContent).toContain(expected);
+    expect(container.textContent).not.toContain("Authentication failed");
+    expect(container.querySelector('[data-chat-model-setup="true"]')).toBeNull();
   });
 
   it("applies a model selection immediately", () => {

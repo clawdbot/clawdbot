@@ -983,4 +983,34 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
+
+  it("distinguishes unknown model providers from unconfirmed models", async () => {
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/model-references");
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/not-in-the-local-catalog" },
+              imageModel: { primary: "no-such-provider/no-such-model" },
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "info",
+          target: "openai/not-in-the-local-catalog",
+        }),
+        expect.objectContaining({
+          severity: "warning",
+          target: "no-such-provider/no-such-model",
+        }),
+      ]),
+    );
+  });
 });

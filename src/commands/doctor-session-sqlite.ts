@@ -36,9 +36,7 @@ import {
   assertSafeSessionSqliteMigrationMove,
   canonicalMigrationFilePath,
   createSessionSqliteMigrationRun,
-  recordCompletedMigrationMove,
   recordCompletedMigrationMoves,
-  recordPlannedMigrationMove,
   recordPlannedMigrationMoves,
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationFailureReports,
@@ -795,33 +793,6 @@ function validateImportedRecordBeforeArchive(
   }
 }
 
-function archiveImportedTranscript(
-  target: SessionStoreTarget,
-  record: LegacySessionRecord,
-  report: DoctorSessionSqliteTargetReport,
-  activeRun: ActiveSessionSqliteMigrationRun | undefined,
-): void {
-  if (!record.transcriptPath || !fs.existsSync(record.transcriptPath)) {
-    return;
-  }
-  try {
-    report.archivedTranscriptFiles.push(
-      ...moveImportedTranscriptArtifactsToArchive(
-        target,
-        record.sessionKey,
-        record.transcriptPath,
-        activeRun,
-      ),
-    );
-  } catch (err) {
-    report.issues.push({
-      code: "transcript_archive_failed",
-      message: `${record.transcriptPath}: ${String(err)}`,
-      sessionKey: record.sessionKey,
-    });
-  }
-}
-
 function archiveImportedTranscripts(
   target: SessionStoreTarget,
   records: readonly LegacySessionRecord[],
@@ -829,13 +800,63 @@ function archiveImportedTranscripts(
   activeRun: ActiveSessionSqliteMigrationRun | undefined,
 ): void {
   const archivedTranscriptPaths = new Set<string>();
+  const reservedArchivePaths = new Set<string>();
+  const plannedArchives: Array<{
+    moves: SessionSqliteMigrationMove[];
+    record: LegacySessionRecord;
+  }> = [];
   for (const record of records) {
     if (!record.transcriptPath || archivedTranscriptPaths.has(record.transcriptPath)) {
       continue;
     }
-    archiveImportedTranscript(target, record, report, activeRun);
     archivedTranscriptPaths.add(record.transcriptPath);
+    if (!fs.existsSync(record.transcriptPath)) {
+      continue;
+    }
+    try {
+      plannedArchives.push({
+        moves: planImportedTranscriptArtifactsToArchive(
+          target,
+          record.sessionKey,
+          record.transcriptPath,
+          reservedArchivePaths,
+        ),
+        record,
+      });
+    } catch (err) {
+      report.issues.push({
+        code: "transcript_archive_failed",
+        message: `${record.transcriptPath}: ${String(err)}`,
+        sessionKey: record.sessionKey,
+      });
+    }
   }
+  const migrationTarget = createMigrationTargetInput(target);
+  recordPlannedMigrationMoves(
+    activeRun,
+    migrationTarget,
+    plannedArchives.flatMap((archive) => archive.moves),
+  );
+  const completedMoves: SessionSqliteMigrationMove[] = [];
+  for (const { moves, record } of plannedArchives) {
+    try {
+      const archivePaths: string[] = [];
+      for (const move of moves) {
+        assertSafeSessionSqliteMigrationMove(move, migrationTarget);
+        fs.renameSync(move.sourcePath, move.archivePath);
+        archivePaths.push(move.archivePath);
+        completedMoves.push(move);
+      }
+      report.archivedTranscriptFiles.push(...archivePaths);
+    } catch (err) {
+      report.issues.push({
+        code: "transcript_archive_failed",
+        message: `${record.transcriptPath}: ${String(err)}`,
+        sessionKey: record.sessionKey,
+      });
+    }
+  }
+  recordCompletedMigrationMoves(activeRun, migrationTarget, completedMoves);
 }
 
 function archiveUnreferencedJsonlFiles(
@@ -969,8 +990,8 @@ function recordLegacyStoreMoveForTarget(
     kind: "legacy-store" as const,
     sourcePath: path.resolve(target.storePath),
   };
-  recordPlannedMigrationMove(activeRun, createMigrationTargetInput(target), move);
-  recordCompletedMigrationMove(activeRun, createMigrationTargetInput(target), move);
+  recordPlannedMigrationMoves(activeRun, createMigrationTargetInput(target), [move]);
+  recordCompletedMigrationMoves(activeRun, createMigrationTargetInput(target), [move]);
 }
 
 function validateLegacySessionRecords(
@@ -1234,34 +1255,36 @@ function resolveActiveSqliteTranscriptFile(
   return activePath;
 }
 
-function moveImportedTranscriptArtifactsToArchive(
+function planImportedTranscriptArtifactsToArchive(
   target: SessionStoreTarget,
   sessionKey: string,
   transcriptPath: string,
-  activeRun: ActiveSessionSqliteMigrationRun | undefined,
-): string[] {
-  const archived = [
-    moveImportedTranscriptToArchive(target, sessionKey, transcriptPath, "transcript", activeRun),
-  ];
+  reservedArchivePaths: Set<string>,
+): SessionSqliteMigrationMove[] {
+  const moves: SessionSqliteMigrationMove[] = [];
+  const addMove = (sourcePathRaw: string, kind: SessionSqliteMigrationMoveKind) => {
+    const move = planSessionJsonlArchiveMove({
+      archiveKey: sessionKey,
+      baseNameRaw: path.basename(sourcePathRaw),
+      kind,
+      reservedArchivePaths,
+      sessionKey,
+      sourcePathRaw,
+      target,
+    });
+    reservedArchivePaths.add(move.archivePath);
+    moves.push(move);
+  };
+  addMove(transcriptPath, "transcript");
   const trajectoryPath = resolveTrajectoryPath(transcriptPath);
   if (trajectoryPath && fs.existsSync(trajectoryPath)) {
-    archived.push(
-      moveImportedTranscriptToArchive(target, sessionKey, trajectoryPath, "trajectory", activeRun),
-    );
+    addMove(trajectoryPath, "trajectory");
   }
   const trajectoryPointerPath = resolveTrajectoryPointerPath(transcriptPath);
   if (trajectoryPointerPath && fs.existsSync(trajectoryPointerPath)) {
-    archived.push(
-      moveImportedTranscriptToArchive(
-        target,
-        sessionKey,
-        trajectoryPointerPath,
-        "trajectory",
-        activeRun,
-      ),
-    );
+    addMove(trajectoryPointerPath, "trajectory");
   }
-  return archived;
+  return moves;
 }
 
 function resolveTrajectoryPath(transcriptPath: string): string | undefined {
@@ -1276,24 +1299,6 @@ function resolveTrajectoryPointerPath(transcriptPath: string): string | undefine
     : undefined;
 }
 
-function moveImportedTranscriptToArchive(
-  target: SessionStoreTarget,
-  sessionKey: string,
-  sourcePathRaw: string,
-  kind: SessionSqliteMigrationMoveKind,
-  activeRun: ActiveSessionSqliteMigrationRun | undefined,
-): string {
-  return moveSessionJsonlToArchive({
-    activeRun,
-    archiveKey: sessionKey,
-    baseNameRaw: path.basename(sourcePathRaw),
-    kind,
-    sessionKey,
-    sourcePathRaw,
-    target,
-  });
-}
-
 function moveSessionJsonlToArchive(params: {
   activeRun: ActiveSessionSqliteMigrationRun | undefined;
   archiveKey: string;
@@ -1305,10 +1310,10 @@ function moveSessionJsonlToArchive(params: {
 }): string {
   const move = planSessionJsonlArchiveMove(params);
   const migrationTarget = createMigrationTargetInput(params.target);
-  recordPlannedMigrationMove(params.activeRun, migrationTarget, move);
+  recordPlannedMigrationMoves(params.activeRun, migrationTarget, [move]);
   assertSafeSessionSqliteMigrationMove(move, migrationTarget);
   fs.renameSync(move.sourcePath, move.archivePath);
-  recordCompletedMigrationMove(params.activeRun, migrationTarget, move);
+  recordCompletedMigrationMoves(params.activeRun, migrationTarget, [move]);
   return move.archivePath;
 }
 

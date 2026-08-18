@@ -1988,6 +1988,7 @@
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
+    "ui:proof:composer-mic-hover": "node --import tsx scripts/capture-composer-mic-hover-proof.mts",
     "ui:proof:workboard": "node --import tsx scripts/capture-workboard-ui-proof.mts",
     "native:i18n:baseline": "node --import tsx scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",

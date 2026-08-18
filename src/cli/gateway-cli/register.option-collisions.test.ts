@@ -156,13 +156,8 @@ function expectLocalGatewayCall(method: string, port: number, params?: unknown) 
   if (params !== undefined) {
     expect(actualParams).toEqual(params);
   }
-  const gatewayOpts = opts as
-    | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
-    | undefined;
+  const gatewayOpts = opts as { localPortOverride?: number } | undefined;
   expect(gatewayOpts?.localPortOverride).toBe(port);
-  expect(gatewayOpts?.config).toEqual({
-    gateway: { mode: "local", port },
-  });
 }
 
 describe("gateway register option collisions", () => {
@@ -225,7 +220,7 @@ describe("gateway register option collisions", () => {
       },
     },
     {
-      name: "projects gateway call --port into local config",
+      name: "projects gateway call --port into the local override",
       argv: ["gateway", "call", "health", "--port", "19084", "--json"],
       assert: () => {
         expectLocalGatewayCall("health", 19084, {});
@@ -293,7 +288,7 @@ describe("gateway register option collisions", () => {
       },
     },
     {
-      name: "projects gateway health --port into local config",
+      name: "projects gateway health --port into the local override",
       argv: ["gateway", "health", "--port", "19081", "--json"],
       assert: () => {
         expectLocalGatewayCall("health", 19081);
@@ -344,7 +339,7 @@ describe("gateway register option collisions", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("uses the effective local port config for gateway health auth diagnostics", async () => {
+  it("uses the effective local port override for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
     callGatewayCli.mockRejectedValueOnce(authError);
     emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
@@ -356,9 +351,7 @@ describe("gateway register option collisions", () => {
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith({
       error: authError,
-      config: {
-        gateway: { mode: "local", port: 19081 },
-      },
+      config: {},
       runtime: defaultRuntime,
       timeoutMs: 10000,
       token: undefined,

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
@@ -59,7 +60,7 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     ...over,
   };
 }

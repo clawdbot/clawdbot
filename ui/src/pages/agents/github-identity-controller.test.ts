@@ -4,6 +4,7 @@ import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { GitHubIdentityController } from "./github-identity-controller.js";
 
 const availableStatus = {
@@ -239,7 +240,12 @@ describe("GitHubIdentityController", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client, phase: "connected", sessionKey: "main" },
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
       subscribe: () => () => undefined,
     });
     await runtimeConfig.ensureLoaded();

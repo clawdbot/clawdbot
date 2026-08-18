@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { mcpContentBlockToAgentContent } from "../agents/mcp-content.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
@@ -35,6 +34,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
@@ -953,17 +953,7 @@ function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
   };
 }
 
-type McpInvokeContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
-
-function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null {
-  return isRecord(block) ? mcpContentBlockToAgentContent(block) : null;
-}
-
-function serializedJsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value));
-}
+type McpInvokeContentBlock = Record<string, unknown>;
 
 /** Keeps MCP text/image content while bounding text sent through node.invoke. */
 function boundMcpToolResultPayload(result: {
@@ -975,11 +965,11 @@ function boundMcpToolResultPayload(result: {
   structuredContent?: Record<string, unknown>;
   isError?: true;
 } {
-  const normalizedBlocks = result.content
-    .map(normalizeMcpContentBlock)
-    .filter((block): block is McpInvokeContentBlock => block !== null);
+  const normalizedBlocks = result.content.filter(isRecord);
   const totalTextBytes = normalizedBlocks.reduce<number>(
-    (total, block) => total + (block.type === "text" ? Buffer.byteLength(block.text) : 0),
+    (total, block) =>
+      total +
+      (block.type === "text" && typeof block.text === "string" ? Buffer.byteLength(block.text) : 0),
     0,
   );
   let remainingTextBytes =
@@ -989,7 +979,7 @@ function boundMcpToolResultPayload(result: {
   let markedTruncated = false;
   const textBoundedContent: McpInvokeContentBlock[] = [];
   for (const block of normalizedBlocks) {
-    if (block.type === "image") {
+    if (block.type !== "text" || typeof block.text !== "string") {
       textBoundedContent.push(block);
       continue;
     }
@@ -1017,15 +1007,13 @@ function boundMcpToolResultPayload(result: {
     }
   }
   const payloadMarker = { type: "text" as const, text: MCP_PAYLOAD_TRUNCATION_MARKER };
-  const reservedMarkerBytes = serializedJsonBytes(payloadMarker) + 1;
+  const reservedMarkerBytes = jsonUtf8Bytes(payloadMarker) + 1;
   const isError = result.isError === true;
-  let usedBytes = Buffer.byteLength(
-    JSON.stringify({ content: [], ...(isError ? { isError } : {}) }),
-  );
+  let usedBytes = jsonUtf8Bytes({ content: [], ...(isError ? { isError } : {}) });
   let payloadTruncated = false;
   const content: McpInvokeContentBlock[] = [];
   for (const block of textBoundedContent) {
-    const blockBytes = serializedJsonBytes(block) + (content.length > 0 ? 1 : 0);
+    const blockBytes = jsonUtf8Bytes(block) + (content.length > 0 ? 1 : 0);
     if (usedBytes + blockBytes + reservedMarkerBytes > MCP_INVOKE_PAYLOAD_MAX_BYTES) {
       payloadTruncated = true;
       continue;
@@ -1036,7 +1024,7 @@ function boundMcpToolResultPayload(result: {
   let structuredContent: Record<string, unknown> | undefined;
   if (result.structuredContent) {
     const structuredBytes =
-      Buffer.byteLength(',"structuredContent":') + serializedJsonBytes(result.structuredContent);
+      Buffer.byteLength(',"structuredContent":') + jsonUtf8Bytes(result.structuredContent);
     if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
       structuredContent = result.structuredContent;
     } else {

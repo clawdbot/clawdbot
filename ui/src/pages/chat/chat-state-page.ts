@@ -217,6 +217,7 @@ export function createPageState(
     sessionsError: null,
     sessionsArchivedFilter: "active",
     selectedChatSessionArchived: false,
+    selectedChatSessionIncognito: false,
     agentsList: context.agents.state.agentsList,
     agentsSelectedId: context.agentSelection.state.selectedId,
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
