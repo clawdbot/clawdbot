@@ -7,16 +7,20 @@ import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js"
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
-/** Collects nested TTS-compatible provider SecretRefs from channel root and account blocks. */
+type NestedProviderOwnerId =
+  | string
+  | ((entry: { accountId: string; providerId: string }) => string);
+
+/** Collects nested provider SecretRefs from channel root and account blocks. */
 export function collectNestedChannelTtsAssignments(params: {
   /** Channel config key used in runtime warning/assignment paths. */
   channelKey: string;
-  /** Nested channel config field that owns the `tts` block, such as `outbound`. */
+  /** Nested channel config field that owns the provider block, such as `outbound` or `voice`. */
   nestedKey: string;
   /** Config block below the nested channel field that owns `providers`. Defaults to `tts`. */
   providerBlockKey?: string;
   /** Capability owner used for degraded-secret attribution. Defaults to `tts`. */
-  ownerId?: string;
+  ownerId?: NestedProviderOwnerId;
   channel: Record<string, unknown>;
   surface: ChannelAccountSurface;
   defaults: SecretDefaults | undefined;
@@ -24,7 +28,7 @@ export function collectNestedChannelTtsAssignments(params: {
   /** Whether the top-level nested provider block can affect runtime behavior. */
   topLevelActive: boolean;
   topInactiveReason: string;
-  /** Per-account activity predicate for account-specific nested `tts` blocks. */
+  /** Per-account activity predicate for account-specific nested provider blocks. */
   accountActive: ChannelAccountPredicate;
   accountInactiveReason:
     | string
@@ -35,21 +39,46 @@ export function collectNestedChannelTtsAssignments(params: {
       }) => string);
 }): void {
   const providerBlockKey = params.providerBlockKey ?? "tts";
+  const ownerId = params.ownerId;
+  const resolveOwnerId = (accountId: string) =>
+    typeof ownerId === "function"
+      ? (providerId: string) => ownerId({ accountId, providerId })
+      : (ownerId ?? "tts");
   const topLevelNested = params.channel[params.nestedKey];
   const topLevelProviderBlock =
     isRecord(topLevelNested) && isRecord(topLevelNested[providerBlockKey])
       ? topLevelNested[providerBlockKey]
       : undefined;
   if (topLevelProviderBlock) {
-    collectTtsApiKeyAssignments({
-      tts: topLevelProviderBlock,
-      pathPrefix: `channels.${params.channelKey}.${params.nestedKey}.${providerBlockKey}`,
-      ownerId: params.ownerId ?? "tts",
-      defaults: params.defaults,
-      context: params.context,
-      active: params.topLevelActive,
-      inactiveReason: params.topInactiveReason,
-    });
+    const collectTopLevel = (accountId: string, active: boolean) =>
+      collectTtsApiKeyAssignments({
+        tts: topLevelProviderBlock,
+        pathPrefix: `channels.${params.channelKey}.${params.nestedKey}.${providerBlockKey}`,
+        ownerId: resolveOwnerId(accountId),
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason: params.topInactiveReason,
+      });
+    if (typeof params.ownerId !== "function") {
+      collectTopLevel("default", params.topLevelActive);
+    } else {
+      const inheritingAccounts = params.surface.hasExplicitAccounts
+        ? params.surface.accounts.filter(
+            ({ account, enabled }) =>
+              params.topLevelActive && enabled && !Object.hasOwn(account, params.nestedKey),
+          )
+        : params.topLevelActive
+          ? [{ accountId: "default" }]
+          : [];
+      if (inheritingAccounts.length === 0) {
+        collectTopLevel("default", false);
+      } else {
+        for (const { accountId } of inheritingAccounts) {
+          collectTopLevel(accountId, true);
+        }
+      }
+    }
   }
   if (!params.surface.hasExplicitAccounts) {
     return;
@@ -64,7 +93,7 @@ export function collectNestedChannelTtsAssignments(params: {
     collectTtsApiKeyAssignments({
       tts: providerBlock,
       pathPrefix: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.nestedKey}.${providerBlockKey}`,
-      ownerId: params.ownerId ?? "tts",
+      ownerId: resolveOwnerId(entry.accountId),
       defaults: params.defaults,
       context: params.context,
       active: params.accountActive(entry),

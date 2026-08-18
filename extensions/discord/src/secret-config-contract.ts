@@ -33,6 +33,14 @@ function createVoiceProviderSecretTarget(params: {
   };
 }
 
+export function discordRealtimeVoiceSecretOwnerId(accountId: string, providerId: string): string {
+  return `discord:voice:realtime:${accountId}:${providerId}`;
+}
+
+function isRealtimeVoiceActive(value: unknown): boolean {
+  return isRecord(value) && isEnabledFlag(value) && value.mode !== "stt-tts";
+}
+
 export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.accounts.*.pluralkit.token",
@@ -139,28 +147,39 @@ export function collectRuntimeConfigAssignments(params: {
       enabled && isRecord(account.pluralkit) && isEnabledFlag(account.pluralkit),
     accountInactiveReason: "Discord account is disabled or PluralKit is disabled for this account.",
   });
-  for (const [providerBlockKey, ownerId] of [
-    ["tts", "tts"],
-    ["realtime", "realtime-voice"],
-  ] as const) {
-    collectNestedChannelTtsAssignments({
-      channelKey: "discord",
-      nestedKey: "voice",
-      providerBlockKey,
-      ownerId,
-      channel: discord,
-      surface,
-      defaults: params.defaults,
-      context: params.context,
-      topLevelActive:
-        isBaseFieldActiveForChannelSurface(surface, "voice") &&
-        isRecord(discord.voice) &&
-        isEnabledFlag(discord.voice),
-      topInactiveReason:
-        "no enabled Discord surface inherits this top-level voice config or voice is disabled.",
-      accountActive: ({ account, enabled }) =>
-        enabled && isRecord(account.voice) && isEnabledFlag(account.voice),
-      accountInactiveReason: "Discord account is disabled or voice is disabled for this account.",
-    });
-  }
+  collectNestedChannelTtsAssignments({
+    channelKey: "discord",
+    nestedKey: "voice",
+    channel: discord,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      isBaseFieldActiveForChannelSurface(surface, "voice") &&
+      isRecord(discord.voice) &&
+      isEnabledFlag(discord.voice),
+    topInactiveReason:
+      "no enabled Discord surface inherits this top-level voice config or voice is disabled.",
+    accountActive: ({ account, enabled }) =>
+      enabled && isRecord(account.voice) && isEnabledFlag(account.voice),
+    accountInactiveReason: "Discord account is disabled or voice is disabled for this account.",
+  });
+  collectNestedChannelTtsAssignments({
+    channelKey: "discord",
+    nestedKey: "voice",
+    providerBlockKey: "realtime",
+    ownerId: ({ accountId, providerId }) =>
+      discordRealtimeVoiceSecretOwnerId(accountId, providerId),
+    channel: discord,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      isBaseFieldActiveForChannelSurface(surface, "voice") && isRealtimeVoiceActive(discord.voice),
+    topInactiveReason:
+      "no enabled Discord surface uses this top-level realtime voice config, voice is disabled, or voice mode is stt-tts.",
+    accountActive: ({ account, enabled }) => enabled && isRealtimeVoiceActive(account.voice),
+    accountInactiveReason:
+      "Discord account is disabled, voice is disabled, or voice mode is stt-tts for this account.",
+  });
 }

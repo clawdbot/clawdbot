@@ -38,11 +38,13 @@ function collectProviderApiKeyAssignment(params: {
   });
 }
 
+type ProviderSecretOwnerId = string | ((providerId: string) => string);
+
 /** Collects provider API key SecretRefs from a TTS-compatible provider config block. */
 export function collectTtsApiKeyAssignments(params: {
   tts: Record<string, unknown>;
   pathPrefix: string;
-  ownerId?: string;
+  ownerId?: ProviderSecretOwnerId;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
   active?: boolean;
@@ -61,7 +63,10 @@ export function collectTtsApiKeyAssignments(params: {
         defaults: params.defaults,
         context: params.context,
         contract: params.tts,
-        ownerId: params.ownerId ?? "tts",
+        ownerId:
+          typeof params.ownerId === "function"
+            ? params.ownerId(providerId)
+            : (params.ownerId ?? "tts"),
         active: params.active,
         inactiveReason: params.inactiveReason,
       });

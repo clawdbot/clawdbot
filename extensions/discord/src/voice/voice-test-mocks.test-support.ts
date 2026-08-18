@@ -24,6 +24,7 @@ const {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -190,6 +191,7 @@ const {
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
+    assertSecretOwnerAvailableMock: vi.fn(),
   };
 });
 
@@ -217,7 +219,18 @@ export const voiceTestMocks = {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
 };
+
+vi.mock("openclaw/plugin-sdk/channel-secret-basic-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-secret-basic-runtime")
+  >("openclaw/plugin-sdk/channel-secret-basic-runtime");
+  return {
+    ...actual,
+    assertSecretOwnerAvailable: assertSecretOwnerAvailableMock,
+  };
+});
 
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({

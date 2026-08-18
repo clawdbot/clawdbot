@@ -1,3 +1,4 @@
+import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceSessionInstructions,
@@ -22,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
@@ -127,6 +129,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   constructor(
     private readonly params: {
+      accountId: string;
       cfg: OpenClawConfig;
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
@@ -222,6 +225,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       generation: lifecycleGeneration,
       instance: this,
     };
+    const configuredProviderId = this.realtimeConfig?.provider?.trim();
+    if (configuredProviderId) {
+      assertSecretOwnerAvailable(
+        "capability",
+        discordRealtimeVoiceSecretOwnerId(this.params.accountId, configuredProviderId),
+      );
+    }
     const resolved = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: this.realtimeConfig?.provider,
       providerConfigs: buildProviderConfigs(this.realtimeConfig),
@@ -231,6 +241,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       defaultModel: this.realtimeConfig?.model,
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
+    assertSecretOwnerAvailable(
+      "capability",
+      discordRealtimeVoiceSecretOwnerId(this.params.accountId, resolved.provider.id),
+    );
     this.realtimeProviderId = resolved.provider.id;
     const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const sessionPolicy = resolveRealtimeVoiceSessionPolicy({

@@ -28,5 +28,6 @@ export {
   pushWarning,
 } from "../secrets/runtime-shared.js";
 export type { ResolverContext, SecretDefaults } from "../secrets/runtime-shared.js";
+export { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 export { isRecord } from "../secrets/shared.js";
 export type { SecretTargetRegistryEntry } from "../secrets/target-registry-types.js";

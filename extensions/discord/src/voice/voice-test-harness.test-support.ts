@@ -44,6 +44,7 @@ const {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
 } = voiceTestMocks;
 const [managerModule, realtimeModule, segmentModule] = await Promise.all([
   import("./voice-runtime.js"),
@@ -93,6 +94,7 @@ function buildVoiceTestHarness() {
     updateVoiceStateMock.mockClear();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
+    assertSecretOwnerAvailableMock.mockReset();
     createAudioResourceMock.mockClear();
     realtimeSessionMock.close.mockClear();
     realtimeSessionMock.connect.mockClear();

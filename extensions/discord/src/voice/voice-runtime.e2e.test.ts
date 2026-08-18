@@ -790,6 +790,7 @@ defineDiscordVoiceTests(
       );
       const player = createAudioPlayerMock();
       const session = new realtimeModule.DiscordRealtimeVoiceSession({
+        accountId: "default",
         cfg: {},
         discordConfig: { voice: { enabled: true, mode: "agent-proxy", realtime: {} } },
         entry: {
@@ -813,6 +814,37 @@ defineDiscordVoiceTests(
       expect((session as unknown as { lifecycle: { status: string } }).lifecycle.status).toBe(
         "stopped",
       );
+    });
+
+    it("gates an unavailable explicit realtime secret owner before provider resolution", async () => {
+      assertSecretOwnerAvailableMock.mockImplementationOnce(() => {
+        throw new Error("SECRET_SURFACE_UNAVAILABLE: test owner is unavailable");
+      });
+      const session = new realtimeModule.DiscordRealtimeVoiceSession({
+        accountId: "work",
+        cfg: {},
+        discordConfig: {
+          voice: { enabled: true, mode: "agent-proxy", realtime: { provider: "openai" } },
+        },
+        entry: {
+          guildId: "g1",
+          channelId: "1001",
+          voiceSessionKey: "discord:g1:1001",
+          route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
+          player: createAudioPlayerMock(),
+        },
+        mode: "agent-proxy",
+        onTerminalError: vi.fn(),
+        runAgentTurn: vi.fn(),
+      } as never);
+
+      await expect(session.connect()).rejects.toThrow("SECRET_SURFACE_UNAVAILABLE");
+
+      expect(assertSecretOwnerAvailableMock).toHaveBeenCalledWith(
+        "capability",
+        "discord:voice:realtime:work:openai",
+      );
+      expect(resolveConfiguredRealtimeVoiceProviderMock).not.toHaveBeenCalled();
     });
 
     it("provider reset fences transcript, tool, playback, and consult completions", async () => {
