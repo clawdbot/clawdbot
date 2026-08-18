@@ -15,7 +15,7 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { notifyProviderHttpMetadata, transportAbortError } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
@@ -228,6 +228,22 @@ export function createOpenAIResponseHook(
     ? () =>
         onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model)
     : undefined;
+}
+
+export function createOpenAIProviderAcceptanceHook(
+  options: Pick<BaseOpenAIStreamOptions, "onProviderAccepted" | "onResponse"> | undefined,
+  response: Response,
+  model: Model,
+): (() => void | Promise<void>) | undefined {
+  if (!options?.onProviderAccepted) {
+    return createOpenAIResponseHook(options?.onResponse, response, model);
+  }
+  return () =>
+    notifyProviderHttpMetadata({
+      options,
+      response: { status: response.status, headers: headersToRecord(response.headers) },
+      model,
+    });
 }
 
 type ModelStreamCooperativeScheduler = {

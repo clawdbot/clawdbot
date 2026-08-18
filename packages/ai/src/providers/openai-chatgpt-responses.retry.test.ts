@@ -92,9 +92,13 @@ describe("streamOpenAICodexResponses retry classification", () => {
       return 0 as unknown as ReturnType<typeof setTimeout>;
     });
 
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
     const options = {
       apiKey: jwt,
       transport: "sse" as const,
+      onProviderAccepted,
+      onResponse,
     };
     responsesPromptObserver.set(options, (observation) => observations.push(observation));
 
@@ -106,6 +110,8 @@ describe("streamOpenAICodexResponses retry classification", () => {
 
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onProviderAccepted).not.toHaveBeenCalled();
+    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503, 401]);
     expect(observations).toHaveLength(2);
     expect(observations.every((entry) => entry.egress === "native-codex-sse")).toBe(true);
     expect(observations.every((entry) => entry.payloadVariant === "initial")).toBe(true);

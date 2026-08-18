@@ -27,6 +27,7 @@ import {
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 import {
+  createOpenAIProviderAcceptanceHook,
   createOpenAIResponseHook,
   type MutableAssistantOutput,
   type OpenAIModeModel,
@@ -271,7 +272,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           stream: responseStream,
           signal: firstEventAbort.signal,
           abort: firstEventAbort.abort,
-          hook: createOpenAIResponseHook(options?.onResponse, response, model),
+          hook: options?.onProviderAccepted
+            ? createOpenAIProviderAcceptanceHook(options, response, model)
+            : createOpenAIResponseHook(options?.onResponse, response, model),
           onReady: () => stream.push({ type: "start", partial: output }),
         });
         await processCompletionsStream(hookedResponseStream, output, model, stream, {

@@ -231,6 +231,8 @@ export function createAnthropicVertexStreamFn(
       // cache boundary and budgets all cache_control markers; re-applying the
       // payload policy here marked the uncached suffix and breached the 4-marker cap.
       onPayload: options?.onPayload,
+      onProviderAccepted: options?.onProviderAccepted,
+      onResponse: options?.onResponse,
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
     };

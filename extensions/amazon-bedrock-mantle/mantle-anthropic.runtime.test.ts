@@ -60,9 +60,13 @@ describe("createMantleAnthropicStreamFn", () => {
     const context = { messages: [] };
     const deps = createTestDeps();
     deps.stream.mockReturnValue(stream as never);
+    const onProviderAccepted = vi.fn();
+    const onResponse = vi.fn();
 
     const result = createMantleAnthropicStreamFn(deps)(model, context, {
       apiKey: "bedrock-bearer-token",
+      onProviderAccepted,
+      onResponse,
       headers: {
         "X-Caller": "caller-header",
       },
@@ -87,6 +91,8 @@ describe("createMantleAnthropicStreamFn", () => {
       "bedrock-bearer-token",
     );
     expect(streamOptions.thinkingEnabled).toBe(false);
+    expect(streamOptions.onProviderAccepted).toBe(onProviderAccepted);
+    expect(streamOptions.onResponse).toBe(onResponse);
   });
 
   it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {

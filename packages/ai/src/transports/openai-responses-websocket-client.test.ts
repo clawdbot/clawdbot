@@ -3,6 +3,7 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
+  type StreamOptions,
 } from "@openclaw/llm-core";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -268,6 +269,7 @@ async function run(
     headers?: Record<string, string>;
     observations?: ResponsesPromptObservation[];
     onCompactionRejected?: () => void;
+    onProviderAccepted?: NonNullable<StreamOptions["onProviderAccepted"]>;
   } = {},
 ): Promise<AssistantMessage> {
   const options = {
@@ -278,6 +280,7 @@ async function run(
     timeoutMs: overrides.timeoutMs,
     headers: overrides.headers,
     onCompactionRejected: overrides.onCompactionRejected,
+    onProviderAccepted: overrides.onProviderAccepted,
   };
   if (overrides.observations) {
     responsesPromptObserver.set(options, (observation) =>
@@ -339,6 +342,19 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+  });
+
+  it("reports WebSocket acceptance without fabricated HTTP metadata", async () => {
+    transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
+    const onProviderAccepted = vi.fn();
+
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      { onProviderAccepted },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
   });
 
   it("continues past provider-only output metadata with one socket and only new input", async () => {
