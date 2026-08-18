@@ -182,6 +182,53 @@ describe("buildStatusMessage context window", () => {
     expect(text).not.toContain("Context: 11/272k");
   });
 
+  it("replaces matching runtime telemetry with a newly authored effective cap", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-sol",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  ...statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000),
+                  contextTokens: 1_000_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-sol" },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "authored-context-cap",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
   it("preserves a locked legacy session window", () => {
     const text = buildStatusMessage({
       agent: { model: "openai/gpt-5.6-sol" },

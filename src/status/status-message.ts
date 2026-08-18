@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -36,9 +37,9 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
+  resolveProjectedSessionContextTokens,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveTrustedSessionContextTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -764,90 +765,34 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     selectedModel: selectedLookupModel,
     parentSessionKey: args.parentSessionKey,
   });
-  const persistedContextTokens = resolveTrustedSessionContextTokens({
+  const projectedActiveContextTokens = resolveProjectedSessionContextTokens({
     entry,
     provider: contextLookupProvider,
     model: contextLookupModel,
     agentHarnessId: args.resolvedHarness,
+    resolvedContextTokens: activeContextTokens,
+    authoredContextTokens: resolveAuthoredModelContextTokens({
+      cfg: contextConfig,
+      provider: contextLookupProvider,
+      model: contextLookupModel,
+    }),
   });
-  const cappedPersistedContextTokens =
-    typeof persistedContextTokens === "number" && typeof activeContextTokens === "number"
-      ? Math.min(persistedContextTokens, activeContextTokens)
-      : persistedContextTokens;
-  const channelOverrideContextTokens = channelModelNote
-    ? (explicitRuntimeContextTokens ?? cappedPersistedContextTokens ?? activeContextTokens)
-    : undefined;
   const runtimeSnapshotHasFallbackProvenance =
     initialFallbackState.active ||
     hasSessionAutoModelFallbackProvenance(entry) ||
     areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown", {
       config: args.config,
     });
-  // When a fallback model is active, the selected-model context limit that
-  // callers keep on the agent config is often stale. Prefer an explicit runtime
-  // snapshot only when it belongs to a real fallback/equivalent runtime. A
-  // transcript-derived previous model is stale after a manual switch and must
-  // not pin the newly selected model to the old context window. Separately,
-  // Persisted runtime snapshots still take precedence over model metadata so
-  // historical fallback sessions keep their last known live limit even if the
-  // active model later becomes unresolvable.
-  const unlockedContextTokens = runtimeDiffersFromSelected
-    ? (() => {
-        if (!runtimeSnapshotHasFallbackProvenance) {
-          if (typeof selectedContextTokens === "number") {
-            return selectedContextTokens;
-          }
-          return DEFAULT_CONTEXT_TOKENS;
-        }
-        if (explicitRuntimeContextTokens !== undefined) {
-          return explicitRuntimeContextTokens;
-        }
-        if (cappedPersistedContextTokens !== undefined) {
-          const trustedPersistedContextTokens = cappedPersistedContextTokens;
-          const persistedLooksSelectedWindow =
-            typeof selectedContextTokens === "number" &&
-            trustedPersistedContextTokens === selectedContextTokens;
-          const activeWindowDiffersFromSelected =
-            typeof selectedContextTokens === "number" &&
-            typeof activeContextTokens === "number" &&
-            activeContextTokens !== selectedContextTokens;
-          if (persistedLooksSelectedWindow && activeWindowDiffersFromSelected) {
-            return activeContextTokens;
-          }
-          if (typeof activeContextTokens === "number") {
-            return Math.min(trustedPersistedContextTokens, activeContextTokens);
-          }
-          return trustedPersistedContextTokens;
-        }
-        if (typeof activeContextTokens === "number") {
-          return activeContextTokens;
-        }
-        return DEFAULT_CONTEXT_TOKENS;
-      })()
-    : (() => {
-        const resolvedContextTokens = resolveContextTokensForModel({
-          cfg: contextConfig,
-          ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-          model: contextLookupModel,
-          allowAsyncLoad: false,
-        });
-        const runtimeLimit =
-          channelOverrideContextTokens ??
-          cappedPersistedContextTokens ??
-          explicitRuntimeContextTokens;
-        if (runtimeLimit === undefined) {
-          return resolvedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
-        }
-        return resolvedContextTokens === undefined
-          ? runtimeLimit
-          : Math.min(runtimeLimit, resolvedContextTokens);
-      })();
-  // A locked native session owns its observed window even when current config
-  // describes a lower route that cannot replace the locked runtime.
-  const contextTokens =
-    entry?.modelSelectionLocked === true && persistedContextTokens !== undefined
-      ? persistedContextTokens
-      : unlockedContextTokens;
+  // A transcript-derived previous model must not pin a newly selected model to
+  // its old window. Once fallback provenance is established, the shared
+  // projector owns authored caps, runtime telemetry, and locked-session state.
+  const useSelectedContext =
+    entry?.modelSelectionLocked !== true &&
+    runtimeDiffersFromSelected &&
+    !runtimeSnapshotHasFallbackProvenance;
+  const contextTokens = useSelectedContext
+    ? (selectedContextTokens ?? DEFAULT_CONTEXT_TOKENS)
+    : (projectedActiveContextTokens ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
