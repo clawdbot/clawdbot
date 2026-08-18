@@ -37,6 +37,11 @@ while upgrading or starting the copied gateway.
 > 80–95%; Clawesome 95–100%. Higher maturity means a stronger regression
 > expectation.
 
+> [!TIP]
+> Want help with a surface? Ask the agent to walk you through its manual test.
+> It will give you the action, command or URL, and pass condition, then record
+> your notes.
+
 <!-- Campaign creator: generate exactly five priority surface tables with empty Testing notes cells, then remove this comment. -->
 
 ## Other surfaces to test
