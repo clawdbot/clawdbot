@@ -132,6 +132,11 @@ describe("Skill Workshop applied history", () => {
 
     expect(page.querySelectorAll(".sw-row")).toHaveLength(1);
     expect(page.querySelector(".sw-row")?.textContent).toContain("4 revisions");
+    // The Applied tab counts grouped skills, matching the one-row-per-skill list.
+    const appliedFilter = [...page.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Applied"),
+    );
+    expect(appliedFilter?.querySelector(".settings-count")?.textContent).toBe("1");
     await vi.waitFor(
       () => expect(page.querySelectorAll(".sw-applied-history__item")).toHaveLength(4),
       { interval: 1 },

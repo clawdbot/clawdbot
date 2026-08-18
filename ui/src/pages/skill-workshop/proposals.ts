@@ -351,14 +351,23 @@ function showActionNotice(
 export function countSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
 ): Record<"all" | SkillProposalStatus, number> {
-  return proposals.reduce(
-    (counts, proposal) => {
-      counts.all += 1;
-      counts[proposal.status] += 1;
-      return counts;
+  // Applied renders one row per skill, so its tab count is grouped skills;
+  // every other status stays a per-proposal count.
+  const appliedSkills = new Set<string>();
+  const counts = proposals.reduce(
+    (accumulated, proposal) => {
+      accumulated.all += 1;
+      if (proposal.status === "applied") {
+        appliedSkills.add(proposal.slug);
+      } else {
+        accumulated[proposal.status] += 1;
+      }
+      return accumulated;
     },
     { all: 0, pending: 0, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
   );
+  counts.applied = appliedSkills.size;
+  return counts;
 }
 
 export async function loadSkillWorkshopProposals(
