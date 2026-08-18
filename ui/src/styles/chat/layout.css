@@ -1693,8 +1693,8 @@ button.chat-reply-preview--message:disabled {
   --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
   --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);
   --task-suggestion-prompt-bg: var(--panel);
-  --task-suggestion-action-bg: var(--text-strong);
-  --task-suggestion-action-fg: var(--bg);
+  --task-suggestion-action-bg: color-mix(in srgb, var(--accent) 72%, var(--text-strong) 28%);
+  --task-suggestion-action-fg: var(--primary-foreground);
 
   position: absolute;
   z-index: 24;
