@@ -135,7 +135,10 @@ function createPage(context: ApplicationContext, options: { render?: boolean } =
 
 function cronListResponse(jobs: CronJob[]): CronJobsListResult {
   return {
-    jobs,
+    jobs: jobs.map((job) => ({
+      configRevision: job.configRevision ?? `config-revision-${job.id}`,
+      ...job,
+    })),
     snapshotRevision: "cron-page-fixture",
     total: jobs.length,
     offset: 0,
@@ -348,6 +351,9 @@ describe("CronPage editor state sync", () => {
       if (method === "cron.runs") {
         return { entries: [], total: 0, offset: 0, hasMore: false };
       }
+      if (method === "cron.run") {
+        return { ok: true, enqueued: true, runId: "run-fresh" };
+      }
       if (method === "models.list") {
         return { models: [] };
       }
@@ -376,6 +382,9 @@ describe("CronPage editor state sync", () => {
     );
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
     await waitForCronPage(() => expect(page.cron.cronCreateOpen).toBe(false));
+    await waitForCronPage(() =>
+      expect(page.textContent).toContain("Run queued. Run ID: run-fresh"),
+    );
   });
 
   it("drills from the failing stat into run history filtered to errors", async () => {
@@ -422,7 +431,12 @@ describe("CronPage editor state sync", () => {
         if (typeof patch?.enabled === "boolean") {
           serverEnabled = patch.enabled;
         }
-        return {};
+        return {
+          ...job,
+          enabled: serverEnabled,
+          updatedAtMs: 1,
+          configRevision: "config-revision-job-1-updated",
+        };
       }
       if (method === "cron.remove") {
         removed = true;
@@ -457,6 +471,11 @@ describe("CronPage editor state sync", () => {
     enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
     await waitForCronPage(() => expect(page.cron.cronForm.enabled).toBe(false));
     expect(serverEnabled).toBe(false);
+    expect(request).toHaveBeenCalledWith("cron.update", {
+      id: job.id,
+      expectedConfigRevision: "config-revision-job-1",
+      patch: { enabled: false },
+    });
 
     const findRemoveButton = () =>
       Array.from(page.querySelectorAll<HTMLButtonElement>(".cron-job-menu__item")).find(

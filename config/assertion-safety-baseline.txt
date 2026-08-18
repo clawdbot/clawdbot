@@ -4124,7 +4124,7 @@ ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	5
 ui/src/lib/config/config-gateway-operations.ts	1
-ui/src/lib/cron/index.ts	16
+ui/src/lib/cron/index.ts	14
 ui/src/lib/gateway-diagnostics.ts	3
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
