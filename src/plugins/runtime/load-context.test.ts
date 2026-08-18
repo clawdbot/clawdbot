@@ -1,5 +1,5 @@
 // Load context tests cover agent and workspace context resolution for plugin runtimes.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();
@@ -69,13 +69,15 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("resolvePluginRuntimeLoadContext", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../../config/runtime-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js"));
     ({ resolvePluginRuntimeLoadContext, buildPluginRuntimeLoadOptions } =
       await import("./load-context.js"));
+  });
+
+  beforeEach(() => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     fingerprintPluginAutoEnableConfigMock.mockClear();
@@ -94,6 +96,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       autoEnabledReasons: {},
     }));
     clearRuntimeConfigSnapshot();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("builds the runtime plugin load context from the auto-enabled config", () => {
