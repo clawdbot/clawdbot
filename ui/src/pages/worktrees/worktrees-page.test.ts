@@ -97,6 +97,15 @@ function mutableGateway(client: GatewayBrowserClient) {
       (snapshot as ApplicationGatewaySnapshot).phase = connected ? "connected" : "stopped";
       listener?.(snapshot as ApplicationGatewaySnapshot);
     },
+    setScopes(scopes: string[]) {
+      snapshot.hello = {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes },
+        features: { methods: ["worktrees.list", "worktrees.create"] },
+      } as ApplicationGatewaySnapshot["hello"];
+      listener?.(snapshot);
+    },
     gateway,
   };
 }
@@ -153,6 +162,41 @@ describe("WorktreesPage lifecycle", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.branches");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
     expect(showConfirmDialog).not.toHaveBeenCalled();
+  });
+
+  it("closes an open create draft when admin access is lost", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list" ? { worktrees: [] } : {},
+    );
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await waitForFast(() => expect(page.loading).toBe(false));
+    const newWorktreeButton = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "New worktree",
+    );
+    newWorktreeButton?.click();
+    await page.updateComplete;
+    expect(page.querySelectorAll('input.settings-input[type="text"]')).toHaveLength(3);
+
+    source.setScopes(["operator.read"]);
+    await page.updateComplete;
+
+    expect(page.createOpen).toBe(false);
+    expect(page.querySelectorAll('input.settings-input[type="text"]')).toHaveLength(0);
+    expect(newWorktreeButton?.disabled).toBe(true);
+    newWorktreeButton?.click();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
   });
 
   it("navigates a session-owned worktree with the face-preference marker", async () => {

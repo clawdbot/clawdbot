@@ -73,6 +73,11 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.invalidateOperations();
     },
     ensureInitialData: () => void this.load(),
+    onSnapshot: (change) => {
+      if (!readGatewayOperatorAccess(change.snapshot).canAdmin) {
+        this.createOpen = false;
+      }
+    },
   });
 
   private readonly listTask = new Task(this, {
