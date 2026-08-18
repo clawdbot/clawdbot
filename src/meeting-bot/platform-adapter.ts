@@ -4,6 +4,7 @@ import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "
 import { createMeetingChromeTransport } from "./chrome-transport.js";
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
+import { createMeetingLeaveSource, createMeetingTranscriptSource } from "./page-script-source.js";
 import type {
   MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
@@ -400,7 +401,9 @@ export const MeetingPlatformAdapter = {
   createNodeHostHandler: createMeetingConfiguredNodeHost,
   createPluginEntry: createMeetingPluginEntryOptions,
   createStatusCallSource: createMeetingStatusCallSource,
+  createLeaveSource: createMeetingLeaveSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
+  createTranscriptSource: createMeetingTranscriptSource,
   isRealtimeRouteReady: isMeetingRealtimeRouteReady,
   isTalkBackMode: isMeetingTalkBackMode,
   ensureAudioBackend: ensureMeetingAudioBackend,
