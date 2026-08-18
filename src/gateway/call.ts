@@ -87,7 +87,17 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
+import {
+  GatewayTransportError,
+  type GatewayTransportErrorKind,
+  isGatewayTransportError,
+} from "./transport-error.js";
 export type { GatewayConnectionDetails };
+export {
+  GatewayTransportError,
+  isGatewayTransportError,
+  type GatewayTransportErrorKind,
+} from "./transport-error.js";
 
 export type GatewayRequestFunction = <T = Record<string, unknown>>(
   method: string,
@@ -146,39 +156,6 @@ export type CallGatewayCliOptions = CallGatewayBaseOptions & {
 export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
-
-export type GatewayTransportErrorKind = "closed" | "timeout";
-
-export class GatewayTransportError extends Error {
-  readonly kind: GatewayTransportErrorKind;
-  readonly connectionDetails: GatewayConnectionDetails;
-  readonly code?: number;
-  readonly reason?: string;
-  readonly timeoutMs?: number;
-
-  constructor(params: {
-    kind: GatewayTransportErrorKind;
-    message: string;
-    connectionDetails: GatewayConnectionDetails;
-    code?: number;
-    reason?: string;
-    timeoutMs?: number;
-  }) {
-    super(params.message);
-    this.name = "GatewayTransportError";
-    this.kind = params.kind;
-    this.connectionDetails = params.connectionDetails;
-    if (params.code !== undefined) {
-      this.code = params.code;
-    }
-    if (params.reason !== undefined) {
-      this.reason = params.reason;
-    }
-    if (params.timeoutMs !== undefined) {
-      this.timeoutMs = params.timeoutMs;
-    }
-  }
-}
 
 export class GatewayCredentialsRequiredError extends Error {
   readonly method: string;
@@ -373,21 +350,6 @@ export function formatGatewayAuthErrorJson(value: unknown): GatewayAuthErrorJson
       message: value.message,
     },
   };
-}
-
-export function isGatewayTransportError(value: unknown): value is GatewayTransportError {
-  if (value instanceof GatewayTransportError) {
-    return true;
-  }
-  if (!(value instanceof Error) || value.name !== "GatewayTransportError") {
-    return false;
-  }
-  const candidate = value as Partial<GatewayTransportError>;
-  return (
-    (candidate.kind === "closed" || candidate.kind === "timeout") &&
-    typeof candidate.connectionDetails === "object" &&
-    candidate.connectionDetails !== null
-  );
 }
 
 export function isGatewayCredentialsRequiredError(
