@@ -1717,6 +1717,7 @@ describe("gateway server chat", () => {
               agentRuntime: {
                 id: "codex",
                 cloudPlacementSupported: false,
+                devicePlacementSupported: false,
                 source: "implicit",
               },
               contextWindow: 400_000,

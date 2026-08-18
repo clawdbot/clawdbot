@@ -19,6 +19,7 @@ const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
+  devicePlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
     Type.Literal("agent"),

@@ -125,6 +125,10 @@ export async function moveChatPanePlacement(params: {
   const target: SessionMoveTarget | null = await showSessionPlacementMoveDialog({
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,
+    deviceDisabledReason:
+      params.row.agentRuntime?.devicePlacementSupported === false
+        ? t("newSession.deviceRuntimeUnsupported")
+        : undefined,
     loadCatalog: async () =>
       await loadPlacementMoveCatalog(
         client,

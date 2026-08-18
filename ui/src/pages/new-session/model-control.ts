@@ -25,6 +25,7 @@ import type { NewSessionPreference } from "./preferences.ts";
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 type GatewayAgentRuntime = NonNullable<GatewayAgentRow["agentRuntime"]> & {
   cloudPlacementSupported?: boolean;
+  devicePlacementSupported?: boolean;
 };
 type NewSessionMetadataStatus = ChatModelCatalogState["status"];
 type NewSessionMetadataState = {
@@ -509,6 +510,15 @@ export class NewSessionModelControl {
       return undefined;
     }
     return runtimeId === runtime.id ? runtime : { ...runtime, id: runtimeId };
+  }
+
+  devicePlacementUnsupportedReason(): string | undefined {
+    return this.resolveAgentRuntime({
+      agent: this.pendingAgent,
+      context: this.pendingContext,
+    })?.devicePlacementSupported === false
+      ? t("newSession.deviceRuntimeUnsupported")
+      : undefined;
   }
 
   render(options: {

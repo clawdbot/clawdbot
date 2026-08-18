@@ -1146,7 +1146,12 @@ describe("gateway session utils", () => {
     expect(legacyObservedOpenClaw.agentRuntime?.id).toBe("codex");
     expect(legacyObservedOpenClaw.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
     expect(lockedCodex.thinkingLevel).toBe("ultra");
-    expect(lockedCodex.agentRuntime).toEqual({ id: "codex", source: "session" });
+    expect(lockedCodex.agentRuntime).toEqual({
+      id: "codex",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
+      source: "session",
+    });
     expect(lockedCodex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
   });
 
@@ -1174,7 +1179,12 @@ describe("gateway session utils", () => {
       } as SessionEntry,
     });
 
-    expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
+    expect(row.agentRuntime).toEqual({
+      id: "codex",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
+      source: "session",
+    });
   });
 
   test.each([true, false])(
@@ -3366,6 +3376,7 @@ describe("gateway session utils", () => {
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
       cloudPlacementSupported: false,
+      devicePlacementSupported: false,
       source: "implicit",
     });
   });
@@ -3474,6 +3485,7 @@ describe("gateway session utils", () => {
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
       cloudPlacementSupported: false,
+      devicePlacementSupported: false,
       source: "provider",
     });
   });
@@ -3713,7 +3725,12 @@ describe("listSessionsFromStore selected model display", () => {
         derivedTitle: "title 0",
         lastMessagePreview: "last 0",
       });
-      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
+      expect(listed.sessions[0]?.agentRuntime).toEqual({
+        id: "codex",
+        cloudPlacementSupported: false,
+        devicePlacementSupported: false,
+        source: "implicit",
+      });
       expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
       expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
@@ -3922,6 +3939,8 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
     expect(result.sessions[0]?.agentRuntime).toEqual({
       id: "claude-cli",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
       source: "model",
     });
   });

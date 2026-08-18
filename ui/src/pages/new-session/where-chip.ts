@@ -25,6 +25,7 @@ type WhereChipState = Readonly<{
   cloudProfiles: readonly DraftCloudProfile[];
   cloudMachines: readonly DraftMachineOption[];
   selectedMachineId: string;
+  deviceDisabledReason?: string;
 }>;
 
 function nodeUpdateIssueCopy(node: DraftNode): string | undefined {
@@ -44,6 +45,7 @@ export function resolveWhereChip(params: {
   cloudProfileId: string;
   machineClass?: string;
   execNode: string;
+  deviceDisabledReason?: string;
 }): WhereChipState {
   const sections = resolvePlacePickerSections(params);
   const node = sections.deviceNodes.find((candidate) => candidate.nodeId === params.execNode);
@@ -67,6 +69,7 @@ export function resolveWhereChip(params: {
       cloudMachines,
       selectedMachineId: selectedMachine?.id ?? "",
       ...sections,
+      deviceDisabledReason: params.deviceDisabledReason,
     };
   }
   if (params.execNode) {
@@ -76,6 +79,7 @@ export function resolveWhereChip(params: {
       cloudMachines: [],
       selectedMachineId: "",
       ...sections,
+      deviceDisabledReason: params.deviceDisabledReason,
     };
   }
   return {
@@ -84,6 +88,7 @@ export function resolveWhereChip(params: {
     cloudMachines: [],
     selectedMachineId: "",
     ...sections,
+    deviceDisabledReason: params.deviceDisabledReason,
   };
 }
 
@@ -178,6 +183,7 @@ export function renderWhereChip(params: {
               <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
               ${params.state.deviceNodes.map((node, index) => {
                 const updateIssue = nodeUpdateIssueCopy(node);
+                const disabledReason = params.state.deviceDisabledReason ?? updateIssue;
                 return renderSessionMenuItem(
                   {
                     value: `node:${node.nodeId}`,
@@ -186,10 +192,14 @@ export function renderWhereChip(params: {
                       ? icons.monitorSmartphone
                       : icons.monitor,
                     sub: nodeSuffixes[index],
-                    facts: updateIssue ? [updateIssue] : params.state.deviceFacts.get(node.nodeId),
+                    facts: disabledReason
+                      ? [disabledReason]
+                      : params.state.deviceFacts.get(node.nodeId),
                     checked: params.execNode === node.nodeId,
-                    disabled: !isDraftNodeSessionEligible(node),
-                    title: updateIssue ?? nodeTooltip(node),
+                    disabled:
+                      Boolean(params.state.deviceDisabledReason) ||
+                      !isDraftNodeSessionEligible(node),
+                    title: disabledReason ?? nodeTooltip(node),
                     onSelect: () => params.onSelectExecNode(node.nodeId),
                   },
                   params.submitting,

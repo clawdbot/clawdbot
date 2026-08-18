@@ -229,6 +229,124 @@ describe("chat pane placement", () => {
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 
+  it("disables paired-device moves for a runtime that cannot dispatch there", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { profiles: [], environments: [] };
+      }
+      if (method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "build-mac",
+              displayName: "Build Mac",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        refreshReplacement: vi.fn(async () => undefined),
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+    } as never;
+    const session = {
+      ...activePlacementSession(),
+      agentRuntime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        devicePlacementSupported: false,
+        source: "model",
+      },
+    } satisfies GatewaySessionRow;
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
+    });
+    const device = document.body.querySelector<HTMLButtonElement>(
+      '[data-value="device:build-mac"]',
+    );
+    expect(device?.disabled).toBe(true);
+    expect(device?.textContent).toContain("Needs the embedded runtime");
+    expect(device?.title).toBe("Needs the embedded runtime");
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Cancel")
+      ?.click();
+    await moving;
+
+    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  });
+
+  it("moves an embedded-runtime session to a paired device", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { profiles: [], environments: [] };
+      }
+      if (method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "build-mac",
+              displayName: "Build Mac",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+    } as never;
+    const session = {
+      ...activePlacementSession(),
+      agentRuntime: {
+        id: "openclaw",
+        cloudPlacementSupported: true,
+        devicePlacementSupported: true,
+        source: "model",
+      },
+    } satisfies GatewaySessionRow;
+
+    const moving = pane.moveHeaderPlacement(session);
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
+    });
+    document.body.querySelector<HTMLButtonElement>('[data-value="device:build-mac"]')?.click();
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Move session")
+      ?.click();
+    await moving;
+
+    expect(request).toHaveBeenCalledWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      expected: {
+        generation: 1,
+        environmentId: "worker:one",
+        ownerEpoch: 1,
+      },
+      target: { kind: "device", deviceId: "build-mac" },
+    });
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
   it("does not reclaim when the operator cancels", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({

@@ -376,4 +376,43 @@ describe("Where chip state", () => {
       now.mockRestore();
     }
   });
+
+  it("disables device placements when the selected runtime cannot dispatch to devices", () => {
+    const state = resolveWhereChip({
+      execNodes: nodes,
+      environments: readDraftEnvironments([{ id: "node:macbook", type: "node" }]),
+      cloudProfiles: [],
+      execNode: "",
+      cloudProfileId: "",
+      deviceDisabledReason: "Needs the embedded runtime",
+    });
+    const container = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        execNode: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingCloud: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: true,
+        onGuardTransition: () => undefined,
+        onPopoverShow: () => undefined,
+        onPopoverHide: () => undefined,
+        onPopoverAfterHide: () => undefined,
+        onSelectExecNode: () => undefined,
+        onSelectCloudProfile: () => undefined,
+        onConnectMachine: () => undefined,
+      }),
+      container,
+    );
+
+    const device = container.querySelector<HTMLButtonElement>('[data-value="node:macbook"]');
+    expect(device?.disabled).toBe(true);
+    expect(device?.textContent).toContain("Needs the embedded runtime");
+    expect(device?.title).toBe("Needs the embedded runtime");
+  });
 });

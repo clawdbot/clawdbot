@@ -37,6 +37,7 @@ type FixtureOptions = {
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
+  nodes?: unknown[];
   scopes?: string[];
   selfUser?: { id: string };
   request?: (method: string) => Promise<unknown>;
@@ -45,7 +46,7 @@ type FixtureOptions = {
 function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string) => {
     if (method === "node.list") {
-      return Promise.resolve({ nodes: [] });
+      return Promise.resolve({ nodes: options.nodes ?? [] });
     }
     if (options.request) {
       return options.request(method);
@@ -299,6 +300,44 @@ describe("DraftSubmissionFlow submit gates", () => {
     expect(fixture.flow.canSubmit()).toBe(false);
     expect(fixture.flow.submitBlock()?.gate).toBe("empty-draft");
     expect(fixture.flow.blockedSubmitNotice()).toBeUndefined();
+  });
+
+  it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
+    const fixture = createDraftFixture({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      agents: [
+        {
+          id: "main",
+          workspace: "/workspace",
+          workspaceGit: false,
+          model: { primary: "openai/gpt-5.6-sol" },
+          agentRuntime: {
+            id: "codex",
+            cloudPlacementSupported: true,
+            devicePlacementSupported: false,
+            source: "model",
+          },
+        },
+      ],
+      nodes: [
+        {
+          nodeId: "build-mac",
+          displayName: "Build Mac",
+          connected: true,
+          commands: ["system.run"],
+        },
+      ],
+    });
+    await vi.waitFor(() => expect(fixture.place.execNodes()).toHaveLength(1));
+    fixture.place.selectExecNode("build-mac");
+    fixture.flow.setMessage("run on the device");
+
+    expect(fixture.flow.submitBlock()).toEqual({
+      gate: "node-runtime",
+      reason: "Needs the embedded runtime",
+    });
+    expect(fixture.flow.canSubmit()).toBe(false);
+    expect(fixture.flow.submitDisabledReason()).toBe("Needs the embedded runtime");
   });
 });
 

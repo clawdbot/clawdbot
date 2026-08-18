@@ -29,6 +29,7 @@ type ReasonedSubmitGate =
   | "agents"
   | "agent-not-allowed"
   | "node"
+  | "node-runtime"
   | "cloud"
   | "worktree-unavailable"
   | "worktree-name"
@@ -144,6 +145,10 @@ export function resolveNewSessionSubmitBlock(
   }
   if (!place.execNodeReady()) {
     return { gate: "node", reason: t("newSession.nodeUnavailable") };
+  }
+  const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
+  if (place.execNode && deviceRuntimeUnsupportedReason) {
+    return { gate: "node-runtime", reason: deviceRuntimeUnsupportedReason };
   }
   const cloudProfileId = host.cloudProfileForSubmission();
   if (

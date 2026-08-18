@@ -207,7 +207,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     ) {
       respondInvalidWorkerSession(
         respond,
-        `runtime ${sessionRuntime} requires an SSH-backed cloud worker provider`,
+        dispatchTarget.deviceId !== undefined
+          ? `runtime ${sessionRuntime} cannot dispatch to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or choose an SSH-backed cloud worker provider`
+          : `runtime ${sessionRuntime} requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"`,
       );
       return;
     }
