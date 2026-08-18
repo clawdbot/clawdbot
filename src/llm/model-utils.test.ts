@@ -113,7 +113,7 @@ describe("clampThinkingLevel", () => {
     expect(clampThinkingLevel(model, "xhigh")).toBe("high");
   });
 
-  it("keeps extended levels hidden when compat reasoning is explicitly disabled", () => {
+  it("exposes only off when compat reasoning is explicitly disabled", () => {
     const model = {
       ...baseOpenAIResponsesModel,
       compat: {
@@ -122,8 +122,36 @@ describe("clampThinkingLevel", () => {
       },
     } satisfies TestOpenAIResponsesModel;
 
-    expect(getSupportedThinkingLevels(model)).not.toContain("xhigh");
-    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
+    expect(getSupportedThinkingLevels(model)).toEqual(["off"]);
+    expect(clampThinkingLevel(model, "high")).toBe("off");
+    expect(clampThinkingLevel(model, "xhigh")).toBe("off");
+  });
+
+  it("exposes max when compat declares a native max effort", () => {
+    const model = {
+      ...baseOpenAICompletionsModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "max"],
+      },
+    } satisfies TestOpenAICompletionsModel;
+
+    expect(getSupportedThinkingLevels(model)).toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("max");
+  });
+
+  it("exposes max when compat maps it to a declared provider effort", () => {
+    const model = {
+      ...baseOpenAICompletionsModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "provider-max"],
+        reasoningEffortMap: { max: "provider-max" },
+      },
+    } satisfies TestOpenAICompletionsModel;
+
+    expect(getSupportedThinkingLevels(model)).toContain("max");
+    expect(clampThinkingLevel(model, "max")).toBe("max");
   });
 
   it("exposes max only with an explicit compat max-to-xhigh mapping", () => {

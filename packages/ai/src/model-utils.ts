@@ -98,7 +98,10 @@ function supportsCompatExtendedThinkingLevel<TApi extends Api>(
   const mapped = normalizeReasoningEffort(mappedValue);
 
   if (level === "max") {
-    return hasCompatMapping && mapped === "xhigh" && supported.has("xhigh");
+    if (hasCompatMapping) {
+      return supported.size > 0 && Boolean(mapped) && supported.has(mapped);
+    }
+    return supported.has(level);
   }
   if (hasCompatMapping && !mapped) {
     return false;
@@ -116,6 +119,10 @@ export function getSupportedThinkingLevels<TApi extends Api>(
   const mandatoryAdaptiveContract =
     model.api === "anthropic-messages" && requiresClaudeMandatoryAdaptiveThinking(model);
   if (!model.reasoning && !mandatoryAdaptiveContract) {
+    return ["off"];
+  }
+  const compat = getCompatReasoningConfig(model);
+  if (compat?.supportsReasoningEffort === false) {
     return ["off"];
   }
   const thinkingLevelMap = resolveThinkingLevelMap(model);
