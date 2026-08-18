@@ -159,8 +159,6 @@ export function readTranscriptDisplayDelta(
   scope: SessionTranscriptReadScope,
   limits: SessionTranscriptRawDeltaLimits = {},
 ): SessionTranscriptDisplayDeltaResult {
-  withCurrentProjectionSnapshot(scope, () => undefined);
-  const resolved = resolveSqliteTranscriptReadScope(scope);
   const maxEvents = normalizeRawDeltaLimit(
     limits.maxEvents,
     DEFAULT_RAW_TRANSCRIPT_MAX_EVENTS,
@@ -173,29 +171,21 @@ export function readTranscriptDisplayDelta(
     MAX_RAW_TRANSCRIPT_BYTES,
     "maxBytes",
   );
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
-        database,
-        ...resolved,
-      })?.beforeRawSeq;
-      return readRawDeltaInTransaction(
-        database.db,
-        resolved,
-        limits.cursor,
-        maxEvents,
-        maxBytes,
-        beforeEventSeq,
-        true,
-      );
-    },
-    {
-      databaseLabel: database.path,
-      operationLabel: "session transcript display delta",
-    },
-  );
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
+      database: projection.database,
+      ...projection.resolved,
+    })?.beforeRawSeq;
+    return readRawDeltaInTransaction(
+      projection.database.db,
+      projection.resolved,
+      limits.cursor,
+      maxEvents,
+      maxBytes,
+      beforeEventSeq,
+      true,
+    );
+  });
 }
 
 function readRawDeltaInTransaction(

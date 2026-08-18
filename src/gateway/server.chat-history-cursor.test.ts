@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -8,7 +9,16 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceTranscriptEvents,
+  SessionTranscriptProjectionUnavailableError,
 } from "../config/sessions/session-accessor.js";
+import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-delta.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
@@ -146,6 +156,105 @@ describe("chat.history cursor catch-up", () => {
         sessionInfo: { activeLeafEntryId: "cached" },
       },
     });
+  });
+
+  test("does not advance a cursor past messages appended after the projection check", async () => {
+    const { context, storePath } = await createCursorSession();
+    const scope = currentScope(storePath);
+    const cached = await callChat<{ deltaCursor?: string }>(context, "chat.history");
+    const cursor = cached.payload?.deltaCursor;
+    if (!cursor) {
+      throw new Error("expected cached history cursor");
+    }
+    const resolved = resolveSqliteTranscriptReadScope(scope);
+    const databaseOptions = toDatabaseOptions(resolved);
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const indexed = asOptionalRecord(
+      database.db
+        .prepare("SELECT indexed_seq FROM session_transcript_index_state WHERE session_id = ?")
+        .get(sessionId),
+    );
+    const indexedSeq = indexed?.indexed_seq;
+    if (typeof indexedSeq !== "number") {
+      throw new Error("expected current transcript projection");
+    }
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(database.path);
+    writer.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 1000; PRAGMA foreign_keys = ON;");
+    let appended = false;
+    const limits = {
+      cursor,
+      maxBytes: 1_000_000,
+      get maxEvents() {
+        if (appended) {
+          return 200;
+        }
+        appended = true;
+        const nextSeq = indexedSeq + 1;
+        const events = [
+          transcriptEvent({
+            content: "missed user",
+            id: "missed-user",
+            parentId: "cached",
+            role: "user",
+          }),
+          transcriptEvent({
+            content: "missed assistant",
+            id: "missed-assistant",
+            parentId: "missed-user",
+            role: "assistant",
+          }),
+        ];
+        writer.exec("BEGIN IMMEDIATE;");
+        try {
+          const insertEvent = writer.prepare(
+            "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+          );
+          const insertIdentity = writer.prepare(
+            `INSERT INTO transcript_event_identities
+               (session_id, event_id, seq, event_type, parent_id,
+                message_idempotency_key, created_at)
+             VALUES (?, ?, ?, 'message', ?, NULL, ?)`,
+          );
+          for (const [offset, event] of events.entries()) {
+            const seq = nextSeq + offset;
+            insertEvent.run(sessionId, seq, JSON.stringify(event), Date.now());
+            insertIdentity.run(sessionId, event.id, seq, event.parentId, Date.now());
+          }
+          writer.exec("COMMIT;");
+        } catch (error) {
+          writer.exec("ROLLBACK;");
+          throw error;
+        }
+        return 200;
+      },
+    };
+
+    try {
+      expect(() => readTranscriptDisplayDelta(scope, limits)).toThrow(
+        SessionTranscriptProjectionUnavailableError,
+      );
+    } finally {
+      writer.close();
+    }
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const recovered = await callChat<{
+        kind?: string;
+        messages?: Array<{ message?: { content?: unknown } }>;
+      }>(context, "chat.history", { cursor });
+      expect(recovered).toMatchObject({
+        ok: true,
+        payload: {
+          kind: "delta",
+          messages: [
+            { message: { content: "missed user" } },
+            { message: { content: "missed assistant" } },
+          ],
+        },
+      });
+    }
   });
 
   test.each([
