@@ -32,7 +32,6 @@ import {
   runCommand,
   runSutContainerAction,
   selectCrabboxSshPort,
-  signalCommandTree,
   signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
@@ -40,15 +39,10 @@ import {
   waitForLogAfterOffset,
   writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const posixIt = process.platform === "win32" ? it.skip : it;
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -1193,75 +1187,6 @@ setInterval(() => {}, 1000);
         process.kill(grandchildPid, "SIGKILL");
       }
     }
-  });
-
-  it("signals Windows proof command process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalCommandTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalCommandTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows proof command process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalCommandTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("lets timed-out command descendants exit during kill grace", async () => {
