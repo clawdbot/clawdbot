@@ -1468,8 +1468,8 @@ async function* startWebSocketOutputOnFirstEvent(
     if (!started) {
       started = true;
       onFirstProviderEvent();
-      await onProviderAccepted();
       onStart();
+      await onProviderAccepted();
       stream.push({ type: "start", partial: output });
     }
     yield event;
