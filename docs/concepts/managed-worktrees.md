@@ -97,7 +97,7 @@ The Control UI **Worktrees** page under Settings provides the same actions plus 
 | `worktrees.restore`  | Restore a removed worktree from its snapshot.                           |
 | `worktrees.gc`       | Run idle, orphan, and retention cleanup now.                            |
 
-`worktrees.list` requires `operator.read`, and the mutating methods require `operator.admin`. `worktrees.branches` needs `operator.write` for configured agent workspaces, while any other host path requires `operator.admin` (matching the `sessions.create` cwd bar). It reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+`worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. Write-scoped creation skips repository checkout hooks and `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 ## Workboard workspaces
 

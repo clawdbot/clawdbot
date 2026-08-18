@@ -95,7 +95,7 @@ describe("method scope resolution", () => {
     ["environments.destroy", ["operator.admin"]],
     ["worktrees.list", ["operator.read"]],
     ["worktrees.branches", ["operator.write"]],
-    ["worktrees.create", ["operator.admin"]],
+    ["worktrees.create", ["operator.write"]],
     ["projects.list", ["operator.read"]],
     ["users.prefs.get", ["operator.read"]],
     ["users.prefs.set", ["operator.write"]],
