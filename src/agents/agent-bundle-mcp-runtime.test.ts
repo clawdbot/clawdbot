@@ -1381,6 +1381,7 @@ describe("session MCP runtime", () => {
           type: "text",
           text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
         },
+        { type: "text", text: "captured screenshot" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         { type: "text", text: "[Report] https://example.com/report" },
         { type: "text", text: "memo body" },
