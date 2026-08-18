@@ -43,7 +43,7 @@ type SessionCatalogGroupsParams = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  creatorId?: string | null;
+  ownerId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
   draggingSectionId: string | null;
@@ -120,9 +120,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows reuse the live session row so activity, unread state, and
   // the session menu behave exactly like the regular list.
   const liveRowsByKey = new Map<string, GatewaySessionRow>();
+  const liveOwnerIdBySessionKey = new Map<string, string | undefined>();
   for (const row of params.liveRows) {
     if (!liveRowsByKey.has(row.key)) {
       liveRowsByKey.set(row.key, row);
+      liveOwnerIdBySessionKey.set(row.key, row.owner?.actor.id);
     }
   }
   return params.catalogs.map((catalog) => {
@@ -130,7 +132,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
     // Catalog providers own host identity; the sidebar only removes hosts with no visible rows.
-    const visibleHosts = visibleCatalogHosts(hosts, params.creatorId);
+    const visibleHosts = visibleCatalogHosts(hosts, params.ownerId, liveOwnerIdBySessionKey);
     const rows = visibleHosts.flatMap((host) =>
       host.sessions.map((session) => ({ host, session })),
     );

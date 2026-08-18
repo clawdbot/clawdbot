@@ -88,4 +88,27 @@ describe("visibleCatalogHosts", () => {
       { ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] },
     ]);
   });
+
+  it("uses a live adopted session owner before catalog creator provenance", () => {
+    const adoptedKey = "agent:main:adopted";
+    const hosts: SessionCatalogHost[] = [
+      {
+        hostId: "node:remote",
+        label: "Remote node",
+        kind: "node",
+        connected: true,
+        sessions: [
+          {
+            ...session("adopted", "Adopted"),
+            sessionKey: adoptedKey,
+            createdActor: { id: "operator:creator", type: "human" },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      visibleCatalogHosts(hosts, "operator:owner", new Map([[adoptedKey, "operator:owner"]])),
+    ).toEqual(hosts);
+  });
 });

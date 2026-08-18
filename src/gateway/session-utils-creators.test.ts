@@ -241,13 +241,23 @@ it("projects and filters the effective owner while preserving creator provenance
     },
     { type: "human", id: "profile-bob", label: "Bob" },
   ]);
-  const filtered = listSessionsFromStore({
+  const creatorFiltered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
-    opts: { archived: "all", creatorId: "profile-bob" },
+    opts: { archived: "all", creatorId: "profile-ada" },
   });
-  expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:assigned-owner"]);
+  expect(creatorFiltered.sessions.map((row) => row.key)).toEqual([
+    "agent:main:default-owner",
+    "agent:main:assigned-owner",
+  ]);
+  const ownerFiltered = listSessionsFromStore({
+    cfg: {} as OpenClawConfig,
+    storePath: "/tmp/openclaw-session-owners",
+    store,
+    opts: { archived: "all", ownerId: "profile-bob" },
+  });
+  expect(ownerFiltered.sessions.map((row) => row.key)).toEqual(["agent:main:assigned-owner"]);
 });
 
 it("projects participant identities and filters sessions involving the viewer", () => {

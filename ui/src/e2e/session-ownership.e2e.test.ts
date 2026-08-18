@@ -168,7 +168,7 @@ suite.define(() => {
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).some(
           (request) =>
-            (request.params as { creatorId?: unknown } | undefined)?.creatorId === "profile-ada",
+            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
         ),
       )
       .toBe(true);

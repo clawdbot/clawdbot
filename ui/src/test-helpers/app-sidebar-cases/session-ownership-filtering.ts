@@ -150,7 +150,7 @@ describe("AppSidebar session ownership filtering", () => {
     expect(sidebar.querySelector(".sidebar-session-sort--filtered")).not.toBeNull();
   });
 
-  it("filters catalog rows by authoritative creator ownership", async () => {
+  it("filters adopted catalog rows by authoritative live ownership", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
     const harness = createSessionsHarness("main", [
@@ -168,7 +168,12 @@ describe("AppSidebar session ownership filtering", () => {
       throw new Error("expected ownership rows");
     }
     ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    adopted.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    adopted.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    adopted.owner = {
+      actor: { type: "human", id: "profile-bob", label: "Bob" },
+      assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+      assignedAt: 10,
+    };
     result.creators = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
@@ -193,7 +198,7 @@ describe("AppSidebar session ownership filtering", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: backingSessionKey,
-                createdActor: { type: "human", id: "profile-bob", label: "Bob" },
+                createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                 canContinue: true,
                 canArchive: false,
               },
@@ -216,9 +221,9 @@ describe("AppSidebar session ownership filtering", () => {
 
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).toContain("External unowned session");
-    await selectCreator(sidebar, "profile-ada");
+    await selectCreator(sidebar, "profile-bob");
 
-    expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).toBeNull();
+    expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
 
     harness.publishList({

@@ -188,6 +188,7 @@ function filterSessionEntries(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
   const creatorId = normalizeOptionalString(opts.creatorId);
+  const ownerId = normalizeOptionalString(opts.ownerId);
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
@@ -309,15 +310,20 @@ function filterSessionEntries(params: {
       if (effectiveOwner) {
         addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
       }
-    } else if (creatorId || involvingActorId) {
+    } else if (ownerId || involvingActorId) {
       filterOwnerIdentityById ??= new Map();
+      configuredAgentIds ??= new Set(listAgentIds(cfg));
       effectiveOwner = projectAssignableSessionOwner(
         entry.owner?.actor ?? entry.createdActor,
         filterOwnerIdentityById,
         cfg,
+        configuredAgentIds,
       );
     }
-    if (creatorId && effectiveOwner?.id !== creatorId) {
+    if (creatorId && entry.createdActor?.id !== creatorId) {
+      continue;
+    }
+    if (ownerId && effectiveOwner?.id !== ownerId) {
       continue;
     }
     if (involvingActorId) {
