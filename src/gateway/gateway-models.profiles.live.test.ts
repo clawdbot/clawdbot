@@ -1390,10 +1390,20 @@ function normalizeOptionalEnvValue(value: string | undefined): string | undefine
 }
 
 function createExplicitLiveFallbackModel(provider: string, id: string): Model {
+  const thinkingProfile = resolveEffectiveThinkingProfile({
+    provider,
+    context: {
+      provider,
+      modelId: id,
+      agentRuntime: "openclaw",
+      reasoning: true,
+    },
+  });
   return {
     ...createGatewayLiveTestModel(provider, id),
     contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
     maxTokens: 4_096,
+    reasoning: thinkingProfile?.levels.some((level) => level.id !== "off") ?? false,
   };
 }
 
@@ -3950,6 +3960,7 @@ describe("OpenAI Ultra wire capture", () => {
   it("uses the configured or official route for explicit fallback models", () => {
     const candidate = createExplicitLiveFallbackModel("openai", "gpt-5.6-sol");
 
+    expect(candidate.reasoning).toBe(true);
     expect(
       resolveOpenAIUltraUpstreamBaseUrl({
         candidate,
