@@ -13,8 +13,21 @@ fixture setup and reporting. Let the human drive OpenClaw and judge quality.
 Use one editable Markdown worksheet as the entire run record. Do not create
 `run.json`, mission state, receipts, or other tracking files.
 
-Tell the tester: **Edit the worksheet directly or tell me what to record. Reply
-exactly `finish validation` when you are done.**
+## Workflows
+
+Choose the workflow from the request:
+
+- **Initialize campaign** is the asynchronous release-process path. Create or
+  reuse the canonical issue for the exact candidate, close older open campaign
+  issues, print the current issue URL, and stop.
+- **Validate release** is the default human-testing path. Join the existing
+  candidate issue, copy and upgrade a gateway, then guide testing. This workflow
+  never creates or rewrites the canonical issue.
+
+Before the upgrade reaches a terminal ready or blocked result, keep tester-facing
+output to the campaign issue, candidate identity, gateway choice, and upgrade
+progress or errors. The worksheet, priority surfaces, testing instructions, and
+`finish validation` phrase are disclosed only after that gate.
 
 ## 1. Candidate and shared issue
 
@@ -25,12 +38,22 @@ Use `gh` to find the open issue identified by
 `<!-- openclaw-release-validation:<tag> -->`. Ignore closed campaign issues and
 fail clearly if more than one open issue has the marker.
 
-When the issue exists, read its body and use the worksheet between
+Whenever the workflow reaches its issue announcement, use this exact shape with
+one raw URL and no commentary about discovery or campaign counts:
+
+```text
+Issue: https://github.com/openclaw/openclaw/issues/<number>
+```
+
+In **Validate release**, fail with `Release validation has not been initialized
+for <tag>.` when the issue is absent. When it exists, announce it once in the
+format above, then read its body and use the worksheet between
 `<!-- validation-worksheet:start -->` and
 `<!-- validation-worksheet:end -->`. Keep its release priorities and template
 unchanged.
 
-When the issue does not exist, become the campaign creator:
+In **Initialize campaign**, reuse the current issue unchanged when it already
+exists. When it does not exist, generate it:
 
 1. Read the GitHub release notes for the exact tag. If they are empty or
    incomplete, also read that tag's section of `CHANGELOG.md`.
@@ -104,10 +127,17 @@ When the issue does not exist, become the campaign creator:
    completed worksheet verbatim between the worksheet markers. Re-query open
    issues for the marker after creation and fail on duplicates.
 
-Only the campaign creator performs release-note analysis or generates the
-canonical template. Later runs consume the issue body without rewriting it, but
-replace **Your changes in this release** in their private worksheet with the
-current tester's complete authored-PR list for the same tag range.
+After the current issue exists, find open campaign issues whose marker names a
+release published before the current candidate. Comment on each with the current
+issue URL, then close it as completed. Never close the current issue or a campaign
+for a later release. Re-query and require the current candidate to be the only
+open campaign. Announce its URL once in the exact format above and end the
+initializer workflow without waiting for testing.
+
+Only **Initialize campaign** performs release-note analysis or generates the
+canonical template. Validation runs consume the issue body without rewriting
+it, but replace **Your changes in this release** in their private worksheet with
+the current tester's complete authored-PR list for the same tag range.
 
 ## 2. Choose and copy a real gateway
 
@@ -131,18 +161,7 @@ environment and assign a non-conflicting port; do not make an additional staged
 copy. Keep the source unchanged. Before activating copied channel credentials,
 stop the current credential owner and restore it when validation ends.
 
-## 3. Create the worksheet
-
-Copy the canonical worksheet between the shared issue's markers to
-`.artifacts/openclaw-release-validation/<tag>-<timestamp>.md`. Fill in the
-source, shared issue URL, and local upgrade result without changing the campaign
-priorities. Refresh **Your changes in this release** for the current tester, give
-them a clickable link, and briefly point out the five priority surfaces.
-
-This worksheet is the only checklist and note store. The tester may edit it in
-their editor or tell the agent what to record.
-
-## 4. Upgrade and report errors
+## 3. Upgrade and report errors
 
 Install the exact candidate runtime and use the runtime name returned by OCM:
 
@@ -162,13 +181,40 @@ Verify `ocm service status <test-env>`, `ocm @<test-env> -- --version`, and
 requires HTTP health and gateway reachability.
 
 Report every error to the tester immediately, including errors recovered by a
-retry. Record candidate OpenClaw behavior caused by the upgrade under **Upgrade
-findings**; it is eligible for the GitHub comment. Keep OCM, copying, local
-tooling, setup, and cleanup problems in the conversation only; they never enter
-the worksheet or GitHub comment.
+retry. Retain candidate OpenClaw behavior caused by the upgrade for **Upgrade
+findings** after the worksheet is created; it is eligible for the GitHub
+comment. Keep OCM, copying, local tooling, setup, and cleanup problems in the
+conversation only; they never enter the worksheet or GitHub comment.
 
-Update the worksheet's upgrade result. Do not continue to testing while the
-upgrade or gateway readiness is unresolved.
+Complete this step only when candidate readiness is either verified or blocked
+with a concrete terminal finding. Do not continue to testing while the upgrade
+or gateway readiness is unresolved.
+
+## 4. Create and reveal the worksheet
+
+Only after the upgrade gate above, copy the canonical worksheet between the
+shared issue's markers to
+`.artifacts/openclaw-release-validation/<tag>-<timestamp>.md`. Fill in the
+source, shared issue URL, terminal upgrade result, and eligible upgrade findings
+without changing the campaign priorities. Refresh **Your changes in this
+release** for the current tester.
+
+Resolve and print the worksheet's absolute path, followed by one exact
+platform-appropriate command that opens it. Use this shape on macOS:
+
+```text
+Testing worksheet: /absolute/path/to/worksheet.md
+Open it: open '/absolute/path/to/worksheet.md'
+```
+
+Use `xdg-open '<absolute-path>'` on Linux or `start "" "<absolute-path>"` on
+Windows. Shell-quote the actual path. Then briefly point out the five priority
+surfaces and tell the tester: **Edit the worksheet directly or tell me what to
+record. Reply exactly `finish validation` when you are done.**
+
+This worksheet is the only checklist and note store. If readiness is verified,
+continue to human-driven testing. If readiness is blocked, state that testing
+cannot begin and wait for final feedback or `finish validation`.
 
 ## 5. Human-driven testing
 
