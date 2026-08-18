@@ -40,16 +40,21 @@ When the issue does not exist, become the campaign creator:
    Select the three to five subsystems with the broadest changed surface or
    highest regression risk.
 3. Move each selected subsystem from **Other subsystems** into **Priority for
-   this release**. Under its `####` heading, replace the hidden guidance comment
-   with `##### What changed`, `##### Recommended testing`, and `##### Notes`.
-   **What changed** synthesizes the dominant themes across the subsystem's
-   complete group instead of listing a few fixes. Issue or PR links are optional
-   supporting examples: label them `Examples`, limit them to one or two
-   representative links, and never use them as the organizing content.
+   this release**, leaving all others under **Other subsystems**. Replace every
+   subsystem's hidden guidance comment with `#### What changed` and `####
+Notes`. Add `#### Recommended testing` between them whenever release changes
+   justify a targeted exercise; every priority subsystem must include it. When
+   no release item is relevant, write `No notable changes in this release.`
+   under **What changed** and omit **Recommended testing**.
+
+   For each **What changed**, synthesize the dominant themes across the
+   subsystem's complete group instead of listing a few fixes. Issue or PR links
+   are optional supporting examples: label them `Examples`, limit them to one or
+   two representative links, and never use them as the organizing content.
    Hyperlink every reference, using only items cited by the release notes or
-   verified live. **Recommended testing** is one concise human-driven exercise.
-   Leave every non-priority subsystem as a plain `####` heading with its hidden
-   guidance comment and no `##### Notes` subsection.
+   verified live. Each **Recommended testing** is one concise human-driven
+   exercise.
+
 4. Make a working copy of the worksheet asset and fill it with the exact
    candidate identity, release-notes URL, and priority subsystem sections.
    Remove the campaign-creator comment and ensure no template placeholder
@@ -126,21 +131,18 @@ upgrade or gateway readiness is unresolved.
 
 Ask: **What do you want to test first?** Recommend starting with a release
 priority, but let the tester choose one subsystem at a time in any order. After
-each item, add their notes under `##### Notes` for a priority subsystem or
-directly beneath the hidden guidance comment for any other subsystem. Then ask
-what they want to test next.
+each item, add their notes under that subsystem's `#### Notes`, then ask what
+they want to test next.
 
 The tester drives interactive surfaces such as the TUI, Control UI, onboarding,
 channels, pairing, and approvals. Provide the command or URL and explain what
 to look for, then wait for their result. Take control only when explicitly
 asked. Do not turn the checklist into an automated scenario runner.
 
-A subsystem counts as tested only when tester-authored text appears in its note
-area. For a priority subsystem, read only text beneath `##### Notes`; **What
-changed** and **Recommended testing** never count as test evidence. For any other
-subsystem, read tester text beneath its `####` heading and ignore the HTML
-guidance comment. An empty or comment-only note area means untouched. Add
-candidate problems found during subsystem testing to that subsystem's notes.
+A subsystem counts as tested only when tester-authored text appears beneath its
+`#### Notes`. **What changed** and **Recommended testing** never count as test
+evidence. An empty or comment-only note area means untouched. Add candidate
+problems found during subsystem testing to that subsystem's notes.
 
 ## 6. Finish and publish
 

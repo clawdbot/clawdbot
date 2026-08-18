@@ -25,91 +25,90 @@ the affected subsystem.
 ## Subsystem notes
 
 > **Operator notes**
-> Add notes only to the subsystems you tested. For priority subsystems, write
-> under **Notes**; for all others, write directly beneath the subsystem name.
-> Leave untested sections empty.
+> Add notes under **Notes** for each subsystem you tested. Leave untested note
+> sections empty. Start with **Priority for this release** when possible.
 
 [Release notes]({{RELEASE_NOTES_URL}})
 
-### Priority for this release
+## Priority for this release
 
-<!-- Campaign creator: move 3-5 selected subsystem sections here, add What changed, Recommended testing, and Notes subsections, then remove this comment. -->
+<!-- Campaign creator: move 3-5 selected subsystem sections here; add What changed, optional Recommended testing, and Notes to all 19 sections; then remove this comment. -->
 
-### Other subsystems
+## Other subsystems
 
-#### Pairing
+### Pairing
 
 <!-- Pair a client or sender and confirm it can act. Add notes below. -->
 
-#### Channels
+### Channels
 
 <!-- Use the channel you know best and confirm one reply per message. Add notes below. -->
 
-#### Control UI
+### Control UI
 
 <!-- Hold a real conversation with tools, reload, and continue. Add notes below. -->
 
-#### TUI
+### TUI
 
 <!-- Drive history, streaming, shortcuts, and reconnect yourself. Add notes below. -->
 
-#### Onboarding
+### Onboarding
 
 <!-- Complete setup and reach a working conversation. Add notes below. -->
 
-#### Slash commands
+### Slash commands
 
 <!-- Try familiar commands and check their results. Add notes below. -->
 
-#### Memory
+### Memory
 
 <!-- Retrieve old memory, add new memory, and retrieve it later. Add notes below. -->
 
-#### Subagents
+### Subagents
 
 <!-- Spawn a child, receive its result, and confirm it exits. Add notes below. -->
 
-#### Agents
+### Agents
 
 <!-- Create or switch agents and confirm their state stays separate. Add notes below. -->
 
-#### Cron
+### Cron
 
 <!-- Create, run, inspect, and remove one disposable job. Add notes below. -->
 
-#### Sessions
+### Sessions
 
 <!-- Restart or reconnect and confirm conversation continuity. Add notes below. -->
 
-#### Context Engine
+### Context Engine
 
 <!-- Confirm relevant context appears without obvious excess. Add notes below. -->
 
-#### Skill Workshop
+### Skill Workshop
 
 <!-- Invoke a skill, revise it, and invoke the revision. Add notes below. -->
 
-#### MCP
+### MCP
 
 <!-- Discover a familiar server and complete one real call. Add notes below. -->
 
-#### Models
+### Models
 
 <!-- List, select, use, and persist a model. Add notes below. -->
 
-#### Approvals
+### Approvals
 
 <!-- Deny once and approve once; confirm each action happens once. Add notes below. -->
 
-#### Compaction
+### Compaction
 
 <!-- Compact a real conversation and confirm continuity. Add notes below. -->
 
-#### Codex harness
+### Codex harness
 
 <!-- Complete useful tool work and inspect its artifacts. Add notes below. -->
 
-#### OpenClaw harness
+### OpenClaw harness
 
 <!-- Complete a real task and inspect its artifacts. Add notes below. -->
 
