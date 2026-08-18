@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
@@ -91,6 +92,49 @@ describe("resolveEmbeddedRunSkillEntries (integration)", () => {
       description: "Agent wins",
       filePath: path.join(agentWorkspaceDir, "skills", "fallback-shared", "SKILL.md"),
     });
+  });
+
+  it("keeps agent skills ahead of execution skills in a constrained fallback prompt", async () => {
+    const agentWorkspaceDir = tempDirs.make("openclaw-agent-workspace-");
+    const executionWorkspaceDir = tempDirs.make("openclaw-execution-workspace-");
+    const executionSkillsDir = path.join(executionWorkspaceDir, "skills");
+    const agentSkillName = "z-agent-priority";
+    const executionSkillName = "a-execution-priority";
+    await writeSkill({
+      dir: path.join(agentWorkspaceDir, "skills", agentSkillName),
+      name: agentSkillName,
+      description: "Agent priority",
+    });
+    await writeSkill({
+      dir: path.join(executionSkillsDir, executionSkillName),
+      name: executionSkillName,
+      description: "Execution priority",
+    });
+    const config: OpenClawConfig = { skills: { limits: { maxSkillsInPrompt: 1 } } };
+    const snapshotPrompt = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: agentWorkspaceDir,
+      executionSkillsDir,
+      config,
+      skillFilter: [agentSkillName, executionSkillName],
+      watch: false,
+      snapshotVersion: 1,
+    }).snapshot.prompt;
+    const fallback = resolveEmbeddedRunSkillEntries({
+      workspaceDir: agentWorkspaceDir,
+      executionSkillsDir,
+      config,
+      workspaceOnly: true,
+    });
+    const fallbackPrompt = resolveSkillsPrompt({
+      entries: fallback.skillEntries,
+      workspaceDir: agentWorkspaceDir,
+      config,
+      preserveEntryOrder: fallback.preserveEntryOrder,
+    });
+
+    expect(fallbackPrompt).toBe(snapshotPrompt);
+    expect(fallbackPrompt).toContain(agentSkillName);
+    expect(fallbackPrompt).not.toContain(executionSkillName);
   });
 
   it("loads bundled diffs skill when explicitly enabled in config", async () => {

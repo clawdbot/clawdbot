@@ -81,6 +81,7 @@ type ResolveSkillsPromptParams = {
   agentId?: string;
   eligibility?: SkillEligibilityContext;
   loadEntries?: () => SkillEntry[];
+  preserveEntryOrder?: boolean;
 };
 
 function buildSkillsPromptFromEntries(
@@ -95,6 +96,7 @@ function buildSkillsPromptFromEntries(
     config: params.config,
     agentId: params.agentId,
     eligibility: params.eligibility,
+    preserveEntryOrder: params.preserveEntryOrder,
   }).prompt;
   return prompt.trim() ? prompt : "";
 }

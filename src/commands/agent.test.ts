@@ -44,6 +44,7 @@ import {
   loadVisibleSkills,
   loadWorkspaceSkills,
 } from "../skills/loading/workspace-skill-loader.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import type { SkillEntry } from "../skills/types.js";
 import {
   createDirectOutboundTestAdapter,
@@ -577,6 +578,29 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("carries an external cwd into the direct agent session skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const executionWorkspace = path.join(home, "external-repo");
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "inspect this repo",
+          agentId: "main",
+          cwd: executionWorkspace,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(executionWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
   it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
     "does not discover skills for literal dollar input: %s",
     async (message) => {

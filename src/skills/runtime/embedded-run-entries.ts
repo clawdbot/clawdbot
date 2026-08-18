@@ -21,9 +21,16 @@ export function resolveEmbeddedRunSkillEntries(params: {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
   loadSkillEntries: () => SkillEntry[];
+  preserveEntryOrder: boolean;
 } {
   const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
   const config = resolveSkillRuntimeConfig(params.config);
+  const skillRoots =
+    params.skillsSnapshot?.skillRoots ??
+    normalizeWorkspaceSkillRoots({
+      agentWorkspaceDir: params.workspaceDir,
+      ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
+    });
   let cachedSkillEntries: SkillEntry[] | undefined;
   const loadSkillEntries = (): SkillEntry[] => {
     if (cachedSkillEntries) {
@@ -41,11 +48,6 @@ export function resolveEmbeddedRunSkillEntries(params: {
         : {}),
       ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
     };
-    const liveSkillRoots = normalizeWorkspaceSkillRoots({
-      agentWorkspaceDir: params.workspaceDir,
-      ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
-    });
-    const skillRoots = params.skillsSnapshot?.skillRoots ?? liveSkillRoots;
     cachedSkillEntries = skillRoots.executionSkillsDir
       ? loadMergedWorkspaceSkills({ ...skillRoots, ...options })
       : loadWorkspaceSkills(params.workspaceDir, options);
@@ -55,5 +57,7 @@ export function resolveEmbeddedRunSkillEntries(params: {
     shouldLoadSkillEntries,
     skillEntries: shouldLoadSkillEntries ? loadSkillEntries() : [],
     loadSkillEntries,
+    // Merged loading orders agent skills first so prompt caps keep their priority.
+    preserveEntryOrder: skillRoots.executionSkillsDir !== undefined,
   };
 }

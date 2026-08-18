@@ -146,7 +146,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       skillsAnchorWorkspace: params.bootstrapWorkspaceDir ?? effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
     });
-    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } =
+    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
       resolveEmbeddedRunSkillEntries({
         workspaceDir: effectiveSkillsWorkspace,
         config: params.config,
@@ -191,6 +191,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       workspaceDir: effectiveSkillsPromptWorkspace,
       agentId: effectiveSkillAgentId,
       eligibility: skillsEligibility,
+      preserveEntryOrder,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
