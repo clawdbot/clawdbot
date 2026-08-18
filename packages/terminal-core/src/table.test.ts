@@ -3,7 +3,12 @@ import path from "node:path";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "./ansi.js";
-import { note, resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
+import {
+  noteToStream,
+  resolveNoteColumns,
+  resolveNoteOutputColumns,
+  wrapNoteMessage,
+} from "./note.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -821,7 +826,7 @@ describe("wrapNoteMessage", () => {
     } as unknown as NodeJS.WriteStream;
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
-    note("word ".repeat(18).trim(), "Wide note", output);
+    noteToStream("word ".repeat(18).trim(), "Wide note", output);
 
     const rendered = stripAnsi(writes.join(""));
     expect(rendered).toContain("word ".repeat(17).trim());

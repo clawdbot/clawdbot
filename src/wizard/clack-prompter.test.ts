@@ -88,7 +88,7 @@ vi.mock("../cli/progress.js", () => ({
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: terminalNoteMocks.note,
+  noteToStream: terminalNoteMocks.note,
 }));
 
 vi.mock("./clack-navigation-prompts.js", () => ({

@@ -219,10 +219,10 @@ function createNoteOutput(output: NodeJS.WriteStream, columns: number): NodeJS.W
   return adaptedOutput;
 }
 
-export function note(
+export function noteToStream(
   message: unknown,
-  title?: string,
-  output: NodeJS.WriteStream = process.stdout,
+  title: string | undefined,
+  output: NodeJS.WriteStream,
 ) {
   if (
     suppressNotesStorage.getStore() === true ||
@@ -235,6 +235,10 @@ export function note(
   clackNote(wrappedMessage, stylePromptTitle(title), {
     output: createNoteOutput(output, resolveNoteOutputColumns(wrappedMessage, columns)),
   });
+}
+
+export function note(message: unknown, title?: string) {
+  noteToStream(message, title, process.stdout);
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

@@ -21,7 +21,7 @@ import {
   truncateToVisibleWidth,
   visibleWidth,
 } from "../../packages/terminal-core/src/ansi.js";
-import { note as emitNote } from "../../packages/terminal-core/src/note.js";
+import { noteToStream as emitNote } from "../../packages/terminal-core/src/note.js";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
   stylePromptMessage,
