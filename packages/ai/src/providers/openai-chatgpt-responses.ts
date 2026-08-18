@@ -33,12 +33,8 @@ import {
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
 import {
-  createOpenAIProviderAcceptanceHook,
-  createOpenAIResponseHook,
-} from "../transports/openai-transport-shared.js";
-import {
-  notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -364,10 +360,8 @@ export const streamOpenAICodexResponses: StreamFunction<
               stream,
               model,
               () => {
-                websocketStarted = true;
-              },
-              () => {
                 commitSemanticAttempt(activeAttempt);
+                websocketStarted = true;
               },
               requestOptions,
               firstEventAbort.abort,
@@ -588,7 +582,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response)),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
-        hook: createOpenAIProviderAcceptanceHook(options, response, model),
+        hook: createOpenAIResponseHook(options?.onResponse, response, model),
         onReady: () => stream.push({ type: "start", partial: output }),
       });
       await processResponsesStream(hookedResponseStream, output, stream, model, {
@@ -1459,17 +1453,13 @@ async function* startWebSocketOutputOnFirstEvent(
   events: AsyncIterable<ResponseStreamEvent>,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
-  onFirstProviderEvent: () => void,
-  onProviderAccepted: () => Promise<void>,
   onStart: () => void,
 ): AsyncGenerator<ResponseStreamEvent> {
   let started = false;
   for await (const event of events) {
     if (!started) {
       started = true;
-      onFirstProviderEvent();
       onStart();
-      await onProviderAccepted();
       stream.push({ type: "start", partial: output });
     }
     yield event;
@@ -1483,7 +1473,6 @@ async function processWebSocketStream(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<"openai-chatgpt-responses">,
-  onFirstProviderEvent: () => void,
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
@@ -1520,8 +1509,6 @@ async function processWebSocketStream(
         mapCodexEvents(parseWebSocket(socket, options?.signal)),
         output,
         stream,
-        onFirstProviderEvent,
-        () => notifyProviderStreamOpened({ options, model }),
         onStart,
       ),
       output,

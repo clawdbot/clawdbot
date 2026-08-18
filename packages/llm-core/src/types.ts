@@ -64,15 +64,6 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
-/** Evidence that a text provider accepted a request. */
-export type ProviderAcceptance =
-  | {
-      kind: "http_response";
-      status: number;
-      headers: Record<string, string>;
-    }
-  | { kind: "provider_stream_opened" };
-
 /** Request options shared by text streaming providers. */
 export interface StreamOptions {
   temperature?: number;
@@ -122,13 +113,8 @@ export interface StreamOptions {
    */
   onPayload?: (payload: unknown, model: Model) => MaybePromise<unknown>;
   /**
-   * Optional callback invoked after the provider accepts the request and before
-   * its body stream is consumed. HTTP metadata is included only when the transport sees it.
-   */
-  onProviderAccepted?: (acceptance: ProviderAcceptance, model: Model) => void | Promise<void>;
-  /**
-   * Optional compatibility callback invoked after a transport receives a real
-   * HTTP response and before its body stream is consumed.
+   * Optional callback invoked after an HTTP response is received and before
+   * its body stream is consumed.
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**

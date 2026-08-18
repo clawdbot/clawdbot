@@ -55,7 +55,6 @@ import {
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { notifyProviderHttpMetadata } from "openclaw/plugin-sdk/provider-lifecycle";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -284,11 +283,10 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         if (response.$metadata.requestId) {
           responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
         }
-        await notifyProviderHttpMetadata({
-          options,
-          response: { status: response.$metadata.httpStatusCode, headers: responseHeaders },
+        await options?.onResponse?.(
+          { status: response.$metadata.httpStatusCode, headers: responseHeaders },
           model,
-        });
+        );
       }
 
       let sawMessageStop = false;

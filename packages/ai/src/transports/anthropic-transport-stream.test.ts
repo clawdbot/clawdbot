@@ -1129,24 +1129,17 @@ describe("anthropic transport stream", () => {
       ),
     );
 
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
     const result = await runTransportStream(
       makeAnthropicTransportModel(),
       {
         messages: [{ role: "user", content: "hello" }],
       } as AnthropicStreamContext,
-      { apiKey: "test-api-key", onProviderAccepted, onResponse } as AnthropicStreamOptions,
+      { apiKey: "test-api-key" } as AnthropicStreamOptions,
     );
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(
       'HTTP 429: {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens exceeded the per-minute rate limit."}}; Retry-After: 30 seconds',
-    );
-    expect(onProviderAccepted).not.toHaveBeenCalled();
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 429, headers: { "content-type": "text/plain;charset=UTF-8", "retry-after": "30" } },
-      expect.objectContaining({ provider: "anthropic" }),
     );
   });
 
@@ -3801,33 +3794,6 @@ describe("anthropic transport stream", () => {
     expect(cancelReason).toBe(abortReason);
   });
 
-  it("cancels an unread SSE body when provider acceptance fails", async () => {
-    let cancelCalled = false;
-    guardedFetchMock.mockResolvedValueOnce(
-      createOpenRawSseResponse({
-        body: "",
-        onCancel: () => {
-          cancelCalled = true;
-        },
-      }),
-    );
-
-    const result = await runTransportStream(
-      makeAnthropicTransportModel(),
-      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-api",
-        onProviderAccepted: () => Promise.reject(new Error("acceptance callback failed")),
-      } as AnthropicStreamOptions,
-    );
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "acceptance callback failed",
-    });
-    await vi.waitFor(() => expect(cancelCalled).toBe(true));
-  });
-
   it("cancels open SSE bodies when Anthropic stream consumers throw", async () => {
     let cancelCalled = false;
     guardedFetchMock.mockResolvedValueOnce(
@@ -4367,12 +4333,10 @@ describe("anthropic transport stream", () => {
       ]),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
     const stream = streamFn(
       makeAnthropicTransportModel(),
       { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api", onProviderAccepted, onResponse } as AnthropicStreamOptions,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
     );
 
     const eventTypes: string[] = [];
@@ -4383,18 +4347,6 @@ describe("anthropic transport stream", () => {
     const startIndex = eventTypes.indexOf("start");
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "content-type": "text/event-stream" } },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
@@ -4409,12 +4361,10 @@ describe("anthropic transport stream", () => {
       ),
     );
     const streamFn = createAnthropicMessagesTransportStreamFn();
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
     const stream = streamFn(
       makeAnthropicTransportModel(),
       { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api", onProviderAccepted, onResponse } as AnthropicStreamOptions,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
     );
 
     const eventTypes: string[] = [];
@@ -4426,18 +4376,6 @@ describe("anthropic transport stream", () => {
     // surfaces the SSE error as an explicit "error" event or silently ends the
     // stream (a timing artefact of synchronous mock SSE delivery).
     expect(eventTypes).not.toContain("start");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "content-type": "text/event-stream" } },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

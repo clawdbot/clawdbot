@@ -19,7 +19,7 @@ import {
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import {
-  createOpenAIProviderAcceptanceHook,
+  createOpenAIResponseHook,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
@@ -184,7 +184,7 @@ export const streamOpenAICompletions: StreamFunction<
         stream: openaiStream,
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
-        hook: createOpenAIProviderAcceptanceHook(options, response, model),
+        hook: createOpenAIResponseHook(options?.onResponse, response, model),
         onReady: () => stream.push({ type: "start", partial: output }),
       });
 

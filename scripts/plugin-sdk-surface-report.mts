@@ -195,8 +195,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
-      // +1: supported provider request-acceptance lifecycle seam.
-      147,
+      146,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -301,8 +300,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: account-scoped model catalog discovery for native agent harnesses.
       // +2: shared delegation policy (mode resolver + section builder) so harness
       //     runtimes render the same guidance instead of diverging prompt copies.
-      // +5: provider acceptance receipt/response types and three lifecycle helpers.
-      4339,
+      4334,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -387,8 +385,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
       // +2: shared delegation policy (mode resolver + section builder) so harness
       //     runtimes render the same guidance instead of diverging prompt copies.
-      // +3: provider acceptance lifecycle helpers for HTTP and metadata-free streams.
-      2580,
+      2577,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

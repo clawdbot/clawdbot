@@ -9,7 +9,6 @@ const mistralMockState = vi.hoisted(() => ({
   payloads: [] as unknown[],
   requestOptions: [] as unknown[],
   randomUUIDs: [] as string[],
-  requestThroughHttpClient: false,
   streamError: new Error("stop before network") as unknown,
   streamResult: undefined as unknown,
 }));
@@ -28,10 +27,7 @@ vi.mock("@mistralai/mistralai", async () => {
   return {
     ...actual,
     Mistral: class MockMistral {
-      private readonly config: unknown;
-
       constructor(config: unknown) {
-        this.config = config;
         mistralMockState.configs.push(config);
       }
 
@@ -39,19 +35,6 @@ vi.mock("@mistralai/mistralai", async () => {
         stream: vi.fn(async (payload: unknown, requestOptions: unknown) => {
           mistralMockState.payloads.push(payload);
           mistralMockState.requestOptions.push(requestOptions);
-          if (mistralMockState.requestThroughHttpClient) {
-            const httpClient = (
-              this.config as {
-                httpClient?: { request(request: Request): Promise<Response> };
-              }
-            ).httpClient;
-            const response = await httpClient?.request(new Request("https://api.mistral.ai/chat"));
-            if (response && !response.ok) {
-              throw Object.assign(new Error(`Mistral HTTP ${response.status}`), {
-                statusCode: response.status,
-              });
-            }
-          }
           if (mistralMockState.streamResult !== undefined) {
             return mistralMockState.streamResult;
           }
@@ -236,137 +219,12 @@ describe("Mistral provider", () => {
     mistralMockState.payloads = [];
     mistralMockState.requestOptions = [];
     mistralMockState.randomUUIDs = [];
-    mistralMockState.requestThroughHttpClient = false;
     mistralMockState.streamError = new Error("stop before network");
     mistralMockState.streamResult = undefined;
   });
 
   afterEach(() => {
     configureAiTransportHost({});
-  });
-
-  it("reports the real HTTP response captured by the Mistral HTTPClient hook", async () => {
-    mistralMockState.requestThroughHttpClient = true;
-    mistralMockState.streamResult = {
-      async *[Symbol.asyncIterator]() {
-        yield {
-          data: {
-            id: "resp-http-ack",
-            model: "mistral-large-latest",
-            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
-          },
-        };
-      },
-    };
-    const hostFetch = vi.fn<typeof fetch>(
-      async () =>
-        new Response("stream", {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-mistral-request-id": "req-1",
-          },
-        }),
-    );
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
-
-    const result = await runSimpleMistralFixture(context, {
-      onProviderAccepted,
-      onResponse,
-    });
-
-    expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: expect.objectContaining({
-          "content-type": "text/event-stream",
-          "x-mistral-request-id": "req-1",
-        }),
-      },
-      expect.objectContaining({ provider: "mistral" }),
-    );
-    expect(onResponse).toHaveBeenCalledWith(
-      {
-        status: 200,
-        headers: expect.objectContaining({ "x-mistral-request-id": "req-1" }),
-      },
-      expect.objectContaining({ provider: "mistral" }),
-    );
-    expect(hostFetch).toHaveBeenCalledOnce();
-  });
-
-  it("cancels an unread Mistral stream when provider acceptance fails", async () => {
-    mistralMockState.requestThroughHttpClient = true;
-    const cancel = vi.fn(async () => undefined);
-    mistralMockState.streamResult = {
-      cancel,
-      async *[Symbol.asyncIterator]() {
-        yield {
-          data: {
-            id: "resp-http-ack",
-            model: "mistral-large-latest",
-            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
-          },
-        };
-      },
-    };
-    configureAiTransportHost({
-      buildModelFetch: () => async () => new Response("stream", { status: 200 }),
-    });
-    const hookError = new Error("acceptance callback failed");
-
-    const result = await runSimpleMistralFixture(context, {
-      onProviderAccepted: () => Promise.reject(hookError),
-    });
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "acceptance callback failed",
-    });
-    expect(cancel).toHaveBeenCalledWith(hookError);
-  });
-
-  it("reports a rejected HTTP response without marking it accepted", async () => {
-    mistralMockState.requestThroughHttpClient = true;
-    const hostFetch = vi.fn<typeof fetch>(
-      async () =>
-        new Response("rate limited", {
-          status: 429,
-          headers: { "x-mistral-request-id": "req-rejected" },
-        }),
-    );
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
-
-    const result = await runSimpleMistralFixture(context, {
-      onProviderAccepted,
-      onResponse,
-    });
-
-    expect(result.stopReason).toBe("error");
-    expect(onProviderAccepted).not.toHaveBeenCalled();
-    expect(onResponse).toHaveBeenCalledWith(
-      {
-        status: 429,
-        headers: expect.objectContaining({ "x-mistral-request-id": "req-rejected" }),
-      },
-      expect.objectContaining({ provider: "mistral" }),
-    );
-    expect(hostFetch).toHaveBeenCalledOnce();
-  });
-
-  it("does not report acceptance when SDK stream setup fails", async () => {
-    const onProviderAccepted = vi.fn();
-
-    const result = await runSimpleMistralFixture(context, { onProviderAccepted });
-
-    expect(result.stopReason).toBe("error");
-    expect(onProviderAccepted).not.toHaveBeenCalled();
   });
 
   it("forwards simple stop sequences to Mistral stop", async () => {

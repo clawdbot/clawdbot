@@ -119,17 +119,12 @@ describe("Bedrock stream client lifecycle", () => {
       yield { messageStop: { stopReason: BedrockStopReason.END_TURN } };
     }
     const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200, requestId: "bedrock-request-1" },
+      $metadata: { httpStatusCode: 200 },
       stream: successfulStream(),
     } as never);
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
 
-    const resultPromise = streamBedrockForTest(bedrockModel({}), context, {
-      onProviderAccepted,
-      onResponse,
-    }).result();
+    const resultPromise = streamBedrockForTest(bedrockModel({}), context).result();
     await streamBlocked;
     expect(destroy).not.toHaveBeenCalled();
 
@@ -137,18 +132,6 @@ describe("Bedrock stream client lifecycle", () => {
     const result = await resultPromise;
 
     expect(result.stopReason).toBe("stop");
-    expect(onProviderAccepted).toHaveBeenCalledWith(
-      {
-        kind: "http_response",
-        status: 200,
-        headers: { "x-amzn-requestid": "bedrock-request-1" },
-      },
-      expect.objectContaining({ provider: "amazon-bedrock" }),
-    );
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "x-amzn-requestid": "bedrock-request-1" } },
-      expect.objectContaining({ provider: "amazon-bedrock" }),
-    );
     expectDestroyedClient(send, destroy);
   });
 

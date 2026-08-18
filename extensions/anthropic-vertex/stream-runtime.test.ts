@@ -541,26 +541,6 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions).not.toHaveProperty("temperature");
   });
 
-  it("forwards provider acceptance hooks to the shared Anthropic transport", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const onProviderAccepted = vi.fn();
-    const onResponse = vi.fn();
-
-    void streamFn(
-      makeModel({ id: "claude-sonnet-4-6" }),
-      { messages: [] },
-      {
-        onProviderAccepted,
-        onResponse,
-      },
-    );
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.onProviderAccepted).toBe(onProviderAccepted);
-    expect(transportOptions.onResponse).toBe(onResponse);
-  });
-
   it("keeps already-budgeted cache_control markers intact when forwarding payload hooks", async () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);
