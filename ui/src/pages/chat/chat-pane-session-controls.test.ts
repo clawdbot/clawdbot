@@ -115,4 +115,55 @@ describe("chat pane composer controls", () => {
       {},
     );
   });
+
+  it.each([
+    ["ordinary picker open", false],
+    ["Retry", true],
+  ] as const)("uses the expected server-cache policy for %s", async (_label, refresh) => {
+    const container = document.createElement("div");
+    const request = vi.fn(async () => ({ models: [] }));
+    const state = {
+      chatRunId: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: { request },
+      chatLoading: false,
+      chatModelCatalog: [],
+      chatModelCatalogError: refresh ? "refresh failed" : null,
+      sessions: { state: { modelOverrides: {} }, patch: vi.fn() },
+      chatModelSwitchPromises: {},
+      sessionKey: "main",
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: undefined,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    });
+    render(controls.composerControls, container);
+
+    if (refresh) {
+      container.querySelector<HTMLButtonElement>('[data-chat-model-catalog-retry="true"]')?.click();
+    } else {
+      const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+      picker!.open = true;
+      picker!.dispatchEvent(new Event("toggle"));
+    }
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+      ...(refresh ? { refresh: true } : {}),
+    });
+  });
 });

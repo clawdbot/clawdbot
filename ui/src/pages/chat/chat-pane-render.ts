@@ -161,10 +161,12 @@ export class ChatPane extends ChatPaneLayoutRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const authoritativeModelCatalog =
+      state.connected && !state.chatModelCatalogError ? state.chatModelCatalog : [];
     const modelUnavailable = isChatModelUnavailable(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
-      state.chatModelCatalog,
+      authoritativeModelCatalog,
     );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,

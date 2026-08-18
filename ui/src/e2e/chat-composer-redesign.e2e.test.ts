@@ -9,6 +9,72 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it("uses only authoritative catalog snapshots to gate the composer", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      const coldModels = [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          available: false,
+        },
+      ];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.5",
+        models: coldModels,
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const textarea = composer.locator("textarea");
+      const model = composer.locator('[data-chat-model-select="true"]');
+      const disabledReason = composer.locator(".agent-chat__disabled-reason");
+      const authFailure =
+        "Authentication failed. Review the provider credential or sign-in, then retry.";
+
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      await expect.poll(async () => (await disabledReason.textContent())?.trim()).toBe(authFailure);
+      await expect.poll(() => textarea.getAttribute("placeholder")).toBe("Message OpenClaw");
+
+      await gateway.setOnline(false);
+      await expect
+        .poll(async () =>
+          (await model.locator(".chat-controls__inline-select-label").textContent())?.trim(),
+        )
+        .toBe("Offline");
+      await expect.poll(() => textarea.isEnabled()).toBe(true);
+      await expect.poll(() => disabledReason.count()).toBe(0);
+
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: 1 });
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      await expect.poll(async () => (await disabledReason.textContent())?.trim()).toBe(authFailure);
+
+      await gateway.setMethodResponse("models.list", {
+        __mockError: { code: "UNAVAILABLE", message: "mock catalog refresh failed" },
+      });
+      const beforeFailure = (await gateway.getRequests("models.list")).length;
+      await model.click();
+      await gateway.waitForRequest("models.list", { after: beforeFailure });
+      await expect
+        .poll(() => composer.locator('[data-chat-model-catalog-state="error"]').textContent())
+        .toContain("Couldn’t refresh models");
+      await expect.poll(() => textarea.isEnabled()).toBe(true);
+      await expect.poll(() => disabledReason.count()).toBe(0);
+
+      await gateway.setMethodResponse("models.list", {
+        models: [{ ...coldModels[0], available: true }],
+      });
+      const beforeRetry = (await gateway.getRequests("models.list")).length;
+      await composer.locator('[data-chat-model-catalog-retry="true"]').click();
+      const retry = await gateway.waitForRequest("models.list", { after: beforeRetry });
+      expect(retry.params).toEqual({ agentId: "main", refresh: true, view: "configured" });
+      await expect.poll(() => textarea.isEnabled()).toBe(true);
+      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+    });
+  });
+
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 667, height: 375 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);

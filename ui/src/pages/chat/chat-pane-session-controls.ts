@@ -71,7 +71,6 @@ export function renderChatPaneComposerControls(params: {
   } = params;
   const hasModelSnapshot =
     state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
-  const refreshModelCatalog = () => refreshChatModelCatalogOnDemand(state);
   return {
     composerControls: html`
       <div class="chat-composer-model-control">
@@ -84,14 +83,16 @@ export function renderChatPaneComposerControls(params: {
           modelCatalog: state.chatModelCatalog,
           modelCatalogState: {
             hasSnapshot: hasModelSnapshot,
-            onRetry: () => void refreshModelCatalog(),
-            status: state.chatModelCatalogError
-              ? "error"
-              : state.chatModelsLoading
-                ? hasModelSnapshot
-                  ? "refreshing"
-                  : "loading"
-                : "ready",
+            onRetry: () => void refreshChatModelCatalogOnDemand(state, { refresh: true }),
+            status: !state.connected
+              ? "offline"
+              : state.chatModelCatalogError
+                ? "error"
+                : state.chatModelsLoading
+                  ? hasModelSnapshot
+                    ? "refreshing"
+                    : "loading"
+                  : "ready",
           },
           modelOverrides: state.sessions.state.modelOverrides,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
@@ -110,7 +111,7 @@ export function renderChatPaneComposerControls(params: {
             effortAccess.allowed
               ? switchChatFastMode(state, next, targetSessionKey)
               : Promise.resolve(false),
-          onModelPickerOpen: refreshModelCatalog,
+          onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
           onModelSelect: (next, targetSessionKey) =>
             modelAccess.allowed
               ? switchChatModel(state, next, targetSessionKey)
