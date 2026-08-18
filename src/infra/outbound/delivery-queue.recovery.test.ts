@@ -710,6 +710,22 @@ describe("delivery-queue recovery", () => {
     await expectPendingEntry({ retryCount: 1, attemptCount: 1, lastError: "network down" });
     expect(auditEvents).toEqual([]);
   });
+  it("leaves an aborted recovery pending without consuming retry budget", async () => {
+    const { auditEvents, unsubscribe } = captureAuditEvents();
+    const id = await enqueueDemoRecoveryDelivery();
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+
+    const { result, log } = await runRecovery({
+      deliver: vi.fn().mockRejectedValue(abortError),
+    });
+    unsubscribe();
+
+    expect(result).toMatchObject({ recovered: 0, failed: 0 });
+    await expectPendingEntry({ id, retryCount: 0, lastError: undefined });
+    expect(auditEvents).toEqual([]);
+    expectMockMessageContaining(log.info, "recovery aborted; leaving pending");
+  });
   it.each([
     {
       name: "keeps a repeated pre-connect recovery failure replayable",

@@ -6,6 +6,7 @@ import type {
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isAbortError } from "../abort-signal.js";
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
@@ -742,7 +743,7 @@ async function drainQueuedEntry(opts: {
   stateDir?: string;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone" | "deferred"> {
   const { entry } = opts;
   const maxRetries = resolveMaxRetries(entry);
   const attemptBudgetExhausted = resolveAttemptCount(entry) >= maxRetries;
@@ -1109,7 +1110,6 @@ async function drainQueuedEntry(opts: {
     return "recovered";
   } catch (err) {
     const errMsg = formatErrorMessage(err);
-    opts.onFailed?.(entry, errMsg);
     if (isOutboundDeliveryError(err) && err.results.length > 0) {
       deliveredResults = [...err.results];
     }
@@ -1118,6 +1118,7 @@ async function drainQueuedEntry(opts: {
       postSendState !== undefined ||
       (isOutboundDeliveryError(err) && err.sentBeforeError);
     if (hasSendEvidence) {
+      opts.onFailed?.(entry, errMsg);
       // A rejected batch can still contain successful earlier sends. Preserve
       // that concrete evidence so reconnect recovery never replays the batch.
       try {
@@ -1152,6 +1153,7 @@ async function drainQueuedEntry(opts: {
     if (!(await loadPendingDelivery(entry.id, opts.stateDir))) {
       // A best-effort pre-send marker fallback may ack the row before provider
       // I/O. Recovery then owns the stable queue terminal on provider rejection.
+      opts.onFailed?.(entry, errMsg);
       emitQueuedAuditTerminals(entry, () =>
         failedOutboundAuditTerminals({
           payloadCount: queuedPayloadCount(entry),
@@ -1162,6 +1164,11 @@ async function drainQueuedEntry(opts: {
       );
       return "failed";
     }
+    if (isAbortError(err)) {
+      opts.log.info(`Delivery entry ${entry.id} recovery aborted; leaving pending`);
+      return "deferred";
+    }
+    opts.onFailed?.(entry, errMsg);
     const permanentPlatformRejection = findPlatformMessageRejectedError(err);
     if (permanentPlatformRejection || isPermanentDeliveryError(errMsg)) {
       try {
