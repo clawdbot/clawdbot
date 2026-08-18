@@ -39,6 +39,14 @@ function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
   return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
 }
 
+/**
+ * Stands in for a failed assistant turn during replay. Keeps the turn present so the
+ * user message before it is not mistaken for a new request, without replaying partial
+ * output the provider never finished.
+ */
+const FAILED_ASSISTANT_REPLAY_TEXT =
+  "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
+
 function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   if (message.role !== "assistant") {
     return false;
@@ -177,14 +185,24 @@ export function transformTransportMessages(
   // their adjacent results together; pre-filtering the call can misattribute its result
   // to an older turn that reused the same provider id.
   const requiresPairing = allowSyntheticToolResults || hasCrossModelAsyncCalls;
-  const replayable = transformed.filter((_, index) => {
+  const replayable = transformed.flatMap((msg, index) => {
     const original = messages[index];
-    if (!original) {
-      return true;
+    if (!original || !isFailedAssistantTurn(original)) {
+      return [msg];
     }
-    return requiresPairing
-      ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
-      : !isFailedAssistantTurn(original);
+    if (failedAssistantHasToolCalls(original)) {
+      return requiresPairing ? [msg] : [];
+    }
+    if (isReasoningOnlyLengthAssistantTurn(original)) {
+      // Thinking-only length stops carry provider-owned signatures and no answer text,
+      // so they stay dropped rather than replaying an unusable reasoning block.
+      return [];
+    }
+    // A text-only error/abort has no tool call to unpair, so dropping it only hides that
+    // the turn happened: the preceding user message then replays as unanswered and the
+    // model merges it with the next one and can redo a completed side effect. Replace the
+    // partial output with a marker so the failure stays visible without replaying it.
+    return [{ ...msg, content: [{ type: "text" as const, text: FAILED_ASSISTANT_REPLAY_TEXT }] }];
   });
 
   if (!requiresPairing) {

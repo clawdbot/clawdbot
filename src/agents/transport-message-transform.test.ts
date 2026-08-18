@@ -555,7 +555,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("call_aborted");
   });
 
-  it("drops text-only aborted and errored transport assistant turns before replay", () => {
+  it("replaces text-only aborted and errored transport assistant turns with a replay marker", () => {
     const messages: Context["messages"] = [
       {
         role: "assistant",
@@ -583,9 +583,50 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       makeModel("openai-responses", "openai", "gpt-5.4"),
     );
 
-    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+    // The turns stay in replay so the user message before them is not seen as a new
+    // request, but their unfinished output is replaced rather than replayed.
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "assistant", "user"]);
     expect(JSON.stringify(result)).not.toContain("partial aborted output");
     expect(JSON.stringify(result)).not.toContain("partial error output");
+    for (const msg of result.slice(0, 2)) {
+      expect(msg.content).toEqual([
+        {
+          type: "text",
+          text: "[This turn failed before it completed. Do not redo its work without confirming with the user first.]",
+        },
+      ]);
+    }
+  });
+
+  it("does not leave two adjacent user turns when an assistant turn failed between them", () => {
+    // The reported failure: the errored turn vanished from replay, so the request before
+    // it looked unanswered, merged with the next message, and the write was redone.
+    const messages: Context["messages"] = [
+      { role: "user", content: "create order 1234", timestamp: Date.now() },
+      {
+        role: "assistant",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        stopReason: "error",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+      } as Extract<Context["messages"][number], { role: "assistant" }>,
+      { role: "user", content: "what is the weather", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6"),
+    );
+
+    const roles = result.map((msg) => msg.role);
+    expect(roles).toEqual(["user", "assistant", "user"]);
+    for (const [index, role] of roles.entries()) {
+      if (index > 0 && role === "user") {
+        expect(roles[index - 1]).not.toBe("user");
+      }
+    }
   });
 
   it("drops max-token reasoning-only transport assistant turns before replay", () => {
