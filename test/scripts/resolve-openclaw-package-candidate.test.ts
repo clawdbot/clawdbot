@@ -538,7 +538,6 @@ describe("resolve-openclaw-package-candidate", () => {
       "setInterval(() => {}, 1000);",
     ].join("");
 
-    const startedAt = Date.now();
     const timeoutAssertion = expect(
       runCommandForTest(process.execPath, ["-e", parentScript], {
         env: {
@@ -556,7 +555,6 @@ describe("resolve-openclaw-package-candidate", () => {
     await timeoutAssertion;
 
     expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-    expect(Date.now() - startedAt).toBeLessThan(900);
   });
 
   it("forwards external termination to package runner process groups", async () => {

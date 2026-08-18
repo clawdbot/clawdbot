@@ -12,7 +12,15 @@ import {
   resolveSpawnCommand,
 } from "../../scripts/run-with-env.mts";
 
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
+// These subprocess fixtures expose explicit ready files. Cold tsx startup can exceed a few
+// seconds on a loaded maintainer host, so this only bounds genuine fixture hangs.
+const PROCESS_READY_TIMEOUT_MS = 30_000;
+
+async function waitFor(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = PROCESS_READY_TIMEOUT_MS,
+): Promise<void> {
   const startedAt = Date.now();
   while (!predicate()) {
     if (Date.now() - startedAt > timeoutMs) {

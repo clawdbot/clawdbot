@@ -43,6 +43,9 @@ import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const posixIt = process.platform === "win32" ? it.skip : it;
+// Proof subprocesses expose explicit ready files; the timeout only bounds broken fixtures and
+// must leave headroom for cold tsx startup on loaded maintainer hosts.
+const PROCESS_READY_TIMEOUT_MS = 30_000;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -91,7 +94,10 @@ function runProofCli(args: string[]) {
   );
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = PROCESS_READY_TIMEOUT_MS,
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (predicate()) {
