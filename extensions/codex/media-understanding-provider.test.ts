@@ -269,7 +269,7 @@ describe("codex media understanding provider", () => {
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async () => client);
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({
       clientFactory,
     });
@@ -352,7 +352,7 @@ describe("codex media understanding provider", () => {
 
   it("treats a blank agent directory as absent when starting the app-server", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async () => client);
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
     const cfg = {};
 
@@ -384,7 +384,7 @@ describe("codex media understanding provider", () => {
 
   it("preserves configured WebSocket transport for media turns", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async () => client);
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({
       pluginConfig: {
         appServer: {
