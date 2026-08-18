@@ -1375,7 +1375,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const preRequestIdleMs = 500;
     const pendingHoldMs = 700;
     const harness = createStartedThreadHarness();
-    const params = makeTestParams({ timeoutMs: attemptIdleTimeoutMs });
+    const toolAuthorityFingerprint = "turn-watch-secret-input-authority";
+    const params = makeTestParams({
+      timeoutMs: attemptIdleTimeoutMs,
+      toolAuthorityFingerprint,
+    });
     params.onBlockReply = vi.fn();
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
@@ -1443,9 +1447,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
           (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
       ),
     ).toBe(false);
-    expect(queueActiveRunMessageForTest("session-1", "2", { isInboundUserMessage: true })).toBe(
-      true,
-    );
+    expect(
+      queueActiveRunMessageForTest("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });

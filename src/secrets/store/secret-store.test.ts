@@ -10,9 +10,11 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../../state/openclaw-state-db.js";
 import {
+  consumeGitHubSetupHandoff,
   deleteSecretStoreEntry,
   listSecretStoreEntries,
   purgeExpiredSecretStoreEntries,
+  readSecretStoreExecEnvironment,
   readSecretStoreValue,
   SECRET_STORE_VALUE_MAX_BYTES,
   writeSecretStoreEntry,
@@ -27,6 +29,13 @@ function createDatabaseOptions() {
   return { path: path.join(root, "state.sqlite") };
 }
 
+function countStoredRows(database: ReturnType<typeof createDatabaseOptions>, name: string): number {
+  const row = openOpenClawStateDatabase(database)
+    .db.prepare("SELECT COUNT(*) AS count FROM secret_store_entries WHERE name = ?")
+    .get(name) as { count: number };
+  return row.count;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   closeOpenClawStateDatabaseForTest();
@@ -36,6 +45,37 @@ afterEach(() => {
 });
 
 describe("secret store", () => {
+  it("consumes only a fresh, unbound GitHub setup handoff", () => {
+    const database = createDatabaseOptions();
+    const name = "github-setup-11111111111111111111111111111111";
+    writeSecretStoreEntry({
+      scope: team,
+      name,
+      value: "temporary-value",
+      kind: "secret",
+      allowedHosts: [],
+      updatedBy: "test",
+      database,
+    });
+    writeSecretStoreEntry({
+      scope: team,
+      name: "DEPLOY_TOKEN",
+      value: "unrelated-value",
+      kind: "secret",
+      updatedBy: "test",
+      database,
+    });
+
+    expect(consumeGitHubSetupHandoff({ name, database })).toBe("temporary-value");
+    expect(countStoredRows(database, name)).toBe(0);
+    expect(consumeGitHubSetupHandoff({ name, database })).toBeUndefined();
+    expect(consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
+    expect(readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual({
+      ok: true,
+      value: "unrelated-value",
+    });
+  });
+
   it("round-trips env and secret entries without disclosing secret list values", () => {
     const database = createDatabaseOptions();
     writeSecretStoreEntry({
@@ -51,12 +91,17 @@ describe("secret store", () => {
       name: "SERVICE_API_KEY",
       value: "stored-super-secret",
       kind: "secret",
+      allowedHosts: ["API.EXAMPLE.COM", "bücher.example"],
       updatedBy: "test",
       database,
     });
 
     expect(listSecretStoreEntries({ scope: team, database })).toEqual([
-      expect.objectContaining({ name: "SERVICE_API_KEY", kind: "secret" }),
+      expect.objectContaining({
+        name: "SERVICE_API_KEY",
+        kind: "secret",
+        allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
+      }),
       expect.objectContaining({
         name: "SERVICE_URL",
         kind: "env",
@@ -69,6 +114,22 @@ describe("secret store", () => {
       value: "stored-super-secret",
     });
     expect(isSecretValueRegisteredForRedaction("stored-super-secret")).toBe(true);
+    expect(
+      readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })
+        .secretEgressBindings,
+    ).toEqual([
+      expect.objectContaining({
+        name: "SERVICE_API_KEY",
+        allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
+      }),
+    ]);
+    expect(
+      readSecretStoreExecEnvironment({
+        includeSecretSentinels: true,
+        excludeNames: ["SERVICE_API_KEY"],
+        database,
+      }),
+    ).not.toHaveProperty("secretSentinels");
   });
 
   it("soft-deletes idempotently and purges after the 30-day retention", () => {
@@ -92,6 +153,94 @@ describe("secret store", () => {
     vi.setSystemTime(new Date("2026-02-01T00:00:00.001Z"));
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
     expect(listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual([]);
+  });
+
+  it.each([
+    { kind: "env" as const, allowedHosts: undefined, ageMs: 0 },
+    { kind: "secret" as const, allowedHosts: ["github.com"], ageMs: 0 },
+    { kind: "secret" as const, allowedHosts: undefined, ageMs: 10 * 60_000 + 1 },
+  ])("rejects a non-handoff store entry %#", ({ kind, allowedHosts, ageMs }) => {
+    const database = createDatabaseOptions();
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now - ageMs);
+    writeSecretStoreEntry({
+      scope: team,
+      name: "github-setup-22222222222222222222222222222222",
+      value: "temporary-value",
+      kind,
+      ...(allowedHosts ? { allowedHosts } : {}),
+      updatedBy: "test",
+      database,
+    });
+    expect(
+      consumeGitHubSetupHandoff({
+        name: "github-setup-22222222222222222222222222222222",
+        nowMs: now,
+        database,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps setup handoffs out of listings and exec and hard-deletes abandoned generations", () => {
+    const database = createDatabaseOptions();
+    const name = "github-setup-33333333333333333333333333333333";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    writeSecretStoreEntry({
+      scope: team,
+      name,
+      value: "abandoned-value",
+      kind: "secret",
+      allowedHosts: [],
+      updatedBy: "test",
+      database,
+    });
+    writeSecretStoreEntry({
+      scope: team,
+      name: "UNRELATED_SECRET",
+      value: "keep-value",
+      kind: "secret",
+      updatedBy: "test",
+      database,
+    });
+
+    expect(listSecretStoreEntries({ scope: team, database }).map((entry) => entry.name)).toEqual([
+      "UNRELATED_SECRET",
+    ]);
+    expect(
+      listSecretStoreEntries({ scope: team, includeDeleted: true, database }).map(
+        (entry) => entry.name,
+      ),
+    ).toEqual(["UNRELATED_SECRET"]);
+    expect(
+      readSecretStoreExecEnvironment({ includeSecretSentinels: true, database }).secretSentinels,
+    ).not.toHaveProperty(name);
+    vi.setSystemTime(new Date("2026-01-01T00:10:00.001Z"));
+    expect(listSecretStoreEntries({ scope: team, database }).map((entry) => entry.name)).toEqual([
+      "UNRELATED_SECRET",
+    ]);
+    expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
+    expect(countStoredRows(database, name)).toBe(0);
+    expect(readSecretStoreValue({ scope: team, name: "UNRELATED_SECRET", database })).toEqual({
+      ok: true,
+      value: "keep-value",
+    });
+  });
+
+  it("hard-deletes reserved setup names while ordinary secrets remain soft-deleted", () => {
+    const database = createDatabaseOptions();
+    const name = "github-setup-44444444444444444444444444444444";
+    writeSecretStoreEntry({
+      scope: team,
+      name,
+      value: "temporary-value",
+      kind: "secret",
+      updatedBy: "test",
+      database,
+    });
+    deleteSecretStoreEntry({ scope: team, name, database });
+    expect(countStoredRows(database, name)).toBe(0);
   });
 
   it("makes duplicate team rows impossible at the schema boundary", () => {
@@ -129,6 +278,16 @@ describe("secret store", () => {
     expect(() =>
       writeSecretStoreEntry({
         scope: team,
+        name: "github-setup-token",
+        value: "value",
+        kind: "secret",
+        updatedBy: null,
+        database,
+      }),
+    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
+    expect(() =>
+      writeSecretStoreEntry({
+        scope: team,
         name: "LARGE_SECRET",
         value: "é".repeat(SECRET_STORE_VALUE_MAX_BYTES / 2 + 1),
         kind: "secret",
@@ -137,6 +296,23 @@ describe("secret store", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_TOO_LARGE" }));
   });
+
+  it.each(["*.example.com", "https://api.example.com", "api.example.com:443", "bad host"])(
+    "rejects invalid allowed host %s at write time",
+    (allowedHost) => {
+      expect(() =>
+        writeSecretStoreEntry({
+          scope: team,
+          name: "HOST_BOUND_SECRET",
+          value: "value",
+          kind: "secret",
+          allowedHosts: [allowedHost],
+          updatedBy: null,
+          database: createDatabaseOptions(),
+        }),
+      ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_ALLOWED_HOST" }));
+    },
+  );
 
   it("rejects an empty secret value but keeps empty env values legal", () => {
     const database = createDatabaseOptions();

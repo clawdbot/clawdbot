@@ -1,14 +1,13 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isToolCallContentType,
-  isToolResultContentType,
-  resolveToolUseId,
-} from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
+  type ChatGuardianNotice,
+  type ChatItem,
+  type ChatQueueItem,
+  type MessageGroup,
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
@@ -61,11 +60,10 @@ import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
-  extractToolMessageRefs,
-  resolveMatchingLiveToolIdentity,
-  type LiveToolStreamRef,
+  buildLiveRenderedToolRefs,
+  buildToolStreamIdentity,
+  removeLiveToolBlocksFromHistory,
 } from "./tool-stream-identity.ts";
-import type { PlanStatus } from "./tool-stream.ts";
 
 export type BuildChatItemsProps = {
   paneId: string;
@@ -75,6 +73,7 @@ export type BuildChatItemsProps = {
   locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
+  guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
@@ -85,13 +84,50 @@ export type BuildChatItemsProps = {
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
-  planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
 };
+
+function guardianNoticeItem(notice: ChatGuardianNotice): Extract<ChatItem, { kind: "notice" }> {
+  const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  if (notice.kind === "approved") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.approvedSummary", { action }),
+      text: "",
+      timestamp: notice.timestamp,
+    };
+  }
+  if (notice.kind === "warning") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.warningLabel"),
+      text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
+      timestamp: notice.timestamp,
+      tone: "danger",
+    };
+  }
+  return {
+    kind: "notice",
+    key: notice.key,
+    icon: "shieldCheck",
+    label: t("chat.systemNotice.guardian.deniedLabel"),
+    text: t("chat.systemNotice.guardian.deniedSummary", {
+      action,
+      risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
+      rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
+    }),
+    timestamp: notice.timestamp,
+    tone: "danger",
+  };
+}
 
 function isUserChatItem(item: ChatItem): boolean {
   if (item.kind !== "message") {
@@ -146,51 +182,10 @@ function resolveRunInsertionBounds(
   return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
 }
 
-function liveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {
-  const refs: LiveToolStreamRef[] = [];
-  const seen = new Set<string>();
-  for (const [index, message] of toolMessages.entries()) {
-    for (const ref of extractToolMessageRefs(message)) {
-      const key = JSON.stringify([ref.runId ?? null, ref.id]);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      refs.push({ ...ref, identity: `live:${index}:${key}` });
-    }
-  }
-  return refs;
-}
-
-function removeLiveToolBlocksFromHistory(
-  message: unknown,
-  liveToolRefs: LiveToolStreamRef[],
-): unknown {
-  const record = asRecord(message);
-  if (!record || !Array.isArray(record.content) || liveToolRefs.length === 0) {
-    return message;
-  }
-  const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
-  const content = record.content.filter((block) => {
-    const entry = asRecord(block);
-    if (!entry || (!isToolCallContentType(entry.type) && !isToolResultContentType(entry.type))) {
-      return true;
-    }
-    const id = resolveToolUseId(entry) ?? topLevelToolId;
-    if (!id) {
-      return true;
-    }
-    const runId = normalizeOptionalString(entry.runId) ?? topLevelRunId;
-    return !resolveMatchingLiveToolIdentity({ id, ...(runId ? { runId } : {}) }, liveToolRefs);
-  });
-  return content.length === record.content.length ? message : { ...record, content };
-}
-
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
-  const liveToolRefs = liveRenderedToolRefs(tools);
+  const liveToolRefs = buildLiveRenderedToolRefs(tools);
   const history = props.messages
     .filter(
       (message) =>
@@ -444,29 +439,112 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
   const segments = props.streamSegments;
+  const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
+  let latestBoundaryRunId: string | undefined;
+  for (const segment of segments) {
+    const afterBoundaryRunId =
+      normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
+    if (afterBoundaryRunId) {
+      afterBoundaryBySegment.set(segment, afterBoundaryRunId);
+    }
+    latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
+  }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
-  const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
+  const indexedSegments = segments.filter(
+    (segment) => !streamSegmentHasItemId(segment) && segment.boundaryMarker !== true,
+  );
   const toolItems = tools.map((message, index) => ({
     key: toolKeys[index] ?? messageKey(message, index + history.length),
     message,
   }));
-  const toolKeysByCallId = new Map<string, string>();
+  const toolKeysByIdentity = new Map<string, string>();
+  const uniqueToolKeysByCallId = new Map<string, string | null>();
+  const addUniqueBareValue = (
+    values: Map<string, string | null>,
+    toolCallId: string,
+    value: string,
+  ) => values.set(toolCallId, values.has(toolCallId) ? null : value);
   for (const tool of toolItems) {
-    const toolCallId = asRecord(tool.message)?.toolCallId;
+    const toolRecord = asRecord(tool.message);
+    const toolCallId = normalizeOptionalString(toolRecord?.toolCallId);
     if (typeof toolCallId === "string" && toolCallId.trim()) {
-      toolKeysByCallId.set(toolCallId.trim(), tool.key);
+      const runId = normalizeOptionalString(toolRecord?.runId);
+      if (runId) {
+        toolKeysByIdentity.set(buildToolStreamIdentity(runId, toolCallId), tool.key);
+      }
+      addUniqueBareValue(uniqueToolKeysByCallId, toolCallId, tool.key);
     }
   }
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
   const toolStreamPredecessors = new Map<string, string>();
   const projectionInsertionBounds = new Map<string, TurnInsertionBounds>();
-  const applyRunBounds = (key: string, runId: unknown) => {
+  const applyRunBounds = (
+    key: string,
+    runId: unknown,
+    boundaryRunId?: string,
+    afterBoundaryRunId?: string,
+  ) => {
     const bounds = resolveRunInsertionBounds(items, runId, props.runId, currentTurnBounds);
-    if (bounds) {
-      projectionInsertionBounds.set(key, bounds);
+    const boundaryKey = boundaryRunId
+      ? findRunTurnBounds(items, boundaryRunId)?.afterKey
+      : undefined;
+    const afterBounds = afterBoundaryRunId
+      ? findRunTurnBounds(items, afterBoundaryRunId)
+      : undefined;
+    if (bounds || boundaryKey || afterBounds) {
+      projectionInsertionBounds.set(key, {
+        ...bounds,
+        ...(afterBounds?.afterKey ? { afterKey: afterBounds.afterKey } : {}),
+        ...(afterBounds?.beforeKey ? { beforeKey: afterBounds.beforeKey } : {}),
+        ...(boundaryKey ? { beforeKey: boundaryKey } : {}),
+      });
     }
   };
+  if (!searchFiltering) {
+    for (const notice of props.guardianNotices ?? []) {
+      const item = guardianNoticeItem(notice);
+      timestampedProjectionItems.push(item);
+      applyRunBounds(item.key, notice.runId);
+    }
+  }
+  const toolBoundariesByIdentity = new Map<string, string>();
+  const uniqueToolBoundariesByCallId = new Map<string, string | null>();
+  const toolAfterBoundariesByIdentity = new Map<string, string>();
+  const uniqueToolAfterBoundariesByCallId = new Map<string, string | null>();
+  for (const segment of indexedSegments) {
+    const toolCallId = normalizeOptionalString(segment.toolCallId);
+    const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
+    const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
+    if (!toolCallId) {
+      continue;
+    }
+    const runId = normalizeOptionalString(segment.runId);
+    if (runId && boundaryRunId) {
+      toolBoundariesByIdentity.set(buildToolStreamIdentity(runId, toolCallId), boundaryRunId);
+    }
+    if (boundaryRunId) {
+      addUniqueBareValue(uniqueToolBoundariesByCallId, toolCallId, boundaryRunId);
+    }
+    if (runId && afterBoundaryRunId) {
+      toolAfterBoundariesByIdentity.set(
+        buildToolStreamIdentity(runId, toolCallId),
+        afterBoundaryRunId,
+      );
+    }
+    if (afterBoundaryRunId) {
+      addUniqueBareValue(uniqueToolAfterBoundariesByCallId, toolCallId, afterBoundaryRunId);
+    }
+  }
+  const resolveScopedValue = (
+    exact: ReadonlyMap<string, string>,
+    bare: ReadonlyMap<string, string | null>,
+    runId: string | undefined,
+    toolCallId: string,
+  ) =>
+    (runId ? exact.get(buildToolStreamIdentity(runId, toolCallId)) : undefined) ??
+    bare.get(toolCallId) ??
+    undefined;
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
@@ -478,8 +556,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const visibleText = usesAccumulatedText
         ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
         : text;
-      if (usesAccumulatedText && text.length > 0) {
-        previousAccumulatedStreamText = text;
+      if (usesAccumulatedText) {
+        previousAccumulatedStreamText = advanceAccumulatedStreamText(
+          previousAccumulatedStreamText,
+          text,
+        );
       }
       if (visibleText.length > 0) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
@@ -491,9 +572,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           isStreaming: false,
         };
         timestampedProjectionItems.push(streamItem);
-        applyRunBounds(streamItem.key, segment.runId);
+        applyRunBounds(
+          streamItem.key,
+          segment.runId,
+          segment.boundaryRunId,
+          afterBoundaryBySegment.get(segment),
+        );
         const toolCallId = segment.toolCallId?.trim();
-        const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
+        const toolKey = toolCallId
+          ? resolveScopedValue(
+              toolKeysByIdentity,
+              uniqueToolKeysByCallId,
+              normalizeOptionalString(segment.runId),
+              toolCallId,
+            )
+          : undefined;
         if (toolKey) {
           // Gateway and browser clocks can disagree. Keep the assistant text that
           // introduced a tool causally before its card even when timestamps do not.
@@ -509,7 +602,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         message: tool.message,
       };
       timestampedProjectionItems.push(toolItem);
-      applyRunBounds(toolItem.key, asRecord(tool.message)?.runId);
+      const toolRecord = asRecord(tool.message);
+      const toolCallId = normalizeOptionalString(toolRecord?.toolCallId);
+      const toolRunId = normalizeOptionalString(toolRecord?.runId);
+      applyRunBounds(
+        toolItem.key,
+        toolRunId,
+        toolCallId
+          ? resolveScopedValue(
+              toolBoundariesByIdentity,
+              uniqueToolBoundariesByCallId,
+              toolRunId,
+              toolCallId,
+            )
+          : undefined,
+        toolCallId
+          ? resolveScopedValue(
+              toolAfterBoundariesByIdentity,
+              uniqueToolAfterBoundariesByCallId,
+              toolRunId,
+              toolCallId,
+            )
+          : undefined,
+      );
     }
   }
   for (const segment of keyedSegments) {
@@ -525,7 +640,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       isStreaming: false,
     };
     timestampedProjectionItems.push(commentaryItem);
-    applyRunBounds(commentaryItem.key, segment.runId);
+    applyRunBounds(
+      commentaryItem.key,
+      segment.runId,
+      segment.boundaryRunId,
+      afterBoundaryBySegment.get(segment),
+    );
   }
 
   for (const prompt of props.questionPrompts ?? []) {
@@ -591,22 +711,26 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
     if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
       const liveProgress = resolveProgress();
-      items.push({
+      const liveStreamItem: ChatItem = {
         kind: "stream",
         key: liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
-      });
+      };
+      const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
+      const liveTurnBounds = liveTurnRunId ? findRunTurnBounds(items, liveTurnRunId) : null;
+      if (liveTurnBounds) {
+        const { maximum } = insertionIndexesForBounds(items, liveTurnBounds);
+        items.splice(maximum, 0, liveStreamItem);
+      } else {
+        items.push(liveStreamItem);
+      }
     }
   }
   if (showWorkingIndicator) {
     items.push({ kind: "reading-indicator", ...resolveProgress() });
   }
-  if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
-    items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
-  }
-
   // Future queued turns are a causal ceiling for every current-run projection.
   // Append them after tools, streams, progress, and prompts so none can cross the
   // next user turn when a live item becomes stable transcript history.

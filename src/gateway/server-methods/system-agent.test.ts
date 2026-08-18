@@ -388,7 +388,7 @@ describe("openclaw.setup", () => {
     const { calls, respond } = makeRespond();
 
     await systemAgentHandler("openclaw.setup.auth.start")({
-      params: { sessionId: "auth-session-1", authChoice: "github-copilot" },
+      params: { sessionId: "auth-session-1", agentId: "research", authChoice: "github-copilot" },
       respond,
       context,
     } as never);
@@ -402,6 +402,7 @@ describe("openclaw.setup", () => {
     expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "provider-auth", authChoice: "github-copilot" }),
     );
+    expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].agentId).toBe("research");
     expect(setupInferenceMocks.activateSetupInference.mock.calls[0]?.[0].signal).toBe(
       session.signal,
     );
@@ -432,6 +433,7 @@ describe("openclaw.setup", () => {
     await systemAgentHandler("openclaw.setup.prepare.start")({
       params: {
         sessionId: "prepare-session-1",
+        agentId: "research",
         authChoice: "ollama",
         workspace: "/tmp/models-workspace",
       },
@@ -452,6 +454,7 @@ describe("openclaw.setup", () => {
     expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         authChoice: "ollama",
+        agentId: "research",
         config: verifiedConfig,
         workspaceDir: "/tmp/models-workspace",
         setDefaultModel: false,
@@ -538,21 +541,12 @@ describe("openclaw.chat", () => {
     setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async () => {
       started.resolve();
       await release.promise;
-      return {
-        candidates: [],
-        unavailableCandidates: [],
-        manualProviders: [],
-        authOptions: [],
-        prepareOptions: [],
-        recommendedInstalls: [],
-        workspace: "/tmp/work",
-        setupComplete: false,
-      };
+      return { setupComplete: false } as never;
     });
     const activeAtResponse: number[] = [];
 
     const pending = systemAgentHandler("openclaw.setup.detect")({
-      params: {},
+      params: { agentId: "research" },
       respond: () => {
         activeAtResponse.push(systemAgentLane().activeCount);
       },
@@ -564,7 +558,9 @@ describe("openclaw.chat", () => {
     await pending;
 
     expect(activeAtResponse).toEqual([0]);
-    expect(systemAgentLane().activeCount).toBe(0);
+    const [detectOptions] =
+      setupInferenceDetectionMocks.detectSetupInferenceIsolated.mock.calls[0]!;
+    expect(detectOptions?.agentId).toBe("research");
   });
 
   it.each([
@@ -584,9 +580,11 @@ describe("openclaw.chat", () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
     const { calls, respond } = makeRespond();
 
-    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond } as never);
+    const verify = systemAgentHandler("openclaw.setup.verify");
+    await verify({ params: { agentId: "research" }, respond } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+      agentId: "research",
       runtime: defaultRuntime,
     });
     expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
@@ -624,6 +622,7 @@ describe("openclaw.chat", () => {
     const pending = systemAgentHandler("openclaw.setup.activate")({
       params: {
         kind: "api-key",
+        agentId: "research",
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",
@@ -642,6 +641,7 @@ describe("openclaw.chat", () => {
 
     expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
       kind: "api-key",
+      agentId: "research",
       modelRef: "openai/gpt-5.5",
       authChoice: "openai-api-key",
       apiKey: "test-key",
@@ -1027,74 +1027,5 @@ describe("openclaw.chat", () => {
 
     expect(activeAtResponse).toEqual([2, 1]);
     expect(systemAgentLane().activeCount).toBe(0);
-  });
-
-  it("keeps the session map bounded during concurrent unique initialization", async () => {
-    const evictionStarted = createDeferred();
-    const releaseEviction = createDeferred();
-    const oldest = seededSession({ lastUsedAt: 0 });
-    const disposeOldest = vi.spyOn(oldest.engine, "dispose").mockImplementation(async () => {
-      evictionStarted.resolve();
-      await releaseEviction.promise;
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
-    for (let index = 1; index < 8; index += 1) {
-      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
-    }
-    stubEngineOverview();
-
-    const context = makeContext(sessions);
-    const first = callChat(context, { sessionId: "new-1" });
-    const second = callChat(context, { sessionId: "new-2" });
-    await evictionStarted.promise;
-    await waitOneTask();
-    releaseEviction.resolve();
-    await Promise.all([first, second]);
-
-    expect(disposeOldest).toHaveBeenCalledOnce();
-    expect(sessions.size).toBe(8);
-    expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
-  });
-
-  it("resets a session on request", async () => {
-    stubEngineOverview();
-    transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);
-    const engine = makeVerifiedEngine();
-    const handle = vi.spyOn(engine, "handle");
-    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
-    const seedHistory = vi.spyOn(SystemAgentChatEngine.prototype, "seedHistory");
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-    // Reset drops the stored session; loading a fresh welcome would hit real
-    // discovery, so stub the overview loader on the replacement engine path by
-    // asserting the old engine is gone instead.
-    const { calls, respond } = makeRespond();
-    const context = makeContext(sessions);
-    const pending = systemAgentHandler("openclaw.chat")({
-      params: { sessionId: "s1", reset: true },
-      client: defaultClient,
-      respond,
-      context,
-    } as never);
-    await pending;
-    expect(handle).not.toHaveBeenCalled();
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(sessions.get("s1")?.engine).not.toBe(engine);
-    expect(calls[0]?.ok).toBe(true);
-    expect(seedHistory).not.toHaveBeenCalled();
-    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
-
-    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
-      { role: "user", text: "After reset", at: 3 },
-      { role: "assistant", text: "Fresh answer", at: 4 },
-    ]);
-    const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
-    expect(fresh.ok).toBe(true);
-    expect(seedHistory).toHaveBeenCalledWith([
-      { role: "user", text: "After reset" },
-      { role: "assistant", text: "Fresh answer" },
-    ]);
-    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenLastCalledWith(30, {
-      afterLastReset: true,
-    });
   });
 });

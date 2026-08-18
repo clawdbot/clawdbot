@@ -19,6 +19,7 @@ import {
   pluginIdForWidgetKind,
   type PluginBoardWidgetRenderer,
 } from "../../lib/board/widgets/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
@@ -162,7 +163,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     try {
       await action();
     } catch (error) {
-      this.actionError = error instanceof Error ? error.message : String(error);
+      this.actionError = formatUiError(error);
     } finally {
       this.actionPending = false;
     }
@@ -314,7 +315,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       })
       .catch((error: unknown) => {
         if (this.pluginRendererLoadToken === loadToken) {
-          this.pluginRendererError = error instanceof Error ? error.message : String(error);
+          this.pluginRendererError = formatUiError(error);
           this.requestUpdate();
         }
       });

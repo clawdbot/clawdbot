@@ -4,6 +4,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   countSessionToolOverrides,
@@ -33,7 +34,7 @@ import {
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
-import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { renderChatVoiceError } from "./chat-voice-activity.ts";
 
@@ -165,7 +166,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       // exactly when a queue is long enough to need it.
       onQueueMove: props.onQueueMove,
       onQueueEdit: props.queuedEdit?.onEdit,
+      onQueueEditChange: props.queuedEdit?.onEditChange,
+      onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
+      onQueueEditCancel: props.queuedEdit?.onCancel,
       editingId: props.queuedEdit?.editingId ?? null,
+      editingText: props.queuedEdit?.editingText,
       onQueueRemove: props.onQueueRemove,
     })}
     ${props.runError
@@ -282,10 +287,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              ${renderChatPlanChecklist(props.planStatus, {
-                active: showAbortableUi,
-                variant: "bar",
-              })}
+              ${renderSessionProgressCard(props.progressCard, "composer")}
               ${renderFallbackIndicator(props.fallbackStatus)}
               ${renderCompactionIndicator(props.compactionStatus)}
               ${renderChatGoal(state, activeSession?.goal, {
@@ -395,24 +397,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
                 onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
-              ${props.queuedEdit?.editingId
-                ? html`
-                    <span class="agent-chat__composer-edit" role="status">
-                      <span class="agent-chat__composer-edit-icon" aria-hidden="true"
-                        >${icons.pencil}</span
-                      >
-                      <span class="agent-chat__sr-only">${t("chat.queue.editing")}</span>
-                      <button
-                        class="agent-chat__composer-edit-cancel"
-                        type="button"
-                        aria-label=${t("chat.queue.cancelEdit")}
-                        @click=${() => props.queuedEdit?.onCancel()}
-                      >
-                        ${icons.x}
-                      </button>
-                    </span>
-                  `
-                : nothing}
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
@@ -475,6 +459,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
 
             <div class="agent-chat__composer-footer">
+              ${props.permissionPicker
+                ? html`<div class="agent-chat__composer-meta">
+                    ${renderChatPermissionPicker(props.permissionPicker)}
+                  </div>`
+                : nothing}
               ${composerControls !== nothing
                 ? html`
                     <div class="agent-chat__composer-controls">
@@ -528,7 +517,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              <div class="agent-chat__composer-meta">${contextNotice}</div>
+              <div class="agent-chat__composer-context">${contextNotice}</div>
             </div>
           </div>`
         : nothing}

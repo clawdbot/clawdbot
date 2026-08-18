@@ -890,7 +890,7 @@ describe("script payload validation", () => {
   it("rejects creation while the trigger gate is disabled", () => {
     expect(() =>
       createJob(createMockState(now, { scriptPayloadsEnabled: false }), input()),
-    ).toThrow("cron.triggers.enabled=true");
+    ).toThrow("the operator set cron.triggers.enabled: false");
   });
 
   it("rejects malformed scripts on creation with a user-relative location", () => {
@@ -998,7 +998,7 @@ describe("script payload validation", () => {
         { payload: { kind: "script", script: "return {}" } },
         { cronConfig: { triggers: { enabled: false } } },
       ),
-    ).toThrow("cron.triggers.enabled=true");
+    ).toThrow("the operator set cron.triggers.enabled: false");
 
     const patched = structuredClone(base);
     applyJobPatch(

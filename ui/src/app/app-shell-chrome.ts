@@ -1,5 +1,5 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   COMMAND_PALETTE_TARGET_EVENT,
@@ -12,13 +12,15 @@ import {
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../components/panel-toggle-contract.ts";
+import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -71,9 +73,10 @@ export interface ShellChromeHost extends HTMLElement {
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
+  readonly custodianPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
-  readonly approvalOverlay: (HTMLElement & { show(): void }) | undefined;
+  readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
   routeState: ShellRouteState;
   navDrawerOpen: boolean;
   desktopNavigationExpanded: boolean;
@@ -95,6 +98,14 @@ export interface ShellChromeHost extends HTMLElement {
 export class ShellChromeOwner {
   constructor(private readonly host: ShellChromeHost) {}
 
+  private isSessionRoute(): boolean {
+    const locationRouteId = routeIdFromPath(
+      globalThis.location?.pathname ?? "",
+      this.host.context?.basePath ?? "",
+    );
+    return isSessionRouteId(locationRouteId ?? this.host.routeState.routeId);
+  }
+
   connect(): void {
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
@@ -115,6 +126,7 @@ export class ShellChromeOwner {
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
   disconnect(): void {
@@ -135,6 +147,7 @@ export class ShellChromeOwner {
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {
@@ -352,7 +365,11 @@ export class ShellChromeOwner {
       this.togglePalette();
       return;
     }
-    if (!isOptionalElementDefined(host.terminalPanelElement) && isTerminalPanelShortcut(event)) {
+    if (
+      !isSessionRouteId(host.routeState.routeId) &&
+      !isOptionalElementDefined(host.terminalPanelElement) &&
+      isTerminalPanelShortcut(event)
+    ) {
       event.preventDefault();
       this.handleDeferredTerminalToggle(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
       return;
@@ -394,7 +411,7 @@ export class ShellChromeOwner {
     if (
       host.commandPalette?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
-      (overlaySnapshot?.approvalQueue.length ?? 0) > 0 ||
+      host.approvalOverlay?.dialogOpen === true ||
       document.querySelector("dialog[open]")
     ) {
       return true;
@@ -471,6 +488,10 @@ export class ShellChromeOwner {
 
   readonly handleDeferredTerminalToggle = (event: Event): void => {
     const host = this.host;
+    if (this.isSessionRoute()) {
+      rememberSessionPanelToggle("terminal", event);
+      return;
+    }
     if (isOptionalElementDefined(host.terminalPanelElement)) {
       return;
     }
@@ -487,6 +508,10 @@ export class ShellChromeOwner {
 
   readonly handleDeferredBrowserToggle = (event: Event): void => {
     const host = this.host;
+    if (this.isSessionRoute()) {
+      rememberSessionPanelToggle("browser", event);
+      return;
+    }
     if (isOptionalElementDefined(host.browserPanelElement)) {
       return;
     }
@@ -498,6 +523,10 @@ export class ShellChromeOwner {
 
   readonly handleDeferredDesktopToggle = (event: Event): void => {
     const host = this.host;
+    if (this.isSessionRoute()) {
+      rememberSessionPanelToggle("desktop", event);
+      return;
+    }
     const context = host.context;
     if (!context || !isDesktopPanelAvailable(context.gateway.snapshot)) {
       event.stopImmediatePropagation();
@@ -507,6 +536,17 @@ export class ShellChromeOwner {
       return;
     }
     this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
+  };
+
+  readonly handleDeferredCustodianToggle = (event: Event): void => {
+    const host = this.host;
+    if (isOptionalElementDefined(host.custodianPanelElement)) {
+      return;
+    }
+    const snapshot = host.context?.gateway?.snapshot;
+    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+      this.deliverPanelEventAfterLoad(host.custodianPanelElement, event);
+    }
   };
 
   readonly handleCommandPaletteSlashCommand = (command: string): void => {

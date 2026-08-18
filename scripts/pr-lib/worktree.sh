@@ -39,6 +39,172 @@ ensure_full_pr_worktree_checkout() {
   fi
 }
 
+refuse_review_transition() {
+  local pr="$1"
+  local reason="$2"
+  echo "Refusing scripts/pr transition for PR #$pr: $reason" >&2
+  git status --short >&2
+  return 1
+}
+
+require_no_foreign_untracked() {
+  local pr="$1"
+  local foreign=()
+  local file
+  while IFS= read -r -d '' file; do
+    case "$file" in
+      .local|.local/*) ;;
+      *) foreign+=("$file") ;;
+    esac
+  done < <(git ls-files --others --exclude-standard -z)
+  [ "${#foreign[@]}" -eq 0 ] || refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+}
+
+require_no_ignored_transition_paths() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local file ignored
+  while IFS= read -r -d '' file; do
+    case "$file" in
+      .local|.local/*)
+        refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
+        return 1
+        ;;
+    esac
+    if IFS= read -r -d '' ignored < <(
+      git ls-files --others --ignored --exclude-standard -z -- ":(literal)$file"
+    ); then
+      refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
+      return 1
+    fi
+  done < <(git diff --name-only --no-renames -z "$source" "$target")
+}
+
+validate_review_transition_state() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local current
+  current=$(git rev-parse HEAD)
+  if { [ "$current" != "$source" ] && [ "$current" != "$target" ]; } ||
+    [ -n "$(git ls-files -u)" ] || ! git diff --quiet ||
+    ! require_no_foreign_untracked "$pr"
+  then
+    refuse_review_transition "$pr" "the journaled transition state is ambiguous."
+    return 1
+  fi
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
+
+  # A path changed from source is owned only when its index mode and blob match target.
+  local file
+  while IFS= read -r -d '' file; do
+    if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
+      refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
+      return 1
+    fi
+  done < <(git diff --cached --name-only --no-renames -z "$source")
+}
+
+write_review_transition_journal() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local mode="$4"
+  local branch="$5"
+  mkdir -p .local
+  local journal=.local/review-transition.json
+  local pending
+  pending=$(mktemp "$journal.XXXXXX") || return 1
+  if jq -cn --argjson pr "$pr" --arg source "$source" --arg target "$target" \
+    --arg mode "$mode" --arg branch "$branch" \
+    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" then $branch else null end)}' \
+    >"$pending" && mv "$pending" "$journal"
+  then
+    return 0
+  fi
+  rm -f "$pending"
+  return 1
+}
+
+recover_review_transition() {
+  local pr="$1"
+  local journal=.local/review-transition.json
+  [ -e "$journal" ] || return 0
+
+  local fields source target mode branch
+  fields=$(jq -er --argjson pr "$pr" '
+    select(type == "object" and (keys | sort) == ["branch","mode","pr","source","target","version"])
+    | select(.version == 1 and .pr == $pr)
+    | select((.source | type == "string" and test("^[0-9a-f]{40}$")) and (.target | type == "string" and test("^[0-9a-f]{40}$")))
+    | select((.mode == "detached" and .branch == null) or (.mode == "branch" and (.branch | type == "string")))
+    | [.source,.target,.mode,(.branch // "")] | @tsv
+  ' "$journal" 2>/dev/null) || {
+    refuse_review_transition "$pr" "the transition journal is invalid."
+    return 1
+  }
+  IFS=$'\t' read -r source target mode branch <<<"$fields"
+  if ! git cat-file -e "$source^{commit}" 2>/dev/null ||
+    ! git cat-file -e "$target^{commit}" 2>/dev/null ||
+    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
+  then
+    refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
+    return 1
+  fi
+
+  validate_review_transition_state "$pr" "$source" "$target" || return 1
+  local paths=()
+  local file
+  while IFS= read -r -d '' file; do
+    paths+=(":(literal)$file")
+  done < <(git diff --name-only --no-renames -z "$source" "$target")
+  if [ "${#paths[@]}" -gt 0 ]; then
+    git restore --source="$target" --staged --worktree -- "${paths[@]}" || return 1
+  fi
+  if [ "$(git write-tree)" != "$(git rev-parse "$target^{tree}")" ] || ! git diff --quiet; then
+    refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
+    return 1
+  fi
+  if [ "$mode" = "branch" ]; then
+    git checkout -B "$branch" "$target" || return 1
+  else
+    git checkout --detach "$target" || return 1
+  fi
+
+  local actual_branch
+  actual_branch=$(git branch --show-current)
+  if [ "$(git rev-parse HEAD)" != "$target" ] || ! git diff --quiet || ! git diff --cached --quiet ||
+    { [ "$mode" = "branch" ] && [ "$actual_branch" != "$branch" ]; } ||
+    { [ "$mode" = "detached" ] && [ -n "$actual_branch" ]; } ||
+    ! require_no_foreign_untracked "$pr"
+  then
+    refuse_review_transition "$pr" "the journaled transition did not complete cleanly."
+    return 1
+  fi
+  rm -f "$journal"
+}
+
+checkout_pr_worktree_target() {
+  local pr="$1"
+  local target_ref="$2"
+  local branch="${3:-}"
+  recover_review_transition "$pr" || return 1
+  if [ -n "$(git ls-files -u)" ] || ! git diff --quiet || ! git diff --cached --quiet ||
+    ! require_no_foreign_untracked "$pr"
+  then
+    refuse_review_transition "$pr" "foreign state blocks a new transition."
+    return 1
+  fi
+
+  local source target mode=detached
+  source=$(git rev-parse HEAD) || return 1
+  target=$(git rev-parse "$target_ref^{commit}") || return 1
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
+  [ -z "$branch" ] || mode=branch
+  write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1
+  recover_review_transition "$pr"
+}
+
 enter_worktree() {
   local pr="$1"
   local reset_to_main="${2:-false}"
@@ -91,10 +257,11 @@ enter_worktree() {
     return 1
   fi
 
+  recover_review_transition "$pr" || return 1
   ensure_full_pr_worktree_checkout
   git fetch origin main
   if [ "$reset_to_main" = "true" ]; then
-    git checkout -B "temp/pr-$pr" origin/main
+    checkout_pr_worktree_target "$pr" origin/main "temp/pr-$pr" || return 1
   fi
   mkdir -p .local
 }

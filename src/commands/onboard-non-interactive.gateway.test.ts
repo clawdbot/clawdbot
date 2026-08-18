@@ -519,7 +519,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           port: 24680,
           bind: "loopback",
           auth: { mode: "password", password: passwordRef },
-          tailscale: { mode: "serve", resetOnExit: true },
+          tailscale: { mode: "serve" },
         },
       } as OpenClawConfig);
 
@@ -596,7 +596,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         gateway: {
           bind: "lan",
           auth: { mode: "password", password: "test-password" },
-          tailscale: { mode: "serve", resetOnExit: true },
+          tailscale: { mode: "serve" },
         },
       } as OpenClawConfig);
 
@@ -613,7 +613,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           gatewayAuth: "token",
           gatewayToken: token,
           tailscale: "off",
-          tailscaleResetOnExit: false,
         },
         runtime,
       );
@@ -623,7 +622,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           mode?: string;
           bind?: string;
           auth?: { mode?: string; token?: string };
-          tailscale?: { mode?: string; resetOnExit?: boolean };
+          tailscale?: { mode?: string };
         };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
@@ -636,7 +635,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
-      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off", resetOnExit: false });
+      expect(cfg?.gateway?.tailscale).toEqual({ mode: "off" });
       expect(cfg?.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);
@@ -846,29 +845,39 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("explains local health failure when no daemon was requested", async () => {
+  it("completes explicit no-daemon setup when no gateway is listening", async () => {
     await withStateDir("state-local-health-hint-", async (stateDir) => {
       waitForGatewayReachableMock = vi.fn(async () => ({
         ok: false,
-        detail: "socket closed: 1006 abnormal closure",
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
+      const log = vi.fn();
+
+      await runNonInteractiveSetup(
+        { ...createLocalDaemonSetupOptions(stateDir), installDaemon: false },
+        { ...runtime, log },
+      );
+
+      expect(log.mock.calls.flat().join("\n")).toMatch(
+        /Setup complete; gateway was not installed or started because daemon installation was explicitly skipped\.[\s\S]*Gateway did not become reachable[\s\S]*Classification: not-listening[\s\S]*only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
+      );
+    });
+  }, 60_000);
+
+  it("still fails when an existing gateway is expected but unreachable", async () => {
+    await withStateDir("state-local-health-required-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
       }));
 
       await expect(
         runNonInteractiveSetup(
-          {
-            nonInteractive: true,
-            mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
-            authChoice: "skip",
-            skipSkills: true,
-            skipHealth: false,
-            installDaemon: false,
-            gatewayBind: "loopback",
-          },
+          { ...createLocalDaemonSetupOptions(stateDir), installDaemon: undefined },
           runtime,
         ),
       ).rejects.toThrow(
-        /only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
+        /Gateway did not become reachable[\s\S]*Classification: not-listening[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
       );
     });
   }, 60_000);

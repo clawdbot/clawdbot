@@ -8,8 +8,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AttemptFailureSource } from "./attempt-terminal.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { AttemptFailureSource, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
@@ -41,8 +40,8 @@ import {
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
+  isCodexNotificationForTurn,
   readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
@@ -137,8 +136,10 @@ export class CodexAppServerEventProjector {
       (text) => this.toolProgressProjection.matchesEcho(text),
       () => this.nextTranscriptTimestamp(),
     );
-    this.reasoningProjection = new CodexReasoningProjection(params, (event) =>
-      this.emitAgentEvent(event),
+    this.reasoningProjection = new CodexReasoningProjection(
+      params,
+      (event) => this.emitAgentEvent(event),
+      options.onNativePlanUpdate,
     );
   }
 
@@ -221,7 +222,7 @@ export class CodexAppServerEventProjector {
       if (readCodexNotificationThreadId(params) !== this.threadId) {
         return;
       }
-    } else if (!this.isNotificationForTurn(params)) {
+    } else if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     this.nativeToolLifecycleProjector.handleNotification(notification);
@@ -239,7 +240,7 @@ export class CodexAppServerEventProjector {
         this.reasoningProjection.handlePlanDelta(params);
         break;
       case "turn/plan/updated":
-        this.reasoningProjection.handleTurnPlanUpdated(params);
+        await this.reasoningProjection.handleTurnPlanUpdated(params);
         break;
       case "item/started":
         await this.handleItemStarted(params);
@@ -350,10 +351,13 @@ export class CodexAppServerEventProjector {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
   }
 
-  /** Projects a successful OpenClaw update_plan call through the native plan stream. */
-  recordDynamicPlanUpdate(params: unknown): void {
+  /** Projects a successful OpenClaw progress_card call through the native plan stream. */
+  async recordDynamicProgressCardUpdate(params: unknown): Promise<void> {
     if (isJsonObject(params)) {
-      this.reasoningProjection.handleTurnPlanUpdated(params, "openclaw");
+      const projected: JsonObject = {
+        plan: Array.isArray(params.plan) ? params.plan : [],
+      };
+      await this.reasoningProjection.handleTurnPlanUpdated(projected, "openclaw");
     }
   }
 
@@ -450,7 +454,7 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
-      this.options.onContextCompacted?.();
+      await this.options.onContextCompacted?.();
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
         messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
@@ -640,12 +644,6 @@ export class CodexAppServerEventProjector {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
       embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
-  }
-
-  private isNotificationForTurn(params: JsonObject): boolean {
-    const threadId = readCodexNotificationThreadId(params);
-    const turnId = readCodexNotificationTurnId(params);
-    return threadId === this.threadId && turnId === this.turnId;
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {

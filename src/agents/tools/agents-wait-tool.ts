@@ -9,6 +9,7 @@ import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-regi
 import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
+import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
@@ -70,6 +71,9 @@ function completionResult(entry: SubagentRunRecord) {
     status: completion.status,
     result: resolveSubagentCompletionResultText(entry) ?? "",
     ...(completion.structured !== undefined ? { structured: completion.structured } : {}),
+    ...(entry.execution.outcome?.status === "error"
+      ? { error: entry.execution.outcome.error }
+      : {}),
     ...(completion.schemaError ? { schemaError: completion.schemaError } : {}),
     sessionKey: entry.childSessionKey,
     ...(entry.label ? { label: entry.label } : {}),
@@ -262,8 +266,7 @@ export function createAgentsWaitTool(opts: {
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
-    description:
-      "Wait for collector subagents started by sessions_spawn collect=true. Accepts many run ids; returns once any completes (completed results incl. structured output, plus pending ids), or on timeoutSeconds.",
+    description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { ids: string[]; timeoutSeconds?: number };

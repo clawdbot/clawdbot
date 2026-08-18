@@ -3,6 +3,47 @@ import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
 
+export type OpenAIResponsesCompactionRejection = {
+  data: string;
+  id?: string;
+};
+
+export type CodeModeToolSurfaceObservation = {
+  beforeToolIdentities: readonly string[];
+  afterToolIdentities: readonly string[];
+};
+
+const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
+const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
+type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
+
+export const codeModeToolSurfaceObserver = {
+  set(
+    options: object,
+    observer: CodeModeToolSurfaceObserver,
+    collector?: CodeModeToolSurfaceObserver,
+  ): void {
+    Reflect.set(options, CODE_MODE_TOOL_SURFACE_OBSERVER, observer);
+    if (collector) {
+      Reflect.set(options, CODE_MODE_TOOL_SURFACE_COLLECTOR, collector);
+    }
+  },
+  get(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
+    if (!options) {
+      return undefined;
+    }
+    const observer: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_OBSERVER);
+    return typeof observer === "function" ? (observation) => observer(observation) : undefined;
+  },
+  getCollector(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
+    if (!options) {
+      return undefined;
+    }
+    const collector: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_COLLECTOR);
+    return typeof collector === "function" ? (observation) => collector(observation) : undefined;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
@@ -59,6 +100,8 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
   authProfileId?: string;
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
+  /** Internal owner notification after a server rejects a persisted compaction checkpoint. */
+  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
   frequencyPenalty?: number;

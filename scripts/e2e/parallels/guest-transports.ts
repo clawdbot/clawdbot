@@ -707,10 +707,13 @@ Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
 }
 
 export class LinuxGuest {
-  constructor(
-    private vmName: string,
-    private phases: PhaseRunner,
-  ) {}
+  private vmName: string;
+  private phases: PhaseRunner;
+
+  constructor(vmName: string, phases: PhaseRunner) {
+    this.vmName = vmName;
+    this.phases = phases;
+  }
 
   exec(args: string[], options: GuestExecOptions = {}): string {
     const result = run("prlctl", this.transportArgs(args), {
@@ -751,17 +754,22 @@ interface MacosGuestOptions extends GuestExecOptions {
   env?: Record<string, string>;
 }
 
+type MacosGuestInput = {
+  vmName: string;
+  getUser: () => string;
+  getTransport: () => "current-user" | "sudo";
+  resolveDesktopHome: (user: string) => string;
+  path: string;
+};
+
 export class MacosGuest {
-  constructor(
-    private input: {
-      vmName: string;
-      getUser: () => string;
-      getTransport: () => "current-user" | "sudo";
-      resolveDesktopHome: (user: string) => string;
-      path: string;
-    },
-    private phases: PhaseRunner,
-  ) {}
+  private input: MacosGuestInput;
+  private phases: PhaseRunner;
+
+  constructor(input: MacosGuestInput, phases: PhaseRunner) {
+    this.input = input;
+    this.phases = phases;
+  }
 
   exec(args: string[], options: MacosGuestOptions = {}): string {
     return this.run(args, options).stdout.trim();
@@ -835,10 +843,13 @@ export class MacosGuest {
 }
 
 export class WindowsGuest {
-  constructor(
-    private vmName: string,
-    private phases: PhaseRunner,
-  ) {}
+  private vmName: string;
+  private phases: PhaseRunner;
+
+  constructor(vmName: string, phases: PhaseRunner) {
+    this.vmName = vmName;
+    this.phases = phases;
+  }
 
   exec(args: string[], options: GuestExecOptions = {}): string {
     return this.run(args, options).stdout.trim();

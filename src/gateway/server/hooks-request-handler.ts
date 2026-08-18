@@ -14,10 +14,11 @@ import { applyHookMappings } from "../hooks-mapping.js";
 import {
   extractHookToken,
   getHookAgentPolicyError,
-  getHookAgentSelectionError,
   getHookChannelError,
   getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
+  type HookSessionKeySource,
+  type HookTargetAgentResolution,
   type HooksConfigResolved,
   isHookAgentAllowed,
   isSessionKeyAllowedByPrefix,
@@ -31,9 +32,9 @@ import {
   resolveHookDeliver,
   resolveHookIdempotencyKey,
   resolveHookSessionKey,
-  resolveHookTargetAgentId,
 } from "../hooks.js";
 import { sendJson } from "../http-common.js";
+import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIp } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 
@@ -104,6 +105,10 @@ export function createHooksRequestHandler(
   });
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
+    const attribution = readPreparedGatewayIngressAttribution(req);
+    if (attribution && attribution.kind !== "unattributable-proxy") {
+      return normalizeRateLimitClientIp(attribution.rateLimit.subject.key);
+    }
     const clientIpConfig = getClientIpConfig?.();
     const clientIp =
       resolveRequestClientIp(
@@ -317,6 +322,57 @@ export function createHooksRequestHandler(
       }
       return dispatchSessionKey;
     };
+    const resolveTargetAgentOrRespond = (
+      agentId: string | undefined,
+      source: "request" | "mapping",
+    ): Extract<HookTargetAgentResolution, { ok: true }> | null => {
+      const resolution = resolveEffectiveHookTargetAgentId(hooksConfig, agentId, source);
+      if (!resolution.ok) {
+        sendJson(res, 400, { ok: false, error: resolution.error });
+        return null;
+      }
+      if (!isHookAgentAllowed(hooksConfig, resolution.effectiveAgentId)) {
+        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+        return null;
+      }
+      return resolution;
+    };
+    const dispatchWakeOrRespond = (
+      value: Parameters<HookDispatchers["dispatchWakeHook"]>[0],
+      targetAgentId: string,
+      source: HookSessionKeySource,
+    ): true => {
+      let dispatchSessionKey: string | undefined;
+      if (value.sessionKey) {
+        const sessionKey = resolveHookSessionKey({
+          hooksConfig,
+          source,
+          sessionKey: value.sessionKey,
+        });
+        if (!sessionKey.ok) {
+          sendJson(res, 400, { ok: false, error: sessionKey.error });
+          return true;
+        }
+        const resolvedSessionKey = resolveDispatchSessionKeyOrRespond(
+          sessionKey.value,
+          targetAgentId,
+        );
+        if (resolvedSessionKey === null) {
+          return true;
+        }
+        dispatchSessionKey = resolvedSessionKey;
+      }
+      dispatchWakeHook(
+        {
+          text: value.text,
+          mode: value.mode,
+          ...(dispatchSessionKey ? { sessionKey: dispatchSessionKey } : {}),
+        },
+        targetAgentId,
+      );
+      sendJson(res, 200, { ok: true, mode: value.mode });
+      return true;
+    };
 
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
@@ -324,21 +380,11 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
-        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+      const target = resolveTargetAgentOrRespond(normalized.value.agentId, "request");
+      if (!target) {
         return true;
       }
-      const targetAgentId = resolveEffectiveHookTargetAgentId(
-        hooksConfig,
-        normalized.value.agentId,
-      );
-      if (!targetAgentId) {
-        sendJson(res, 400, { ok: false, error: getHookAgentSelectionError() });
-        return true;
-      }
-      dispatchWakeHook(normalized.value, targetAgentId);
-      sendJson(res, 200, { ok: true, mode: normalized.value.mode });
-      return true;
+      return dispatchWakeOrRespond(normalized.value, target.effectiveAgentId, "request");
     }
 
     if (subPath === "agent") {
@@ -347,8 +393,8 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
-        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+      const target = resolveTargetAgentOrRespond(normalized.value.agentId, "request");
+      if (!target) {
         return true;
       }
       if (normalized.value.sessionMode === "persistent" && !normalized.value.sessionKey) {
@@ -378,21 +424,12 @@ export function createHooksRequestHandler(
         });
         return true;
       }
-      const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
-      const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
-        hooksConfig,
-        normalized.value.agentId,
-      );
-      if (!effectiveTargetAgentId) {
-        sendJson(res, 400, { ok: false, error: getHookAgentSelectionError() });
-        return true;
-      }
       const replayKey = buildHookReplayCacheKey({
         pathKey: "agent",
         token,
         idempotencyKey,
         dispatchScope: {
-          agentId: effectiveTargetAgentId,
+          agentId: target.effectiveAgentId,
           sessionKey:
             normalized.value.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
           message: normalized.value.message,
@@ -415,7 +452,7 @@ export function createHooksRequestHandler(
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
         sessionKey.value,
-        effectiveTargetAgentId,
+        target.effectiveAgentId,
       );
       if (dispatchSessionKey === null) {
         return true;
@@ -423,11 +460,11 @@ export function createHooksRequestHandler(
       const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
         dispatchAgentHook({
           ...normalized.value,
-          effectiveAgentId: effectiveTargetAgentId,
+          effectiveAgentId: target.effectiveAgentId,
           idempotencyKey,
           sessionKey: dispatchSessionKey,
           sourcePath: `${basePath}/agent`,
-          agentId: targetAgentId,
+          agentId: target.selectedAgentId,
           externalContentSource: "webhook",
         }),
       );
@@ -455,43 +492,19 @@ export function createHooksRequestHandler(
           }
           if (mapped.action.kind === "wake") {
             const action = mapped.action;
-            if (!isHookAgentAllowed(hooksConfig, action.agentId)) {
-              sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+            const target = resolveTargetAgentOrRespond(action.agentId, "mapping");
+            if (!target) {
               return true;
             }
-            const targetAgentId = resolveEffectiveHookTargetAgentId(hooksConfig, action.agentId);
-            if (!targetAgentId) {
-              sendJson(res, 400, { ok: false, error: getHookAgentSelectionError() });
-              return true;
-            }
-            let dispatchSessionKey: string | undefined;
-            if (action.sessionKey) {
-              const sessionKey = resolveHookSessionKey({
-                hooksConfig,
-                source:
-                  action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
-                sessionKey: action.sessionKey,
-              });
-              if (!sessionKey.ok) {
-                sendJson(res, 400, { ok: false, error: sessionKey.error });
-                return true;
-              }
-              dispatchSessionKey =
-                resolveDispatchSessionKeyOrRespond(sessionKey.value, targetAgentId) ?? undefined;
-              if (!dispatchSessionKey) {
-                return true;
-              }
-            }
-            dispatchWakeHook(
+            return dispatchWakeOrRespond(
               {
                 text: action.text,
                 mode: action.mode,
-                ...(dispatchSessionKey ? { sessionKey: dispatchSessionKey } : {}),
+                sessionKey: action.sessionKey,
               },
-              targetAgentId,
+              target.effectiveAgentId,
+              action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
             );
-            sendJson(res, 200, { ok: true, mode: action.mode });
-            return true;
           }
           const action = mapped.action;
           const channel = resolveHookChannel(action.channel);
@@ -507,8 +520,8 @@ export function createHooksRequestHandler(
                 to: action.to,
               }
             : { mode: "none" as const };
-          if (!isHookAgentAllowed(hooksConfig, action.agentId)) {
-            sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+          const target = resolveTargetAgentOrRespond(action.agentId, "mapping");
+          if (!target) {
             return true;
           }
           if (
@@ -532,18 +545,9 @@ export function createHooksRequestHandler(
             sendJson(res, 400, { ok: false, error: sessionKey.error });
             return true;
           }
-          const targetAgentId = resolveHookTargetAgentId(hooksConfig, action.agentId);
-          const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
-            hooksConfig,
-            action.agentId,
-          );
-          if (!effectiveTargetAgentId) {
-            sendJson(res, 400, { ok: false, error: getHookAgentSelectionError() });
-            return true;
-          }
           const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
             sessionKey.value,
-            effectiveTargetAgentId,
+            target.effectiveAgentId,
           );
           if (dispatchSessionKey === null) {
             return true;
@@ -553,7 +557,7 @@ export function createHooksRequestHandler(
             token,
             idempotencyKey,
             dispatchScope: {
-              agentId: effectiveTargetAgentId,
+              agentId: target.effectiveAgentId,
               sessionKey: action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
               message: action.message,
               name: action.name ?? "Hook",
@@ -577,8 +581,8 @@ export function createHooksRequestHandler(
               message: action.message,
               name: action.name ?? "Hook",
               idempotencyKey,
-              agentId: targetAgentId,
-              effectiveAgentId: effectiveTargetAgentId,
+              agentId: target.selectedAgentId,
+              effectiveAgentId: target.effectiveAgentId,
               wakeMode: action.wakeMode,
               sessionKey: dispatchSessionKey,
               sessionMode: action.sessionMode,

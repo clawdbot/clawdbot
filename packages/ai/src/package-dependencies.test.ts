@@ -44,16 +44,19 @@ async function productionImportsPackage(packageName: string): Promise<boolean> {
 }
 
 describe("@openclaw/ai source dependency contract", () => {
-  it("declares bundled normalization-core imports as a workspace dev dependency", async () => {
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
-    ) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
+  it.each(["@openclaw/model-catalog-core", "@openclaw/normalization-core"])(
+    "declares bundled %s imports as a workspace dev dependency",
+    async (packageName) => {
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
 
-    expect(await productionImportsPackage("@openclaw/normalization-core")).toBe(true);
-    expect(manifest.dependencies?.["@openclaw/normalization-core"]).toBeUndefined();
-    expect(manifest.devDependencies?.["@openclaw/normalization-core"]).toBe("workspace:*");
-  });
+      expect(await productionImportsPackage(packageName)).toBe(true);
+      expect(manifest.dependencies?.[packageName]).toBeUndefined();
+      expect(manifest.devDependencies?.[packageName]).toBe("workspace:*");
+    },
+  );
 });

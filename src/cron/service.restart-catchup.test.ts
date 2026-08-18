@@ -113,7 +113,7 @@ describe("CronService restart catch-up", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     const [text, options] = enqueueSystemEvent.mock.calls[0] ?? [];
     expect(text).toBe(expectedText);
-    expect((options as { agentId?: string } | undefined)?.agentId).toBeUndefined();
+    expect((options as { agentId?: string } | undefined)?.agentId).toBe("main");
   }
 
   function expectInterruptedJobEvent(

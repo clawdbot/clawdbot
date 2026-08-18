@@ -143,6 +143,17 @@ export function createRuntimeConfigCapability(
       state.configSnapshot?.appliedConfigHash !== undefined,
     refresh: (isCurrent) => loadOnce("config", () => loadConfig(state, {}, isCurrent)),
   });
+  const refreshConnectionState = () => {
+    const config = run(() => loadConfig(state));
+    void trackLoad("config", config);
+    if (state.configSchemaVersion !== null && canCallConfigMethod("config.schema")) {
+      void trackLoad(
+        "schema",
+        run(() => loadConfigSchema(state)),
+      );
+    }
+    return config;
+  };
 
   const writes: ConfigWriteCoordinator = createConfigWriteCoordinator({
     state,
@@ -158,6 +169,7 @@ export function createRuntimeConfigCapability(
     resetConfigLoad: () => {
       configLoad = null;
     },
+    refreshConnectionState,
     canCallConfigMethod,
     cancelAppliedRefresh: appliedRefresh.cancel,
     reconcileAppliedRefresh: appliedRefresh.reconcile,

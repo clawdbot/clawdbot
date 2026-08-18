@@ -7,6 +7,7 @@ import {
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
   type ReplyMessageInjectionAttempt,
+  type ReplyMessageInjectionOptions,
   type ReplyMessageInjectionOutcome,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
@@ -18,6 +19,7 @@ import {
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendQueueMessageMismatch =
+  | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
@@ -35,10 +37,23 @@ type ReplyMessageInjectionRejectionReason =
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
     ReplyBackendHandle,
-    "sourceReplyDeliveryMode" | "supportsQueueMessageImages" | "taskSuggestionDeliveryMode"
+    | "sourceReplyDeliveryMode"
+    | "supportsQueueMessageImages"
+    | "taskSuggestionDeliveryMode"
+    | "toolAuthorityFingerprint"
   >,
   options?: ReplyBackendQueueMessageOptions,
+  authority?: { toolAuthorityFingerprint?: string },
 ): ReplyBackendQueueMessageMismatch | undefined {
+  if (options?.isInboundUserMessage === true) {
+    const activeFingerprint = normalizeOptionalString(
+      backend.toolAuthorityFingerprint ?? authority?.toolAuthorityFingerprint,
+    );
+    const incomingFingerprint = normalizeOptionalString(options.toolAuthorityFingerprint);
+    if (!activeFingerprint || !incomingFingerprint || activeFingerprint !== incomingFingerprint) {
+      return "tool_authority_mismatch";
+    }
+  }
   if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
     return "image_input_unsupported";
   }
@@ -123,30 +138,59 @@ export function resolveReplyMessageInjectionRejection(params: {
   } catch (error) {
     return { reason: "injection_unavailable", errorMessage: String(error) };
   }
-  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options);
+  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, operation);
   return mismatch ? { reason: mismatch } : { backend, injection };
+}
+
+function isLeafOwnershipRejection(reason: ReplyMessageInjectionRejectionReason): boolean {
+  return (
+    reason === "no_active_run" ||
+    reason === "not_running" ||
+    reason === "stale_run" ||
+    reason === "leaf_mismatch"
+  );
 }
 
 export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
-  options?: ReplyBackendQueueMessageOptions,
+  options?: ReplyMessageInjectionOptions,
 ): ReplyMessageInjectionAttempt {
+  const operation = target[replyMessageInjectionTargetOperation];
+  const { toolAuthorityOverlay, ...backendOptions } = options ?? {};
+  const projectedToolAuthorityFingerprint = toolAuthorityOverlay
+    ? operation.projectToolAuthorityFingerprint(toolAuthorityOverlay)
+    : backendOptions.toolAuthorityFingerprint;
+  const queueOptions: ReplyBackendQueueMessageOptions | undefined = options
+    ? {
+        ...backendOptions,
+        ...(toolAuthorityOverlay
+          ? { toolAuthorityFingerprint: projectedToolAuthorityFingerprint }
+          : {}),
+      }
+    : undefined;
   const resolved = resolveReplyMessageInjectionRejection({
-    operation: target[replyMessageInjectionTargetOperation],
+    operation,
     originatingLeafEntryId: target.originatingLeafEntryId,
     expectedRunId: target.identity === "run" ? target.runId : undefined,
-    options,
+    options: queueOptions,
   });
   if (!("injection" in resolved)) {
     const immediateRejection = { status: "rejected" as const, ...resolved };
     return {
       targetRunId: target.runId,
-      ...(target.identity === "leaf" ? { rejectBeforeAck: true as const } : {}),
+      ...(target.identity === "leaf" && isLeafOwnershipRejection(resolved.reason)
+        ? { rejectBeforeAck: true as const }
+        : {}),
       acceptance: Promise.resolve(false),
       outcome: Promise.resolve(immediateRejection),
     };
   }
+  const targetRunId = normalizeOptionalString(resolved.backend.runId);
+  const userTurnTranscriptRecorder = queueOptions?.userTurnTranscriptRecorder;
+  // The backend selected at the final admission check owns steering identity.
+  // Durable provenance is confirmed only after this exact queue operation proves
+  // transcript commitment; acceptance alone is insufficient.
   // Injection is user input, not run evidence: stamping activity here would let
   // sub-10-minute user messages re-arm a wedged run's staleness window forever.
   // Invoke before the first await. The capability owns the final synchronous
@@ -160,9 +204,9 @@ export function beginReplyMessageInjectionTarget(
     acceptanceSettled = true;
     acceptance.resolve(accepted);
   };
-  const callerOnQueueAccepted = options?.onQueueAccepted;
-  const queueOptions: ReplyBackendQueueMessageOptions = {
-    ...options,
+  const callerOnQueueAccepted = queueOptions?.onQueueAccepted;
+  const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
+    ...queueOptions,
     onQueueAccepted: (accepted) => {
       settleAcceptance(accepted);
       callerOnQueueAccepted?.(accepted);
@@ -170,7 +214,7 @@ export function beginReplyMessageInjectionTarget(
   };
   let queued: Promise<void | ReplyBackendQueueMessageResult>;
   try {
-    queued = resolved.injection.queueMessage(text, queueOptions);
+    queued = resolved.injection.queueMessage(text, runtimeQueueOptions);
   } catch (error) {
     settleAcceptance(false);
     const immediateRejection = {
@@ -179,14 +223,21 @@ export function beginReplyMessageInjectionTarget(
       errorMessage: String(error),
     };
     return {
-      targetRunId: target.runId,
+      targetRunId,
       acceptance: acceptance.promise,
       outcome: Promise.resolve(immediateRejection),
     };
   }
   const outcome = queued.then(
-    (result): ReplyMessageInjectionOutcome => {
+    async (result): Promise<ReplyMessageInjectionOutcome> => {
       settleAcceptance(true);
+      if (
+        targetRunId &&
+        queueOptions?.waitForTranscriptCommit === true &&
+        result?.transcriptCommit !== "unconfirmed"
+      ) {
+        await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+      }
       return result ? { status: "accepted", result } : { status: "accepted" };
     },
     (error: unknown): ReplyMessageInjectionOutcome => {
@@ -199,7 +250,7 @@ export function beginReplyMessageInjectionTarget(
     },
   );
   return {
-    targetRunId: target.runId,
+    targetRunId,
     acceptance: acceptance.promise,
     outcome,
   };

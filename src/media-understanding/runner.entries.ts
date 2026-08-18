@@ -1049,7 +1049,7 @@ export async function runCliEntry(params: {
     });
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
-    const templCtx: TemplateContext = {
+    const templCtx: TemplateContext & Record<string, unknown> = {
       ...ctx,
       AttachmentPath: mediaPath,
       AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
@@ -1074,7 +1074,7 @@ export async function runCliEntry(params: {
       "MediaTranscribedIndexes",
       "MediaStaged",
     ]) {
-      delete (templCtx as unknown as Record<string, unknown>)[key];
+      delete templCtx[key];
     }
     const argv = [command, ...args].map((part, index) =>
       index === 0 ? part : applyTemplate(part, templCtx),

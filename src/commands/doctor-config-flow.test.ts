@@ -23,6 +23,13 @@ const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
+const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
+  vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
+    config: cfg,
+    changes: [] as string[],
+    warnings: [] as string[],
+  })),
+);
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
 );
@@ -263,6 +270,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("./doctor-tailscale.js", () => ({
+  prepareTailscaleConfigMigration: prepareTailscaleConfigMigrationMock,
 }));
 
 vi.mock("./doctor/repair-sequencing.js", async () => {
@@ -1648,6 +1659,12 @@ describe("doctor config flow", () => {
     runDoctorRepairSequenceMock.mockReset();
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
@@ -1668,6 +1685,45 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("previews and applies the legacy Tailscale Serve migration through Doctor", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "secret" },
+        tailscale: { mode: "off" },
+      },
+    };
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
+      config: {
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          bind: "loopback" as const,
+          tailscale: { ...cfg.gateway?.tailscale, mode: "serve" as const },
+        },
+      },
+      changes: ["Migrated legacy Tailscale Serve to managed ingress."],
+      warnings: [],
+    }));
+
+    const preview = await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const repair = await runDoctorConfigWithInput({
+      config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(preview.shouldWriteConfig).toBe(false);
+    expect(preview.cfg.gateway?.bind).toBe("lan");
+    expect(repair.shouldWriteConfig).toBe(true);
+    expect(repair.cfg.gateway?.bind).toBe("loopback");
+    expect(repair.cfg.gateway?.tailscale?.mode).toBe("serve");
+    expect(prepareTailscaleConfigMigrationMock).toHaveBeenCalledTimes(2);
+  });
+
   it("plans persistence of the injected main roster during doctor repair", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
@@ -1686,12 +1742,78 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents?.entries).toEqual({
       main: { workspace: "/tmp/migrated-main" },
     });
-    expect(terminalNoteMock).toHaveBeenCalledWith(
+    // Repair panels defer to the atomic write runner; the flow itself must not
+    // claim the roster change happened before anything reached disk.
+    expect(result.pendingChangePanels).toContain(
       "Prepared the canonical agent roster without retired default markers for persistence.",
-      "Doctor changes",
     );
+    expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
       false,
+    );
+  });
+
+  it("previews and persists pre-parse context-budget cleanup with every path reported", async () => {
+    const canonical = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                contextTokens: 64_000,
+                contextWindow: 128_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: { defaults: {}, entries: { ops: {} } },
+    };
+    const legacy = {
+      models: {
+        providers: {
+          openai: {
+            contextTokens: 64_000,
+            contextWindow: 128_000,
+            models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+          },
+        },
+      },
+      agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
+    };
+
+    await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
+    expect(previewText).toContain(
+      "models.providers.openai.contextTokens → models.providers.openai.models[0].contextTokens",
+    );
+    expect(previewText).toContain("Removed agents.defaults.contextTokens");
+    expect(previewText).toContain("Removed agents.entries.ops.contextTokens");
+    expect(previewText).toContain("models.providers.<provider>.models[].contextTokens");
+
+    terminalNoteMock.mockClear();
+    const repaired = await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repaired.shouldWriteConfig).toBe(true);
+    expect(repaired.cfg).toMatchObject(canonical);
+    expect(repaired.pendingChangePanels?.join("\n")).toContain(
+      "Removed models.providers.openai.contextWindow after baking it into explicit model entries.",
+    );
+    expect(terminalNoteMock.mock.calls.map(([message]) => message).join("\n")).toContain(
+      "agents.entries.ops.contextTokens cannot be represented per model",
     );
   });
 
@@ -2885,7 +3007,7 @@ describe("doctor config flow", () => {
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           channels: {
@@ -2919,9 +3041,14 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
 
-      const outputs = noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
-        .map((call) => call[0]);
+      // Repair-mode change panels defer to the write runner; sanitized change
+      // text travels through pendingChangePanels instead of immediate notes.
+      const outputs = [
+        ...noteSpy.mock.calls
+          .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+          .map((call) => call[0]),
+        ...(result.pendingChangePanels ?? []),
+      ];
       const joinedOutputs = outputs.join("\n");
       expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
       expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
@@ -3570,11 +3697,11 @@ describe("doctor config flow", () => {
   });
 
   it.each([
-    [false, "Doctor changes preview", false],
-    [true, "Doctor changes", true],
+    [false, false],
+    [true, true],
   ] as const)(
     "previews and repairs retired internal hook registrations (repair=%s)",
-    async (repair, panelTitle, shouldWriteConfig) => {
+    async (repair, shouldWriteConfig) => {
       const noteSpy = resetTerminalNoteMock();
       try {
         const result = await runDoctorConfigWithInput({
@@ -3595,13 +3722,21 @@ describe("doctor config flow", () => {
         ).toBeUndefined();
         expect(result.cfg.hooks?.internal?.enabled).toBeUndefined();
         expect(result.shouldWriteConfig).toBe(shouldWriteConfig);
-        expect(
-          noteSpy.mock.calls.some(
-            ([message, title]) =>
-              title === panelTitle &&
-              message.includes("Removed retired hooks.internal.handlers registrations"),
-          ),
-        ).toBe(true);
+        const removalLine = "Removed retired hooks.internal.handlers registrations";
+        if (repair) {
+          // Repair panels defer until the atomic write commits.
+          expect(
+            (result.pendingChangePanels ?? []).some((panel) => panel.includes(removalLine)),
+          ).toBe(true);
+          expect(noteSpy.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
+        } else {
+          expect(
+            noteSpy.mock.calls.some(
+              ([message, title]) =>
+                title === "Doctor changes preview" && message.includes(removalLine),
+            ),
+          ).toBe(true);
+        }
       } finally {
         noteSpy.mockClear();
       }
@@ -3633,10 +3768,10 @@ describe("doctor config flow", () => {
     }
   });
 
-  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+  it("defers the applied panel to the config write when --fix is passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      const result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           heartbeat: {
@@ -3647,8 +3782,11 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
       const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
-      expect(changeTitles).toContain("Doctor changes");
+      // The flow itself prints nothing as applied; the write runner reports
+      // "Doctor changes" only after the atomic write commits.
+      expect(changeTitles).not.toContain("Doctor changes");
       expect(changeTitles).not.toContain("Doctor changes preview");
+      expect(result.pendingChangePanels?.length).toBeGreaterThan(0);
     } finally {
       noteSpy.mockClear();
     }
@@ -3731,14 +3869,16 @@ describe("doctor config flow", () => {
           });
           noteSpy.mockClear();
 
-          await loadAndMaybeMigrateDoctorConfig({
+          const secondRun = await loadAndMaybeMigrateDoctorConfig({
             options: { nonInteractive: true, repair: true },
             confirm: async () => false,
           });
-          const secondRunTalkNormalizationLines = noteSpy.mock.calls
-            .filter((call) => call[1] === "Doctor changes")
-            .map((call) => call[0])
-            .filter((line) => line.includes("Normalized talk.provider/providers shape"));
+          const secondRunTalkNormalizationLines = [
+            ...noteSpy.mock.calls
+              .filter((call) => call[1] === "Doctor changes")
+              .map((call) => call[0]),
+            ...(secondRun.pendingChangePanels ?? []),
+          ].filter((line) => line.includes("Normalized talk.provider/providers shape"));
           expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();

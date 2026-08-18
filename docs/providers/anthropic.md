@@ -539,6 +539,68 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   </Accordion>
 
+  <Accordion title="Server-side compaction">
+    Anthropic server-side compaction is opt-in. For supported `anthropic/*`
+    models using API-key auth directly against `api.anthropic.com`, enable it
+    per model:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {
+              params: { anthropicServerCompaction: true },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw adds the `compact-2026-01-12` beta header and sends an Anthropic
+    `context_management` compaction edit. When compaction occurs, OpenClaw
+    stores the newest summary as hidden provider replay state and sends it
+    first on the next matching request. The full transcript remains local;
+    only the outbound history before the checkpoint is omitted.
+    If Anthropic rejects a stored checkpoint, that turn reports the provider
+    error and the following turn falls back to full local history.
+
+    When `anthropicCompactThreshold` is omitted, OpenClaw uses
+    `max(50000, floor(contextWindow * 0.7))`. To choose a different input-token
+    trigger:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {
+              params: {
+                anthropicServerCompaction: true,
+                anthropicCompactThreshold: 120000,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Configured thresholds below `50000` are clamped to `50000`.
+
+    <Warning>
+    Anthropic server-side compaction is a beta feature and OpenClaw never
+    enables it automatically. It applies only to direct Anthropic API requests
+    authenticated with an API key. OAuth/subscription tokens, Claude CLI,
+    proxies, Bedrock, Vertex, and Foundry are excluded. OpenClaw does not send
+    `pause_after_compaction` or custom compaction instructions.
+    </Warning>
+
+    See Anthropic's [compaction guide](https://platform.claude.com/docs/en/build-with-claude/compaction).
+
+  </Accordion>
+
   <Accordion title="Media understanding (image and PDF)">
     The bundled Anthropic plugin registers image and PDF understanding. OpenClaw
     auto-resolves media capabilities from the configured Anthropic auth; no

@@ -6,7 +6,6 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -31,6 +30,11 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
+import {
+  renderSessionAttentionIcon,
+  renderSessionRunSpinner,
+  sessionAttentionSubtitle,
+} from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
@@ -156,22 +160,22 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const agentId = host.activeChipAgent().activeId;
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
-  const approvalNeeded = sessionHasPendingApproval(
-    host.sessionData.approvalBadgeSnapshot(),
-    mainKey,
-  );
-  const outboxCount = host.outboxCountForSessionKey(mainKey);
+  const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
+  const attentionLabel = sessionAttentionSubtitle(attention);
+  const outboxAttentionCount = host.outboxAttentionCountForSession(mainKey);
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = !active && host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
-  // Home shares the sidebar's leading-slot contract: run state rings its icon
-  // instead of drifting to the row edge, which stays reserved for counts.
+  // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
-    content: html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`,
-    running,
+    content:
+      attention.kind === "none"
+        ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
+        : renderSessionAttentionIcon(attention),
+    running: false,
     badge: unread ? renderSessionUnreadBadge() : nothing,
   });
   return html`
@@ -186,6 +190,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
+      aria-label=${attentionLabel ? `${t("nav.home")} · ${attentionLabel}` : nothing}
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
@@ -195,10 +200,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         host.openMainSession(agentId);
       }}
     >
-      ${running
-        ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}
-            >${homeGlyph}</openclaw-tooltip
-          >`
+      ${attentionLabel
+        ? html`<openclaw-tooltip .content=${attentionLabel}>${homeGlyph}</openclaw-tooltip>`
         : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
       ${sessionHasBoard(mainKey)
@@ -211,55 +214,24 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${approvalNeeded || outboxCount > 0 || hasComposerDraft
+      ${running || outboxAttentionCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${approvalNeeded
-              ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
-                  <span
-                    class="session-approval-badge"
-                    role="img"
-                    aria-label=${t("sessionsView.approvalNeeded")}
-                    >${icons.alertTriangle}</span
-                  >
-                </openclaw-tooltip>`
-              : nothing}
-            ${renderSessionRowBadges({ hasAutomation: false, outboxCount, hasComposerDraft })}
+            ${running ? renderSessionRunSpinner() : nothing}
+            ${renderSessionRowBadges({
+              hasAutomation: false,
+              outboxAttentionCount,
+              hasComposerDraft,
+            })}
           </span>`
         : nothing}
     </a>
   `;
 }
 
-/** Both zone groups accept drops, so dragging a session onto either one pins it
-    and records its slot in the canonical entry order. */
-export function renderAppSidebarZoneGroup(host: AppSidebarRenderHost, content: unknown) {
-  return html`
-    <div
-      class="nav-section__items"
-      @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragOver(event)}
-      @dragleave=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-      @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
-    >
-      ${content}
-    </div>
-  `;
-}
-
-/** Pinned sessions are elevated content, not navigation, so they carry their own
-    section label instead of trailing the Pages list. No customize affordance:
-    the Pages head owns the pin editor, and pinning is a per-session action. */
-export function renderAppSidebarPinnedHead() {
-  return html`
-    <div class="sidebar-nav__head sidebar-nav__head--pinned">
-      <span class="sidebar-recent-sessions__label-text">${t("nav.pinned")}</span>
-    </div>
-  `;
-}
-
 export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
   return html`
     <div class="sidebar-nav__head">
-      <span class="sidebar-recent-sessions__label-text">${t("nav.pages")}</span>
+      <span class="sidebar-recent-sessions__label-text sr-only">${t("nav.pages")}</span>
       <button
         type="button"
         class="sidebar-nav__head-action"

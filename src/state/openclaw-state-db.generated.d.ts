@@ -84,6 +84,13 @@ export interface AgentModelCatalogs {
   updated_at: number;
 }
 
+export interface AgentProvenance {
+  agent_id: string;
+  created_at_ms: number;
+  created_via: string;
+  creator_agent_id: string | null;
+}
+
 export interface AndroidNotificationRecentPackages {
   package_name: string;
   sort_order: number;
@@ -554,6 +561,7 @@ export interface DeviceBootstrapTokens {
   profile_json: string | null;
   public_key: string | null;
   redeemed_profile_json: string | null;
+  setup_id: string | null;
   token: string;
   token_key: string;
   ts: number;
@@ -566,6 +574,16 @@ export interface DeviceIdentities {
   private_key_pem: string;
   public_key_pem: string;
   updated_at_ms: number;
+}
+
+export interface DevicePairSetupCompletions {
+  access: string;
+  completed_at_ms: number;
+  delivery_state: string;
+  device_id: string;
+  device_name: string | null;
+  retain_until_ms: number;
+  setup_id: string;
 }
 
 export interface DevicePairingJoinCodes {
@@ -950,6 +968,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_cloudflare_access_json: string | null;
   gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
@@ -1053,6 +1072,36 @@ export interface OutboundMediaProvenance {
   version: number;
 }
 
+export interface OutboundMessageExecutionBindings {
+  context_id: string;
+  event_id: string;
+  execution_id: string;
+  run_id: string;
+}
+
+export interface OutboundMessageProgress {
+  account_ref: string | null;
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string | null;
+  channel: string;
+  context_id: string | null;
+  conversation_kind: string;
+  conversation_ref: string | null;
+  duration_ms: number | null;
+  execution_id: string | null;
+  occurred_at: number;
+  outcome: string;
+  progress_id: string;
+  run_id: string | null;
+  schema_version: number;
+  sequence: Generated<number>;
+  source_id: string;
+  source_sequence: number;
+  target_ref: string | null;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -1119,6 +1168,7 @@ export interface SchemaMeta {
 }
 
 export interface SecretStoreEntries {
+  allowed_hosts: string | null;
   created_at_ms: number;
   deleted_at_ms: number | null;
   kind: string;
@@ -1132,8 +1182,10 @@ export interface SecretStoreEntries {
 
 export interface SessionGroups {
   created_at: number;
+  cwd: string | null;
   name: string;
   position: number;
+  worktree: number | null;
 }
 
 export interface SessionStateEvents {
@@ -1510,6 +1562,8 @@ export interface WorkerEnvironments {
   idle_since_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  node_device_id: string | null;
+  node_setup_id: string | null;
   owner_epoch: Generated<number>;
   profile_id: string;
   profile_snapshot_json: string;
@@ -1540,11 +1594,26 @@ export interface WorkerInferenceTurns {
   updated_at_ms: number;
 }
 
+export interface WorkerSessionPlacementMoves {
+  created_at_ms: number;
+  last_error: string | null;
+  operation_id: string;
+  session_id: string;
+  source_environment_id: string;
+  source_generation: number;
+  source_owner_epoch: number;
+  target_id: string | null;
+  target_kind: string;
+  target_machine_class: string | null;
+  updated_at_ms: number;
+}
+
 export interface WorkerSessionPlacements {
   active_owner_epoch: number | null;
   agent_id: string;
   created_at_ms: number;
   environment_id: string | null;
+  execution_mode: string | null;
   last_live_event_ack_cursor: number | null;
   last_transcript_ack_cursor: number | null;
   recovery_error: string | null;
@@ -1698,6 +1767,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
+  agent_provenance: AgentProvenance;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
@@ -1732,6 +1802,7 @@ export interface DB {
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
   device_identities: DeviceIdentities;
+  device_pair_setup_completions: DevicePairSetupCompletions;
   device_pairing_join_codes: DevicePairingJoinCodes;
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
@@ -1768,6 +1839,8 @@ export interface DB {
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
+  outbound_message_execution_bindings: OutboundMessageExecutionBindings;
+  outbound_message_progress: OutboundMessageProgress;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
@@ -1806,6 +1879,7 @@ export interface DB {
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placement_moves: WorkerSessionPlacementMoves;
   worker_session_placements: WorkerSessionPlacements;
   worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;

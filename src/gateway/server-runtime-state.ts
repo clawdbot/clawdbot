@@ -23,6 +23,12 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import {
+  createGatewayUnattributableProxyReporter,
+  type GatewayIngressTransport,
+  type GatewayTailscaleIngressEndpoint,
+  type GatewayTailscaleIngressMode,
+} from "./ingress-attribution.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
@@ -37,7 +43,10 @@ import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-req
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
-import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
+import {
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http/route-auth.js";
 import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
 import { findMatchingPluginHttpRoutes } from "./server/plugins-http/route-match.js";
 import {
@@ -46,6 +55,8 @@ import {
 } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -55,6 +66,7 @@ type GatewayPluginRequestHandler = (
     gatewayAuthSatisfied?: boolean;
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
+    gatewayRequestClientIp?: string;
   },
 ) => Promise<boolean>;
 
@@ -67,6 +79,7 @@ type GatewayPluginUpgradeHandler = (
     gatewayAuthSatisfied?: boolean;
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
+    gatewayRequestClientIp?: string;
   },
 ) => Promise<boolean>;
 
@@ -120,10 +133,14 @@ export async function createGatewayHttpTransport(params: {
   getStartup?: StartupChecker;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   clients: Set<GatewayWsClient>;
+  tailscaleMode?: "off" | GatewayTailscaleIngressMode;
+  prepareManagedTailscaleIngress?: (endpoint: GatewayTailscaleIngressEndpoint) => Promise<void>;
 }): Promise<{
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -133,6 +150,7 @@ export async function createGatewayHttpTransport(params: {
   preauthConnectionBudget: PreauthConnectionBudget;
   portalService: GatewayPortalService;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
+  getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
   getMcpAppSandboxPort: () => number | undefined;
   ensureSandboxHostPort: () => Promise<number>;
 }> {
@@ -229,6 +247,9 @@ export async function createGatewayHttpTransport(params: {
   const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
     return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
   };
+  const isPluginAuthenticatedRoute = (pathContext: PluginRoutePathContext): boolean => {
+    return isPluginAuthenticatedRoutePath(resolvePluginRouteRegistry(), pathContext);
+  };
   const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {
     const coreCanvasCapability = isCoreCanvasHostEnabled(loadRuntimeConfig())
       ? resolveCanvasNodeCapability(pathContext.candidates)
@@ -241,6 +262,8 @@ export async function createGatewayHttpTransport(params: {
       ?.nodeCapability;
   };
 
+  const managedTailscaleMode =
+    params.tailscaleMode && params.tailscaleMode !== "off" ? params.tailscaleMode : undefined;
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   if (!isLoopbackHost(params.bindHost)) {
     params.log.warn(
@@ -272,7 +295,11 @@ export async function createGatewayHttpTransport(params: {
     httpServers,
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
-  for (const _ of bindHosts) {
+  const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
+  const createGatewayListener = (
+    ingressTransport: GatewayIngressTransport,
+    tlsOptions: GatewayTlsRuntime["tlsOptions"] | undefined,
+  ): HttpServer => {
     const httpServer = createGatewayHttpServer({
       clients: params.clients,
       controlUiEnabled: params.controlUiEnabled,
@@ -288,24 +315,29 @@ export async function createGatewayHttpTransport(params: {
       handleMcpOAuthCallbackRequest,
       handlePluginRequest,
       shouldEnforcePluginGatewayAuth,
+      isPluginAuthenticatedRoute,
       resolvePluginNodeCapabilityRoute,
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
       joinRateLimiter: params.joinRateLimiter,
+      handleNodeWorkerBundleTransferRequest: params.handleNodeWorkerBundleTransferRequest,
+      handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       isTerminalEnabled: params.isTerminalEnabled,
-      tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      tlsOptions,
+      ingressTransport,
+      reportUnattributableProxy,
     });
-    // Attach upgrade handler BEFORE listening to prevent race condition
     attachGatewayUpgradeHandler({
       httpServer,
       wss,
       handlePluginUpgrade,
       shouldEnforcePluginGatewayAuth,
+      isPluginAuthenticatedRoute,
       resolvePluginNodeCapabilityRoute,
       clients: params.clients,
       preauthConnectionBudget,
@@ -318,10 +350,27 @@ export async function createGatewayHttpTransport(params: {
       desktopSessionRegistry: params.desktopSessionRegistry,
       nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      ingressTransport,
+      reportUnattributableProxy,
     });
+    return httpServer;
+  };
+  for (const _ of bindHosts) {
+    const httpServer = createGatewayListener(
+      { kind: "ordinary" },
+      params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+    );
     gatewayHttpServers.push(httpServer);
     httpServers.push(httpServer);
   }
+  const tailscaleHttpServer = managedTailscaleMode
+    ? createGatewayListener({ kind: "managed-tailscale", mode: managedTailscaleMode }, undefined)
+    : undefined;
+  if (tailscaleHttpServer) {
+    // Register before bind so partial startup failures close the private ingress.
+    httpServers.push(tailscaleHttpServer);
+  }
+  let tailscaleIngressEndpoint: GatewayTailscaleIngressEndpoint | undefined;
   let workerIngressPort: number | undefined;
   const workerHttpServer = params.workerIngressEnabled
     ? createHttpServer((_req, res) => {
@@ -433,6 +482,22 @@ export async function createGatewayHttpTransport(params: {
     // Listening is idempotent for callers racing startup. A failure is terminal for this runtime
     // state; the startup owner tears down every partially bound HTTP/WS server before retrying.
     startListeningPromise = (async () => {
+      if (tailscaleHttpServer) {
+        await listenGatewayHttpServer({
+          httpServer: tailscaleHttpServer,
+          bindHost: "127.0.0.1",
+          port: 0,
+          retryEaddrinuse: false,
+          serviceName: "Tailscale gateway ingress",
+        });
+        const address = tailscaleHttpServer.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Tailscale gateway ingress failed to resolve its loopback port");
+        }
+        tailscaleIngressEndpoint = { host: "127.0.0.1", port: address.port };
+        // Publish the private target before ordinary ingress can accept requests.
+        await params.prepareManagedTailscaleIngress?.(tailscaleIngressEndpoint);
+      }
       const requiredAlias =
         params.bindHost !== "127.0.0.1" && bindHosts.includes("127.0.0.1")
           ? "127.0.0.1"
@@ -506,6 +571,7 @@ export async function createGatewayHttpTransport(params: {
       workerIngressPort === undefined
         ? undefined
         : { host: "127.0.0.1" as const, port: workerIngressPort },
+    getTailscaleIngressEndpoint: () => tailscaleIngressEndpoint,
     getMcpAppSandboxPort: () => mcpAppSandboxPort,
     ensureSandboxHostPort,
   };

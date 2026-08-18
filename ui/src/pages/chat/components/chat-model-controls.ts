@@ -2,7 +2,10 @@
 import { html } from "lit";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
+import {
+  normalizeChatModelProviderId,
+  resolvePreferredServerChatModelValue,
+} from "../../../lib/chat/model-ref.ts";
 import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
@@ -272,6 +275,44 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !explicitOverride && currentOverride.trim().toLowerCase() === defaultModel.trim().toLowerCase()
       ? ""
       : currentOverride;
+  const activeModelOption =
+    pickerValue === ""
+      ? modelOptions.find((option) => option.isDefault)
+      : modelOptions.find((option) => option.value === pickerValue);
+  const activeSessionModel = activeSession?.model
+    ? resolveChatModelCatalogEntry(
+        resolvePreferredServerChatModelValue(
+          activeSession.model,
+          activeSession.modelProvider,
+          props.modelCatalog,
+        ),
+        props.modelCatalog,
+      )
+    : undefined;
+  const activeOptionModel = activeModelOption
+    ? resolveChatModelCatalogEntry(activeModelOption.value, props.modelCatalog)
+    : undefined;
+  const activeSessionRuntime = activeSession?.agentRuntime?.id.trim().toLowerCase();
+  const activeOptionRuntime = (
+    activeOptionModel?.agentRuntime?.id ??
+    (activeModelOption?.isDefault ? props.sessionsResult?.defaults?.agentRuntime?.id : undefined)
+  )
+    ?.trim()
+    .toLowerCase();
+  const activeRuntimeMatches =
+    Boolean(activeSessionRuntime) && activeSessionRuntime === activeOptionRuntime;
+  // Missing or mismatched current-selection provenance cannot bind the cached
+  // session window. Even matching provenance is useful only after the switch settles.
+  if (
+    !props.modelSwitching &&
+    activeModelOption &&
+    activeSession?.contextTokens &&
+    activeRuntimeMatches &&
+    activeSessionModel !== undefined &&
+    activeSessionModel === activeOptionModel
+  ) {
+    activeModelOption.contextTokens = activeSession.contextTokens;
+  }
   const lockedModelLabel =
     props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
       ? t("chat.selectors.nativeCodexModel")

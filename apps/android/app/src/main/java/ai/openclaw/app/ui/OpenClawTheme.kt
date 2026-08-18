@@ -9,12 +9,15 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+internal val LocalResolvedAppearanceIsDark = staticCompositionLocalOf { false }
+
 /**
- * App theme wrapper that installs dynamic Material colors and legacy mobile color tokens.
+ * App theme wrapper that resolves the requested appearance for system surfaces and child themes.
  */
 @Composable
 fun OpenClawTheme(
@@ -24,12 +27,11 @@ fun OpenClawTheme(
   val context = LocalContext.current
   val isDark = themeMode.isDark(systemDark = isSystemInDarkTheme())
   val colorScheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-  val mobileColors = if (isDark) darkMobileColors() else lightMobileColors()
 
   OpenClawSystemBarAppearance(lightAppearance = !isDark)
 
   CompositionLocalProvider(
-    LocalMobileColors provides mobileColors,
+    LocalResolvedAppearanceIsDark provides isDark,
   ) {
     MaterialTheme(colorScheme = colorScheme, content = content)
   }

@@ -118,6 +118,7 @@ function createTurn(
 
 function createRejectedExecution(order: string[] = []): FollowupExecutionResult {
   return {
+    commentaryPayloadsEnabled: false,
     execution: {
       runId: "run-1",
       outcome: { kind: "rejected", payload: { text: "failed" } },
@@ -282,6 +283,34 @@ describe("createFollowupRunner", () => {
     ]);
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
+
+  it.each([true, false])(
+    "projects queued commentary with the refreshed durable owner when enabled is %s",
+    async (commentaryPayloadsEnabled) => {
+      const typing = createTypingController();
+      const turn = createTurn();
+      const execution = Object.assign(createRejectedExecution(), {
+        commentaryPayloadsEnabled,
+      });
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(execution);
+      state.account.mockResolvedValue(undefined);
+      state.deliver.mockResolvedValue(undefined);
+
+      await createFollowupRunner({
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { commentaryPayloadsEnabled: !commentaryPayloadsEnabled },
+      })(turn.queued);
+
+      expect(state.resolveDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          opts: expect.objectContaining({ commentaryPayloadsEnabled }),
+        }),
+      );
+    },
+  );
 
   it("does not replay a settled turn when progress presentation fails", async () => {
     const typing = createTypingController();

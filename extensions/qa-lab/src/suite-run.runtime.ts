@@ -7,7 +7,7 @@ import {
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { resolveRequestedQaSuiteModels } from "./suite-model-selection.js";
 import {
-  collectQaSuiteGatewayConfigPatch,
+  collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   normalizeQaSuiteConcurrency,
@@ -78,7 +78,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
         : []),
     ]),
   ];
-  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(
+  const gatewayConfigPatches = collectQaSuiteGatewayConfigPatches(
     selectedScenarios,
     params?.adapterOptions?.sutAccountId?.trim() ||
       (channelDriver === "crabline" ? "default" : "sut"),
@@ -104,7 +104,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     fastMode,
     channelDriver,
     enabledPluginIds,
-    gatewayConfigPatch,
+    gatewayConfigPatches,
     gatewayRuntimeOptions,
     concurrency,
     progressEnabled,

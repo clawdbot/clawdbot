@@ -40,6 +40,7 @@ function createPrepared(params: {
   channelType?: "im" | "mpim" | "channel" | "group";
   threadId?: string;
   mode?: "off" | "auto" | "on";
+  prompt?: string;
   sessionKey?: string;
 }): PreparedSlackMessage {
   const channelId = params.channelId ?? "D123";
@@ -57,13 +58,17 @@ function createPrepared(params: {
       accountId: "default",
       sessionKey: params.sessionKey ?? `agent:main:slack:channel:${channelId}`,
     },
-    channelConfig: params.mode
-      ? {
-          allowed: true,
-          requireMention: false,
-          presenceEvents: { mode: params.mode },
-        }
-      : null,
+    channelConfig:
+      params.mode || params.prompt !== undefined
+        ? {
+            allowed: true,
+            requireMention: false,
+            presenceEvents: {
+              ...(params.mode ? { mode: params.mode } : {}),
+              ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+            },
+          }
+        : null,
     ctxPayload: {
       MessageThreadId: params.threadId,
     },
@@ -83,15 +88,82 @@ describe("Slack presence monitor", () => {
     ).toBe(true);
   });
 
+  it("replaces only the default guidance with a configured prompt", async () => {
+    let now = 2_000;
+    const getPresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockResolvedValueOnce({ presence: "active" });
+    const enqueue = vi.fn((..._args: unknown[]) => true);
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto", prompt: "Account guidance" },
+      client: { getPresence } as never,
+      cooldownStore: createCooldownStore(),
+      enqueue,
+      wake: vi.fn(),
+      nowMs: () => now,
+    });
+    monitor.observe(
+      createPrepared({ userId: "U123", mode: "auto", prompt: "Do not send a greeting." }),
+    );
+
+    await monitor.pollOnce();
+    now = 7_500;
+    await monitor.pollOnce();
+
+    expect(enqueue.mock.calls[0]?.[0]).toBe(
+      [
+        "Slack presence event:",
+        'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
+        "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+        "Do not send a greeting.",
+      ].join("\n"),
+    );
+  });
+
+  it("allows empty prompt guidance so workspace instructions govern the event", async () => {
+    let now = 2_000;
+    const getPresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockResolvedValueOnce({ presence: "active" });
+    const enqueue = vi.fn((..._args: unknown[]) => true);
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto", prompt: "Account guidance" },
+      client: { getPresence } as never,
+      cooldownStore: createCooldownStore(),
+      enqueue,
+      wake: vi.fn(),
+      nowMs: () => now,
+    });
+    monitor.observe(createPrepared({ userId: "U123", mode: "auto", prompt: "" }));
+
+    await monitor.pollOnce();
+    now = 7_500;
+    await monitor.pollOnce();
+
+    expect(enqueue.mock.calls[0]?.[0]).toBe(
+      [
+        "Slack presence event:",
+        'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
+        "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+      ].join("\n"),
+    );
+  });
+
   it("seeds the first sample and wakes only on away-to-active", async () => {
+    let now = 1_000;
     const getPresence = vi
       .fn()
       .mockResolvedValueOnce({ presence: "active" })
       .mockResolvedValueOnce({ presence: "away" })
+      .mockResolvedValueOnce({ presence: "away" })
       .mockResolvedValueOnce({ presence: "active" })
       .mockResolvedValueOnce({ presence: "away" })
       .mockResolvedValueOnce({ presence: "active" });
-    const enqueue = vi.fn(() => true);
+    const enqueue = vi.fn((..._args: unknown[]) => true);
     const wake = vi.fn();
     const monitor = createSlackPresenceMonitor({
       accountId: "default",
@@ -100,17 +172,26 @@ describe("Slack presence monitor", () => {
       cooldownStore: createCooldownStore(),
       enqueue,
       wake,
+      nowMs: () => now,
     });
     monitor.observe(createPrepared({ userId: "U123" }));
 
     await monitor.pollOnce();
+    now = 2_000;
     await monitor.pollOnce();
     expect(enqueue).not.toHaveBeenCalled();
 
+    now = 4_000;
+    await monitor.pollOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+
+    now = 7_500;
     await monitor.pollOnce();
     expect(enqueue).toHaveBeenCalledOnce();
     expect(enqueue).toHaveBeenCalledWith(
-      expect.stringContaining("retrieve relevant memory and wiki context"),
+      expect.stringMatching(
+        /observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500/,
+      ),
       expect.objectContaining({ agentId: "main", sessionKey: "agent:main:slack:channel:D123" }),
       expect.objectContaining({
         deliveryContext: {
@@ -120,9 +201,20 @@ describe("Slack presence monitor", () => {
         },
       }),
     );
+    expect(enqueue.mock.calls[0]?.[0]).toBe(
+      [
+        "Slack presence event:",
+        'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
+        "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+        "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
+        "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
+      ].join("\n"),
+    );
     expect(wake).toHaveBeenCalledOnce();
 
+    now = 8_000;
     await monitor.pollOnce();
+    now = 9_000;
     await monitor.pollOnce();
     expect(enqueue).toHaveBeenCalledOnce();
   });

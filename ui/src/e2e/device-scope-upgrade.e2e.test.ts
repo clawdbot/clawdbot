@@ -229,6 +229,48 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "approved.png");
   });
 
+  it("collapses the limited-access banner into a persistent status chip", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Collapse limited access banner" }).click();
+
+    const statusChip = page.getByRole("button", { name: "Show limited access details" });
+    await statusChip.waitFor();
+    expect(await statusChip.getAttribute("aria-expanded")).toBe("false");
+    await waitForLayoutSettled(page, ".content, .scope-upgrade-chip-row");
+    const chipInset = await statusChip.evaluate((chip) => {
+      const content = document.querySelector<HTMLElement>(".content");
+      if (!content) {
+        throw new Error("Missing content around limited-access status chip");
+      }
+      const contentBox = content.getBoundingClientRect();
+      const chipBox = chip.getBoundingClientRect();
+      return {
+        right: contentBox.right - chipBox.right,
+        top: chipBox.top - contentBox.top,
+      };
+    });
+    await captureProof(page, "collapsed.png");
+    expect(chipInset).toEqual({ right: 20, top: 8 });
+    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
+      0,
+    );
+
+    await page.reload();
+    await statusChip.waitFor();
+    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
+      0,
+    );
+
+    await statusChip.click();
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
+  });
+
   it.each(SCOPE_UPGRADE_METHODS)(
     "shows manual repair guidance when %s is not advertised",
     async (missingMethod) => {
@@ -244,8 +286,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       });
 
       await page.goto(`${server.baseUrl}chat`);
-      const guidance = page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
+      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
+      await scopeUpgradeCallout.waitFor();
+      const guidance = scopeUpgradeCallout.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
       await guidance.waitFor();
+      await waitForLayoutSettled(
+        page,
+        "openclaw-device-scope-upgrade-banner .callout, .shell-chrome-controls",
+      );
 
       const guidanceBox = await guidance.boundingBox();
       const chromeControls = page.locator(".shell-chrome-controls__button");
@@ -266,6 +314,8 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
 
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+      await page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await page.getByRole("button", { name: "Show limited access details" }).waitFor();
     },
   );
 
@@ -306,10 +356,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       }
       await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
-      await waitForLayoutSettled(page, ".content, openclaw-update-banner .callout");
+      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
+      await scopeUpgradeCallout.waitFor();
+      await waitForLayoutSettled(page, ".content, openclaw-device-scope-upgrade-banner .callout");
       const calloutInsetDelta = await page.evaluate(() => {
         const content = document.querySelector<HTMLElement>(".content");
-        const callout = document.querySelector<HTMLElement>("openclaw-update-banner .callout");
+        const callout = document.querySelector<HTMLElement>(
+          "openclaw-device-scope-upgrade-banner .callout",
+        );
         if (!content || !callout) {
           throw new Error("Missing content or scope-upgrade callout after layout settled");
         }
@@ -374,11 +428,40 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     }
   });
 
-  it("shows manual repair guidance without a signed browser device", async () => {
+  it("offers the admin upgrade without crypto.subtle", async () => {
     const context = await createContext();
     const page = await context.newPage();
     await page.addInitScript(() => {
       Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": { requestId: "upgrade-insecure" },
+      },
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    // Pure-JS Ed25519 signs the device connect on insecure contexts, so the
+    // explicit upgrade path stays available instead of manual-only guidance.
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+  });
+
+  it("shows manual repair guidance when the browser cannot mint a device identity", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      // Without a WebCrypto RNG the identity mint fails and the client
+      // degrades to a device-less connect that cannot sign upgrade requests.
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(globalThis.crypto, "getRandomValues", {
         configurable: true,
         value: undefined,
       });

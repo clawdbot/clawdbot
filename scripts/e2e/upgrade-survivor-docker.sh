@@ -28,6 +28,35 @@ PROBE_MAX_BODY_BYTES="$(
   openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES 1048576
 )"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
+LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
+LIVE_OPENAI_ENV_ARGS=()
+case "$LIVE_OPENAI" in
+  0)
+    ;;
+  1)
+    if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+      exit 2
+    fi
+    if [ -z "${OPENAI_API_KEY:-}" ]; then
+      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENAI_API_KEY" >&2
+      exit 2
+    fi
+    LIVE_OPENAI_TIMEOUT_SECONDS="$(
+      openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
+    )"
+    LIVE_OPENAI_ENV_ARGS=(
+      -e OPENAI_API_KEY
+      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1
+      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
+      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS="$LIVE_OPENAI_TIMEOUT_SECONDS"
+    )
+    ;;
+  *)
+    echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI must be 0 or 1; got: $LIVE_OPENAI" >&2
+    exit 2
+    ;;
+esac
 
 resolve_lane_artifact_suffix() {
   if [ -n "${OPENCLAW_DOCKER_ALL_LANE_NAME:-}" ]; then
@@ -58,6 +87,7 @@ LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 DOCKER_RUN_USER_ARGS=()
 PREPUBLISH_PLUGIN_REGISTRY_ARGS=()
+AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -73,9 +103,10 @@ if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED:-}" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED="$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED"
   )
 fi
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+configure_prepublish_plugin_registry() {
+  local registry_dir="$1"
   PREPUBLISH_PLUGIN_REGISTRY_DIR="$(
-    cd "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" && pwd
+    cd "$registry_dir" && pwd
   )"
   if [ ! -f "$PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" ]; then
     echo "Prepublish plugin registry manifest is missing." >&2
@@ -85,9 +116,15 @@ if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
     -v "$PREPUBLISH_PLUGIN_REGISTRY_DIR:/tmp/openclaw-prepublish-plugin-registry:ro"
   )
+}
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  configure_prepublish_plugin_registry "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
 fi
 cleanup_outer() {
   docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
+  if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
+    rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
+  fi
 }
 trap cleanup_outer EXIT
 
@@ -130,17 +167,20 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   DOCKER_E2E_PACKAGE_ARGS=()
   CANDIDATE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE:-current}"
   CANDIDATE_KIND="npm"
+  CANDIDATE_IS_CURRENT=0
   CANDIDATE_SPEC=""
 
   if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "$OPENCLAW_CURRENT_PACKAGE_TGZ")"
     docker_e2e_package_mount_args "$PACKAGE_TGZ"
     CANDIDATE_KIND="tarball"
+    CANDIDATE_IS_CURRENT=1
     CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
   elif [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
     docker_e2e_package_mount_args "$PACKAGE_TGZ"
     CANDIDATE_KIND="tarball"
+    CANDIDATE_IS_CURRENT=1
     CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
   elif [[ "$CANDIDATE_RAW" == *.tgz ]]; then
     if [ ! -f "$CANDIDATE_RAW" ]; then
@@ -154,6 +194,20 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   else
     CANDIDATE_KIND="npm"
     CANDIDATE_SPEC="$(normalize_npm_candidate "$CANDIDATE_RAW")"
+  fi
+
+  if [ "$CANDIDATE_IS_CURRENT" = "1" ] && [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
+      mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"
+    )"
+    OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor \
+      OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
+      OPENCLAW_DOCKER_ALL_TIMINGS=0 \
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS="$BASELINE_SPEC" \
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="$SCENARIO" \
+      node "$HARNESS_ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry
+    configure_prepublish_plugin_registry \
+      "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
   fi
 
   OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
@@ -185,6 +239,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
     "${PROBE_ENV_ARGS[@]}" \
+    "${LIVE_OPENAI_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$TRUSTED_TSX_NODE_MODULES:/tmp/openclaw-release-harness/node_modules:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \

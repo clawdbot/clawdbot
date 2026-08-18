@@ -2,7 +2,11 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  createChatChannelPlugin,
+  type ChannelPlugin,
+  type PluginRuntime,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
   createReplyToFanout,
@@ -595,7 +599,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             accountId: account.accountId,
             config: ctx.cfg,
             runtime: ctx.runtime,
-            channelRuntime: ctx.channelRuntime,
+            channelRuntime: ctx.channelRuntime as PluginRuntime["channel"],
             abortSignal: ctx.abortSignal,
             mediaMaxMb: account.config.mediaMaxMb,
             statusSink,

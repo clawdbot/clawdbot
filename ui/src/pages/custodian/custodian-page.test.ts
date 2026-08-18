@@ -7,11 +7,15 @@ import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
 describe("custodian page", () => {
   beforeEach(() => {
+    // A persisted companion id would turn every mount into a rejoin candidate;
+    // tests exercising the rejoin path seed the key explicitly instead.
+    localStorage.clear();
     vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
     window.history.replaceState({}, "", "/");
   });
 
   afterEach(() => {
+    localStorage.clear();
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
@@ -399,17 +403,25 @@ describe("custodian page", () => {
     ]);
   });
 
-  it("keeps rows for a same-ownership client replacement and requests a fresh welcome", async () => {
-    let chatCalls = 0;
+  it("refreshes durable rows for a same-ownership client replacement", async () => {
+    let historyCalls = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "openclaw.chat.history") {
-        return { turns: [{ role: "assistant", text: "Earlier state", at: 1 }] };
+        historyCalls += 1;
+        return {
+          turns:
+            historyCalls === 1
+              ? [{ role: "assistant", text: "Earlier state", at: 1 }]
+              : [
+                  { role: "assistant", text: "Earlier state", at: 1 },
+                  { role: "assistant", text: "Completed while away", at: 2 },
+                ],
+        };
       }
       if (method === "openclaw.chat") {
-        chatCalls += 1;
         return {
           sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-          reply: chatCalls === 1 ? "Live welcome" : "Fresh session welcome",
+          reply: "Live welcome",
           action: "none",
         };
       }
@@ -424,18 +436,15 @@ describe("custodian page", () => {
 
     setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
-    await waitForFast(() => expect(page.textContent).toContain("Fresh session welcome"));
+    await waitForFast(() => expect(page.textContent).toContain("Completed while away"));
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
-      "openclaw.chat",
+      "openclaw.chat.history",
     ]);
-    expect(request.mock.calls[2]?.[1]).toMatchObject({
-      sessionId: expect.stringMatching(/^control-ui-onboarding-/),
-    });
     expect(page.textContent).toContain("Earlier state");
-    expect(page.textContent).toContain("Fresh session welcome");
+    expect(page.textContent).not.toContain("Live welcome");
   });
 
   it("does not rotate against a replacement gateway without chat support", async () => {
@@ -568,32 +577,37 @@ describe("custodian page", () => {
     expect(page.textContent).toContain("Choose the next step.");
   });
 
-  it("requests a fresh welcome when a connected client is replaced mid-request", async () => {
+  it("renders durable history when a connected client is replaced mid-request", async () => {
     const request = vi
       .fn()
+      .mockResolvedValueOnce({ turns: [] })
       .mockReturnValueOnce(
         new Promise<never>(() => {
           // Keep the original request pending while the gateway replaces its client.
         }),
-      )
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Hello after reconnect.",
-        action: "none",
-      });
-    const { context, setGatewaySnapshot } = createContext(request);
+      );
+    const replacementRequest = vi.fn().mockResolvedValue({
+      turns: [{ role: "assistant", text: "Hello after reconnect.", at: 1 }],
+    });
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-
-    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewaySnapshot({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+    });
+    await waitForFast(() => expect(replacementRequest).toHaveBeenCalledOnce());
     await waitForFast(() => expect(page.textContent).toContain("Hello after reconnect."));
     expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("warns without offering replay when a client replacement abandons a user turn", async () => {
+  it("resolves an abandoned user turn from durable history after reconnect", async () => {
     const request = vi
       .fn()
+      .mockResolvedValueOnce({ turns: [] })
       .mockResolvedValueOnce({
         sessionId: "engine-session-before-user-turn",
         reply: "Welcome.",
@@ -603,33 +617,50 @@ describe("custodian page", () => {
         new Promise<never>(() => {
           // The user turn may reach the old gateway before its client is replaced.
         }),
-      )
-      .mockResolvedValueOnce({
-        sessionId: "engine-session-after-user-turn",
-        reply: "Fresh welcome.",
+      );
+    const replacementRequest = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "openclaw.chat.history") {
+        return Promise.resolve({
+          turns: [
+            { role: "user", text: "check this system", at: 1 },
+            { role: "assistant", text: "System check completed", at: 2 },
+          ],
+        });
+      }
+      // The unknown-outcome turn triggers a full rejoin on the new client.
+      return Promise.resolve({
+        sessionId: params.sessionId,
+        reply: "Welcome back.",
         action: "none",
       });
-    const { context, setGatewaySnapshot } = createContext(request);
+    });
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
     composer.value = "check this system";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-
-    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
-    await waitForFast(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain(
-        "The Gateway connection changed",
-      ),
-    );
 
-    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
-    expect(page.querySelector('[role="alert"] button')).toBeNull();
+    setGatewaySnapshot({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+    });
+    await waitForFast(() => expect(page.textContent).toContain("System check completed"));
+
+    // Full rejoin: history, welcome-only chat, then one barrier refresh behind
+    // the rejoin in case the interrupted turn persisted rows meanwhile.
+    expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
+    expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("clears stale rows and cold-starts against the new gateway after credentials change", async () => {

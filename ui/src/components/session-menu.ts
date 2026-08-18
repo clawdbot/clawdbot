@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -9,14 +10,18 @@ import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { renderSessionIconPicker } from "./session-icon-picker.ts";
+import { renderSessionOwnerMenuAvatar, type SessionOwnerOption } from "./session-owner-chip.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
   label: string;
+  isChild?: boolean;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon: string | null;
   categoryClearReturnsToGroups: boolean;
 };
 
@@ -37,6 +42,8 @@ export type SessionMenuAction =
   | { kind: "toggle-pin" }
   | { kind: "toggle-unread" }
   | { kind: "rename" }
+  | { kind: "set-icon"; icon: string | null }
+  | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
   | { kind: "fork" }
   | { kind: "workboard" }
   | { kind: "move-to-group"; category: string | null }
@@ -49,12 +56,16 @@ export type SessionMenuActionKind = SessionMenuAction["kind"];
 
 const EMPTY_SESSION: SessionMenuData = {
   label: "",
+  isChild: false,
   pinned: false,
   unread: false,
   archived: false,
   category: null,
+  icon: null,
   categoryClearReturnsToGroups: false,
 };
+
+const SESSION_ICON_GRID_COLUMNS = 6;
 
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION;
@@ -70,18 +81,24 @@ class SessionMenu extends OpenClawLightDomElement {
     Record<SessionMenuActionKind, string>
   > = {};
   @property({ attribute: false }) forkDisabled = false;
+  @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
+  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
+  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
+  @property({ attribute: false }) currentOwnerId: string | null = null;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
+  @state() private iconPickerMode: "grid" | "custom" = "grid";
+  @state() private customIconValue = "";
   readonly menuLifecycle = new DropdownMenuController(this, {
     getTrigger: () => this.trigger,
     onClose: () => this.onClose(),
-    onKeydown: (event) => activateMenuShortcut(this, event),
+    onKeydown: (event) => this.handleMenuKeydown(event),
   });
 
   override connectedCallback() {
@@ -148,8 +165,56 @@ class SessionMenu extends OpenClawLightDomElement {
         kind: "move-to-group",
         category: encodedCategory ? decodeURIComponent(encodedCategory) : null,
       });
+      return;
+    }
+    if (value.startsWith("set-icon:")) {
+      const encodedIcon = value.slice("set-icon:".length);
+      this.runAction({
+        kind: "set-icon",
+        icon: encodedIcon ? decodeURIComponent(encodedIcon) : null,
+      });
+      return;
+    }
+    if (value === "assign-owner:self" && this.selfOwner) {
+      this.runAction({ kind: "assign-owner", owner: this.selfOwner });
+      return;
+    }
+    if (value.startsWith("assign-owner:")) {
+      const [, type, encodedId] = value.split(":");
+      const id = encodedId ? decodeURIComponent(encodedId) : "";
+      if ((type === "human" || type === "agent") && id) {
+        this.runAction({ kind: "assign-owner", owner: { type, id } });
+      }
     }
   };
+
+  private renderOwnerSubmenu() {
+    return this.ownerOptions.map((owner) => {
+      const checked = owner.id === this.currentOwnerId;
+      return html`
+        <wa-dropdown-item
+          slot="submenu"
+          class="session-menu__item"
+          value=${`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+          role="menuitemradio"
+          aria-checked=${String(checked)}
+          ${ref((element) => syncDropdownItemRadio(element, checked))}
+          ?disabled=${this.actionDisabled("assign-owner", checked)}
+          title=${this.actionTitle("assign-owner")}
+        >
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${renderSessionOwnerMenuAvatar(owner)}</span
+          >
+          <span class="session-menu__text">${owner.label ?? owner.id}</span>
+          ${checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing}
+        </wa-dropdown-item>
+      `;
+    });
+  }
 
   private readonly handleAfterHide = (event: Event) => {
     // A keyed replacement can finish hiding after its successor opens.
@@ -258,6 +323,145 @@ class SessionMenu extends OpenClawLightDomElement {
     `;
   }
 
+  private renderIconSubmenu() {
+    return renderSessionIconPicker({
+      mode: this.iconPickerMode,
+      currentIcon: this.session.icon,
+      customIconValue: this.customIconValue,
+      disabled: this.actionDisabled("set-icon"),
+      disabledReason: this.actionDisabledReasons["set-icon"],
+      onSelect: this.selectIcon,
+      onShowCustom: this.showCustomIconEntry,
+      onBack: this.showIconGrid,
+      onInput: this.updateCustomIconValue,
+      onApply: this.applyCustomIcon,
+      onRemove: this.removeIcon,
+      onGridKeydown: this.handleIconGridKeydown,
+    });
+  }
+
+  private readonly selectIcon = (event: MouseEvent, icon: string) => {
+    event.stopPropagation();
+    this.runAction({ kind: "set-icon", icon });
+  };
+
+  private readonly showCustomIconEntry = (event: MouseEvent) => {
+    event.stopPropagation();
+    this.iconPickerMode = "custom";
+    this.customIconValue = "";
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLInputElement>(".session-menu__icon-custom-input")?.focus();
+    });
+  };
+
+  private readonly showIconGrid = (event?: Event) => {
+    event?.stopPropagation();
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLButtonElement>(".session-menu__icon-choice--custom")?.focus();
+    });
+  };
+
+  private readonly updateCustomIconValue = (event: InputEvent) => {
+    if (event.currentTarget instanceof HTMLInputElement) {
+      this.customIconValue = event.currentTarget.value;
+    }
+  };
+
+  private readonly applyCustomIcon = (event?: Event) => {
+    event?.stopPropagation();
+    const icon = normalizeSessionIconValue(this.customIconValue);
+    if (icon) {
+      this.runAction({ kind: "set-icon", icon });
+    }
+  };
+
+  private handleMenuKeydown(event: KeyboardEvent) {
+    const input = event
+      .composedPath()
+      .find(
+        (target): target is HTMLInputElement =>
+          target instanceof HTMLInputElement &&
+          target.classList.contains("session-menu__icon-custom-input"),
+      );
+    if (!input) {
+      activateMenuShortcut(this, event);
+      return;
+    }
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.showIconGrid();
+    } else if (event.key === "Enter") {
+      const icon = normalizeSessionIconValue(input.value);
+      if (icon) {
+        event.preventDefault();
+        this.customIconValue = input.value;
+        this.applyCustomIcon();
+      }
+    }
+  }
+
+  private readonly removeIcon = (event: MouseEvent) => {
+    event.stopPropagation();
+    this.runAction({ kind: "set-icon", icon: null });
+  };
+
+  private readonly handleIconGridKeydown = (event: KeyboardEvent) => {
+    const choice = event.target;
+    if (!(choice instanceof HTMLButtonElement)) {
+      return;
+    }
+    const offsets: Partial<Record<string, number>> = {
+      ArrowLeft: -1,
+      ArrowRight: 1,
+      ArrowUp: -SESSION_ICON_GRID_COLUMNS,
+      ArrowDown: SESSION_ICON_GRID_COLUMNS,
+    };
+    const offset = offsets[event.key];
+    if (offset === undefined) {
+      return;
+    }
+    const grid = event.currentTarget;
+    if (!(grid instanceof HTMLElement)) {
+      return;
+    }
+    const choices = Array.from(
+      grid.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)"),
+    );
+    const index = choices.indexOf(choice);
+    if (index < 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const nextIndex = (index + offset + choices.length) % choices.length;
+    choices.forEach((button, buttonIndex) => {
+      button.tabIndex = buttonIndex === nextIndex ? 0 : -1;
+    });
+    choices[nextIndex]?.focus();
+  };
+
+  private readonly focusIconGridOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
+    const item = event.currentTarget;
+    if (!(item instanceof HTMLElement) || event.detail.item !== item) {
+      return;
+    }
+    // Web Awesome re-runs submenu setup when grid/custom content replaces the
+    // slot. Only a closed submenu is a user reopen that should reset state.
+    if (item.getAttribute("aria-expanded") === "true") {
+      return;
+    }
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+    void this.updateComplete.then(() =>
+      requestAnimationFrame(() => {
+        item.querySelector<HTMLButtonElement>('.session-menu__icon-choice[tabindex="0"]')?.focus();
+      }),
+    );
+  };
+
   override render() {
     const menuWidth = 240;
     const menuMaxHeight = 460;
@@ -265,6 +469,8 @@ class SessionMenu extends OpenClawLightDomElement {
     const clampedY = Math.max(8, Math.min(this.anchor.y, window.innerHeight - menuMaxHeight - 8));
     const session = this.session;
     const batch = this.selectionCount > 1;
+    // Pinning and grouping place root rows; child placement is owned by lineage.
+    const rootPlacementActions = session.isChild !== true;
     const count = String(this.selectionCount);
     const menuLabel = batch
       ? t("chat.sidebar.sessionMenuMany", { count })
@@ -294,7 +500,7 @@ class SessionMenu extends OpenClawLightDomElement {
             </div>`
           : nothing}
         ${batch ? nothing : this.renderWorkItems()}
-        ${batch
+        ${batch || !rootPlacementActions
           ? nothing
           : html`
               <wa-dropdown-item
@@ -353,6 +559,47 @@ class SessionMenu extends OpenClawLightDomElement {
                 <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
                 ${menuShortcutHint("r")}
               </wa-dropdown-item>
+              ${this.selfOwner
+                ? html`<wa-dropdown-item
+                    class="session-menu__item"
+                    value="assign-owner:self"
+                    ?disabled=${this.actionDisabled(
+                      "assign-owner",
+                      this.currentOwnerId === this.selfOwner.id,
+                    )}
+                    title=${this.actionTitle("assign-owner")}
+                  >
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.users}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.assignToMe")}</span>
+                  </wa-dropdown-item>`
+                : nothing}
+              ${this.ownerOptions.length > 0
+                ? html`<wa-dropdown-item
+                    class="session-menu__item"
+                    ?disabled=${this.actionDisabled("assign-owner")}
+                    title=${this.actionTitle("assign-owner")}
+                  >
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                      >${icons.users}</span
+                    >
+                    <span class="session-menu__text">${t("sessionsView.assignTo")}</span>
+                    ${this.renderOwnerSubmenu()}
+                  </wa-dropdown-item>`
+                : nothing}
+              <wa-dropdown-item
+                class="session-menu__item"
+                data-shortcut="i"
+                aria-keyshortcuts="I"
+                ?disabled=${this.actionDisabled("set-icon")}
+                title=${this.actionTitle("set-icon")}
+                @submenu-opening=${this.focusIconGridOnOpen}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.star}</span>
+                <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
+                ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
+              </wa-dropdown-item>
               <wa-dropdown-item
                 class="session-menu__item"
                 value="fork"
@@ -362,7 +609,13 @@ class SessionMenu extends OpenClawLightDomElement {
                 title=${this.actionTitle("fork")}
               >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-                <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
+                <span class="session-menu__text"
+                  >${t(
+                    this.forkFromLastCompleted
+                      ? "sessionsView.forkFromLastCompleted"
+                      : "sessionsView.forkSession",
+                  )}</span
+                >
                 ${menuShortcutHint("f")}
               </wa-dropdown-item>
             `}
@@ -387,19 +640,21 @@ class SessionMenu extends OpenClawLightDomElement {
               </wa-dropdown-item>
             `
           : nothing}
-        <wa-dropdown-item
-          class="session-menu__item"
-          ?disabled=${this.actionDisabled("move-to-group")}
-          title=${this.actionTitle("move-to-group")}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-          <span class="session-menu__text"
-            >${batch
-              ? t("sessionsView.moveToGroupMenuCount", { count })
-              : t("sessionsView.moveToGroupMenu")}</span
-          >
-          ${this.renderGroupSubmenu()}
-        </wa-dropdown-item>
+        ${rootPlacementActions
+          ? html`<wa-dropdown-item
+              class="session-menu__item"
+              ?disabled=${this.actionDisabled("move-to-group")}
+              title=${this.actionTitle("move-to-group")}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+              <span class="session-menu__text"
+                >${batch
+                  ? t("sessionsView.moveToGroupMenuCount", { count })
+                  : t("sessionsView.moveToGroupMenu")}</span
+              >
+              ${this.renderGroupSubmenu()}
+            </wa-dropdown-item>`
+          : nothing}
         <div class="session-menu__separator" role="separator"></div>
         ${!batch && this.cloudWorkerStopAllowed
           ? html`

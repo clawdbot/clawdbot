@@ -51,6 +51,9 @@ internal class WearProxyController(
   private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},
   private val disconnectGateway: suspend () -> Unit = {},
+  private val loadAgentPulse: suspend (sessionKey: String?) -> JsonObject = {
+    throw WearProxyGatewayException("unavailable", "Agent Pulse is unavailable")
+  },
   private val startRealtimeTalk:
     suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?, attemptScopedAudio: Boolean) -> WearRealtimeTalkSnapshot? = { _, _, _, _, _ -> null },
   private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
@@ -63,6 +66,7 @@ internal class WearProxyController(
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> proxyStatus(request.params)
+          WearRpcMethod.AgentPulse -> agentPulse(request.params)
           WearRpcMethod.SessionsList -> listSessions(request.params)
           WearRpcMethod.AgentsList -> listAgents(request.params)
           WearRpcMethod.AgentsSelect -> selectAgent(request.params)
@@ -86,6 +90,12 @@ internal class WearProxyController(
     } catch (_: Throwable) {
       failure(request.requestId, code = "unavailable", message = "Phone gateway request failed")
     }
+
+  private suspend fun agentPulse(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey")
+    val sessionKey = params.optionalStringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    return loadAgentPulse(sessionKey)
+  }
 
   private suspend fun talkStart(
     sourceNodeId: String,

@@ -36,7 +36,10 @@ import {
   buildSessionListRowContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import {
+  buildGatewaySessionRow as buildGatewaySessionRowOwner,
+  projectSessionActor,
+} from "./session-utils-row.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -218,6 +221,29 @@ function setTestActivePluginRegistry(
 }
 
 describe("gateway session utils", () => {
+  test("projects configured agent identity while tolerating legacy session-key actor ids", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "roboclaw", identity: { name: "Roboclaw", avatar: "avatar.png" } }],
+      },
+      gateway: { controlUi: { basePath: "/control" } },
+    } as OpenClawConfig;
+
+    expect(projectSessionActor({ type: "agent", id: "roboclaw" }, new Map(), cfg)).toEqual({
+      type: "agent",
+      id: "roboclaw",
+      label: "Roboclaw",
+      avatarUrl: "/control/avatar/roboclaw",
+    });
+    expect(
+      projectSessionActor(
+        { type: "agent", id: "agent:roboclaw:discord:channel:123" },
+        new Map(),
+        cfg,
+      ),
+    ).toEqual({ type: "agent", id: "agent:roboclaw:discord:channel:123" });
+  });
+
   beforeEach(() => {
     // Real artifact loading belongs to its owner tests; session projections only need the contract.
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
@@ -1714,6 +1740,40 @@ describe("gateway session utils", () => {
     expect(row.execCwd).toBe("/Users/peter/Projects/openclaw");
   });
 
+  test("buildGatewaySessionRow projects the session root only for an explicit permission mode", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const ordinaryEntry: SessionEntry = {
+      sessionId: "ordinary",
+      sessionRoot: "/workspace/private",
+      updatedAt: 1,
+    };
+    const ordinaryRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:ordinary": ordinaryEntry },
+      key: "agent:main:ordinary",
+      entry: ordinaryEntry,
+    });
+    expect(ordinaryRow).not.toHaveProperty("sessionRoot");
+
+    const permissionEntry: SessionEntry = {
+      ...ordinaryEntry,
+      permissionMode: "workspace",
+      sessionId: "permission",
+    };
+    const permissionRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:permission": permissionEntry },
+      key: "agent:main:permission",
+      entry: permissionEntry,
+    });
+    expect(permissionRow).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/private",
+    });
+  });
+
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry: SessionEntry = {
@@ -2805,6 +2865,7 @@ describe("gateway session utils", () => {
     });
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
+      cloudPlacementSupported: false,
       source: "implicit",
     });
   });
@@ -2912,6 +2973,7 @@ describe("gateway session utils", () => {
     });
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
+      cloudPlacementSupported: false,
       source: "provider",
     });
   });
@@ -3615,6 +3677,7 @@ describe("deriveSessionTitle", () => {
 describe("resolveGatewayModelSupportsImages", () => {
   const createModelCatalogSnapshot = (params: {
     agentId?: string;
+    catalogComplete?: boolean;
     config?: OpenClawConfig;
     entries?: GatewayModelCatalogSnapshot["entries"];
     staticEntries?: GatewayModelCatalogSnapshot["staticEntries"];
@@ -3622,23 +3685,95 @@ describe("resolveGatewayModelSupportsImages", () => {
     agentId: params.agentId ?? "main",
     agentDir: "/tmp/gateway-model-capability-agent",
     workspaceDir: "/tmp/gateway-model-capability-workspace",
+    catalogComplete: params.catalogComplete ?? false,
     config: params.config ?? {},
     entries: params.entries ?? [],
     routeVariants: [],
     ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
   });
 
-  test("uses same-agent provider-static image capabilities missing from the visible catalog", async () => {
+  test("uses prepared Sol capabilities without starting full catalog discovery", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => []);
-    const loadGatewayModelCatalogSnapshot = vi.fn(async () =>
+    const preparedSnapshot = createModelCatalogSnapshot({
+      agentId: "qa",
+      staticEntries: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          input: ["text", "image"],
+        },
+      ],
+    });
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) => {
+      if (params?.readOnly !== true) {
+        throw new Error("full catalog discovery must not start during attachment admission");
+      }
+      return preparedSnapshot;
+    });
+
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.6-sol",
+        provider: "openai",
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot,
+      }),
+    ).resolves.toBe(true);
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("falls back to live discovery for models absent from the prepared catalog", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
       createModelCatalogSnapshot({
         agentId: "qa",
-        staticEntries: [
+        entries: params?.readOnly
+          ? []
+          : [
+              {
+                id: "vendor/runtime-vision-model",
+                name: "Runtime Vision Model",
+                provider: "openrouter",
+                input: ["text", "image"],
+              },
+            ],
+      }),
+    );
+
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/runtime-vision-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot,
+      }),
+    ).resolves.toBe(true);
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
+      agentId: "qa",
+      readOnly: false,
+    });
+  });
+
+  test("falls back to live discovery for provisional prepared text-only metadata", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
+      createModelCatalogSnapshot({
+        agentId: "qa",
+        entries: [
           {
-            id: "gpt-5.4",
-            name: "GPT-5.4",
-            provider: "openai",
-            input: ["text", "image"],
+            id: "vendor/runtime-vision-model",
+            name: "Runtime Vision Model",
+            provider: "openrouter",
+            input: params?.readOnly ? ["text"] : ["text", "image"],
           },
         ],
       }),
@@ -3647,17 +3782,75 @@ describe("resolveGatewayModelSupportsImages", () => {
     await expect(
       resolveGatewayModelSupportsImages({
         agentId: "qa",
-        model: "gpt-5.4",
-        provider: "openai",
-        loadGatewayModelCatalog,
+        model: "vendor/runtime-vision-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
         loadGatewayModelCatalogSnapshot,
       }),
     ).resolves.toBe(true);
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
       agentId: "qa",
       readOnly: false,
     });
-    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("does not restart discovery for authoritative text-only metadata from a full owner", async () => {
+    const catalogReadModes: Array<boolean | undefined> = [];
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/runtime-text-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          catalogReadModes.push(params?.readOnly);
+          if (params?.readOnly !== true) {
+            throw new Error("full catalog discovery must not restart for a complete owner");
+          }
+          return createModelCatalogSnapshot({
+            agentId: "qa",
+            catalogComplete: true,
+            entries: [
+              {
+                id: "vendor/runtime-text-model",
+                name: "Runtime Text Model",
+                provider: "openrouter",
+                input: ["text"],
+              },
+            ],
+          });
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(catalogReadModes).toEqual([true]);
+  });
+
+  test("does not restart discovery when a full owner authoritatively omits the model", async () => {
+    const catalogReadModes: Array<boolean | undefined> = [];
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/missing-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          catalogReadModes.push(params?.readOnly);
+          if (params?.readOnly !== true) {
+            throw new Error("full catalog discovery must not restart for a complete owner");
+          }
+          return createModelCatalogSnapshot({
+            agentId: "qa",
+            catalogComplete: true,
+            entries: [],
+          });
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(catalogReadModes).toEqual([true]);
   });
 
   test("repairs a stale visible text-only row with same-agent provider-static vision", async () => {
@@ -3732,14 +3925,16 @@ describe("resolveGatewayModelSupportsImages", () => {
   });
 
   test("does not override an explicitly configured text-only model with provider-static vision", async () => {
+    const catalogReadModes: Array<boolean | undefined> = [];
     await expect(
       resolveGatewayModelSupportsImages({
         agentId: "qa",
         model: "gpt-5.4",
         provider: "openai",
         loadGatewayModelCatalog: async () => [],
-        loadGatewayModelCatalogSnapshot: async () =>
-          createModelCatalogSnapshot({
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          catalogReadModes.push(params?.readOnly);
+          return createModelCatalogSnapshot({
             agentId: "qa",
             config: {
               models: {
@@ -3779,9 +3974,11 @@ describe("resolveGatewayModelSupportsImages", () => {
                 input: ["text", "image"],
               },
             ],
-          }),
+          });
+        },
       }),
     ).resolves.toBe(false);
+    expect(catalogReadModes).toEqual([true]);
   });
 
   test("does not borrow provider-static image capabilities across configured routes", async () => {

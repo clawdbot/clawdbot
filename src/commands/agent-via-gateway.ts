@@ -357,7 +357,6 @@ export const agentViaGatewayTesting = {
     agentSessionModuleCache.clear();
     agentSessionModuleLoader = loader;
   },
-  resolveGatewayAgentTimeoutMs,
   setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
     gatewayAbortRetryDelaysMsForTests = delays;
   },

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseCreateParamsStreaming,
   ResponseOutputItem,
@@ -705,10 +706,7 @@ export async function processResponsesStream<TApi extends Api>(
           event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
         );
       } else if (event.type === "response.failed") {
-        const failure = normalizeResponsesFailedEvent(
-          event as unknown as Record<string, unknown>,
-          model,
-        );
+        const failure = normalizeResponsesFailedEvent(isRecord(event) ? event : {}, model);
         finalizeFailedResponse(event.response, failure.responseId);
         throw new ResponsesStreamFailure(failure, event.response);
       }

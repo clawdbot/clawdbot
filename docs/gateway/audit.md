@@ -30,6 +30,11 @@ inspection adapts their existing first-answer-wins rows directly into decision
 receipts; it does not copy approvals into the audit ledger or the generic
 decision-fact table.
 
+Shared outbound delivery is another owner-native source. Queue admission and
+platform-send start use a lazy progress companion, while terminal message rows
+remain in the activity ledger. Run inspection merges both sources directly;
+neither is copied into the generic decision-fact table.
+
 ## Run identity inspection
 
 Execution identity recording is off by default, including on fresh installs
@@ -86,10 +91,22 @@ state for these fields:
 - applicable grants and assurance evidence;
 - parent or child lineage when available.
 
-The foundation records direct local CLI ingress and Gateway boot-system ingress
-at their authoritative producers. Generic public ingress remains explicitly
-unknown when its boundary cannot prove a more specific source; OpenClaw never
-infers ingress or invoker identity from a session key. A direct local execution
+The foundation records direct local CLI ingress, Gateway boot-system ingress,
+and admitted channel participants at their authoritative producers. For a
+channel run, the trusted active registered native plugin produces the remote
+participant fact. Core accepts it only across an exact record, registry epoch,
+scope, and one-shot handoff; the room, route, account, thread, message, and
+transport remain non-principal facts. `boundary-verified` describes that
+in-process boundary verification, not an independent core query to Telegram,
+Discord, or another remote service. Collected messages retain a person only
+when every contribution proves the same participant. Mixed, missing, invalid,
+stale, replayed, or unminted evidence is unknown, and an adapter that explicitly
+lacks support is unsupported. OpenClaw never reconstructs a participant from
+`SenderId`, `From`, session keys, or routing metadata. Plugins cannot publicly
+mint or upgrade participant evidence; fake, copied, changed, stale, reused, or
+lost host carriers remain unknown.
+Other public ingress remains explicitly unknown when its
+boundary cannot prove a more specific source. A direct local execution
 is `unattributed`: the Gateway cell, local CLI ingress, configured agent, and
 runtime binding are present, but no durable invoker principal is supplied at
 this boundary. A run becomes
@@ -114,6 +131,27 @@ Each present context projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
 states that no identity-aware policy or grant evaluation was proven. This is
 an explanation of admission evidence, not an enforcement claim.
+
+Admitted channel runs also project a `channel/admission` decision receipt after
+their exact context/execution/run tuple is queued. Coverage is `enforced` only
+when every contributing ingress decision was participant-aware and
+outcome-affecting. Wildcard/open policy and explicit attribution-only adapters
+remain `attribution-only`; mixed or missing evidence is `unknown`. Identity and
+the corresponding decision share the existing audit-writer FIFO.
+
+For an admitted run with message auditing enabled, run inspection also adapts
+the outbound message lifecycle. It deterministically merges the lazy progress
+owner with terminal ledger rows and reports `queued`, `platform-started`,
+`delivered`, `failed`, `unknown`, and intentionally `suppressed` as distinct
+receipts. Queue and transport results are `attribution-only`: they record what
+the delivery owner observed but do not prove authorization. The existing
+message row keeps its keyed destination reference and `runId`; a lazy companion
+retains the host-validated context/execution/run binding. Inspection requires
+that exact tuple and never assigns run-only delivery evidence to an execution.
+The binding remains diagnostic provenance. Only an exact target-validation,
+message-policy, or turn-capability denial that changed the result is
+`enforced`. Portable actions and early suppressions without a durable owner
+record use the generic fact owner on the same audit-writer FIFO.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`
@@ -190,16 +228,17 @@ diagnostic data.
 Run and tool events are recorded whenever auditing is enabled (the default).
 Message lifecycle events are opt-in and disabled by default.
 
-| Family       | Actions                                                  | Default |
-| ------------ | -------------------------------------------------------- | ------- |
-| Agent runs   | `agent.run.started`, `agent.run.finished`                | on      |
-| Tool actions | `tool.action.started`, `tool.action.finished`            | on      |
-| Messages     | `message.inbound.processed`, `message.outbound.finished` | off     |
+| Family       | Actions                                                                            | Default |
+| ------------ | ---------------------------------------------------------------------------------- | ------- |
+| Agent runs   | `agent.run.started`, `agent.run.finished`                                          | on      |
+| Tool actions | `tool.action.started`, `tool.action.finished`                                      | on      |
+| Messages     | `message.inbound.processed`, `message.outbound.{queued,platform-started,finished}` | off     |
 
-Every record carries a stable event id, a monotonic ledger sequence, a
-lifecycle timestamp, actor, action, status, `schemaVersion: 1`, and
-`redaction: "metadata_only"`. See [Audit records](/cli/audit) for the full
-field reference and query filters.
+Every record carries a stable event id, a monotonic owner sequence, a lifecycle
+timestamp, actor, action, status, `schemaVersion: 1`, and
+`redaction: "metadata_only"`. The activity ledger contains terminal outbound
+rows; run inspection obtains nonterminal outbound progress from its companion.
+See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
 
@@ -214,11 +253,13 @@ Two authoritative boundaries produce message records:
 
 - **Inbound** rows are written when an accepted message reaches core dispatch,
   including duplicate and terminal processing outcomes.
-- **Outbound** rows are written when shared durable delivery reaches a
-  terminal outcome: sent, suppressed, failed, or an explicit `unknown` for
-  crash-ambiguous sends. Queue recovery and dead-letter outcomes are included.
-  Each original logical reply payload gets one terminal row; chunking and
-  adapter fan-out aggregate into `resultCount`.
+- **Outbound** progress records are written when shared durable delivery accepts
+  queue custody and starts platform delivery. Terminal activity rows record
+  sent, suppressed, failed, or an explicit `unknown` for crash-ambiguous sends.
+  Queue recovery and dead-letter outcomes are included. Stable queue-derived
+  source ids prevent recovery from duplicating a lifecycle row. Each original
+  logical reply payload gets one row per reached stage; chunking and adapter
+  fan-out aggregate into terminal `resultCount`.
 
 ### Conversation-kind classification
 
@@ -234,8 +275,8 @@ fewer rows in `direct` mode than they do in `all` mode.
 
 ## Privacy model
 
-Message rows never store raw platform identifiers. Account, conversation,
-message, and target identifiers, when correlation is available, are exported
+Message activity and progress records never store raw platform identifiers.
+Account, conversation, message, and target identifiers, when correlation is available, are exported
 only as installation-local keyed pseudonyms
 (`hmac-sha256:v1:<keyId>:<digest>`):
 
@@ -295,6 +336,20 @@ days, and the ledger is capped at 100,000 rows; expired rows are pruned during
 startup, hourly maintenance, and later writes. Retention maintenance keeps
 running even when collection is disabled.
 
+Outbound `queued` and `platform-started` records live in the narrowly owned
+`outbound_message_progress` table. The table is created idempotently only on
+the first enabled progress write, remains absent after startup, read-only
+inspection, disabled collection, and terminal-only delivery, and does not
+advance the current state schema version 9. Missing under read-only inspection means no
+retained progress. It is capped at 200,000 rows with the same 30-day retention.
+Terminal `message.outbound.finished` rows stay in `audit_events`, so a compatible
+older Gateway can open and use the database while ignoring the additive table.
+Exact terminal linkage lives in the lazy
+`outbound_message_execution_bindings` companion rather than changing the
+released `audit_events` shape. It is created only for a host-validated exact
+binding; run-only terminal writes leave it absent. Compatible older Gateways
+ignore this additive table as well.
+
 Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
 schema automatically at startup (or via `openclaw doctor --fix`); existing
 rows and their ledger sequences are preserved.
@@ -326,8 +381,9 @@ archive.
 
 Terminal approvals remain in their owner-native `operator_approvals` table for
 30 days. Inspection applies that cutoff even when physical pruning has not run.
-The additive `execution_decision_facts` table is reserved for future action
-boundaries that have no owner-native durable record. It is created lazily on
+The additive `execution_decision_facts` table is reserved for action boundaries
+that have no owner-native durable record, including portable message actions,
+policy denials, and early intentional suppressions. It is created lazily on
 first generic fact write, retains facts for 30 days, caps the table at 250,000
 rows, and prunes at most 1,024 rows per write or maintenance tick. Approval
 paths never write this table. Its facts and approval rows are authoritative for
@@ -351,9 +407,9 @@ correlation alone.
   [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
   `executionId` for exact inspection or one `runId` for bounded discovery. It
-  returns the immutable V1 context plus paged admission, approval, and future
-  generic decision receipts for an exact match, or a typed ambiguous candidate
-  page when a run has multiple executions.
+  returns the immutable V1 context plus paged admission, approval,
+  owner-native outbound message, and generic decision receipts for an exact
+  match, or a typed ambiguous candidate page when a run has multiple executions.
 
 ## Related
 

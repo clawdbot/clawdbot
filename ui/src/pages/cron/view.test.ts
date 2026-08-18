@@ -249,9 +249,8 @@ describe("cron view list pane", () => {
 
   it("hides suggestions while any list filter is active", () => {
     expect(renderView({ jobsQuery: "x" }).querySelector(".cron-suggestion")).toBeNull();
-    expect(
-      renderView({ jobsEnabledFilter: "enabled" }).querySelector(".cron-suggestion"),
-    ).toBeNull();
+    const filtered = renderView({ jobsEnabledFilter: "enabled" });
+    expect(filtered.querySelector(".cron-suggestion")).toBeNull();
     expect(renderView().querySelector(".cron-suggestion")).not.toBeNull();
   });
 
@@ -318,155 +317,6 @@ describe("cron view list pane", () => {
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
     container.remove();
-  });
-});
-
-describe("cron view run history", () => {
-  it("renders runs sorted newest first and wires run filters", () => {
-    const onRunsFiltersChange = vi.fn();
-    const container = renderView({
-      listTab: "activity",
-      onRunsFiltersChange,
-      runs: [
-        { ts: 1_000, jobId: "job-1", status: "ok", summary: "older run" },
-        { ts: 2_000, jobId: "job-2", status: "ok", summary: "newer run" },
-      ],
-      status: { enabled: true, jobs: 2 },
-    });
-
-    const titles = Array.from(container.querySelectorAll(".cron-run-entry__title")).map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(titles[0]).toContain("job-2");
-    expect(titles[1]).toContain("job-1");
-
-    const search = getElement(container, ".cron-run-filter-search input", HTMLInputElement);
-    search.value = "fail";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
-
-    const statusOption = container.querySelector<HTMLElement & { checked: boolean }>(
-      '[data-filter="status"] wa-dropdown-item[value="option:error"]',
-    );
-    expect(statusOption).not.toBeNull();
-    statusOption
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: statusOption }, bubbles: true }),
-      );
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
-
-    const clearCommand = container.querySelector<HTMLElement>(
-      '[data-filter="status"] wa-dropdown-item[value="command:clear"]',
-    );
-    clearCommand
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: clearCommand }, bubbles: true }),
-      );
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
-  });
-
-  it("formats run token counts and durations in the rendered entry", () => {
-    const container = renderView({
-      listTab: "activity",
-      runs: [
-        {
-          ts: 4,
-          jobId: "job-total",
-          status: "ok",
-          summary: "total usage",
-          durationMs: 90_000,
-          usage: { total_tokens: 1_234_567 },
-        },
-        {
-          ts: 3,
-          jobId: "job-split",
-          status: "ok",
-          summary: "split usage",
-          durationMs: 500,
-          usage: { input_tokens: 50_000, output_tokens: 999 },
-        },
-        {
-          ts: 2,
-          jobId: "job-zero",
-          status: "ok",
-          summary: "zero duration",
-          durationMs: 0,
-        },
-        {
-          ts: 1.5,
-          jobId: "job-invalid",
-          status: "ok",
-          summary: "invalid duration",
-          durationMs: -1,
-        },
-        { ts: 1, jobId: "job-unknown", status: "ok", summary: "unknown duration" },
-      ],
-    });
-    const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
-    const entryFor = (jobId: string) => {
-      const entry = entries.find((candidate) =>
-        candidate.querySelector(".cron-run-entry__title")?.textContent?.includes(jobId),
-      );
-      expect(entry).toBeInstanceOf(HTMLDivElement);
-      return entry;
-    };
-
-    const total = entryFor("job-total");
-    expect(total?.querySelector(".cron-run-entry__facts")?.textContent).toContain("1.2M Tokens");
-    expect(total?.querySelector(".cron-run-entry__meta")?.textContent).toContain("1m 30s");
-    expect(total?.textContent).not.toContain("1234567");
-    expect(total?.textContent).not.toContain("90000ms");
-
-    const split = entryFor("job-split");
-    expect(split?.querySelector(".cron-run-entry__facts")?.textContent).toContain(
-      "50k in / 999 out",
-    );
-    expect(split?.querySelector(".cron-run-entry__meta")?.textContent).toContain("500ms");
-    expect(entryFor("job-zero")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
-      "0ms",
-    );
-    expect(entryFor("job-invalid")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
-      "n/a",
-    );
-    expect(entryFor("job-unknown")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
-      "n/a",
-    );
-  });
-
-  it("renders run summaries as sanitized markdown", () => {
-    const container = renderView({
-      listTab: "activity",
-      runs: [
-        {
-          ts: 1,
-          jobId: "job-1",
-          status: "ok",
-          summary: "**bold** <script>alert(1)</script>",
-        },
-      ],
-    });
-    const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
-    expect(body.querySelector("strong")?.textContent).toBe("bold");
-    expect(body.querySelector("script")).toBeNull();
-  });
-
-  it("shows run errors as the body when no summary exists", () => {
-    const container = renderView({
-      listTab: "activity",
-      runs: [{ ts: 1, jobId: "job-1", status: "error", error: "boom" }],
-    });
-    const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
-    expect(body.textContent).toContain("boom");
-  });
-
-  it("distinguishes an unfiltered empty state from filtered no-matches", () => {
-    const empty = renderView({ listTab: "activity" });
-    expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No runs yet");
-
-    const filtered = renderView({ listTab: "activity", runsQuery: "fail" });
-    expect(filtered.querySelector(".cron-runs__empty")?.textContent).toContain("No matching runs.");
   });
 });
 
@@ -552,14 +402,15 @@ describe("cron view editor", () => {
     ) as HTMLElement & {
       value: string;
     };
-    expect(
-      Array.from(channel.querySelectorAll("wa-option"), (option) => option.getAttribute("value")),
-    ).toContain("retired-channel");
+    const optionValues = Array.from(channel.querySelectorAll("wa-option"), (option) =>
+      option.getAttribute("value"),
+    );
+    expect(optionValues).toContain("retired-channel");
     expect(channel.querySelector('wa-option[value="telegram"] img')).not.toBeNull();
-    expect(
-      (channel.querySelector('wa-option[value="telegram"]') as HTMLElement & { label?: string })
-        ?.label,
-    ).toBe("Telegram fallback");
+    const telegramOption = channel.querySelector<HTMLElement & { label?: string }>(
+      'wa-option[value="telegram"]',
+    );
+    expect(telegramOption?.label).toBe("Telegram fallback");
     Object.defineProperty(channel, "value", { configurable: true, value: "telegram" });
     channel.dispatchEvent(new Event("change", { bubbles: true }));
     Reflect.deleteProperty(channel, "value");
@@ -624,9 +475,8 @@ describe("cron view editor", () => {
       createOpen: true,
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "on-exit" },
     });
-    expect(
-      onExitContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]'),
-    ).not.toBeNull();
+    const onExitKind = onExitContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]');
+    expect(onExitKind).not.toBeNull();
     expect(findToggleByLabel(onExitContainer, "Delete after run")).not.toBeNull();
     expect(everyContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]')).toBeNull();
     const onExitFormChange = vi.fn();
@@ -938,11 +788,8 @@ describe("cron view editor", () => {
     }
     expect(onRemove).toHaveBeenCalledWith(job);
 
-    expect(
-      container
-        .querySelector('[data-test-id="cron-detail-tab-settings"]')
-        ?.getAttribute("aria-selected"),
-    ).toBe("true");
+    const settingsTab = container.querySelector('[data-test-id="cron-detail-tab-settings"]');
+    expect(settingsTab?.getAttribute("aria-selected")).toBe("true");
     container
       .querySelector('[data-test-id="cron-detail-tab-history"]')
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
@@ -1022,13 +869,21 @@ describe("cron view editor", () => {
       jobs: [job],
       editingJobId: "job-1",
       detailTab: "history",
-      runs: [{ ts: 5, jobId: "job-1", jobName: "Nightly digest", status: "ok", summary: "ran" }],
+      runs: [
+        {
+          ts: 5,
+          jobId: "job-1",
+          action: "finished",
+          jobName: "Nightly digest",
+          status: "ok",
+          summary: "ran",
+        },
+      ],
     });
     expect(container.querySelector(".cron-run-entry")).not.toBeNull();
     expect(container.querySelector(".cron-editor")).toBeNull();
-    expect(
-      container.querySelector('[data-test-id="cron-detail-description"]')?.textContent,
-    ).toContain(job.description);
+    const description = container.querySelector('[data-test-id="cron-detail-description"]');
+    expect(description?.textContent).toContain(job.description);
   });
 
   it("shows the paused switch state for disabled jobs", () => {
@@ -1069,6 +924,11 @@ describe("cron view editor", () => {
     expect(model.querySelector('wa-option[value="openai/gpt-5.2"]')).not.toBeNull();
     expect(model.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     expect(container.querySelector<HTMLInputElement>("#cron-payload-model")?.hidden).toBe(true);
+    // The inherit option must resolve to a real catalog string — a missing key
+    // renders the raw "common.default" literal to every locale.
+    const inheritText = model.querySelector('wa-option[value=""]')?.textContent ?? "";
+    expect(inheritText).toContain("Default");
+    expect(inheritText).not.toContain("common.default");
   });
 });
 

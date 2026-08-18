@@ -334,9 +334,12 @@ openclaw-board-widget-cell {
 }
 
 openclaw-workboard-card-widget,
-openclaw-workboard-mini-widget {
+openclaw-workboard-mini-widget,
+openclaw-workboard-board-widget {
   display: block;
+  max-width: 100%;
   min-height: 100%;
+  min-width: 0;
 }
 
 .workboard-widget-card,
@@ -457,6 +460,75 @@ openclaw-workboard-mini-widget {
 
 .workboard-widget-mini__card {
   justify-content: flex-start;
+}
+
+.workboard-widget-board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 10px;
+}
+
+.workboard-widget-board__header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workboard-widget-board__header strong {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-widget-board__header span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.workboard-widget-board__header a {
+  color: var(--accent);
+  font-size: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.workboard-widget-board .workboard-board {
+  flex: 1;
+  grid-auto-columns: minmax(240px, 1fr);
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.workboard-widget-board .workboard-column,
+.workboard-widget-board .workboard-board--compact .workboard-column {
+  max-width: none;
+  min-height: 0;
+  min-width: 240px;
+  overflow: hidden;
+  width: auto;
+}
+
+.workboard-widget-board .workboard-column__cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workboard-card__actions--widget {
+  justify-content: stretch;
 }
 
 .board-widget__mcp-app {

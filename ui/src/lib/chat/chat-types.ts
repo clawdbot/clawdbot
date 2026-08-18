@@ -38,6 +38,17 @@ export type ChatComposerMemoryFallback = {
   sequence: number;
 };
 
+export type ChatGuardianNotice = {
+  key: string;
+  runId: string;
+  timestamp: number;
+  kind: "approved" | "denied" | "warning";
+  command?: string;
+  riskLevel?: string;
+  rationale?: string;
+  message?: string;
+};
+
 export type ChatQueueSkillWorkshopRevision = {
   proposalId: string;
   agentId?: string;
@@ -93,6 +104,7 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      tone?: "danger";
     }
   | {
       kind: "divider";
@@ -106,13 +118,18 @@ export type ChatItem =
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string; startedAt: number }
-  | { kind: "question"; key: string; questionId: string; startedAt: number }
-  | { kind: "plan"; key: string };
+  | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
   text: string;
   ts: number;
   runId?: string;
+  /** Persisted user send that causally precedes this transient output. */
+  afterBoundaryRunId?: string;
+  /** Persisted user send that causally follows this transient output. */
+  boundaryRunId?: string;
+  /** Ordering-only boundary with no renderable assistant text. */
+  boundaryMarker?: true;
   toolCallId?: string;
   itemId?: string;
 };
@@ -121,8 +138,26 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
-export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
-  return !streamSegmentHasItemId(segment);
+export function streamSegmentUsesAccumulatedText(segment: {
+  itemId?: unknown;
+  boundaryMarker?: unknown;
+}): boolean {
+  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
+}
+
+/** Advance the accumulated-text tracker only when the segment genuinely
+    extends it. A standalone (itemId-less) preamble whose text is not part of
+    the cumulative run text must not become the prefix baseline: the next
+    cumulative snapshot would fail the startsWith check and re-render every
+    earlier segment's text. */
+export function advanceAccumulatedStreamText(
+  previousText: string | null,
+  text: string,
+): string | null {
+  if (!text.trim()) {
+    return previousText;
+  }
+  return previousText === null || text.startsWith(previousText) ? text : previousText;
 }
 
 export function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {

@@ -35,6 +35,7 @@ const secretEntry: SecretStoreEntry = {
   createdAtMs: 1_786_352_400_000,
   updatedAtMs: 1_786_352_400_000,
   updatedBy: "E2E Operator",
+  allowedHosts: ["api.example.com"],
 };
 
 const bulkEnvEntry: SecretStoreEntry = {
@@ -46,6 +47,7 @@ const bulkEnvEntry: SecretStoreEntry = {
 const bulkSecretEntry: SecretStoreEntry = {
   ...secretEntry,
   name: "BULK_PRIVATE_KEY",
+  allowedHosts: [],
 };
 
 async function capture(page: Page, fileName: string) {
@@ -84,12 +86,18 @@ async function tableBodyContrast(page: Page): Promise<number> {
 
 suite.define(() => {
   it("adds env and secret values, bulk imports, and deletes without revealing secrets", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(proofDir, { recursive: true });
+    }
     await suite.withPage(
       {
         colorScheme: "dark",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
+        ...(captureUiProofEnabled
+          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+          : {}),
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -133,9 +141,14 @@ suite.define(() => {
         await secretDialog.getByLabel("Name", { exact: true }).fill("SERVICE_API_KEY");
         expect(await secretDialog.locator('input[type="checkbox"]').isChecked()).toBe(true);
         await secretDialog.getByLabel("Value", { exact: true }).fill("super-secret-material");
+        await secretDialog.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
+        await capture(page, "02-secret-allowed-hosts.png");
         await secretDialog.getByRole("button", { name: "Save", exact: true }).click();
         await page.getByRole("status").getByText("Saved SERVICE_API_KEY.").waitFor();
         expect(await page.content()).not.toContain("super-secret-material");
+        expect(await page.getByRole("row", { name: /SERVICE_API_KEY/u }).textContent()).toContain(
+          "api.example.com",
+        );
 
         await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
         const bulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
@@ -156,6 +169,10 @@ suite.define(() => {
         expect(await page.getByRole("row", { name: /BULK_URL/u }).count()).toBe(0);
 
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(4);
+        expect((await gateway.getRequests("secrets.store.set"))[1]?.params).toMatchObject({
+          name: "SERVICE_API_KEY",
+          allowedHosts: ["api.example.com"],
+        });
         expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(1);
         expect(await page.content()).not.toContain("super-secret-material");
         expect(await tableBodyContrast(page)).toBeGreaterThanOrEqual(9.5);

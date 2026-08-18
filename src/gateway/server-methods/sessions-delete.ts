@@ -415,6 +415,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         const deletionParams = {
           agentId: target.agentId,
           archiveTranscript: incognito ? false : deleteTranscript,
+          deleteDeliveryArtifacts: true,
           deleteTranscriptWithoutArchive: incognito,
           expectedEntry: postCleanupEntry,
           expectedLifecycleRevision,
@@ -450,7 +451,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
             sessionKey: target.canonicalKey ?? key,
             sessionId: result.deletedSessionId,
             storePath,
-            sessionFile: result.deletedSessionFile,
             agentId: target.agentId,
             reason: "deleted",
             archivedTranscripts: result.archivedTranscripts,

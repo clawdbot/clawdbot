@@ -347,10 +347,7 @@ describe("compaction staged summarization failures", () => {
       .mockResolvedValueOnce("summary of chunk 3")
       .mockResolvedValue("merged: chunk 1 + chunk 2 + chunk 3");
 
-    await expect(runStagedSummary()).resolves.toEqual({
-      kind: "summary",
-      text: expect.stringContaining("merged"),
-    });
+    await expect(runStagedSummary()).resolves.toEqual(expect.stringContaining("merged"));
   });
 
   it("throws CompactionError when a later chunk fails after earlier successes", async () => {

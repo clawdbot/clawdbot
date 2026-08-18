@@ -11,7 +11,10 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
-import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
+import {
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceTokenReadOnly,
+} from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -47,6 +50,7 @@ export type GatewayProbeAuthSummary = {
 
 export type GatewayProbeServerSummary = {
   version: string | null;
+  buildId?: string;
   connId: string | null;
 };
 
@@ -290,13 +294,13 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = opts.suppressStoredDeviceAuth
         ? null
         : deviceAuthScope
-          ? loadOriginDeviceToken({
+          ? loadOriginDeviceTokenReadOnly({
               gatewayScope: deviceAuthScope,
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
             })
-          : loadDeviceAuthToken({
+          : loadDeviceAuthTokenReadOnly({
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
@@ -410,6 +414,7 @@ export async function probeGateway(opts: {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
+      sharedStateMode: "read-only",
       instanceId,
       deviceIdentity,
       onConnectError: (err) => {
@@ -440,6 +445,9 @@ export async function probeGateway(opts: {
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
           server = {
             version: typeof hello?.server?.version === "string" ? hello.server.version : null,
+            ...(typeof hello?.server?.buildId === "string"
+              ? { buildId: hello.server.buildId }
+              : {}),
             connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
           };
           auth = resolveProbeAuthSummary({

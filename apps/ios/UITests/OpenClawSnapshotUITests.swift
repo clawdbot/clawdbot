@@ -55,7 +55,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             let focusProbe = "focus"
             input.typeText(focusProbe)
             XCTAssertEqual(input.value as? String, focusProbe)
-            input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: focusProbe.count))
+            self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
             if keyboard.exists {
@@ -947,12 +947,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let host = app.textFields["Host"]
         XCTAssertTrue(host.waitForExistence(timeout: 5))
         host.tap()
-        host.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 32) + "localhost")
+        self.clearTextField(host)
+        host.typeText("localhost")
 
         let port = app.textFields["Port"]
         XCTAssertTrue(port.waitForExistence(timeout: 5))
         port.tap()
-        port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
+        self.clearTextField(port)
+        port.typeText("18920")
         let unencrypted = app.buttons["Unencrypted"]
         XCTAssertTrue(unencrypted.waitForExistence(timeout: 5))
         unencrypted.tap()
@@ -1551,6 +1553,19 @@ extension OpenClawSnapshotUITests {
 
     private func chatMessageInput(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["chat-message-input"]
+    }
+
+    /// A burst of synthetic key events can drop a keystroke under simulator load, so one
+    /// delete-per-character `typeText` does not reliably empty a field. Re-send against
+    /// whatever is actually left instead of assuming the first burst landed in full.
+    private func clearTextField(_ element: XCUIElement, attempts: Int = 4) {
+        for _ in 0 ..< attempts {
+            let value = element.value as? String ?? ""
+            if value.isEmpty {
+                return
+            }
+            element.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+        }
     }
 
     private func attachFullScreenScreenshot(named name: String) {

@@ -144,6 +144,8 @@ export async function startCodexAttemptThread(params: {
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
   sessionAgentId: string;
   effectiveWorkspace: string;
@@ -390,11 +392,12 @@ export async function startCodexAttemptThread(params: {
             };
             releaseStartupResourcesOnTimeout = releaseStartupSandboxEnvironment;
             try {
-              startupSandboxEnvironment = shouldRequireCodexSandboxExecServerEnvironment({
+              const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
                 sandbox: params.sandbox,
                 nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
                 sandboxExecServerEnabled: params.sandboxExecServerEnabled,
-              })
+              });
+              startupSandboxEnvironment = sandboxEnvironmentRequired
                 ? await ensureCodexSandboxExecServerEnvironment({
                     client: activeStartupClient,
                     sandbox: params.sandbox ?? null,
@@ -408,12 +411,7 @@ export async function startCodexAttemptThread(params: {
                 await releaseStartupSandboxEnvironment();
                 throw new CodexAppServerStartupError("aborted");
               }
-              if (
-                params.sandbox?.enabled &&
-                params.nativeToolSurfaceEnabled &&
-                params.sandboxExecServerEnabled &&
-                !startupSandboxEnvironment
-              ) {
+              if (sandboxEnvironmentRequired && !startupSandboxEnvironment) {
                 throw new Error(
                   "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
                 );
@@ -477,6 +475,8 @@ export async function startCodexAttemptThread(params: {
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
+                shellEnvironment: params.shellEnvironment,
+                disableLoginShell: params.disableLoginShell,
                 finalConfigPatch: params.finalConfigPatch,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,

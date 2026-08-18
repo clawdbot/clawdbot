@@ -1,3 +1,4 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GatewayClient,
   type GatewayClientCloseInfo,
@@ -5,6 +6,7 @@ import {
   type GatewayClientRequestOptions,
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
 type GatewayCandidateEvent = Parameters<NonNullable<GatewayClientOptions["onEvent"]>>[0];
@@ -14,6 +16,7 @@ type CandidateConnectionOptions = Omit<
   GatewayClientOptions,
   | "url"
   | "tlsFingerprint"
+  | "cloudflareAccess"
   | "onEvent"
   | "onHelloOk"
   | "onConnectError"
@@ -23,9 +26,15 @@ type CandidateConnectionOptions = Omit<
 
 type GatewayCandidateConnectionParams = {
   candidates: readonly NodeHostGatewayConfig[];
+  cloudflareAccessByCandidate?: ReadonlyMap<NodeHostGatewayConfig, CloudflareAccessCredentials>;
   clientOptions: CandidateConnectionOptions;
   onEvent: (event: GatewayCandidateEvent) => void;
-  onHelloOk: (hello: GatewayCandidateHello, url: string, tlsFingerprint?: string) => void;
+  onHelloOk: (
+    hello: GatewayCandidateHello,
+    url: string,
+    tlsFingerprint?: string,
+    cloudflareAccess?: CloudflareAccessCredentials,
+  ) => void;
   onConnectError: (error: Error) => void;
   onReconnectPaused: (info: GatewayReconnectPausedInfo) => void;
   onClose: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
@@ -58,7 +67,9 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
   let currentCandidateIndex = 0;
   let stopped = false;
   let winnerSelected = params.candidates.length === 1;
-  let latestManifest: { caps: string[]; commands: string[] } | undefined;
+  let latestManifest:
+    | { caps: string[]; commands: string[]; computerUse?: ComputerUseCapabilityDescriptor }
+    | undefined;
   let currentClient = createCandidateClient(currentCandidateIndex);
 
   function createCandidateClient(candidateIndex: number): GatewayClient {
@@ -67,10 +78,12 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
       throw new Error(`node host gateway candidate ${candidateIndex} is unavailable`);
     }
     const url = formatGatewayCandidateUrl(candidate);
+    const cloudflareAccess = params.cloudflareAccessByCandidate?.get(candidate);
     const candidateClient = new GatewayClient({
       ...params.clientOptions,
       url,
       tlsFingerprint: candidate.tlsFingerprint,
+      ...(cloudflareAccess ? { cloudflareAccess } : {}),
       onEvent: (event) => {
         if (currentCandidateIndex === candidateIndex) {
           params.onEvent(event);
@@ -84,7 +97,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           winnerSelected = true;
           params.onWinningCandidate(candidate);
         }
-        params.onHelloOk(hello, url, candidate.tlsFingerprint);
+        params.onHelloOk(hello, url, candidate.tlsFingerprint, cloudflareAccess);
       },
       onConnectError: (error) => {
         if (currentCandidateIndex === candidateIndex) {
@@ -142,7 +155,11 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     ): Promise<T> {
       return currentClient.request<T>(...requestArgs);
     },
-    updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    updateNodeManifest(manifest: {
+      caps: string[];
+      commands: string[];
+      computerUse?: ComputerUseCapabilityDescriptor;
+    }): void {
       // Availability may change before the first hello. Every later candidate
       // must start with the newest manifest rather than the constructor snapshot.
       latestManifest = manifest;

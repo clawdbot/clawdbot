@@ -2,6 +2,11 @@
 import process from "node:process";
 import { format } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  isNodeVersionAtLeast,
+  isSupportedOpenClawNodeVersion,
+  parseNodeReleaseVersion,
+} from "../../node-version.mjs";
 import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -26,9 +31,6 @@ type Semver = {
   patch: number;
 };
 
-const MIN_NODE_22: Semver = { major: 22, minor: 22, patch: 3 };
-const MIN_NODE_24: Semver = { major: 24, minor: 15, patch: 0 };
-const MIN_NODE_25: Semver = { major: 25, minor: 9, patch: 0 };
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -117,20 +119,7 @@ export function isCurrentRuntimeSupported(): boolean {
 
 /** Checks a Node version label against OpenClaw's supported Node version range. */
 export function isSupportedNodeVersion(version: string | null): boolean {
-  const parsed = parseSemver(version);
-  if (!parsed) {
-    return false;
-  }
-  if (parsed.major === MIN_NODE_22.major) {
-    return isAtLeast(parsed, MIN_NODE_22);
-  }
-  if (parsed.major === MIN_NODE_24.major) {
-    return isAtLeast(parsed, MIN_NODE_24);
-  }
-  if (parsed.major === MIN_NODE_25.major) {
-    return isAtLeast(parsed, MIN_NODE_25);
-  }
-  return parsed.major > MIN_NODE_25.major;
+  return isSupportedOpenClawNodeVersion(version);
 }
 
 /** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
@@ -152,13 +141,13 @@ export function nodeVersionSatisfiesEngine(
 ): boolean | null {
   const minimum = parseMinimumNodeEngine(engine);
   if (minimum) {
-    return isAtLeast(parseSemver(version), minimum);
+    return isNodeVersionAtLeast(parseNodeReleaseVersion(version), minimum);
   }
 
   if (!engine) {
     return null;
   }
-  const parsed = parseSemver(version);
+  const parsed = parseNodeReleaseVersion(version);
   if (!parsed) {
     return false;
   }

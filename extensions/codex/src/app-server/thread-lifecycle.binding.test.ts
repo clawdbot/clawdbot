@@ -7,6 +7,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
@@ -114,6 +115,7 @@ function createParams(sessionFile: string, workspaceDir: string) {
 
 const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
   "features.goals": false,
+  "tools.update_plan.enabled": false,
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
@@ -406,6 +408,143 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(2, {
       action: "resume",
       binding: expect.objectContaining({ threadId: "thread-warm" }),
+    });
+  });
+
+  it("cold-resumes a warm thread to clear stale enforcing PreToolUse hooks", async () => {
+    const sessionFile = path.join(tempDir, "warm-cleared-hooks-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-cleared-hooks-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const fake = createFakeCodexAppServerClient(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-cleared-hooks");
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = fake.client;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const buildFinalConfigPatch = vi
+      .fn()
+      .mockReturnValueOnce({
+        configPatch: {
+          "features.hooks": true,
+          "hooks.PreToolUse": [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "openclaw hooks relay --event pre_tool_use",
+                },
+              ],
+            },
+          ],
+        },
+        nativeHookRelayGeneration: "generation-policy",
+      })
+      .mockReturnValueOnce({
+        configPatch: { "features.hooks": true, "hooks.PreToolUse": [] },
+        nativeHookRelayGeneration: "generation-no-policy",
+      });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      buildFinalConfigPatch,
+    };
+
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+    const resumed = await startOrResumeThread(common);
+
+    expect(resumed).toMatchObject({
+      threadId: "thread-warm-cleared-hooks",
+      nativeHookRelayGeneration: "generation-no-policy",
+      lifecycle: { action: "resumed" },
+    });
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    const resumeConfig = fake.request.mock.calls.find(
+      ([method]) => method === "thread/resume",
+    )?.[1];
+    expect(resumeConfig).toMatchObject({
+      config: { "features.hooks": true, "hooks.PreToolUse": [] },
+    });
+    expect(JSON.stringify(resumeConfig)).not.toContain("openclaw hooks relay");
+  });
+
+  it("cold-resumes a warm thread when final config adds an image-generation deny", async () => {
+    const sessionFile = path.join(tempDir, "warm-image-deny-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-image-deny-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-image-deny");
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-image-deny",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const resumed = await startOrResumeThread(common);
+
+    expect(resumed).toMatchObject({
+      threadId: "thread-warm-image-deny",
+      lifecycle: { action: "resumed" },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "configRequirements/read",
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toMatchObject({
+      config: { "features.image_generation": false },
     });
   });
 
@@ -1276,6 +1415,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicTools: [messageTool],
       config: {
         "features.apps": true,
+        "features.chronicle": true,
         "features.current_time_reminder": true,
         "features.deferred_executor": true,
         "features.hooks": true,
@@ -1283,8 +1423,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "features.multi_agent": true,
         "features.multi_agent_v2": true,
         "features.plugins": true,
+        "features.skill_search": true,
+        "features.shell_tool": true,
         "features.standalone_web_search": true,
         "features.token_budget": true,
+        "features.unified_exec": true,
+        "features.view_image": true,
         "orchestrator.mcp.enabled": true,
         "tools.experimental_request_user_input.enabled": true,
         "tools.update_plan.enabled": true,
@@ -1424,7 +1568,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(request.config).toMatchObject({
       "features.apps": false,
+      "features.artifact": false,
+      "features.browser_use": false,
+      "features.browser_use_external": false,
+      "features.browser_use_full_cdp_access": false,
+      "features.chronicle": false,
+      "features.computer_use": false,
       "features.current_time_reminder": false,
+      "features.default_mode_request_user_input": false,
       "features.deferred_executor": false,
       "features.hooks": false,
       "features.image_generation": false,
@@ -1432,10 +1583,20 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "features.multi_agent": false,
       "features.multi_agent_v2": false,
       "features.plugins": false,
+      "features.request_permissions_tool": false,
+      "features.skill_search": false,
+      "features.shell_tool": false,
       "features.standalone_web_search": false,
       "features.token_budget": false,
+      "features.unified_exec": false,
+      "features.view_image": false,
+      "features.web_search_cached": false,
+      "features.web_search_request": false,
+      "features.workspace_dependencies": false,
       "orchestrator.mcp.enabled": false,
       "orchestrator.skills.enabled": false,
+      "skills.bundled.enabled": false,
+      "skills.include_instructions": false,
       "tools.experimental_request_user_input.enabled": false,
       "tools.update_plan.enabled": false,
       mcp_servers: { inherited: { enabled: false } },
@@ -1687,6 +1848,94 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "config/read",
       "configRequirements/read",
     ]);
+  });
+
+  it("fails closed when requirements pin denied image generation on", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { image_generation: true } } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+      }),
+    ).rejects.toThrow("cannot override required feature image_generation");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["configRequirements/read"]);
+  });
+
+  it.each([
+    "apps",
+    "artifact",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "chronicle",
+    "code_mode",
+    "code_mode_only",
+    "computer_use",
+    "current_time_reminder",
+    "default_mode_request_user_input",
+    "deferred_executor",
+    "goals",
+    "hooks",
+    "image_generation",
+    "memories",
+    "multi_agent",
+    "multi_agent_v2",
+    "plugins",
+    "request_permissions_tool",
+    "skill_search",
+    "shell_tool",
+    "standalone_web_search",
+    "token_budget",
+    "unified_exec",
+    "view_image",
+    "web_search_cached",
+    "web_search_request",
+    "workspace_dependencies",
+    "codex_hooks",
+  ])("fails closed when requirements pin native registry %s on", async (feature) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { [feature]: true } } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      }),
+    ).rejects.toThrow(`cannot override required feature ${feature}`);
   });
 
   it.each([

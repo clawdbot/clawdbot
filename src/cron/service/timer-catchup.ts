@@ -4,6 +4,7 @@ import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   isJobEnabled,
@@ -31,9 +32,9 @@ import {
   type StartupDeferredJob,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { createCompletedCronRunOutcomeDrain } from "./timer-outcome-finalization.js";
 import { collectRunnableJobs, hasMissedCronSlotSinceLastRun } from "./timer-runnable.js";
-import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
 import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 function deferPendingBackoffMissedCronSlots(
@@ -419,4 +420,3 @@ async function applyStartupCatchupOutcomes(
   });
   return outcomes;
 }
-import type { CronJob } from "../types.js";

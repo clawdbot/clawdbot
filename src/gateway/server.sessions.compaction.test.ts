@@ -7,6 +7,8 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveManualCompactionCliTarget } from "../agents/session-runtime-compat.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import {
   clearFollowupQueue,
@@ -14,7 +16,6 @@ import {
   getFollowupQueue,
 } from "../auto-reply/reply/queue/state.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -24,6 +25,7 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -42,8 +44,10 @@ import {
   rpcReq,
   testState,
 } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   setupGatewaySessionsTestHarness,
+  getGatewayConfigModule,
   getSessionManagerModule,
   sessionStoreEntry,
   createCheckpointFixture,
@@ -132,7 +136,7 @@ function expectMainCompactionResult(
 ) {
   expect(compacted.ok, JSON.stringify(compacted)).toBe(true);
   expect(compacted.payload?.key).toBe("agent:main:main");
-  expect(compacted.payload?.compacted).toBe(expectedCompacted);
+  expect(compacted.payload?.compacted, JSON.stringify(compacted)).toBe(expectedCompacted);
 }
 
 async function seedSessionEntry(params: {
@@ -567,6 +571,12 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
       spawnedCwd: "/tmp/task-repo",
       thinkingLevel: "medium",
       reasoningLevel: "stream",
+      cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "claude-session" },
+        "codex-cli": { sessionId: "codex-session" },
+      },
+      claudeCliSessionId: "claude-session",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -657,6 +667,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     return {
       ok: true,
       compacted: true,
+      compactionKind: "context-engine",
       result: {
         summary: "summary",
         firstKeptEntryId: "entry-1",
@@ -781,6 +792,9 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     | {
         compactionCheckpoints?: unknown[];
         compactionCount?: number;
+        cliSessionBindings?: unknown;
+        cliSessionIds?: unknown;
+        claudeCliSessionId?: string;
         contextBudgetStatus?: unknown;
         totalTokens?: number;
         totalTokensFresh?: boolean;
@@ -788,6 +802,9 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     | undefined;
   expect(storedEntry?.compactionCount).toBe(1);
   expect(storedEntry?.compactionCheckpoints).toHaveLength(1);
+  expect(storedEntry?.cliSessionBindings).toBeUndefined();
+  expect(storedEntry?.cliSessionIds).toBeUndefined();
+  expect(storedEntry?.claudeCliSessionId).toBeUndefined();
   expect(storedEntry?.contextBudgetStatus).toBeUndefined();
   expect(storedEntry?.totalTokens).toBe(80);
   expect(storedEntry?.totalTokensFresh).toBe(true);
@@ -800,9 +817,12 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-codex", {
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
       compactionCount: 2,
       totalTokens: 54_321,
       totalTokensFresh: true,
+      cliSessionIds: { "codex-cli": "thread-1" },
+      cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
     }),
     sessionKey: "agent:main:main",
     storePath,
@@ -816,6 +836,7 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
     ok: true,
     compacted: true,
+    compactionKind: "native-harness",
     result: {
       summary: "",
       firstKeptEntryId: "",
@@ -863,10 +884,92 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   // advances and stale token accounting is cleared for recomputation.
   const codexEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(codexEntry?.compactionCount).toBe(3);
+  expect(codexEntry?.cliSessionIds).toEqual({ "codex-cli": "thread-1" });
+  expect(codexEntry?.cliSessionBindings).toEqual({
+    "codex-cli": { sessionId: "thread-1" },
+  });
   expect(codexEntry?.totalTokens).toBeUndefined();
   expect(codexEntry?.totalTokensFresh).toBeUndefined();
 
   ws.close();
+});
+
+test("sessions.compact targets the persisted native CLI session", async () => {
+  const pluginRegistry = getTestPluginRegistry();
+  pluginRegistry.cliBackends.push({
+    pluginId: "anthropic",
+    source: "test",
+    backend: {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      config: { command: "claude" },
+      bundleMcp: false,
+    },
+  });
+  setActivePluginRegistry(pluginRegistry);
+  const { storePath } = await createSessionStoreDir();
+  await seedSessionEntry({
+    entry: sessionStoreEntry("sess-claude", {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "native-claude-session" },
+      },
+    }),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: "sess-claude",
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 2,
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: true,
+  });
+  const storedEntry = loadAccessorSessionEntry({
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  const cfg = (await getGatewayConfigModule()).loadConfig();
+  const selectedModel = resolveSessionModelRef(cfg, storedEntry, "main");
+  expect(selectedModel.provider).toBe("anthropic");
+  expect(storedEntry).toMatchObject({
+    cliSessionBindings: {
+      "claude-cli": { sessionId: "native-claude-session" },
+    },
+  });
+  expect(
+    resolveManualCompactionCliTarget({ provider: selectedModel.provider, entry: storedEntry, cfg }),
+  ).toMatchObject({
+    agentHarnessId: "claude-cli",
+    cliSessionBinding: { sessionId: "native-claude-session" },
+    cliSessionId: "native-claude-session",
+  });
+
+  const { ws } = await openClient();
+  try {
+    await rpcReq(ws, "sessions.subscribe", {});
+    const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+      ws,
+      "sessions.compact",
+      { key: "main" },
+    );
+
+    expectMainCompactionResult(compacted, true);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "claude-cli",
+        cliSessionBinding: expect.objectContaining({ sessionId: "native-claude-session" }),
+        cliSessionId: "native-claude-session",
+        trigger: "manual",
+      }),
+    );
+  } finally {
+    ws.close();
+  }
 });
 
 test("sessions.compact emits a terminal operation event when persistence fails", async () => {
@@ -1630,10 +1733,17 @@ test("sessions.patch waits for terminal compaction before archiving the session"
   ws.close();
 });
 
-test("sessions.compact maxLines trims SQLite transcript rows and archives the full pre-compaction transcript", async () => {
+test("sessions.compact maxLines trims SQLite transcript rows without creating a transcript archive", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await seedSessionEntry({
-    entry: sessionStoreEntry("sess-main"),
+    entry: sessionStoreEntry("sess-main", {
+      cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "claude-session" },
+        "codex-cli": { sessionId: "codex-session" },
+      },
+      claudeCliSessionId: "claude-session",
+    }),
     sessionKey: "agent:main:main",
     storePath,
   });
@@ -1643,20 +1753,12 @@ test("sessions.compact maxLines trims SQLite transcript rows and archives the fu
     storePath,
     totalLines: 500,
   });
-  const original = await loadTranscriptRows({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  expect(original).toHaveLength(500);
-
   const { ws } = await openClient();
   const compacted = await rpcReq<{
     ok: true;
     key: string;
     compacted: boolean;
     kept?: number;
-    archived?: string;
   }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
 
   expect(compacted.ok).toBe(true);
@@ -1677,16 +1779,13 @@ test("sessions.compact maxLines trims SQLite transcript rows and archives the fu
   expect(retained.at(-1)).toMatchObject({
     message: { content: "line-498" },
   });
-  const archived = compacted.payload?.archived ?? "";
-  expect(path.basename(archived)).toMatch(/^sess-main\.jsonl\.bak\.\d{4}-\d{2}-\d{2}T/);
-  expect(await fs.realpath(path.dirname(archived))).toBe(await fs.realpath(dir));
-  await expect(fs.stat(archived)).resolves.toMatchObject({ mode: expect.any(Number) });
-  const archivedEvents = readSessionArchiveContentSync(archived)
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-  expect(archivedEvents).toEqual(original);
+  expect(compacted.payload).not.toHaveProperty("archived");
+  expect((await fs.readdir(dir)).some((name) => name.includes(".jsonl.bak."))).toBe(false);
   await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
+  const trimmedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+  expect(trimmedEntry?.cliSessionIds).toBeUndefined();
+  expect(trimmedEntry?.cliSessionBindings).toBeUndefined();
+  expect(trimmedEntry?.claudeCliSessionId).toBeUndefined();
 
   // No active run present, so the interrupt guard short-circuits without aborting.
   expect(embeddedRunMock.abortCalls).toEqual([]);

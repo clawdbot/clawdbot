@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
@@ -57,6 +58,7 @@ const daemonStatusGatherModuleLoader = createLazyImportLoader(
 );
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
+const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 type GatewayCliDependencies = {
   loadGatewayHealthModule?: typeof loadGatewayHealthModule;
   loadHealthStyleModule?: typeof loadHealthStyleModule;
@@ -112,9 +114,10 @@ function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TI
     .option("--json", "Output JSON", false);
 }
 
-async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
+    sharedStateMode: "read-only",
   });
 }
 
@@ -151,7 +154,7 @@ async function runGatewayCommand(
         return;
       }
     }
-    const message = String(err);
+    const message = formatErrorMessage(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);
     defaultRuntime.exit(1);
   }
@@ -196,10 +199,10 @@ function resolveGatewayRpcOptions<T extends { token?: string; password?: string 
   };
 }
 
-async function resolveGatewayRpcOptionsWithLocalPort(
+function resolveGatewayRpcOptionsWithLocalPort(
   opts: GatewayRpcOpts & { port?: unknown },
   command?: Command,
-): Promise<GatewayRpcOpts> {
+): GatewayRpcOpts {
   const rpcOpts = resolveGatewayRpcOptions(opts, command);
   const port = parseGatewayPortOption(opts.port ?? inheritOptionFromParent(command, "port"));
   if (port === undefined) {
@@ -208,19 +211,9 @@ async function resolveGatewayRpcOptionsWithLocalPort(
   if (typeof opts.url === "string" && opts.url.trim()) {
     throw new Error("Use either --url or --port, not both.");
   }
-  const { readBestEffortConfig } = await loadConfigModule();
-  const config = await readBestEffortConfig();
   return {
     ...rpcOpts,
     localPortOverride: port,
-    config: {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        mode: "local",
-        port,
-      },
-    },
   };
 }
 
@@ -510,7 +503,7 @@ async function writeSupportExportFromCli(opts: {
         deep: false,
       });
     },
-    readHealthSnapshot: async () => await callGatewayCli("health", rpc),
+    readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
   });
   if (opts.json) {
     defaultRuntime.writeJson(result);
@@ -577,9 +570,16 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (method, opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            // Setup detection owns a 30s worker deadline; its transport must
+            // leave enough grace for the Gateway to return the typed outcome.
+            const callOpts =
+              method === "openclaw.setup.detect" &&
+              command.getOptionValueSource("timeout") === "default"
+                ? { ...opts, timeout: String(SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS) }
+                : opts;
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
             const params = parseGatewayCallParams(String(opts.params ?? "{}"));
-            const result = await callGatewayCli(method, rpcOpts, params);
+            const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;
@@ -606,7 +606,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             await runGatewaySuspend(
               {
                 rpcOpts,
@@ -614,7 +614,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
                 waitSeconds: opts.wait,
                 json: Boolean(rpcOpts.json),
               },
-              { callGateway: callGatewayCli, runtime: defaultRuntime },
+              { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
             );
           },
           "Gateway suspend failed",
@@ -632,10 +632,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (suspensionId, opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             await runGatewayResume(
               { rpcOpts, suspensionId: String(suspensionId), json: Boolean(rpcOpts.json) },
-              { callGateway: callGatewayCli, runtime: defaultRuntime },
+              { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
             );
           },
           "Gateway resume failed",
@@ -662,7 +662,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             if (agentId && opts.allAgents) {
               throw new Error("Use --agent or --all-agents, not both");
             }
-            const summary = (await callGatewayCli("usage.cost", rpcOpts, {
+            const summary = (await callGatewayReadOnlyCli("usage.cost", rpcOpts, {
               days,
               ...(agentId ? { agentId } : {}),
               ...(opts.allAgents ? { agentScope: "all" } : {}),
@@ -690,19 +690,17 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             let result: unknown;
             try {
-              result = await callGatewayCli("health", rpcOpts);
+              result = await callGatewayReadOnlyCli("health", rpcOpts);
             } catch (error) {
-              const [{ emitReachableGatewayAuthDiagnostic }, { readBestEffortConfig }] =
-                await Promise.all([
-                  (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
-                  loadConfigModule(),
-                ]);
+              const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } = await (
+                deps.loadGatewayHealthModule ?? loadGatewayHealthModule
+              )();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: rpcOpts.config ?? (await readBestEffortConfig()),
+                config: rpcOpts.config ?? (await readNonObservingHealthConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,
@@ -809,7 +807,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               return;
             }
 
-            const result = await callGatewayCli("diagnostics.stability", rpcOpts, {
+            const result = await callGatewayReadOnlyCli("diagnostics.stability", rpcOpts, {
               limit: query.limit,
               ...(query.type ? { type: query.type } : {}),
               ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),

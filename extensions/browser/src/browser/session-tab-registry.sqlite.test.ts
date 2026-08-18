@@ -891,6 +891,16 @@ describe("durable session tab registry", () => {
     } satisfies DurableRecord;
     openStore().register("wrong-storage-key", validRecord);
     openStore().register("invalid-record", { version: 999, sessionKey: "agent:main:main" });
+    openStore().register("partial-cleanup", {
+      ...validRecord,
+      nativeTargetId: "NATIVE-PARTIAL",
+      cleanupRequestedAt: 2_000,
+    });
+    openStore().register("noncanonical-aliases", {
+      ...validRecord,
+      nativeTargetId: "NATIVE-ALIASES",
+      profileAliases: ["zeta", "alpha"],
+    });
     const warnings: string[] = [];
     const registry = await freshRegistry("invalid");
 
@@ -901,7 +911,7 @@ describe("durable session tab registry", () => {
     });
     expect(openStore().entries()).toEqual([]);
     expect(cdpMocks.closeTrackedCdpTarget).not.toHaveBeenCalled();
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(4);
   });
 
   it("keeps non-durable tabs out of SQLite but shared across duplicate bundles", async () => {

@@ -74,6 +74,7 @@ type ListSessionsFromStoreParams = {
   modelCatalog?: ModelCatalogEntry[];
   lightweightListRows?: boolean;
   opts: SessionsListParams;
+  involvingActorId?: string;
 };
 
 type SessionEntrySelection = {
@@ -100,8 +101,13 @@ function addSessionCreatorIdentity(
   creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
   entry: SessionEntry,
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
+  cfg: OpenClawConfig,
 ): void {
-  const actor = projectSessionActor(entry.createdActor, userProfileIdentityById);
+  const actor = projectSessionActor(
+    entry.owner?.actor ?? entry.createdActor,
+    userProfileIdentityById,
+    cfg,
+  );
   const id = normalizeOptionalString(actor?.id);
   if (!id) {
     return;
@@ -192,6 +198,7 @@ function filterSessionEntries(params: {
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  involvingActorId?: string;
 }): Pick<SessionEntrySelection, "creators" | "entries"> {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
@@ -206,6 +213,7 @@ function filterSessionEntries(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
   const creatorId = normalizeOptionalString(opts.creatorId);
+  const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
   const creators = new Map<string, { id: string; label?: string; avatarUrl?: string }>();
@@ -313,10 +321,25 @@ function filterSessionEntries(params: {
       continue;
     }
     if (params.userProfileIdentityById) {
-      addSessionCreatorIdentity(creators, entry, params.userProfileIdentityById);
+      addSessionCreatorIdentity(creators, entry, params.userProfileIdentityById, cfg);
     }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
+    if (creatorId && (entry.owner?.actor ?? entry.createdActor)?.id !== creatorId) {
       continue;
+    }
+    if (involvingActorId) {
+      const owner = entry.owner?.actor ?? entry.createdActor;
+      const viewerOwns = owner?.type === "human" && owner.id === involvingActorId;
+      // Only profile-backed ids share the authenticated viewer namespace.
+      // Channel-native and legacy unknown ids remain display-only.
+      const viewerParticipates = entry.participants?.some(
+        (participant) =>
+          participant.type === "human" &&
+          participant.source === "profile" &&
+          participant.id === involvingActorId,
+      );
+      if (!viewerOwns && !viewerParticipates) {
+        continue;
+      }
     }
     entries.push([key, entry]);
   }
@@ -342,6 +365,7 @@ function selectSessionEntries(params: {
   defaultLimit?: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  involvingActorId?: string;
 }): SessionEntrySelection {
   const { creators, entries: filtered } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
@@ -395,6 +419,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
         : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     userProfileIdentityById,
+    involvingActorId: params.involvingActorId,
   });
   const fullRowContext =
     rowContext ||
@@ -465,6 +490,7 @@ export function filterAndSortSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
+  involvingActorId?: string;
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }

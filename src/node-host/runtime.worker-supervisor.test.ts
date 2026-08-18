@@ -16,19 +16,12 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
-const resolveNodeWorkerInstallationMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: resolveNodeWorkerInstallationMock,
-}));
-
 vi.mock("../infra/path-env.js", () => ({
   ensureOpenClawCliOnPath: vi.fn(),
 }));
 
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: 0,
     descriptors: [],
     callMcpTool: vi.fn(),
     close: vi.fn(async () => undefined),
@@ -55,7 +48,6 @@ vi.mock("./skills.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
-  resolveNodeWorkerInstallationMock.mockReset();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -65,10 +57,6 @@ describe("node-host runtime worker supervisor lifetime", () => {
     fs.mkdirSync(fixture.stateDir, { recursive: true });
     fs.renameSync(fixture.bundleRoot, path.join(fixture.stateDir, "node-host"));
     const input = testWorkerLaunchInput(fixture.workspaceDir, "launch-runtime", "wait");
-    resolveNodeWorkerInstallationMock.mockResolvedValue({
-      packageRoot: fixture.root,
-      build: input.descriptor.admission.handshake,
-    });
     let releaseLaunchResponse!: () => void;
     const launchResponseHeld = new Promise<void>((resolve) => {
       releaseLaunchResponse = resolve;
@@ -98,7 +86,12 @@ describe("node-host runtime worker supervisor lifetime", () => {
     expect(prepared.manifest.commands).not.toEqual(
       expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
     );
-    const runtime = prepared.start({ client: { request } });
+    const availability: boolean[] = [];
+    const runtime = prepared.start({
+      client: { request },
+      onRunnerAvailabilityChanged: (available) => availability.push(available),
+    });
+    await vi.waitFor(() => expect(availability).toEqual([false, true]));
     runtime.updateGatewayConnection({ url: "ws://127.0.0.1:18789" });
     const store = new NodeWorkerLaunchStore({ env: fixture.env });
 

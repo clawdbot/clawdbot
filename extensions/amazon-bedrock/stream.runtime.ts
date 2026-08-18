@@ -1108,7 +1108,7 @@ function convertToolConfig(
     toolSpec: {
       name: tool.name,
       description: tool.description,
-      inputSchema: { json: tool.parameters as unknown as DocumentType },
+      inputSchema: { json: { ...tool.parameters } },
     },
   }));
 

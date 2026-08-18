@@ -1,8 +1,11 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
+import {
+  StaleWorkerBuildError,
+  verifyWorkerAdmissionHandshake,
+  type ExpectedWorkerBuild,
+} from "./admission.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -16,6 +19,7 @@ const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
+  prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
@@ -118,26 +122,34 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
-      const nodeLocal =
-        record.providerId === DEVICE_WORKER_PROVIDER_ID &&
+      let currentBundle: ExpectedWorkerBuild;
+      try {
+        currentBundle = await options.prepareCurrentBundle();
+      } catch {
+        throw serviceError("invalid_state", "Current worker build identity is unavailable");
+      }
+      if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+        throw new StaleWorkerBuildError();
+      }
+      const nodeDeviceId = record.nodeDeviceId;
+      const nodeBundle =
+        typeof nodeDeviceId === "string" &&
         !record.sshEndpoint &&
-        record.bootstrapReceipt.installKind === "local";
-      if (nodeLocal) {
-        const profileSettings = record.profileSnapshot.settings;
-        const deviceId = isRecord(profileSettings) ? profileSettings.device : undefined;
+        record.bootstrapReceipt.installKind === "bundle";
+      if (nodeBundle) {
         const sessionId = record.attachedSessionIds[0];
-        if (!nodeTunnels || typeof deviceId !== "string" || !deviceId.trim() || !sessionId) {
-          throw serviceError("invalid_state", "Device worker tunnel runtime is unavailable");
+        if (!nodeTunnels || !sessionId) {
+          throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
         startup = nodeTunnels.start({
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
-          deviceId: deviceId.trim(),
+          deviceId: nodeDeviceId,
           sessionId,
           expectedBuild: {
-            bundleHash: record.bootstrapReceipt.bundleHash,
-            openclawVersion: record.bootstrapReceipt.openclawVersion,
-            protocolFeatures: [...record.bootstrapReceipt.protocolFeatures],
+            bundleHash: currentBundle.bundleHash,
+            openclawVersion: currentBundle.openclawVersion,
+            protocolFeatures: [...currentBundle.protocolFeatures],
           },
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
@@ -158,7 +170,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
       startup = tunnels.start({
         ...request,
-        bundleHash: record.bootstrapReceipt.bundleHash,
+        bundleHash: currentBundle.bundleHash,
         gateway,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,

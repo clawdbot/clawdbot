@@ -80,7 +80,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
@@ -675,12 +675,12 @@ export async function recordInboundSessionMeta(params: {
       if (context.existingEntry) {
         return metadataPatch;
       }
-      const senderId = params.ctx.From?.trim();
+      const senderId = params.ctx.SenderId?.trim();
       return {
         ...buildSessionCreationStamp(
           params.ctx.SessionCreation ?? {
             via: "channel",
-            actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
+            ...(senderId ? { actor: { type: "human", id: senderId } } : {}),
           },
         ),
         ...metadataPatch,
@@ -728,14 +728,12 @@ export async function updateSessionLastRoute(params: {
       if (context.existingEntry) {
         return routePatch;
       }
-      const senderId = params.ctx?.From?.trim();
+      const senderId = params.ctx?.SenderId?.trim();
       return {
         ...buildSessionCreationStamp(
           params.ctx?.SessionCreation ?? {
             via: "channel",
-            ...(params.ctx
-              ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
-              : {}),
+            ...(senderId ? { actor: { type: "human" as const, id: senderId } } : {}),
           },
         ),
         ...routePatch,

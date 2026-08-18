@@ -59,8 +59,58 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
+        "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     });
+  });
+
+  it.each(["history", "send", "list", "status"] as const)(
+    "gives the canonical main session agent-wide %s access under tree visibility",
+    (action) => {
+      const checker = createSessionVisibilityRowChecker({
+        action,
+        requesterSessionKey: "agent:main:work",
+        mainSessionKey: "agent:main:work",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({}),
+      });
+
+      expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
+        allowed: true,
+      });
+    },
+  );
+
+  it("keeps the main exception inside tree same-agent scope", () => {
+    const makeChecker = (visibility: "self" | "tree") =>
+      createSessionVisibilityRowChecker({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        visibility,
+        a2aPolicy: createAgentToAgentPolicy({}),
+      });
+
+    expect(makeChecker("self").check({ key: "agent:main:telegram:group:room" }).allowed).toBe(
+      false,
+    );
+    expect(makeChecker("tree").check({ key: "agent:other:main" }).allowed).toBe(false);
+  });
+
+  it("keeps non-main tree callers scoped to their spawn subtree", () => {
+    const requesterSessionKey = "agent:main:telegram:group:requester";
+    const checker = createSessionVisibilityRowChecker({
+      action: "history",
+      requesterSessionKey,
+      mainSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
+
+    expect(checker.check({ key: "agent:main:main" }).allowed).toBe(false);
+    expect(checker.check({ key: "agent:main:telegram:group:sibling" }).allowed).toBe(false);
+    expect(
+      checker.check({ key: "agent:main:subagent:child", spawnedBy: requesterSessionKey }),
+    ).toEqual({ allowed: true });
   });
 
   it("keeps exact and current self aliases available without a configured default", () => {
@@ -176,14 +226,16 @@ describe("scoped session access providers", () => {
       const direct = createSessionVisibilityChecker({
         action: "history",
         requesterSessionKey,
-        visibility: "all",
+        mainSessionKey: requesterSessionKey,
+        visibility: "tree",
         a2aPolicy: createAgentToAgentPolicy({}),
         spawnedKeys: new Set([targetSessionKey]),
       });
       const row = createSessionVisibilityRowChecker({
         action: "history",
         requesterSessionKey,
-        visibility: "all",
+        mainSessionKey: requesterSessionKey,
+        visibility: "tree",
         a2aPolicy: createAgentToAgentPolicy({}),
       });
 

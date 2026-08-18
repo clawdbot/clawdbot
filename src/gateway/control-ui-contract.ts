@@ -85,6 +85,22 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+/** Bounded session metadata rendered by Control UI session-link hover cards. */
+export type ControlUiSessionPreview =
+  | {
+      status: "ok";
+      sessionKey: string;
+      title?: string;
+      derivedTitle?: string;
+      agentId: string;
+      kind?: string;
+      channel?: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      archived?: boolean;
+    }
+  | { status: "unavailable" };
+
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
@@ -164,6 +180,8 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarReason?: string | null;
   assistantAgentId?: string;
   serverVersion?: string;
+  /** Exact immutable build serving this Control UI when available. */
+  serverBuildId?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for
    * package installs and mainline (main/master) checkouts so the UI only flags

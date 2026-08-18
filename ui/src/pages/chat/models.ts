@@ -25,27 +25,27 @@ function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCa
 
 export async function loadModels(
   client: GatewayBrowserClient,
-  opts?: {
-    agentId?: string;
+  opts: {
+    agentId: string;
     preparedOnly?: boolean;
     refresh?: boolean;
     rejectOnFailure?: boolean;
   },
 ): Promise<ModelCatalogEntry[]> {
   const cache = modelCatalogCacheFor(client);
-  const agentId = opts?.agentId?.trim() ?? "";
+  const agentId = opts.agentId.trim();
   const rejectOnFailure = opts?.rejectOnFailure === true;
-  const cacheKey = `${agentId}\0${opts?.preparedOnly ? "prepared" : "exact"}`;
+  const cacheKey = `${agentId}\0${opts.preparedOnly ? "prepared" : "exact"}`;
   const preparedCacheKey = `${agentId}\0prepared`;
   const cached = cache.get(cacheKey);
   const now = Date.now();
-  if (!opts?.refresh && cached?.models && cached.expiresAt > now) {
+  if (!opts.refresh && cached?.models && cached.expiresAt > now) {
     return cached.models;
   }
   if (
     cached?.inFlight &&
     cached.inFlightRejects === rejectOnFailure &&
-    (!opts?.refresh || cached.inFlightRefresh === true)
+    (!opts.refresh || cached.inFlightRefresh === true)
   ) {
     return cached.inFlight;
   }
@@ -56,8 +56,8 @@ export async function loadModels(
   const inFlight: Promise<ModelCatalogEntry[]> = requestModels(
     client,
     cached?.models,
-    agentId || undefined,
-    opts?.preparedOnly === true,
+    agentId,
+    opts.preparedOnly === true,
     rejectOnFailure,
   )
     .then((result) => {
@@ -68,7 +68,7 @@ export async function loadModels(
           models: result.models,
         };
         cache.set(cacheKey, entry);
-        if (result.fresh && opts?.preparedOnly !== true) {
+        if (result.fresh && opts.preparedOnly !== true) {
           // An exact catalog supersedes the prepared projection. Reusing it for
           // automatic reads prevents route re-entry from restoring stale data.
           cache.set(preparedCacheKey, entry);
@@ -87,29 +87,22 @@ export async function loadModels(
     models: cached?.models ?? [],
     inFlight,
     inFlightRejects: rejectOnFailure,
-    ...(opts?.refresh ? { inFlightRefresh: true } : {}),
+    ...(opts.refresh ? { inFlightRefresh: true } : {}),
   });
   return inFlight;
-}
-
-export function applyModelCatalogResult(models: unknown): ModelCatalogEntry[] | null {
-  if (!Array.isArray(models)) {
-    return null;
-  }
-  return models as ModelCatalogEntry[];
 }
 
 async function requestModels(
   client: GatewayBrowserClient,
   fallback: ModelCatalogEntry[] | undefined,
-  agentId: string | undefined,
+  agentId: string,
   preparedOnly: boolean,
   rejectOnFailure: boolean,
 ): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
   try {
     const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
       view: "configured",
-      ...(agentId ? { agentId } : {}),
+      agentId,
       ...(preparedOnly ? { preparedOnly: true } : {}),
     });
     return { models: result?.models ?? [], fresh: true };

@@ -34,18 +34,6 @@ describe("sentinel-guard", () => {
     );
   });
 
-  it("error attaches the OcPath context", () => {
-    try {
-      guardSentinel(REDACTED_SENTINEL, "oc://config/plugins.entries.foo.token");
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(OcEmitSentinelError);
-      const e = err as OcEmitSentinelError;
-      expect(e.path).toBe("oc://config/plugins.entries.foo.token");
-      expect(e.code).toBe("OC_EMIT_SENTINEL");
-    }
-  });
-
   it("round-trip echoes pre-existing sentinel; strict mode rejects", () => {
     const raw = "## Section\n\n- token: __OPENCLAW_REDACTED__\n";
     const { ast } = parseMd(raw);

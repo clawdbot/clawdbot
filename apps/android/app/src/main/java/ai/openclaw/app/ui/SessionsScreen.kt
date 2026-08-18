@@ -103,29 +103,23 @@ internal fun SessionsScreen(
   var deleteSessionTarget by
     rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
   var searchText by rememberSaveable { mutableStateOf("") }
-  var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
-  var searchLoading by remember { mutableStateOf(false) }
-  val searchQuery = searchText.trim()
   var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
   var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
+  val searchState =
+    rememberSessionBrowserSearchState(
+      viewModel = viewModel,
+      sessions = sessions,
+      query = searchText,
+      archived = filter == SessionFilter.Archived,
+    )
   val visibleSessions =
-    (if (searchQuery.isEmpty()) sessions else searchResults)
-      .let { rows ->
-        when (filter) {
-          SessionFilter.Recent -> rows.filter { it.archived != true }
-          SessionFilter.Current -> rows.filter { it.key == chatSessionKey && it.archived != true }
-          // Gate on the entry's own archived flag so the pre-toggle active list can
-          // never render with archived-only actions while the refetch is in flight.
-          SessionFilter.Archived -> rows.filter { it.archived == true }
-        }
-      }.let { rows ->
-        if (recentFirst) {
-          rows.sortedByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
-        } else {
-          rows.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
-        }
-      }
+    resolveSessionBrowserEntries(
+      entries = searchState.entries,
+      currentSessionKey = chatSessionKey,
+      filter = filter,
+      recentFirst = recentFirst,
+    )
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val sections = groupSessionEntries(visibleSessions, knownGroups = storedGroups)
   // Stored group names stay offered as move targets even while they have no members.
@@ -143,30 +137,6 @@ internal fun SessionsScreen(
   LaunchedEffect(isConnected, filter) {
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
-    }
-  }
-
-  // Keyed on the live session list too: row actions (pin/rename/archive/delete)
-  // refresh live state, which re-runs the search so results never go stale.
-  LaunchedEffect(searchQuery, filter, sessions) {
-    if (searchQuery.isEmpty()) {
-      searchResults = emptyList()
-      searchLoading = false
-      return@LaunchedEffect
-    }
-    searchResults = emptyList()
-    searchLoading = true
-    try {
-      // Debounce keystrokes; the key change cancels superseded fetches, and the
-      // controller falls back to local filtering when the gateway is unreachable.
-      delay(250)
-      searchResults =
-        viewModel.fetchChatSessionList(
-          search = searchQuery,
-          archived = filter == SessionFilter.Archived,
-        )
-    } finally {
-      searchLoading = false
     }
   }
 
@@ -306,7 +276,7 @@ internal fun SessionsScreen(
             modifier = Modifier.fillParentMaxHeight(0.56f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
           ) {
-            when (sessionEmptyMode(searchQuery, searchLoading)) {
+            when (sessionEmptyMode(searchState.query, searchState.loading)) {
               SessionEmptyMode.SearchLoading -> ClawLoadingState(title = nativeString("Searching threads"))
               SessionEmptyMode.SearchNoMatches ->
                 ClawEmptyState(
@@ -348,7 +318,7 @@ internal fun SessionsScreen(
             val active = session.key == chatSessionKey
             SessionRow(
               session = session,
-              title = displaySessionTitle(session),
+              title = sessionPresentationTitle(session) { nativeString("Main thread") },
               subtitle =
                 sessionListSubtitle(
                   session,
@@ -376,7 +346,13 @@ internal fun SessionsScreen(
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onFork = {
                 coroutineScope.launch {
-                  viewModel.forkChatSession(session.key, session.ownerAgentId)?.let { newKey ->
+                  val newKey =
+                    viewModel.forkChatSession(
+                      session.key,
+                      session.ownerAgentId,
+                      fromLastCompleted = session.hasActiveRun == true,
+                    )
+                  if (newKey != null) {
                     viewModel.switchChatSession(newKey, session.ownerAgentId)
                     onOpenChat()
                   }
@@ -727,7 +703,11 @@ private fun SessionRow(
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem(nativeString("Fork")) {
+          SessionMenuItem(
+            nativeString(
+              if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
+            ),
+          ) {
             menuExpanded = false
             onFork()
           }
@@ -864,10 +844,80 @@ private fun SessionMiniTag(text: String) {
   }
 }
 
-private enum class SessionFilter {
+internal enum class SessionFilter {
   Recent,
   Current,
   Archived,
+}
+
+internal data class SessionBrowserSearchState(
+  val query: String,
+  val entries: List<ChatSessionEntry>,
+  val loading: Boolean,
+)
+
+/** Canonical debounced, gateway-backed search state shared by session browser surfaces. */
+@Composable
+internal fun rememberSessionBrowserSearchState(
+  viewModel: MainViewModel,
+  sessions: List<ChatSessionEntry>,
+  query: String,
+  archived: Boolean,
+): SessionBrowserSearchState {
+  val normalizedQuery = query.trim()
+  var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
+  var searchLoading by remember { mutableStateOf(false) }
+
+  // Keyed on the live list too: row mutations refresh sessions and re-run an active search.
+  LaunchedEffect(normalizedQuery, archived, sessions) {
+    if (normalizedQuery.isEmpty()) {
+      searchResults = emptyList()
+      searchLoading = false
+      return@LaunchedEffect
+    }
+    searchResults = emptyList()
+    searchLoading = true
+    try {
+      // Key changes cancel superseded debounce/fetch work. The controller owns
+      // gateway search plus the offline local-filter fallback.
+      delay(250)
+      searchResults =
+        viewModel.fetchChatSessionList(
+          search = normalizedQuery,
+          archived = archived,
+        )
+    } finally {
+      searchLoading = false
+    }
+  }
+
+  return SessionBrowserSearchState(
+    query = normalizedQuery,
+    entries = if (normalizedQuery.isEmpty()) sessions else searchResults,
+    loading = searchLoading,
+  )
+}
+
+/** Applies the canonical active/current/archived filter and chronological ordering. */
+internal fun resolveSessionBrowserEntries(
+  entries: List<ChatSessionEntry>,
+  currentSessionKey: String,
+  filter: SessionFilter,
+  recentFirst: Boolean,
+): List<ChatSessionEntry> {
+  val filtered =
+    when (filter) {
+      SessionFilter.Recent -> entries.filter { it.archived != true }
+      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && it.archived != true }
+      // Gate on the entry's own archived flag so a pre-toggle active list can
+      // never render with archived-only actions while a refetch is in flight.
+      SessionFilter.Archived -> entries.filter { it.archived == true }
+    }
+  return if (recentFirst) {
+    filtered.sortedByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
+  } else {
+    filtered.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
+  }
 }
 
 internal fun sessionListSubtitle(
@@ -1038,9 +1088,3 @@ internal fun relativeSessionTime(
   val days = hours / 24
   return nativeString("\${days}d", days)
 }
-
-/** Prefers the editable label, then falls back to the gateway display name. */
-private fun displaySessionTitle(session: ChatSessionEntry): String =
-  session.label?.takeIf { it.isNotBlank() }
-    ?: session.displayName?.takeIf { it.isNotBlank() }
-    ?: nativeString("Main thread")

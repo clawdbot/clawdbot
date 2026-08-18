@@ -453,17 +453,18 @@ const COMMAND_CASES: readonly CommandCase[] = [
     expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
-    id: "gatewayHealthJsonConnected",
-    name: "gateway health --json (connected)",
+    id: "gatewayHealthJsonWarmState",
+    name: "gateway health --json (warm state)",
     args: ["gateway", "health", "--json"],
     presets: [],
     stateScope: "case",
   },
   {
-    id: "gatewayHealthJsonFirstDevice",
-    name: "gateway health --json (first device)",
+    id: "gatewayHealthJsonFreshState",
+    name: "gateway health --json (fresh state)",
     args: ["gateway", "health", "--json"],
     presets: [],
+    stateScope: "sample",
   },
   {
     id: "configGetGatewayPort",
@@ -689,11 +690,13 @@ function collectExitSummary(samples: Sample[]): string {
 }
 
 function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  const usesSharedToken =
+    commandCase.id === "gatewayHealthJsonWarmState" ||
+    commandCase.id === "gatewayHealthJsonFreshState";
   if (
     commandCase.id !== "configGetGatewayPort" &&
     commandCase.id !== "gatewayHealthJson" &&
-    commandCase.id !== "gatewayHealthJsonConnected" &&
-    commandCase.id !== "gatewayHealthJsonFirstDevice" &&
+    !usesSharedToken &&
     commandCase.id !== "health" &&
     commandCase.id !== "healthJson"
   ) {
@@ -702,7 +705,7 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
   return {
     gateway: {
-      auth: { mode: "none" },
+      auth: { mode: usesSharedToken ? "token" : "none" },
       bind: "loopback",
       mode: "local",
       port,

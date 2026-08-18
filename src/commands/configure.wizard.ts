@@ -62,6 +62,7 @@ import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
+type GatewayHealthCheckOutcome = "succeeded" | "failed" | "skipped";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
@@ -101,7 +102,7 @@ async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   port: number;
-}): Promise<boolean> {
+}): Promise<GatewayHealthCheckOutcome> {
   const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
     port: params.port,
@@ -143,7 +144,7 @@ async function runGatewayHealthCheck(params: {
       // A failed ref does not invalidate a resolved sibling config credential.
       // Skip only when generic health auth could otherwise recover ambient auth.
       if (!hasResolvedRemoteAuth) {
-        return false;
+        return "skipped";
       }
     }
     ({ token, password } = remoteProbeAuth.auth);
@@ -164,14 +165,16 @@ async function runGatewayHealthCheck(params: {
     password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
   }
 
-  await waitForGatewayReachable({
-    url: wsUrl,
-    token,
-    password,
-    deadlineMs: 15_000,
-  });
-
   try {
+    const gatewayProbe = await waitForGatewayReachable({
+      url: wsUrl,
+      token,
+      password,
+      deadlineMs: 15_000,
+    });
+    if (!gatewayProbe.ok) {
+      throw new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${wsUrl}`);
+    }
     await healthCommand(
       {
         json: false,
@@ -195,8 +198,9 @@ async function runGatewayHealthCheck(params: {
       ].join("\n"),
       "Health check help",
     );
+    return "failed";
   }
-  return true;
+  return "succeeded";
 }
 
 async function promptConfigureSection(
@@ -573,15 +577,17 @@ export async function runConfigureWizard(
       remoteConfig = committed.config;
       logConfigUpdated(runtime);
       if (selectedSections?.includes("health")) {
-        const healthCheckAttempted = await runGatewayHealthCheck({
+        const healthCheckOutcome = await runGatewayHealthCheck({
           cfg: remoteConfig,
           runtime,
           port: resolveGatewayPort(remoteConfig),
         });
         outro(
-          healthCheckAttempted
+          healthCheckOutcome === "succeeded"
             ? "Remote gateway configured and health check completed."
-            : "Remote gateway configured; health check skipped.",
+            : healthCheckOutcome === "failed"
+              ? "Remote gateway configured, but health check failed."
+              : "Remote gateway configured; health check skipped.",
         );
       } else {
         outro("Remote gateway configured.");

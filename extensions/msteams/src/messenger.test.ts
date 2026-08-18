@@ -485,7 +485,7 @@ describe("msteams messenger", () => {
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
     });
 
-    it("retries thread sends on throttling (429)", async () => {
+    it("retries thread sends after a replay-safe HTTP 429", async () => {
       const attempts: string[] = [];
       const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
 
@@ -785,22 +785,73 @@ describe("msteams messenger", () => {
       expect(capturedConversationId).toBe("19:abc@thread.tacv2");
     });
 
-    it("retries top-level sends on transient (5xx)", async () => {
-      const attempts: string[] = [];
+    it.each([408, 500, 502, 503, 504])(
+      "does not retry top-level sends after ambiguous HTTP %i",
+      async (statusCode) => {
+        const attempts: string[] = [];
 
-      const ids = await sendMSTeamsMessages({
+        const error = await sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({
+            createFn: createRecordedSendActivity(attempts, statusCode),
+          }),
+          appId: "app123",
+          conversationRef: baseRef,
+          messages: [{ text: "hello" }],
+          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+        }).catch((cause: unknown) => cause);
+
+        expect(attempts).toEqual(["hello"]);
+        expect(error).toMatchObject({ statusCode });
+      },
+    );
+
+    it.each(["ECONNABORTED", "ETIMEDOUT", "ECONNRESET"])(
+      "does not retry top-level sends after ambiguous transport %s",
+      async (code) => {
+        const attempts: string[] = [];
+        const error = await sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({
+            createFn: async (activity) => {
+              attempts.push((activity as { text?: string }).text ?? "");
+              throw Object.assign(new Error(code), { code });
+            },
+          }),
+          appId: "app123",
+          conversationRef: baseRef,
+          messages: [{ text: "hello" }],
+          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
+        }).catch((cause: unknown) => cause);
+
+        expect(attempts).toEqual(["hello"]);
+        expect(error).toMatchObject({ code });
+      },
+    );
+
+    it("does not replay accepted blocks when a later block has an ambiguous failure", async () => {
+      const attempts: string[] = [];
+      const error = await sendMSTeamsMessages({
         replyStyle: "top-level",
         app: createMockApp({
-          createFn: createRecordedSendActivity(attempts, 503),
+          createFn: async (activity) => {
+            const text = (activity as { text?: string }).text ?? "";
+            attempts.push(text);
+            if (text === "second") {
+              throw Object.assign(new Error("gateway timeout"), { statusCode: 504 });
+            }
+            return { id: `id:${text}` };
+          },
         }),
         appId: "app123",
         conversationRef: baseRef,
-        messages: [{ text: "hello" }],
-        retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
-      });
+        messages: [{ text: "first" }, { text: "second" }],
+        retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
+      }).catch((cause: unknown) => cause);
 
-      expect(attempts).toEqual(["hello", "hello"]);
-      expect(ids).toEqual(["id:hello"]);
+      expect(attempts).toEqual(["first", "second"]);
+      expect(error).toMatchObject({ statusCode: 504 });
+      expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
     });
 
     it("delivers all blocks in a multi-block reply via a single proactive send context (#29379)", async () => {

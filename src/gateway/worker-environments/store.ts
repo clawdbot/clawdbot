@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,6 +22,7 @@ import type {
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { isValidSecretRef } from "../../secrets/ref-contract.js";
+import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
@@ -41,6 +43,7 @@ import {
   type WorkerEnvironmentState,
   type WorkerEnvironmentUnleasedState,
 } from "./state.js";
+import { pruneExpiredTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
@@ -54,6 +57,8 @@ type RecordIdentity = { environmentId: string; providerId: string; profileId: st
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
   provisionOperationId: string;
+  nodeSetupId: string | null;
+  nodeDeviceId: string | null;
   sharedHost: boolean | null;
   desktop: WorkerDesktopEndpoint | null;
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null;
@@ -66,7 +71,11 @@ type RecordBase = RecordIdentity & {
   destroyRequestedAtMs: number | null;
 };
 type Ssh = WorkerEnvironmentSshEndpoint;
-type UnleasedRecord = { state: WorkerEnvironmentUnleasedState; leaseId: null; sshEndpoint: null };
+type UnleasedRecord = {
+  state: WorkerEnvironmentUnleasedState;
+  leaseId: null;
+  sshEndpoint: null;
+};
 type LeasedRecord = {
   state: WorkerEnvironmentLeasedState;
   leaseId: string;
@@ -83,6 +92,7 @@ export class WorkerSessionAlreadyAttachedError extends Error {
 }
 export type WorkerEnvironmentTransitionPatch = {
   leaseId?: string | null;
+  nodeDeviceId?: string | null;
   sshEndpoint?: WorkerEnvironmentSshEndpoint | null;
   sharedHost?: boolean;
   desktop?: WorkerDesktopEndpoint | null;
@@ -93,6 +103,7 @@ export type WorkerEnvironmentTransitionPatch = {
 };
 type WorkerDb = Pick<
   StateDatabase,
+  | "device_pair_setup_completions"
   | "worker_environment_credentials"
   | "worker_environment_ssh_fallback_ports"
   | "worker_environments"
@@ -416,17 +427,24 @@ function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | nul
 function assertShape(
   state: WorkerEnvironmentState,
   leaseId: string | null,
+  nodeDeviceId: string | null,
   sshEndpoint: Ssh | null,
   desktop: WorkerDesktopEndpoint | null,
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null,
   attachedSessionIds: readonly string[],
 ): void {
+  if (sshEndpoint && nodeDeviceId) {
+    throw new Error("Worker environment cannot retain both SSH and node transports");
+  }
   if (workerEnvironmentStateRequiresLease(state)) {
     if (!leaseId) {
       throw new Error(`Worker environment state ${state} requires a provider lease`);
     }
     if (state === "bootstrapping" && !sshEndpoint) {
       throw new Error("Worker environment bootstrap requires an SSH endpoint reference");
+    }
+    if (state === "ready" && !sshEndpoint && !nodeDeviceId) {
+      throw new Error("Ready worker environment requires a transport binding");
     }
   } else if (leaseId || sshEndpoint || desktop) {
     throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
@@ -474,6 +492,8 @@ function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentR
     profileId: row.profile_id,
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
     provisionOperationId: row.provision_operation_id,
+    nodeSetupId: row.node_setup_id,
+    nodeDeviceId: row.node_device_id,
     sharedHost: row.shared_host === null ? null : row.shared_host === 1,
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row, fallbackPorts),
@@ -495,6 +515,7 @@ function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentR
   assertShape(
     record.state,
     record.leaseId,
+    record.nodeDeviceId,
     record.sshEndpoint,
     record.desktop,
     record.bootstrapReceipt,
@@ -572,6 +593,49 @@ function findCredentialByHash(db: DatabaseSync, credentialHash: string) {
       .where("credential_hash", "=", credentialHash),
   );
   return row ? credentialFromRow(row) : undefined;
+}
+function findTransferOwner(db: DatabaseSync, environmentId: string) {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_environments")
+      .leftJoin(
+        "worker_environment_credentials",
+        "worker_environment_credentials.environment_id",
+        "worker_environments.environment_id",
+      )
+      .select([
+        "worker_environments.owner_epoch as environment_owner_epoch",
+        "worker_environments.attached_session_ids_json",
+        "worker_environments.destroy_requested_at_ms",
+        "worker_environments.state",
+        "worker_environment_credentials.owner_epoch as credential_owner_epoch",
+        "worker_environment_credentials.expires_at_ms",
+        "worker_environment_credentials.session_id",
+      ])
+      .where("worker_environments.environment_id", "=", environmentId),
+  );
+  if (!row) {
+    return undefined;
+  }
+  return {
+    environment: {
+      ownerEpoch: row.environment_owner_epoch,
+      attachedSessionIds: normalizeAttachedSessionIds(
+        JSON.parse(row.attached_session_ids_json) as unknown,
+      ),
+      destroyRequestedAtMs: row.destroy_requested_at_ms,
+      state: row.state,
+    },
+    credential:
+      row.credential_owner_epoch === null || row.expires_at_ms === null
+        ? undefined
+        : {
+            ownerEpoch: row.credential_owner_epoch,
+            expiresAtMs: row.expires_at_ms,
+            sessionId: row.session_id,
+          },
+  };
 }
 function getRequired(db: DatabaseSync, environmentId: string) {
   const record = find(db, environmentId);
@@ -827,6 +891,8 @@ export function createWorkerEnvironmentStore(
                 "provision operation id",
               ),
               lease_id: null,
+              node_setup_id: null,
+              node_device_id: null,
               shared_host: null,
               ssh_host: null,
               ssh_port: null,
@@ -853,11 +919,60 @@ export function createWorkerEnvironmentStore(
       });
     },
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
+    ensureNodeEnrollment(environmentIdInput: string): WorkerEnvironmentRecord {
+      const environmentId = required(environmentIdInput, "id");
+      return write((db) => {
+        ensureWorkerEnvironmentNodeEnrollmentSchema(db);
+        const current = getRequired(db, environmentId);
+        if (TERMINAL_STATES.includes(current.state) || current.destroyRequestedAtMs !== null) {
+          throw new Error(`Worker environment ${environmentId} cannot begin node enrollment`);
+        }
+        const setupId = current.nodeSetupId ?? randomUUID();
+        const completion = executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom("device_pair_setup_completions")
+            .select("device_id")
+            .where("setup_id", "=", setupId),
+        );
+        const completedDeviceId = completion?.device_id ?? null;
+        if (
+          current.nodeDeviceId !== null &&
+          completedDeviceId !== null &&
+          current.nodeDeviceId !== completedDeviceId
+        ) {
+          throw new Error(`Worker environment ${environmentId} node enrollment identity changed`);
+        }
+        const nodeDeviceId = current.nodeDeviceId ?? completedDeviceId;
+        if (current.nodeSetupId === setupId && current.nodeDeviceId === nodeDeviceId) {
+          return current;
+        }
+        return update(db, environmentId, current.state, {
+          node_setup_id: setupId,
+          node_device_id: nodeDeviceId,
+          updated_at_ms: now(),
+        });
+      });
+    },
     getCredential: (environmentId: string) => findCredential(read(), required(environmentId, "id")),
+    getTransferOwner: (environmentId: string) =>
+      findTransferOwner(read(), required(environmentId, "id")),
+    revokeEnvironmentCredential(environmentId: string): void {
+      return write((db) => revokeCredential(db, required(environmentId, "id")));
+    },
     findCredentialByHash: (credentialHash: string) =>
       findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
     list: (): WorkerEnvironmentRecord[] => listRows(read(), false),
     listForReconcile: (): WorkerEnvironmentRecord[] => listRows(read(), true),
+    pruneTerminalEnvironments(params: { nowMs?: number; limit?: number } = {}): number {
+      return write((db) =>
+        pruneExpiredTerminalWorkerEnvironments({
+          db,
+          nowMs: params.nowMs ?? now(),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
+        }),
+      );
+    },
     reconcileSharedHost(input: {
       environmentId: string;
       state: WorkerEnvironmentState;
@@ -958,6 +1073,19 @@ export function createWorkerEnvironmentStore(
         if (current.leaseId && leaseId !== current.leaseId && !clearsLeaseAfterTeardownFailure) {
           throw new Error("Worker environment provider lease id is immutable once persisted");
         }
+        const nodeDeviceId =
+          patch.nodeDeviceId === undefined
+            ? (current.nodeDeviceId ?? null)
+            : patch.nodeDeviceId === null
+              ? null
+              : required(patch.nodeDeviceId, "node device id");
+        if (
+          current.nodeDeviceId &&
+          nodeDeviceId !== current.nodeDeviceId &&
+          !clearsLeaseAfterTeardownFailure
+        ) {
+          throw new Error("Worker environment node device id is immutable once persisted");
+        }
         const sshEndpoint =
           patch.sshEndpoint === undefined
             ? current.sshEndpoint
@@ -1015,7 +1143,15 @@ export function createWorkerEnvironmentStore(
             : patch.attachedSessionIds === undefined
               ? current.attachedSessionIds
               : normalizeAttachedSessionIds(patch.attachedSessionIds);
-        assertShape(to, leaseId, sshEndpoint, desktop, bootstrapReceipt, attachedSessionIds);
+        assertShape(
+          to,
+          leaseId,
+          nodeDeviceId,
+          sshEndpoint,
+          desktop,
+          bootstrapReceipt,
+          attachedSessionIds,
+        );
         const [attachedSessionId] = attachedSessionIds;
         if (to === "attached" && attachedSessionId) {
           // Change session ownership atomically with worker state.
@@ -1055,6 +1191,7 @@ export function createWorkerEnvironmentStore(
             : current.ownerEpoch;
         updateRow(db, environmentId, from, {
           lease_id: leaseId,
+          node_device_id: nodeDeviceId,
           shared_host: sharedHost === null ? null : sharedHost ? 1 : 0,
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,

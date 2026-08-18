@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -27,10 +28,12 @@ describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
-  it("retains a cloud result when reconciliation fails after worker finishing", async () => {
+  it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
     seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
-    const tunnelFailure = new Error("worker tunnel disconnected before workspace reconcile");
+    const tunnelFailure = new NodeWorkerWorkspaceTransferError(
+      "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+    );
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
@@ -39,7 +42,8 @@ describe("worker turn launcher terminal results", () => {
         resume: vi.fn(async () => {}),
       })),
       runWorkspaceCommand: vi.fn(),
-      launchTurn: vi.fn(async (): Promise<SpawnResult> => {
+      launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+        request.onDispatchReady?.();
         const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
@@ -48,10 +52,7 @@ describe("worker turn launcher terminal results", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-reconcile-tunnel-loss",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });
@@ -84,7 +85,18 @@ describe("worker turn launcher terminal results", () => {
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const reconcileActivePlacement = vi.fn(async () => {
+      const [pending] = placements.listPendingWorkspaceResults();
+      if (!pending) {
+        throw new Error("expected pending workspace result");
+      }
+      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement,
+    });
 
     await expect(
       provider.executeTurn(
@@ -99,14 +111,12 @@ describe("worker turn launcher terminal results", () => {
       ),
     ).rejects.toMatchObject({
       message:
-        "Cloud worker finished, but its workspace result could not be reconciled: worker tunnel disconnected before workspace reconcile",
+        "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
     });
 
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "active",
-      turnClaim: { runId: "run-reconcile-tunnel-loss" },
-    });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
     expect(destroy).not.toHaveBeenCalled();
   });
 
@@ -124,7 +134,8 @@ describe("worker turn launcher terminal results", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
-        launchTurn: vi.fn(async (): Promise<SpawnResult> => {
+        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+          request.onDispatchReady?.();
           const completed = openSessionManager();
           completed.appendMessage(
             makeAgentAssistantMessage({
@@ -173,10 +184,7 @@ describe("worker turn launcher terminal results", () => {
             }),
           );
           createWorkerSessionPlacementGate(placements).updateAckCursors({
-            sessionId: SESSION_ID,
-            environmentId: ENVIRONMENT_ID,
-            ownerEpoch: OWNER_EPOCH,
-            runId: "run-worker-usage",
+            claim: request.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
           });

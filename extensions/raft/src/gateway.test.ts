@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedRaftAccount } from "./accounts.js";
 import { startRaftGatewayAccount } from "./gateway.js";
+import { dispatchRaftWake } from "./inbound.js";
 
 class FakeBridge extends EventEmitter {
   kill = vi.fn(() => true);
@@ -54,6 +55,7 @@ function createContext(accountId = "default") {
       await turn.delivery.deliver();
     },
   );
+  const buildContext = vi.fn(() => ({}));
   const ctx = {
     cfg: {},
     accountId,
@@ -84,7 +86,7 @@ function createContext(accountId = "default") {
       },
       inbound: {
         run,
-        buildContext: vi.fn(() => ({})),
+        buildContext,
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw-agent.sqlite"),
@@ -99,6 +101,7 @@ function createContext(accountId = "default") {
     ctx: ctx as unknown as ChannelGatewayContext<ResolvedRaftAccount>,
     controller: new AbortController(),
     run,
+    buildContext,
     wakeDedupe: createChannelReplayGuard<{ accountId: string; key: string }>({
       dedupe: { ttlMs: 0, memoryMaxSize: 10_000 },
       buildReplayKey: (event) => event.key,
@@ -144,6 +147,13 @@ afterEach(() => {
 });
 
 describe("Raft wake gateway", () => {
+  it("marks the internal wake path explicitly unsupported", async () => {
+    const { ctx, buildContext } = createContext();
+    await dispatchRaftWake({ ctx });
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ channelIngress: "unsupported" }),
+    );
+  });
   it("keeps a disabled account quiescent until shutdown", async () => {
     const { ctx, controller, wakeDedupe } = createContext();
     Object.defineProperty(ctx, "abortSignal", { value: controller.signal });

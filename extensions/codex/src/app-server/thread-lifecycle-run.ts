@@ -187,6 +187,8 @@ export async function startOrResumeThread(
         hostSystemAgentActive,
         restrictedToolSurface,
         restrictedToolSurfaceInheritedMcpServerNames,
+        shellEnvironment: params.shellEnvironment,
+        disableLoginShell: params.disableLoginShell,
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
@@ -241,6 +243,13 @@ export async function startOrResumeThread(
       }
       binding = undefined;
     };
+    if (
+      binding?.threadId &&
+      !restrictedToolSurface &&
+      binding.nativeToolPolicyRestricted === true
+    ) {
+      await clearCurrentBinding("rotating a host-policy-restricted thread binding");
+    }
     if (
       binding?.threadId &&
       binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint
@@ -652,6 +661,7 @@ export async function startOrResumeThread(
           environmentSelectionFingerprint,
           hostSystemAgentActive,
           ringZeroActive,
+          restrictedToolSurface,
           restrictedToolSurfaceInheritedMcpServerNames,
           nativeSkillIsolation,
           lifecycleTiming,
@@ -687,6 +697,7 @@ export async function startOrResumeThread(
       environmentSelectionFingerprint,
       hostSystemAgentActive,
       ringZeroActive,
+      restrictedToolSurface,
       restrictedToolSurfaceInheritedMcpServerNames,
       nativeSkillIsolation,
       lifecycleTiming,

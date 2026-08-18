@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -61,7 +61,6 @@ function planHash(input: ReturnType<typeof testWorkerLaunchInput>): string {
   return createHash("sha256")
     .update(
       stableStringify({
-        installKind: input.installKind,
         expectedBundleHash: input.expectedBundleHash,
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
@@ -217,6 +216,34 @@ describe("node worker supervisor recovery", () => {
     await supervisor.close();
   });
 
+  it("releases a stale pending slot during restart reconciliation", async () => {
+    const { bundleRoot, env, workspaceDir } = fixture("node-worker-restart-pending-");
+    new NodeWorkerLaunchStore({ env }).get("schema-probe");
+    const input = testWorkerLaunchInput(workspaceDir, "restart-pending-launch");
+    insertLaunch({
+      env,
+      input,
+      state: "pending",
+      supervisor: { pid: 2_147_483_647, startTime: 1 },
+    });
+    const availability: boolean[] = [];
+    const supervisor = createNodeWorkerSupervisor({
+      bundleRoot,
+      env,
+      capacity: 1,
+      onAvailabilityChanged: (available) => availability.push(available),
+    });
+
+    await supervisor.initialize();
+
+    expect(await supervisor.status(input.launchId)).toMatchObject({
+      state: "interrupted",
+      worker: null,
+    });
+    expect(availability).toEqual([false, true]);
+    await supervisor.close();
+  });
+
   it.runIf(process.platform !== "win32").each([
     { operation: "replay" as const, state: "interrupted" as const },
     { operation: "cancel" as const, state: "cancelled" as const },
@@ -239,7 +266,7 @@ describe("node worker supervisor recovery", () => {
       spawned.add(workerProcess);
       const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
       ownedProcessGroups.push(worker);
-      await vi.waitFor(() => expect(fs.existsSync(marker)).toBe(true));
+      await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toMatch(/^[1-9]\d*$/u));
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
@@ -321,7 +348,9 @@ describe("node worker supervisor recovery", () => {
       const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
       ownedProcessGroups.push(owned.worker!);
       const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-      await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+      await vi.waitFor(() =>
+        expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u),
+      );
       const grandchild = requireNodeWorkerProcessIdentity(
         Number(fs.readFileSync(grandchildPath, "utf8")),
       );
@@ -374,6 +403,7 @@ describe("node worker supervisor recovery", () => {
         const result = store.claim(
           JSON.parse(fs.readFileSync(claimPath, "utf8")),
           requireNodeWorkerProcessIdentity(process.pid),
+          2,
         );
         process.stdout.write(JSON.stringify(result.receipt) + "\\n");
         setInterval(() => {}, 1000);

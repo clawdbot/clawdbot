@@ -84,6 +84,7 @@ function setGatewayAuthNoneForTest() {
 async function requestUpgradeRejection(
   port: number,
   path = "/",
+  headers: Record<string, string> = {},
 ): Promise<{ status: number; body: string }> {
   return await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = http.request({
@@ -95,6 +96,7 @@ async function requestUpgradeRejection(
         Upgrade: "websocket",
         "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
         "Sec-WebSocket-Version": "13",
+        ...headers,
       },
     });
     req.once("upgrade", (_res, socket) => {
@@ -232,6 +234,52 @@ describe("gateway pre-auth hardening", () => {
     }
   });
 
+  it("rejects unattributable proxy traffic on the public worker path", async () => {
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const accepted = vi.fn();
+    wss.on("connection", accepted);
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      clients,
+      preauthConnectionBudget: createPreauthConnectionBudget(1),
+      resolvedAuth,
+      workerIngressEnabled: true,
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    try {
+      const response = await requestUpgradeRejection(port, WORKER_PUBLIC_INGRESS_PATH, {
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.example",
+      });
+      expect(response.status).toBe(403);
+      expect(response.body).toContain("proxy_attribution_required");
+      expect(accepted).not.toHaveBeenCalled();
+    } finally {
+      wss.close();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("admits the production worker client over the public path without a gateway challenge", async () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -255,6 +303,7 @@ describe("gateway pre-auth hardening", () => {
           bundleHash: "a".repeat(64),
           sessionId: null,
           runId: null,
+          turnClaim: null,
           ownerEpoch: 1,
           rpcSetVersion: 1,
           protocolFeatures: [],

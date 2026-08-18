@@ -10,6 +10,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 const PLUGIN_WORKSPACE_SCOPE_OMITTED_DIAGNOSTIC_CODE = "workspace-scope-omitted" as const;
 
 type PluginControlPlaneWorkspaceResolution = {
+  agentId?: string;
   workspaceDir?: string;
   workspaceScope: "selected" | "omitted";
   diagnostic?: PluginDiagnostic;
@@ -35,6 +36,7 @@ export function resolvePluginControlPlaneWorkspace(params: {
     : undefined;
   if (workspaceDir) {
     return {
+      agentId,
       workspaceDir,
       workspaceScope: "selected",
     };

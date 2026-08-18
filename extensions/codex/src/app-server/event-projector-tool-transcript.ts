@@ -313,9 +313,8 @@ export class CodexToolTranscriptProjection {
     }
     this.rawNativeToolOutputByCallId.set(callId, text);
     const result = this.messages.find(
-      (message) =>
-        message.role === "toolResult" &&
-        (message as unknown as { toolCallId?: unknown }).toolCallId === callId,
+      (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+        message.role === "toolResult" && message.toolCallId === callId,
     );
     if (!result) {
       if (NATIVE_PATCH_REJECTION_RE.test(text)) {
@@ -336,11 +335,9 @@ export class CodexToolTranscriptProjection {
       id: callId,
       name: "apply_patch",
       text,
-      isError: (result as unknown as { isError?: unknown }).isError === true,
+      isError: result.isError,
     });
-    (result as unknown as { content: unknown }).content = (
-      replacement as unknown as { content: unknown }
-    ).content;
+    result.content = replacement.content;
   }
 
   async recordNativeToolResultWithDetails(item: CodexThreadItem | undefined): Promise<void> {
@@ -467,6 +464,7 @@ export class CodexToolTranscriptProjection {
           name,
           text: formatMissingToolResultError({ id, name }),
           isError: true,
+          details: { reason: "missing_tool_result" },
         });
       }
     }
@@ -599,7 +597,9 @@ export class CodexToolTranscriptProjection {
     } as unknown as AgentMessage;
   }
 
-  private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
+  private createToolResultMessage(
+    params: ToolTranscriptResultInput,
+  ): Extract<AgentMessage, { role: "toolResult" }> {
     const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
     return {
       role: "toolResult",
@@ -624,7 +624,7 @@ export class CodexToolTranscriptProjection {
         ? { __openclaw: { resultContentSource: params.resultContentSource } }
         : {}),
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as AgentMessage;
+    } as unknown as Extract<AgentMessage, { role: "toolResult" }>;
   }
 }
 

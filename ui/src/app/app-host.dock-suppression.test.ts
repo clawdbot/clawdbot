@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import "./app-host.ts";
@@ -14,7 +15,10 @@ import type { ApplicationContext } from "./context.ts";
 type ShellRenderState = {
   runtime: ApplicationRuntime;
   activeSessionKey: string;
-  routeState: { routeId: RouteId };
+  routeState: {
+    routeId: RouteId;
+    location?: { hash: string; pathname: string; search: string };
+  };
   render: () => TemplateResult;
 };
 
@@ -51,8 +55,17 @@ describe("OpenClaw shell dock suppression", () => {
         connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
         connect: vi.fn(),
       },
-      agents: { state: { agentsList: null } },
-      agentSelection: { state: { selectedId: "main" } },
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }, { id: "research" }],
+          },
+        },
+      },
+      agentSelection: { state: { selectedId: "research" } },
       config: {
         current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },
       },
@@ -93,12 +106,8 @@ describe("OpenClaw shell dock suppression", () => {
           approvalErrors: new Map(),
           approvalNowMs: 0,
           devicePairSetupOpen: false,
-          devicePairSetupLoading: false,
-          devicePairSetupError: null,
-          devicePairSetup: null,
-          devicePairSetupAccess: "full",
+          devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,
-          deviceAuthMigration: { error: null },
         },
         runUpdate: vi.fn(),
       },
@@ -111,13 +120,22 @@ describe("OpenClaw shell dock suppression", () => {
     const container = document.createElement("div");
     const desktopAvailable = () =>
       (
-        container.querySelector("openclaw-desktop-panel") as HTMLElement & {
-          available: boolean;
-        }
-      ).available;
+        container.querySelector("openclaw-desktop-panel") as
+          | (HTMLElement & {
+              available: boolean;
+            })
+          | null
+      )?.available ?? false;
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("research");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
@@ -145,14 +163,50 @@ describe("OpenClaw shell dock suppression", () => {
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
+    const custodianToggle = container.querySelector<HTMLButtonElement>(
+      ".shell-chrome-controls__custodian",
+    );
+    expect(custodianToggle).not.toBeNull();
+    const toggleListener = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
+    custodianToggle?.click();
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
+    expect(toggleListener).toHaveBeenCalledOnce();
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
+          sessionBottomOnly: boolean;
         }
-      ).suppressed,
-    ).toBe(false);
-    expect(desktopAvailable()).toBe(true);
+      ).sessionBottomOnly,
+    ).toBe(true);
+    expect(container.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
+
+    shell.routeState = {
+      routeId: "new-session",
+      location: { pathname: "/new-session", search: "?agent=missing", hash: "" },
+    };
+    renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("research");
+
+    shell.routeState = {
+      routeId: "new-session",
+      location: { pathname: "/new-session", search: "?agent=main", hash: "" },
+    };
+    renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("main");
 
     context.sessions.state.result!.sessions = [
       {
@@ -174,5 +228,25 @@ describe("OpenClaw shell dock suppression", () => {
     context.sessions.state.result = null;
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
+
+    context.gateway.snapshot.hello!.features!.methods = [
+      "terminal.open",
+      "browser.request",
+      "desktop.observe",
+    ];
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+
+    // Advertised but read-scoped: openclaw.chat requires operator.admin, so the
+    // control must hide instead of opening a panel the store refuses to use.
+    context.gateway.snapshot.hello!.features!.methods = [
+      "terminal.open",
+      "browser.request",
+      "openclaw.chat",
+      "desktop.observe",
+    ];
+    context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   });
 });

@@ -288,6 +288,8 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
+    "secrets.egressProxy.enabled",
+    "secrets.egressProxy.bypassHosts",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
@@ -347,7 +349,6 @@ describe("buildGatewayReloadPlan", () => {
     "agents.defaults.compaction.model",
     "agents.defaults.compaction.maxActiveTranscriptBytes",
     "agents.defaults.compaction.memoryFlush.model",
-    "agents.defaults.contextTokens",
     "agents.defaults.contextPruning.mode",
     "agents.defaults.contextLimits.postCompactionMaxChars",
     "agents.defaults.timeoutSeconds",

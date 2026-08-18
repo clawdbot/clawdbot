@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderChatThread } from "./chat-thread.ts";
@@ -49,6 +49,52 @@ describe("chat transcript controller", () => {
     for (const row of chatRows) {
       expect(observedElements.has(row)).toBe(false);
     }
+  });
+
+  it("measures newly inserted rows after Lit connects them", async () => {
+    // Lit invokes ref callbacks while a new row is still detached. Browsers
+    // report a zero offsetHeight there, which must not become the row's
+    // durable virtual size before the following user bubble is positioned.
+    transcriptDomState.detachedRowHeight = 0;
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("pane-commentary-insert", "agent:main:session-a", [
+      { role: "assistant", content: "commentary", timestamp: 1_000 },
+      { role: "user", content: "next turn", timestamp: 2_000 },
+    ]);
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    render(renderChatThread(props, transcript), container);
+
+    expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
+  });
+
+  it("uses persisted row measurements before remounted rows can be measured", async () => {
+    const measured = new Map<string, number>();
+    const first = createTestTranscript({
+      read: () => undefined,
+      write: (_sessionKey, rowKey, height) => measured.set(rowKey, height),
+    });
+    const props = threadProps("pane-persisted-heights", "agent:main:persisted-heights");
+    const firstContainer = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, first), firstContainer);
+    first.hostConnected();
+    first.hostUpdated();
+    await flushDeferredRowPrune();
+    expect(measured.size).toBeGreaterThan(0);
+
+    transcriptDomState.detachedRowHeight = 0;
+    const remounted = createTestTranscript({
+      read: (_sessionKey, rowKey) => measured.get(rowKey),
+      write: () => undefined,
+    });
+    const remountContainer = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, remounted), remountContainer);
+
+    expect(transcriptRows(remountContainer)[1]?.style.transform).toBe("translateY(100px)");
   });
 
   it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
@@ -110,6 +156,14 @@ describe("chat transcript controller", () => {
 
     const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
     expect(scrollElement).not.toBeNull();
+    // Establish the real viewport baseline first: zero rects from jsdom's
+    // 0-width offsetWidth are ignored as hide transitions, matching browsers
+    // where the initial attach rect is the true width.
+    for (const observer of resizeObservers) {
+      if (observer.observes(scrollElement!)) {
+        observer.emit(800, 600);
+      }
+    }
     scrollElement!.scrollTop = 40;
     scrollElement!.dispatchEvent(new Event("scroll"));
     const virtualizer = (
@@ -194,4 +248,68 @@ describe("chat transcript controller", () => {
       transcript.hostDisconnected();
     },
   );
+
+  it("re-attaches the virtualizer when a foreign host re-stamps the transcript", async () => {
+    const transcript = createTestTranscript();
+    const props = threadProps("pane-foreign-stamp");
+    const chatFace = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, transcript), chatFace);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    const chatScroller = chatFace.querySelector<HTMLElement>(".chat-thread");
+    expect(chatScroller).not.toBeNull();
+    expect(observedElements.has(chatScroller!)).toBe(true);
+
+    // Dashboard face: the pane unmounts the transcript and finishes its update.
+    render(nothing, chatFace);
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    // Split restore: the sidebar region — a different Lit host that receives
+    // the chat template as a property — stamps the transcript in its own
+    // update cycle. The pane does not update again, so attachment must follow
+    // the ref-recorded DOM identity rather than the pane's render cycle.
+    const dock = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, transcript), dock);
+    await flushDeferredRowPrune();
+
+    const dockScroller = dock.querySelector<HTMLElement>(".chat-thread");
+    expect(dockScroller).not.toBeNull();
+    expect(observedElements.has(dockScroller!)).toBe(true);
+    expect(transcriptRows(dock).length).toBeGreaterThan(0);
+    transcript.hostDisconnected();
+  });
+
+  it("keeps rendering rows after a hide-transition zero rect", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const messages = Array.from({ length: 40 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index + 1,
+    }));
+    const props = threadProps("pane-zero-rect", "agent:main:zero-rect", messages);
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
+    expect(scrollElement).not.toBeNull();
+    expect(transcriptRows(container).length).toBeGreaterThan(0);
+
+    // A pane cache or face switch hiding the transcript reports a 0x0 rect.
+    // It must not become the virtualizer's viewport (an empty range renders a
+    // blank transcript) nor count as a width change that wipes measurements.
+    for (const observer of resizeObservers) {
+      if (observer.observes(scrollElement!)) {
+        observer.emit(0, 0);
+      }
+    }
+    render(renderChatThread(props, transcript), container);
+    transcript.hostUpdated();
+
+    expect(transcriptRows(container).length).toBeGreaterThan(0);
+    transcript.hostDisconnected();
+  });
 });

@@ -1,6 +1,7 @@
 // Outbound channel bootstrap lazily loads runtime plugins for selected channels
 // when only setup-shell metadata is active.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -101,7 +102,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   // explicit fleets do not fall back to forbidden ambient-agent selection.
   const agentId = params.agentId?.trim()
     ? normalizeAgentId(params.agentId)
-    : resolveDefaultAgentId(cfg);
+    : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
   const outcomeKey = `${agentId}\0${params.channel}`;
   const registries = resolveBootstrapRegistries(cfg);
   const cachedRegistry = registries.get(outcomeKey);
@@ -111,7 +112,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   }
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const pluginIds = resolveDiscoverableScopedChannelPluginIds({
     config: autoEnabled.config,
     activationSourceConfig: cfg,

@@ -5,6 +5,7 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
@@ -325,7 +326,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 key: target.canonicalKey,
                 compacted: trimResult.compacted,
                 ...(trimResult.compacted
-                  ? { archived: trimResult.archived, kept: trimResult.kept }
+                  ? { kept: trimResult.kept }
                   : "kept" in trimResult
                     ? { kept: trimResult.kept }
                     : { reason: "no transcript" }),
@@ -403,8 +404,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           if (result.ok && result.compacted) {
             let persisted: boolean;
             try {
-              // Guarded terminal persist: skip when session ownership rotated
-              // while compaction ran (sessionId/lifecycleRevision/work-start).
+              // Skip terminal persistence when session ownership rotated during compaction.
               const persistProjection = await applySessionPatchProjection({
                 agentId: target.agentId,
                 sessionKeys: [compactTarget.primaryKey],
@@ -423,6 +423,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   entryToUpdate.updatedAt = Date.now();
                   entryToUpdate.compactionCount =
                     Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+                  if (result.compactionKind === "context-engine") {
+                    clearAllCliSessions(entryToUpdate);
+                  }
                   if (
                     result.result?.sessionId &&
                     result.result.sessionId !== entryToUpdate.sessionId

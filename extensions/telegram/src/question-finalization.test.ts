@@ -40,13 +40,13 @@ describe("Telegram question finalization", () => {
         {
           channel: "telegram",
           messageId: "54",
-          chatId: "123",
+          target: { kind: "chat", id: "123" },
           meta: { telegramDeliveredText: "Long preface", telegramHasInlineKeyboard: false },
         },
         {
           channel: "telegram",
           messageId: "55",
-          chatId: "123",
+          target: { kind: "chat", id: "123" },
           meta: { telegramDeliveredText: "Pick one", telegramHasInlineKeyboard: true },
         },
       ],

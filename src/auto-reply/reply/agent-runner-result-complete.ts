@@ -16,16 +16,14 @@ import {
   markBeforeAgentRunBlockedPayloads,
   resolveReplyRunDeliveryContext,
   resolveSourceReplyPolicy,
+  normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
-import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import {
   accumulateSessionUsageFromTranscript,
   buildInlineRawTracePayload,
   derivePromptSegments,
-} from "./agent-runner-trace.js";
-import {
   type TraceCompletionView,
   type TraceContextManagementView,
   type TraceExecutionView,
@@ -134,18 +132,13 @@ export async function completeReplyAgentRun(input: {
 
     // Inject post-compaction workspace context for the next agent turn
     if (sessionKey) {
-      readPostCompactionContext(followupRun.run.workspaceDir, {
+      const contextContent = await readPostCompactionContext(followupRun.run.workspaceDir, {
         cfg,
         agentId: followupRun.run.agentId,
-      })
-        .then((contextContent) => {
-          if (contextContent) {
-            enqueueSystemEvent(contextContent, { sessionKey });
-          }
-        })
-        .catch(() => {
-          // Silent failure — post-compaction context is best-effort
-        });
+      });
+      if (contextContent) {
+        enqueueSystemEvent(contextContent, { sessionKey });
+      }
     }
 
     if (verboseEnabled) {

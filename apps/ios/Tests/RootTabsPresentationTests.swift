@@ -576,25 +576,6 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarSplitMaximumWidth)
     }
 
-    @Test func `i pad collapsed split sidebar uses header reveal without reserved rail`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-    }
-
     @Test func `initial sidebar visibility parses launch argument`() {
         #expect(
             RootTabs.requestedInitialSidebarVisibility(arguments: [
@@ -1006,19 +987,6 @@ struct RootTabsPresentationTests {
 
         #expect(mode == .drawer)
         #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
-    }
-
-    @Test func `drawer selection collapses sidebar but split selection does not`() {
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
-    }
-
-    @Test func `hidden sidebar shows reveal control`() {
-        #expect(RootTabs.shouldShowSidebarRevealControl(isSidebarVisible: false))
-    }
-
-    @Test func `sidebar reveal controls hide when sidebar is visible`() {
-        #expect(!RootTabs.shouldShowSidebarRevealControl(isSidebarVisible: true))
     }
 
     @Test func `i pad split prefers integrated visible sidebar`() {

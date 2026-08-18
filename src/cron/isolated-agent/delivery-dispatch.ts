@@ -15,6 +15,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   buildDirectCronTranscriptMirrorPayloads,
@@ -162,6 +163,7 @@ export async function dispatchCronDelivery(
     const {
       buildOutboundSessionContext,
       createOutboundSendDeps,
+      durableMessageBatchMayHaveReachedRecipient,
       resolveAgentOutboundIdentity,
       resolveCronChannelReplyTransform,
       sendDurableMessageBatchCore,
@@ -322,15 +324,8 @@ export async function dispatchCronDelivery(
             attemptedPayloadsForMirror.push(payload);
           },
         });
-        // No durable id is still ambiguous: the adapter was already invoked.
         payloadMayHaveReachedRecipientBeforeFailure ||=
-          send.payloadOutcomes?.some(
-            (outcome) =>
-              outcome.status === "sent" ||
-              (outcome.status === "failed" && outcome.sentBeforeError) ||
-              (outcome.status === "suppressed" &&
-                outcome.reason === "adapter_returned_no_identity"),
-          ) ?? false;
+          durableMessageBatchMayHaveReachedRecipient(send);
         if (
           send.status === "failed" &&
           (await waitForCompletedDirectCronDelivery({
@@ -490,7 +485,7 @@ export async function dispatchCronDelivery(
           status: "error",
           summary,
           outputText,
-          error: String(err),
+          error: normalizeCronRunErrorText(err),
           deliveryAttempted,
           ...params.telemetry,
         });

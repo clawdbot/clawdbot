@@ -26,10 +26,6 @@
   word-break: break-word;
 }
 
-.chat-message-disclosure__preview {
-  white-space: pre-wrap;
-}
-
 .chat-message-disclosure__toggle {
   display: inline-flex;
   align-items: center;
@@ -97,9 +93,16 @@
 /* Keep every adjacent top-level Markdown block on the same rhythm, including
    special blocks that otherwise read as part of the preceding block. */
 .chat-text
-  :where(p, ul, ol, pre, blockquote, table, details)
+  > :where(p, ul, ol, pre, blockquote, table, details)
   + :where(p, ul, ol, pre, blockquote, table, details) {
-  margin-top: 0.75em;
+  margin-top: 1em;
+}
+
+.chat-text
+  :where(blockquote, details, li)
+  > :where(p, ul, ol, pre, blockquote, table, details)
+  + :where(p, ul, ol, pre, blockquote, table, details) {
+  margin-top: 0.5em;
 }
 
 /* Tables retain top margin even when first; the adjacent-block rule above gives
@@ -171,7 +174,7 @@
 }
 
 :is(.chat-text, .chat-thinking) {
-  --chat-markdown-indent: var(--space-7);
+  --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);
 }
 
@@ -179,13 +182,12 @@
   padding-inline-start: var(--chat-markdown-indent);
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)) {
-  margin-inline-start: var(--space-3);
-  padding-inline-start: calc(var(--chat-markdown-indent) - var(--space-3));
-}
-
 .chat-text :where(li + li) {
   margin-top: 0.4em;
+}
+
+.chat-text :where(li > ul, li > ol) {
+  margin-top: 0.2em;
 }
 
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
@@ -196,6 +198,8 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   list-style: none;
+  margin-inline-start: calc(-1 * var(--chat-markdown-indent));
+  padding-inline-start: calc(var(--space-4) + var(--chat-markdown-marker-gap));
 }
 
 :is(.chat-text, .chat-thinking) :where(ol > li)::marker {
@@ -208,18 +212,36 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::before {
   position: absolute;
-  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  inset-inline-start: calc(-1 * var(--chat-markdown-indent));
   content: "•";
   inset-block-start: 0;
   inline-size: calc(var(--chat-markdown-indent) - var(--chat-markdown-marker-gap));
   text-align: end;
+  color: var(--muted);
+  font-size: calc(1em + 1px);
 }
 
-/* Authored disclosures align with list text but place their affordance at the
-   row edge; JSON code blocks retain their separate compact presentation. */
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)) {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) details:not(.json-collapse)) {
+  width: calc(100% - var(--space-3));
+  margin-top: var(--space-3);
+  margin-inline-start: var(--space-3);
+}
+
+/* Authored disclosures are complete content surfaces; JSON code blocks retain
+   their separate compact presentation. */
 :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary) {
   position: relative;
-  padding-inline-end: var(--space-7);
+  min-height: var(--space-5);
+  padding-inline-start: var(--space-6);
   list-style: none;
   cursor: var(--cursor-action);
 }
@@ -229,11 +251,11 @@
   display: none;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::after {
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::before {
   position: absolute;
   content: "";
   inset-block-start: calc((1lh - var(--space-4)) / 2);
-  inset-inline-end: 0;
+  inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
   background: var(--select-chevron) center / var(--space-4) no-repeat;
@@ -241,22 +263,29 @@
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary)::after {
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary)::before {
   transform: rotate(0deg);
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+  appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
-  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
   margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  opacity: 1;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open]) {
-  padding-inline-start: calc(var(--chat-markdown-indent) - var(--space-3) - 1px);
-  border-inline-start: 1px solid var(--border);
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 72%, var(--bg))
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+    center / 13px no-repeat;
 }
 
 :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary) {
@@ -264,19 +293,25 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::after {
+  :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::before {
     transition: none;
   }
 }
 
+/* --link, not --accent: user bubbles are filled with --accent-subtle (and peer
+   bubbles with the sender tint), so an accent-colored link sits on its own hue
+   and drops to 4.1:1 on the chocolate palette — 3.95:1 at the worst sender hue —
+   while the body text beside it holds 9:1. Hover shifts color instead of fading
+   opacity, which composited the link toward its background and cost another 1.1. */
 .chat-text :where(a) {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
 .chat-text :where(a:hover) {
-  opacity: 0.8;
+  color: var(--link-hover);
 }
 
 /* GitHub links carry the brand mark so a bare URL and a "[#3434]" shorthand read
@@ -288,11 +323,13 @@
   --github-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.21.67.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z'/%3E%3C/svg%3E");
 
   content: "";
-  display: inline-block;
+  position: absolute;
+  inset-inline-start: 0;
+  /* vertical-align cannot reach an out-of-flow box, so the baseline shift it
+     used to carry becomes an offset from the first line box's top edge. */
+  top: 0.1em;
   width: 1em;
   height: 1em;
-  margin-inline-end: 0.3em;
-  vertical-align: -0.14em;
   background: currentColor;
   mask: var(--github-mark) center / contain no-repeat;
   -webkit-mask: var(--github-mark) center / contain no-repeat;
@@ -302,6 +339,13 @@
    signal and clutters dense URL text. Hover restores it as the affordance,
    like the file-link convention below. */
 .chat-text :where(a.markdown-github-link) {
+  /* The mark is painted out of flow with its space reserved here, so nothing
+     inside the anchor precedes the label: an in-flow atomic mark carries a soft
+     wrap opportunity after it, so a line could end on the mark alone. The anchor
+     stays inline so the bare-URL rule below can still fill the line a long URL
+     starts on; the file-link chip's `display: inline-block` could not. */
+  position: relative;
+  padding-inline-start: 1.3em; /* the mark's 1em box plus the 0.3em gap it had */
   text-decoration: none;
 }
 
@@ -310,12 +354,56 @@
 }
 
 /* The inherited `overflow-wrap: anywhere` breaks a word only once every other
-   option is gone, so a long URL is pushed whole onto the next line — stranding
-   the mark alone at the end of the previous one. Unconditional break points
-   make the URL fill the line it starts on; authored labels are excluded so
-   prose still wraps on word boundaries. */
+   option is gone, so a long URL is pushed whole onto the next line, leaving the
+   line it should have filled ragged. Unconditional break points make the URL
+   fill the line it starts on; authored labels are excluded so prose still wraps
+   on word boundaries. */
 .chat-text :where(a.markdown-bare-url) {
   line-break: anywhere;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link {
+  display: inline;
+  padding: 0.1em 0.2em;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--link);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.9em;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link:hover,
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link:focus-visible {
+  text-decoration: underline;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link--titled {
+  display: inline-block;
+  max-width: min(28em, 100%);
+  padding: 0.08em 0.45em;
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: -0.12em;
+  white-space: nowrap;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
 }
 
 /* Both chat Markdown renderers enable file links — message bubbles (.chat-text)
@@ -325,11 +413,21 @@
    purpose: each renderer's own :where(a) and code rules would otherwise win on
    source order, and sidebar-markdown.css is imported after this file. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link {
-  color: var(--accent);
+  color: var(--link);
   /* File links are href-less anchors (driven by data-file-path), so the UA
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
   text-decoration: none;
+  /* Atomic: prose cannot break between the glyph and the label, or at a hyphen
+     inside it. max-width keeps a label the parser could not shorten wrapping
+     inside the chip; the chat scroller's overflow-x: hidden would clip it.
+     The wrap policy is declared here rather than inherited: .chat-text sets
+     overflow-wrap: anywhere but .sidebar-markdown sets no wrapping policy, so
+     an unbreakable label would size the capped box past the panel, whose body
+     hides horizontal overflow, and be clipped instead of wrapping. */
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link:hover {
@@ -344,19 +442,21 @@
    keeps it on the link color in every theme. Sized in em so it tracks
    --chat-text-size and the user's text-scale setting. The default glyph is the
    generic document; kinds below match components/file-kind.ts, whose icons are
-   the same Lucide set the file preview modal renders as SVG. */
+   the same Lucide set the file preview modal renders as SVG.
+   Stays `inline`: an atomic box carries its own break opportunity and would push
+   a too-wide label whole to the next line, stranding the glyph. Inline boxes
+   ignore width/height, so 1em comes from padding-inline-start and a mask size. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/%3E%3Cpolyline points='14 2 14 8 20 8'/%3E%3Cline x1='16' x2='8' y1='13' y2='13'/%3E%3Cline x1='16' x2='8' y1='17' y2='17'/%3E%3Cline x1='10' x2='8' y1='9' y2='9'/%3E%3C/svg%3E");
 
   content: "";
-  display: inline-block;
-  width: 1em;
-  height: 1em;
+  display: inline;
+  padding-inline-start: 1em;
   margin-inline-end: 0.28em;
   vertical-align: -0.14em;
   background: currentColor;
-  mask: var(--file-glyph) center / contain no-repeat;
-  -webkit-mask: var(--file-glyph) center / contain no-repeat;
+  mask: var(--file-glyph) left center / 1em 1em no-repeat;
+  -webkit-mask: var(--file-glyph) left center / 1em 1em no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="code"]::before {
@@ -427,17 +527,38 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.35em 0.75em;
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   margin-top: 0.75em;
-  padding: 0.5em 0.65em;
-  border: 1px dashed var(--border-strong);
+  padding: 0.7em 0.8em;
+  border: 0;
   border-radius: var(--radius-md);
   background: var(--bg-muted);
   color: var(--muted);
+}
+
+:is(.chat-text, .sidebar-markdown) .markdown-external-image > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--link);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+:is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+  color: var(--link-hover);
+  text-decoration: none;
 }
 
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
@@ -460,7 +581,7 @@
    rather than resetting them here, so no theme override has to be out-specified;
    this rule only has to undo the separate mono-font declarations. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link > code {
-  color: var(--accent);
+  color: var(--link);
   font-family: inherit;
   font-size: inherit;
 }
@@ -497,33 +618,26 @@
 }
 
 .chat-text :where(blockquote) {
-  border-left: 2px solid var(--border-strong);
+  position: relative;
+  border-inline-start: 0;
   margin-left: 0;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.02);
+  background: transparent;
   padding: 8px 12px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.chat-text :where(blockquote)::before {
+  position: absolute;
+  content: "";
+  inset-block: 4px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
 }
 
 .chat-text :where(blockquote blockquote) {
   margin-top: 8px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.chat-text :where(blockquote blockquote blockquote) {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(blockquote) {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote) {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote blockquote) {
-  background: rgba(0, 0, 0, 0.04);
 }
 
 .chat-text :where(hr) {
@@ -541,8 +655,6 @@
 }
 
 .chat-text[dir="rtl"] :where(blockquote) {
-  border-left: none;
-  border-right: 3px solid var(--border);
   padding-left: 0;
   padding-right: 1em;
 }

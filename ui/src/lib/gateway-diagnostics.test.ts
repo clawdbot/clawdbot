@@ -8,12 +8,28 @@ describe("loadGatewayDiagnostics", () => {
       method === "models.list" ? { models: [] } : {},
     );
 
-    await loadGatewayDiagnostics({ request } as unknown as GatewayBrowserClient);
+    await loadGatewayDiagnostics({ request } as unknown as GatewayBrowserClient, "writer");
 
     expect(request).toHaveBeenCalledWith(
       "models.list",
-      { preparedOnly: true },
+      { agentId: "writer", preparedOnly: true },
       { signal: undefined },
     );
+  });
+
+  it("keeps diagnostics available without requesting models before agent selection", async () => {
+    const request = vi.fn(async (_method: string) => ({}));
+
+    const result = await loadGatewayDiagnostics(
+      { request } as unknown as GatewayBrowserClient,
+      null,
+    );
+
+    expect(result.models).toEqual([]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "status",
+      "health",
+      "last-heartbeat",
+    ]);
   });
 });

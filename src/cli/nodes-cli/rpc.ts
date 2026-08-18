@@ -122,6 +122,7 @@ export const callNodesGatewayCli = async (
       ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
       : GATEWAY_CLIENT_NAMES.CLI,
     mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    sharedStateMode: "read-only",
   });
 };
 
@@ -170,6 +171,7 @@ export const callNodePairApprovalGatewayCli = async (
     scopes: callOpts.scopes,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    sharedStateMode: "read-only",
   });
 };
 

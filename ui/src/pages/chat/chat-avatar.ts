@@ -111,7 +111,7 @@ export function renderChatAvatar(
   }
 
   if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+    return html`<div class="chat-avatar ${className}" role="img" aria-label="${userName}">
       ${userAvatarText}
     </div>`;
   }
@@ -132,7 +132,7 @@ export function renderChatAvatar(
       />`;
     }
     if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
+      return html`<div class="chat-avatar ${className}" role="img" aria-label="${assistantName}">
         ${assistantAvatarText}
       </div>`;
     }
@@ -163,6 +163,7 @@ function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
   const initialsAvatar = html`<div
     class="chat-avatar user chat-avatar--sender-initials"
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    role="img"
     aria-label="${label}"
   >
     ${view.fallback.initials}
