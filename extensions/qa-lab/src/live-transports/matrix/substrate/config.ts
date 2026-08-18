@@ -442,11 +442,9 @@ function buildMatrixQaChannelAccountConfig(params: {
   const block = restoreOwnedFields(current?.streaming?.block, baseline?.streaming?.block, [
     "enabled",
   ]);
-  const progress = restoreOwnedFields(
-    current?.streaming?.progress,
-    baseline?.streaming?.progress,
-    ["commandText"],
-  );
+  const progress = restoreOwnedFields(current?.streaming?.progress, baseline?.streaming?.progress, [
+    "commandText",
+  ]);
   const preview = restoreOwnedFields(current?.streaming?.preview, baseline?.streaming?.preview, [
     "toolProgress",
   ]);
