@@ -397,7 +397,7 @@ export class NewSessionModelControl {
   isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
     return (
       this.metadataState.hasSnapshot &&
-      (this.metadataState.status === "ready" || this.metadataState.status === "refreshing") &&
+      this.metadataState.status === "ready" &&
       isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
     );
   }

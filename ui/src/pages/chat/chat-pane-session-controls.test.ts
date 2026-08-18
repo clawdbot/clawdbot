@@ -2,9 +2,68 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import {
+  renderChatPaneComposerControls,
+  resolveChatModelCatalogState,
+} from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+
+describe("chat model catalog state", () => {
+  const cachedCatalog = [
+    {
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      provider: "openai",
+      available: false,
+    },
+  ];
+
+  it.each([
+    {
+      label: "ready",
+      state: {
+        chatModelCatalog: [],
+        chatModelCatalogError: null,
+        chatModelsLoading: false,
+        connected: true,
+      },
+      expected: { hasSnapshot: true, status: "ready" },
+    },
+    {
+      label: "refreshing with a cached snapshot",
+      state: {
+        chatModelCatalog: cachedCatalog,
+        chatModelCatalogError: null,
+        chatModelsLoading: true,
+        connected: true,
+      },
+      expected: { hasSnapshot: true, status: "refreshing" },
+    },
+    {
+      label: "offline",
+      state: {
+        chatModelCatalog: cachedCatalog,
+        chatModelCatalogError: null,
+        chatModelsLoading: false,
+        connected: false,
+      },
+      expected: { hasSnapshot: true, status: "offline" },
+    },
+    {
+      label: "error",
+      state: {
+        chatModelCatalog: cachedCatalog,
+        chatModelCatalogError: "metadata unavailable",
+        chatModelsLoading: false,
+        connected: true,
+      },
+      expected: { hasSnapshot: true, status: "error" },
+    },
+  ])("resolves $label", ({ state, expected }) => {
+    expect(resolveChatModelCatalogState(state)).toEqual(expected);
+  });
+});
 
 describe("chat pane composer controls", () => {
   it("assembles model and permission controls as separate footer inputs", () => {

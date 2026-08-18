@@ -12,7 +12,10 @@ import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import {
+  renderChatModelControls,
+  type ChatModelCatalogState,
+} from "./components/chat-model-controls.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
@@ -46,6 +49,28 @@ export function readChatPaneMutationAccess(
   };
 }
 
+export function resolveChatModelCatalogState(
+  state: Pick<
+    ChatPageHost,
+    "chatModelCatalog" | "chatModelCatalogError" | "chatModelsLoading" | "connected"
+  >,
+): Omit<ChatModelCatalogState, "onRetry"> {
+  const hasSnapshot =
+    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  return {
+    hasSnapshot,
+    status: !state.connected
+      ? "offline"
+      : state.chatModelCatalogError
+        ? "error"
+        : state.chatModelsLoading
+          ? hasSnapshot
+            ? "refreshing"
+            : "loading"
+          : "ready",
+  };
+}
+
 export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
@@ -69,8 +94,7 @@ export function renderChatPaneComposerControls(params: {
     canSelectFull,
     onModelSetup,
   } = params;
-  const hasModelSnapshot =
-    state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
+  const modelCatalogState = resolveChatModelCatalogState(state);
   return {
     composerControls: html`
       <div class="chat-composer-model-control">
@@ -82,17 +106,8 @@ export function renderChatPaneComposerControls(params: {
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
           modelCatalogState: {
-            hasSnapshot: hasModelSnapshot,
+            ...modelCatalogState,
             onRetry: () => void refreshChatModelCatalogOnDemand(state, { refresh: true }),
-            status: !state.connected
-              ? "offline"
-              : state.chatModelCatalogError
-                ? "error"
-                : state.chatModelsLoading
-                  ? hasModelSnapshot
-                    ? "refreshing"
-                    : "loading"
-                  : "ready",
           },
           modelOverrides: state.sessions.state.modelOverrides,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,

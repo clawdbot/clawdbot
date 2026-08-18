@@ -27,6 +27,7 @@ import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
+  resolveChatModelCatalogState,
 } from "./chat-pane-session-controls.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
@@ -161,12 +162,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const authoritativeModelCatalog =
-      state.connected && !state.chatModelCatalogError ? state.chatModelCatalog : [];
+    const modelCatalogState = resolveChatModelCatalogState(state);
     const modelUnavailable = isChatModelUnavailable(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
-      authoritativeModelCatalog,
+      modelCatalogState.status === "ready" ? state.chatModelCatalog : [],
     );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,

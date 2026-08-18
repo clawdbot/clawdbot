@@ -222,35 +222,42 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
-  it("renders a cached catalog immediately while a remounted control revalidates", async () => {
+  it("does not auth-block a cached all-cold catalog until revalidation completes", async () => {
     const models: ModelCatalogEntry[] = [
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: false,
+      },
     ];
+    const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     const refresh = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith(models);
     const firstControl = new NewSessionModelControl(() => undefined);
-    firstControl.load(context, "main", true);
-    await vi.waitFor(() =>
-      expect(
-        renderControl(firstControl, context).querySelector(
-          '[data-chat-model-option="openai/gpt-5.6-luna"]',
-        ),
-      ).not.toBeNull(),
-    );
+    firstControl.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(firstControl.isModelUnavailable(agent)).toBe(true));
     request.mockReturnValueOnce(refresh.promise);
 
     const remountedControl = new NewSessionModelControl(() => undefined);
-    remountedControl.load(context, "main", true);
+    remountedControl.load(context, "main", true, { agent });
 
-    const container = renderControl(remountedControl, context);
+    let container = renderControl(remountedControl, context, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
-    expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).not.toContain(
-      "Loading models",
+    expect(remountedControl.isModelUnavailable(agent)).toBe(false);
+    expect(container.textContent).not.toContain(
+      "Authentication failed. Review the provider credential or sign-in, then retry.",
     );
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
     ).not.toBeNull();
     refresh.resolve({ models });
+    await vi.waitFor(() => expect(remountedControl.isModelUnavailable(agent)).toBe(true));
+    container = renderControl(remountedControl, context, "main", agent);
+    expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
+    expect(container.textContent).toContain(
+      "Authentication failed. Review the provider credential or sign-in, then retry.",
+    );
   });
 
   it("keeps a shared metadata request alive when its first control is torn down", async () => {
@@ -589,9 +596,15 @@ describe("new-session model runtime", () => {
     request.mockResolvedValueOnce({ models: availableModels });
     container.querySelector<HTMLButtonElement>('[data-chat-model-catalog-retry="true"]')?.click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(false));
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context, "main", agent).querySelector(
+          "[data-chat-model-catalog-state]",
+        ),
+      ).toBeNull(),
+    );
+    expect(control.isModelUnavailable(agent)).toBe(false);
     container = renderControl(control, context, "main", agent);
-    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(
       container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-luna"]')
         ?.disabled,

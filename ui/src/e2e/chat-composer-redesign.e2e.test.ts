@@ -46,8 +46,16 @@ suite.define(() => {
       await expect.poll(() => textarea.isEnabled()).toBe(true);
       await expect.poll(() => disabledReason.count()).toBe(0);
 
+      await gateway.deferNext("chat.startup");
       await gateway.setOnline(true);
       await gateway.waitForRequest("chat.startup", { after: 1 });
+      await expect
+        .poll(() => composer.locator('[data-chat-model-catalog-state="refreshing"]').count())
+        .toBe(1);
+      await expect.poll(() => textarea.isEnabled()).toBe(true);
+      await expect.poll(() => disabledReason.count()).toBe(0);
+
+      await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => textarea.isDisabled()).toBe(true);
       await expect.poll(async () => (await disabledReason.textContent())?.trim()).toBe(authFailure);
 
