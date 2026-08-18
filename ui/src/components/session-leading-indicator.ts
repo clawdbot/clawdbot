@@ -210,9 +210,8 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
-  const ownerId = !session.isChild ? ownerActor?.id?.trim() : undefined;
   const ownerChip =
-    ownerId && ownerActor
+    !session.isChild && ownerActor?.id?.trim()
       ? renderSessionOwnerChip(
           ownerActor,
           "row",
@@ -251,7 +250,7 @@ export function renderSessionLeadingState(
       trailingIndicator,
       // Single source for facepile dedup: only the identity actually shown in
       // the lead may be excluded, else attention/archived rows hide a viewer.
-      renderedOwnerId: ownerId,
+      renderedOwnerId: ownerActor?.id,
     };
   }
   return {
