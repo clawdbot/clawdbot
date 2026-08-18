@@ -59,10 +59,9 @@ if (outputPath) {
 }
 
 function createRawAudioFixture(audio: readonly number[]): { dir: string; script: string } {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-raw-test-"));
-  const script = path.join(dir, "emit-audio.mjs");
+  const fixture = createCliFixture();
   writeFileSync(
-    script,
+    fixture.script,
     `
 import { writeFileSync } from "node:fs";
 const outIndex = process.argv.indexOf("--out");
@@ -75,7 +74,14 @@ if (outputPath) {
 }
 `,
   );
-  return { dir, script };
+  return fixture;
+}
+
+function createOggFirstPage(firstPacket: Buffer): Buffer {
+  const header = Buffer.alloc(27);
+  header.write("OggS");
+  header[26] = 1;
+  return Buffer.concat([header, Buffer.from([firstPacket.length]), firstPacket]);
 }
 
 function baseProviderConfig(
@@ -289,6 +295,86 @@ describe("buildCliSpeechProvider", () => {
         voiceCompatible: false,
       });
       expectArgsContainSequence(requireFfmpegArgs(), ["-f", "wav"]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Ogg Opus native for voice-note targets", async () => {
+    const audio = createOggFirstPage(Buffer.from("OpusHeadnative-audio"));
+    const fixture = createRawAudioFixture([...audio]);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--text", "{{Text}}"],
+          outputFormat: "opus",
+        }),
+        target: "voice-note",
+      });
+
+      expect(result).toEqual({
+        audioBuffer: audio,
+        outputFormat: "opus",
+        fileExtension: ".ogg",
+        voiceCompatible: true,
+      });
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { transport: "stdout", outputArgs: [] },
+    {
+      transport: "templated file",
+      outputArgs: ["--out", "{{OutputDir}}/{{OutputBase}}.ogg"],
+    },
+  ])("converts Ogg Vorbis from $transport to Opus for voice notes", async (testCase) => {
+    const audio = createOggFirstPage(Buffer.from("\x01vorbis-not-OpusHead"));
+    const fixture = createRawAudioFixture([...audio]);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--text", "{{Text}}", ...testCase.outputArgs],
+          outputFormat: "opus",
+        }),
+        target: "voice-note",
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.opus"),
+        outputFormat: "opus",
+        fileExtension: ".ogg",
+        voiceCompatible: true,
+      });
+      const ffmpegArgs = requireFfmpegArgs();
+      expectArgsContainSequence(ffmpegArgs, ["-c:a", "libopus", "-b:a", "64k"]);
+      expect(ffmpegArgs[ffmpegArgs.indexOf("-i") + 1]).toMatch(/\.ogg$/);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("converts an M4A file to the configured MP3 target", async () => {
+    const fixture = createRawAudioFixture([...Buffer.from("m4a fixture")]);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--out", "{{OutputDir}}/{{OutputBase}}.m4a"],
+          outputFormat: "mp3",
+        }),
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      });
+      const ffmpegArgs = requireFfmpegArgs();
+      expectArgsContainSequence(ffmpegArgs, ["-c:a", "libmp3lame", "-b:a", "128k"]);
+      expect(ffmpegArgs[ffmpegArgs.indexOf("-i") + 1]).toMatch(/\.m4a$/);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }

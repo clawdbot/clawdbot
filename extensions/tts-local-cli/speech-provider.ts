@@ -23,6 +23,7 @@ const log = createSubsystemLogger("tts-local-cli");
 const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
 const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".opus", ".ogg", ".m4a"]);
 type OutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
+type SourceFormat = OutputFormat | "ogg" | "m4a";
 
 type CliConfig = {
   command: string;
@@ -134,21 +135,27 @@ function findAudioFile(dir: string, baseName: string): string | null {
   return null;
 }
 
-function detectFormatFromExtension(filePath: string): OutputFormat | null {
+function detectFormatFromExtension(filePath: string): SourceFormat | null {
   const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".opus" || ext === ".ogg") {
+  if (ext === ".opus") {
     return "opus";
+  }
+  if (ext === ".ogg") {
+    return "ogg";
   }
   if (ext === ".wav") {
     return "wav";
   }
-  if (ext === ".mp3" || ext === ".m4a") {
+  if (ext === ".mp3") {
     return "mp3";
+  }
+  if (ext === ".m4a") {
+    return "m4a";
   }
   return null;
 }
 
-function detectAudioFormat(buffer: Buffer): OutputFormat | null {
+function detectAudioFormat(buffer: Buffer): SourceFormat | null {
   const prefix = buffer.toString("ascii", 0, 12);
   if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WAVE") {
     return "wav";
@@ -156,12 +163,27 @@ function detectAudioFormat(buffer: Buffer): OutputFormat | null {
   if (prefix.startsWith("ID3") || (buffer[0] === 0xff && ((buffer[1] ?? 0) & 0xe0) === 0xe0)) {
     return "mp3";
   }
-  return prefix.startsWith("OggS") ? "opus" : null;
+  if (!prefix.startsWith("OggS")) {
+    return null;
+  }
+  const segmentCount = buffer[26] ?? 0;
+  const firstSegmentLength = buffer[27] ?? 0;
+  const firstPacketOffset = 27 + segmentCount;
+  const firstPacketPrefix = buffer.toString("ascii", firstPacketOffset, firstPacketOffset + 8);
+  return segmentCount > 0 && firstSegmentLength >= 8 && firstPacketPrefix === "OpusHead"
+    ? "opus"
+    : "ogg";
 }
 
-function getFileExt(format: string): string {
+function getFileExt(format: SourceFormat): string {
   if (format === "opus") {
     return ".opus";
+  }
+  if (format === "ogg") {
+    return ".ogg";
+  }
+  if (format === "m4a") {
+    return ".m4a";
   }
   if (format === "wav") {
     return ".wav";
@@ -183,7 +205,7 @@ async function runCli(params: {
   outputDir: string;
   filePrefix: string;
   outputFormat?: OutputFormat;
-}): Promise<{ buffer: Buffer; actualFormat: "mp3" | "opus" | "wav"; audioPath?: string }> {
+}): Promise<{ buffer: Buffer; actualFormat: SourceFormat; audioPath?: string }> {
   const cleanText = stripEmojis(params.text);
   if (!cleanText) {
     throw new Error("CLI TTS: text is empty after removing emojis");
