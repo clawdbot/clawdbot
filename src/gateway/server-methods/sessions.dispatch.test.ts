@@ -42,6 +42,7 @@ describe("sessions.dispatch", () => {
     const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
       id: "codex",
       label: "Codex",
+      autoSelection: { providerIds: ["codex", "openai"] },
       cloudPlacement: { mode: "remote-exec" },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
