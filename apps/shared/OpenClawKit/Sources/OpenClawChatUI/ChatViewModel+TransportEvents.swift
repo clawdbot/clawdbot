@@ -59,6 +59,10 @@ extension OpenClawChatViewModel {
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
         case .routeChanged:
+            // A replacement route may be a different Gateway, so a cached
+            // known-absent store must not authorize the legacy plan fallback
+            // against a new Gateway that dual-emits both sources.
+            self.progressCardStoreAvailable = nil
             self.clearProgressCard()
             self.swarmEnabled = false
             self.resetSwarmProgress()

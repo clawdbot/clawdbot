@@ -1528,6 +1528,32 @@ struct ChatViewModelTests {
         #expect(card.steps?.map(\.status.rawValue) == ["in_progress", "pending", "completed"])
     }
 
+    @Test func `route replacement invalidates a stale known-absent capability`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Old gateway step", status: "in_progress")]))
+        }
+        #expect(await MainActor.run { vm.progressCard } != nil)
+
+        // A replacement route may be a different Gateway; the stale known-absent
+        // value must not authorize the legacy path against a dual-emitting one.
+        await MainActor.run { vm.handleTransportEvent(.routeChanged) }
+        #expect(await MainActor.run { vm.progressCardStoreAvailable } == nil)
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("New gateway step", status: "in_progress")]))
+        }
+        #expect(await MainActor.run { vm.progressCard } == nil)
+    }
+
     @Test func `legacy plan is ignored when progress card store is available`() async throws {
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
