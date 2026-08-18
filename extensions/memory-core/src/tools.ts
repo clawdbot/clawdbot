@@ -510,12 +510,18 @@ export function createMemorySearchTool(options: {
                 )
               : null;
             const memory = memorySetup?.context ?? null;
-            if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
+            let memoryCorpusUnavailable: string | undefined;
+            if (shouldQueryMemory && memory && "error" in memory) {
               recordMemorySearchToolCooldown(
                 cooldownKey,
                 memory.error ?? "memory search unavailable",
               );
-              return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+              if (!shouldQuerySupplements) {
+                return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+              }
+              // corpus=all still serves wiki supplements, but the omitted memory
+              // corpus must be recorded or the degraded search reads as complete.
+              memoryCorpusUnavailable = memory.error ?? "memory search unavailable";
             }
 
             const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -737,6 +743,11 @@ export function createMemorySearchTool(options: {
               fallback,
               citations: citationsMode,
               mode: searchMode,
+              ...(memoryCorpusUnavailable
+                ? {
+                    warning: `Memory corpus unavailable; results cover wiki supplements only: ${memoryCorpusUnavailable}`,
+                  }
+                : {}),
               ...staleness,
               debug: searchDebug,
             });
