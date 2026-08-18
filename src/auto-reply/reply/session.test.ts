@@ -4602,6 +4602,45 @@ describe("persistSessionUsageUpdate", () => {
   it.each([
     { name: "usage accounting", usage: { input: 120, output: 8, total: 128 } },
     { name: "model-only accounting", usage: undefined },
+  ])(
+    "preserves the complete producing-runtime tuple when model state is retained ($name)",
+    async ({ usage }) => {
+      const storePath = await createStorePath("openclaw-usage-preserved-runtime-");
+      await seedSessionStore(storePath, sessionKey, {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "google",
+        model: "gemini-3-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+      });
+
+      await persistSessionUsageUpdate({
+        storePath,
+        sessionKey,
+        usage,
+        providerUsed: "openai",
+        modelUsed: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokensUsed: 272_000,
+        contextTokensSource: "runtime-configured",
+        preserveRuntimeModel: true,
+      });
+
+      expect(readSessionStoreFast(storePath)[sessionKey]).toMatchObject({
+        modelProvider: "google",
+        model: "gemini-3-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+      });
+    },
+  );
+
+  it.each([
+    { name: "usage accounting", usage: { input: 120, output: 8, total: 128 } },
+    { name: "model-only accounting", usage: undefined },
   ])("clears stale harness provenance when a committed run omits it ($name)", async ({ usage }) => {
     const storePath = await createStorePath("openclaw-usage-harness-missing-");
     await seedSessionStore(storePath, sessionKey, {

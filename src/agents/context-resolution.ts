@@ -224,10 +224,17 @@ export function resolveContextTokensForModelFromCache(
       claudeCli1M: effectiveContext1M === true,
     });
     const configuredContextTokens = readAuthoredModelContextTokens(configuredModel);
+    const configuredContextWindow =
+      typeof configuredModel?.contextWindow === "number" && configuredModel.contextWindow > 0
+        ? configuredModel.contextWindow
+        : undefined;
+    // Fixed provider contracts deliberately ignore materialized catalog windows.
+    // Other runtimes must still keep an authored effective cap below its native window.
+    const configuredTokenLimit = fixedContextWindow ?? configuredContextWindow;
     if (configuredContextTokens !== undefined) {
-      return fixedContextWindow === undefined
+      return configuredTokenLimit === undefined
         ? configuredContextTokens
-        : Math.min(configuredContextTokens, fixedContextWindow);
+        : Math.min(configuredContextTokens, configuredTokenLimit);
     }
     if (fixedContextWindow !== undefined) {
       return fixedContextWindow;
@@ -252,10 +259,6 @@ export function resolveContextTokensForModelFromCache(
       providerWindow,
       modelContextWindow,
     );
-    const configuredContextWindow =
-      typeof configuredModel?.contextWindow === "number" && configuredModel.contextWindow > 0
-        ? configuredModel.contextWindow
-        : undefined;
     if (discoveredCap !== undefined) {
       return configuredContextWindow === undefined
         ? discoveredCap

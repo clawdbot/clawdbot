@@ -658,6 +658,33 @@ describe("lookupContextTokens", () => {
     ).toBe(1_000_000);
   });
 
+  it("bounds an authored effective cap by a smaller authored context window", async () => {
+    mockDiscoveryDeps([]);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    contextWindow: 128_000,
+                    contextTokens: 1_000_000,
+                  },
+                ],
+              },
+            },
+          },
+        } as never,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+      }),
+    ).toBe(128_000);
+  });
+
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {
     mockDiscoveryDeps([{ id: "openrouter/anthropic/claude-sonnet-4-5", contextWindow: 1_048_576 }]);
 

@@ -1275,6 +1275,49 @@ describe("gateway session utils", () => {
   );
 
   test.each([true, false])(
+    "clamps an authored effective cap to a smaller authored contextWindow (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  contextTokens: 1_000_000,
+                  contextWindow: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "authored-effective-above-native",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          contextTokens: 272_000,
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.contextTokens).toBe(128_000);
+    },
+  );
+
+  test.each([true, false])(
     "keeps matching runtime telemetry below a higher authored contextWindow (lightweight=%s)",
     (lightweightListRow) => {
       const cfg = {
