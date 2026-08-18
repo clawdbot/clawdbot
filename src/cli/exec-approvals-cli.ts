@@ -324,9 +324,6 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 }> {
   // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-  if (source === "local") {
-    defaultRuntime.log(theme.muted("Writing local approvals."));
-  }
   const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
   if (isNativeApprovalsSnapshot(snapshot) && !snapshot.enabled) {
     exitWithError(
@@ -362,6 +359,9 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     });
     next = await loadSnapshot(params.opts, params.nodeId);
   } else if (params.source === "local") {
+    // Announced at the write, not at target resolution: no-op allowlist edits and
+    // rejected `set` input never reach here and must not claim a write happened.
+    defaultRuntime.log(theme.muted("Writing local approvals."));
     next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);

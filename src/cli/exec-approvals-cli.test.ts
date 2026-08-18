@@ -141,6 +141,10 @@ function expectGatewayCall(index: number, method: string, params: unknown) {
   expect(call[2]).toEqual(params);
 }
 
+function loggedOutput(): string {
+  return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+}
+
 function writtenJson(): Record<string, unknown> {
   const value = firstMockArg(vi.mocked(defaultRuntime.writeJson));
   return requireRecord(value, "written json");
@@ -311,7 +315,7 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get"]);
 
-    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    const output = loggedOutput();
     expect(output).toContain("State");
     expect(output).toContain("defaults (no stored overrides)");
     expect(output).not.toContain("Exists");
@@ -326,7 +330,7 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get"]);
 
-    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    const output = loggedOutput();
     const hasUnsafeControl = Array.from(output).some((char) => {
       const codePoint = char.codePointAt(0) ?? -1;
       return (
@@ -888,6 +892,37 @@ describe("exec approvals CLI", () => {
     if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
       throw new Error("Expected wildcard exec approval agent entry");
     }
+    expect(loggedOutput()).toContain("Writing local approvals.");
+  });
+
+  it.each([
+    {
+      label: "an already-allowlisted add",
+      args: ["add", "/usr/bin/uptime"],
+      outcome: "Already allowlisted.",
+    },
+    {
+      label: "a remove of an absent pattern",
+      args: ["remove", "/usr/bin/never-added"],
+      outcome: "Pattern not found.",
+    },
+  ])("reports $label without announcing a local write", async ({ args, outcome }) => {
+    localSnapshot.file = {
+      version: 1,
+      agents: { "*": { allowlist: [{ pattern: "/usr/bin/uptime", lastUsedAt: Date.now() }] } },
+    };
+    const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+    updateExecApprovals.mockClear();
+
+    await runApprovalsCommand(["approvals", "allowlist", ...args]);
+
+    const output = loggedOutput();
+    expect(output).toContain(outcome);
+    expect(output).not.toContain("Writing local approvals.");
+    expect(updateExecApprovals).not.toHaveBeenCalled();
+    // Idempotent add/remove leave the requested end state satisfied: no failure exit.
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
@@ -913,6 +948,7 @@ describe("exec approvals CLI", () => {
       version: 1,
       agents: {},
     });
+    expect(loggedOutput()).toContain("Writing local approvals.");
     expect(runtimeErrors).toHaveLength(0);
   });
 
