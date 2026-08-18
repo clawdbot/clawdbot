@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -38,6 +37,14 @@ function createMemoryStore<T = PersistedWorkboardCard>(options?: {
       return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
     },
   };
+}
+
+function createSignal() {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function createPausedCardStore(delegate: WorkboardCardStore) {
@@ -88,8 +95,8 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
       },
     } satisfies WorkboardCardStore,
     pauseNextWrite() {
-      const reached = createDeferred();
-      const resume = createDeferred();
+      const reached = createSignal();
+      const resume = createSignal();
       pause = { reached: () => reached.resolve(), waitForResume: resume.promise };
       return { reached: reached.promise, resume: () => resume.resolve() };
     },
