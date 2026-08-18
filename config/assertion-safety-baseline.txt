@@ -2063,7 +2063,7 @@ src/agents/tool-mutation-names.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
-src/agents/tool-search-catalog.ts	6
+src/agents/tool-search-catalog.ts	4
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	3
