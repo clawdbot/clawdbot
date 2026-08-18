@@ -378,6 +378,11 @@ describe("config io audit helpers", () => {
       expected: ["openclaw", "--password", "***"],
     },
     {
+      name: "password alias covered by the secret suffix matcher",
+      argv: ["openclaw", "--passwd", "fake"],
+      expected: ["openclaw", "--passwd", "***"],
+    },
+    {
       name: "secret flag without a value",
       argv: ["openclaw", "--token"],
       expected: ["openclaw", "--token"],
@@ -474,6 +479,16 @@ describe("config io audit helpers", () => {
         '[{"path":"channels.slack.token","value":"secret-value"}]',
       ],
       expected: ["openclaw", "config", "set", "--batch-json", "***"],
+    },
+    {
+      name: "config provider env assignment",
+      argv: ["openclaw", "config", "set", "--provider-env", "KEY=secret-value"],
+      expected: ["openclaw", "config", "set", "--provider-env", "***"],
+    },
+    {
+      name: "inline config provider env assignment",
+      argv: ["openclaw", "config", "set", "--provider-env=KEY=secret-value"],
+      expected: ["openclaw", "config", "set", "--provider-env=***"],
     },
   ])("redacts $name in persisted audit process info", ({ argv, expected }) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
@@ -303,7 +304,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           ) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
             const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
-            enforceCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
+            enforceCodeModeResponsesToolSurface(
+              params,
+              visibleToolNames,
+              allowedHostedToolTypes,
+              codeModeToolSurfaceObserver.get(options),
+            );
             assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
           }
           return params;
