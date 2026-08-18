@@ -313,7 +313,6 @@ describe("authorizeCronJobPrecheckCommand", () => {
 });
 
 describe("runCronJobPrecheck", () => {
-
   it("assertStillCurrent rejects spawn after authz (receipt revalidation)", async () => {
     const spawnImpl = vi.fn(() => {
       throw new Error("spawn must not run after stale receipt");
@@ -329,7 +328,9 @@ describe("runCronJobPrecheck", () => {
       },
     );
     expect(result.decision).toBe("error");
-    expect(result.reason).toContain("stale run receipt before spawn");
+    if (result.decision === "error") {
+      expect(result.reason).toContain("stale run receipt before spawn");
+    }
     expect(spawnImpl).not.toHaveBeenCalled();
   });
 
