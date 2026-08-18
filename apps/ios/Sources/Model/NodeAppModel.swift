@@ -357,7 +357,6 @@ final class NodeAppModel {
     }
 
     var isBackgrounded: Bool = false
-    let screen: ScreenController
     private let camera: any CameraServicing
     private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
@@ -415,7 +414,6 @@ final class NodeAppModel {
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
-    var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
     var newChatRequestID: Int = 0
@@ -731,7 +729,6 @@ final class NodeAppModel {
         self.mainSessionBaseKey = identity.mainSessionKey
         self.gatewayDefaultAgentId = identity.defaultAgentID
         self.synchronizeTalkSessionKey()
-        self.homeCanvasRevision &+= 1
     }
 
     func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
@@ -929,7 +926,6 @@ final class NodeAppModel {
         activationState: "notActivated")
 
     init(
-        screen: ScreenController = ScreenController(),
         camera: any CameraServicing = CameraController(),
         screenRecorder: any ScreenRecordingServicing = ScreenRecordService(),
         locationService: any LocationServicing = LocationService(),
@@ -946,7 +942,6 @@ final class NodeAppModel {
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
         audioAdmissionInitiallyAllowed: Bool = true)
     {
-        self.screen = screen
         self.camera = camera
         self.preferredCameraFacing = Self.cameraFacingPreference(
             rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
@@ -1058,99 +1053,6 @@ final class NodeAppModel {
             self.reconcileSignificantLocationMonitoring(
                 mode: self.locationMode(),
                 authorizationStatus: snapshot.authorizationStatus)
-        }
-
-        // Wire up deep links from canvas taps
-        self.screen.onDeepLink = { [weak self] url in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.handleDeepLink(url: url)
-            }
-        }
-
-        // Wire up A2UI action clicks (buttons, etc.)
-        self.screen.onA2UIAction = { [weak self] body in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.handleCanvasA2UIAction(body: body)
-            }
-        }
-    }
-
-    func handleCanvasA2UIAction(body: [String: Any]) async {
-        let userActionAny = body["userAction"] ?? body
-        let userAction: [String: Any] = {
-            if let dict = userActionAny as? [String: Any] { return dict }
-            if let dict = userActionAny as? [AnyHashable: Any] {
-                return dict.reduce(into: [String: Any]()) { acc, pair in
-                    guard let key = pair.key as? String else { return }
-                    acc[key] = pair.value
-                }
-            }
-            return [:]
-        }()
-        guard !userAction.isEmpty else { return }
-
-        guard let name = OpenClawCanvasA2UIAction.extractActionName(userAction) else { return }
-        let actionId: String = {
-            let id = (userAction["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return id.isEmpty ? UUID().uuidString : id
-        }()
-
-        let surfaceId: String = {
-            let raw = (userAction["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return raw.isEmpty ? "main" : raw
-        }()
-        let sourceComponentId: String = {
-            let raw = (userAction[
-                "sourceComponentId",
-            ] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return raw.isEmpty ? "-" : raw
-        }()
-
-        let host = NodeDisplayName.resolve(
-            existing: UserDefaults.standard.string(forKey: "node.displayName"),
-            deviceName: UIDevice.current.name,
-            interfaceIdiom: UIDevice.current.userInterfaceIdiom)
-        let instanceId = (UserDefaults.standard.string(forKey: "node.instanceId") ?? "ios-node").lowercased()
-        let contextJSON = OpenClawCanvasA2UIAction.compactJSON(userAction["context"])
-        let sessionKey = mainSessionKey
-
-        let messageContext = OpenClawCanvasA2UIAction.AgentMessageContext(
-            actionName: name,
-            session: .init(key: sessionKey, surfaceId: surfaceId),
-            component: .init(id: sourceComponentId, host: host, instanceId: instanceId),
-            contextJSON: contextJSON)
-        let message = OpenClawCanvasA2UIAction.formatAgentMessage(messageContext)
-
-        let ok: Bool
-        var errorText: String?
-        if await !isGatewayConnected() {
-            ok = false
-            errorText = "gateway not connected"
-        } else {
-            do {
-                try await sendAgentRequest(link: AgentDeepLink(
-                    message: message,
-                    sessionKey: sessionKey,
-                    thinking: "low",
-                    deliver: false,
-                    to: nil,
-                    channel: nil,
-                    timeoutSeconds: nil,
-                    key: actionId))
-                ok = true
-            } catch {
-                ok = false
-                errorText = error.localizedDescription
-            }
-        }
-
-        let js = OpenClawCanvasA2UIAction.jsDispatchA2UIActionStatus(actionId: actionId, ok: ok, error: errorText)
-        do {
-            _ = try await self.screen.eval(javaScript: js)
-        } catch {
-            // ignore
         }
     }
 
@@ -1348,7 +1250,6 @@ final class NodeAppModel {
                     LiveActivityManager.shared.endActivity(reason: "background_idle")
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
-                    self.showLocalCanvasOnDisconnect()
                 }
             }
         }
@@ -1653,7 +1554,6 @@ final class NodeAppModel {
 
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
     private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
-    private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
 
     private func refreshBrandingFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
@@ -1677,7 +1577,6 @@ final class NodeAppModel {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
                 self.synchronizeTalkSessionKey()
-                self.homeCanvasRevision &+= 1
             }
         } catch {
             if let gatewayError = error as? GatewayResponseError {
@@ -1721,7 +1620,6 @@ final class NodeAppModel {
                     self.focusedChatSessionKey = nil
                 }
                 self.synchronizeTalkSessionKey()
-                self.homeCanvasRevision &+= 1
             }
             if let routingIdentity {
                 await sourceStore.storeSessionRoutingIdentity(routingIdentity)
@@ -1761,7 +1659,6 @@ final class NodeAppModel {
             self.focusedChatSessionKey = nil
         }
         self.synchronizeTalkSessionKey()
-        self.homeCanvasRevision &+= 1
         if let relay = ShareGatewayRelaySettings.loadConfig() {
             ShareGatewayRelaySettings.saveConfig(
                 ShareGatewayRelayConfig(
@@ -2264,7 +2161,7 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(
                     code: .backgroundUnavailable,
-                    message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen/talk commands require foreground"))
+                    message: "NODE_BACKGROUND_UNAVAILABLE: camera/screen/talk commands require foreground"))
         }
 
         if command.hasPrefix("camera."), !isCameraEnabled() {
@@ -2348,7 +2245,7 @@ final class NodeAppModel {
     }
 
     private func isBackgroundRestricted(_ command: String) -> Bool {
-        command.hasPrefix("canvas.") || command.hasPrefix("camera.") || command.hasPrefix("screen.") ||
+        command.hasPrefix("camera.") || command.hasPrefix("screen.") ||
             command.hasPrefix("talk.")
     }
 
@@ -2408,131 +2305,6 @@ final class NodeAppModel {
             isPrecise: isPrecise,
             source: nil)
         return try Self.successfulInvokeResponse(req, payload: payload)
-    }
-
-    private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
-            // iOS ignores placement hints; canvas always fills the screen.
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
-            let url = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if url.isEmpty {
-                self.screen.presentDefaultCanvas()
-            } else {
-                self.screen.present(urlString: url)
-            }
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.hide.rawValue:
-            self.screen.hideCanvas()
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.screen.present(urlString: trimmedURL)
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.evalJS.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
-            let result = try await screen.eval(javaScript: params.javaScript)
-            let payload = try Self.encodePayload(["result": result])
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case OpenClawCanvasCommand.snapshot.rawValue:
-            let params = try? Self.decodeParams(OpenClawCanvasSnapshotParams.self, from: req.paramsJSON)
-            let format = params?.format ?? .jpeg
-            let maxWidth: CGFloat? = {
-                if let raw = params?.maxWidth, raw > 0 { return CGFloat(raw) }
-                // Keep default snapshots comfortably below the gateway client's maxPayload.
-                // For full-res, clients should explicitly request a larger maxWidth.
-                return switch format {
-                case .png: 900
-                case .jpeg: 1600
-                }
-            }()
-            let base64 = try await screen.snapshotBase64(
-                maxWidth: maxWidth,
-                format: format,
-                quality: params?.quality)
-            let payload = try Self.encodePayload([
-                "format": format == .jpeg ? "jpeg" : "png",
-                "base64": base64,
-            ])
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        default:
-            return Self.unknownInvokeResponse(req)
-        }
-    }
-
-    private func handleCanvasA2UIInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let command = req.command
-        switch command {
-        case OpenClawCanvasA2UICommand.reset.rawValue:
-            switch await ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) {
-            case .ready:
-                break
-            case .hostUnavailable:
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable"))
-            }
-            let json = try await screen.eval(javaScript: """
-            (() => {
-              const host = globalThis.openclawA2UI;
-              if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
-              return JSON.stringify(host.reset());
-            })()
-            """)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-
-        case OpenClawCanvasA2UICommand.push.rawValue, OpenClawCanvasA2UICommand.pushJSONL.rawValue:
-            let messages: [OpenClawKit.AnyCodable]
-            if command == OpenClawCanvasA2UICommand.pushJSONL.rawValue {
-                let params = try Self.decodeParams(OpenClawCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-                messages = try OpenClawCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
-            } else {
-                do {
-                    let params = try Self.decodeParams(OpenClawCanvasA2UIPushParams.self, from: req.paramsJSON)
-                    messages = params.messages
-                } catch {
-                    // Be forgiving: some clients still send JSONL payloads to `canvas.a2ui.push`.
-                    let params = try Self.decodeParams(OpenClawCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-                    messages = try OpenClawCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
-                }
-            }
-
-            switch await ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) {
-            case .ready:
-                break
-            case .hostUnavailable:
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable"))
-            }
-
-            let messagesJSON = try OpenClawCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
-            let js = """
-            (() => {
-              try {
-                const host = globalThis.openclawA2UI;
-                if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
-                const messages = \(messagesJSON);
-                return JSON.stringify(host.applyMessages(messages));
-              } catch (e) {
-                return JSON.stringify({ ok: false, error: String(e?.message ?? e) });
-              }
-            })()
-            """
-            let resultJSON = try await screen.eval(javaScript: js)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
-
-        default:
-            return Self.unknownInvokeResponse(req)
-        }
     }
 
     private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -3284,20 +3056,6 @@ extension NodeAppModel {
         register([OpenClawLocationCommand.get.rawValue]) { try await $0.handleLocationInvoke($1) }
 
         register([
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-        ]) { try await $0.handleCanvasInvoke($1) }
-
-        register([
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-        ]) { try await $0.handleCanvasA2UIInvoke($1) }
-
-        register([
             OpenClawCameraCommand.list.rawValue,
             OpenClawCameraCommand.snap.rawValue,
             OpenClawCameraCommand.clip.rawValue,
@@ -4024,7 +3782,6 @@ extension NodeAppModel {
         self.chatSessionRoutingRestoreTask = nil
         self.synchronizeTalkSessionKey()
         ShareGatewayRelaySettings.clearConfig()
-        showLocalCanvasOnDisconnect()
     }
 
     private func disableGatewayAutoReconnect() {
@@ -4095,7 +3852,6 @@ extension NodeAppModel {
             self.focusedChatSessionKey = nil
         }
         self.synchronizeTalkSessionKey()
-        self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
         self.apnsLastRegisteredGatewayStableID = nil
         self.chatSessionRoutingRestoreTask = Task { [weak self] in
@@ -4142,7 +3898,6 @@ extension NodeAppModel {
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         self.gatewayConnected = false
-        showLocalCanvasOnDisconnect()
         if problem.pauseReconnect {
             self.gatewayAutoReconnectEnabled = false
         }
@@ -4593,7 +4348,6 @@ extension NodeAppModel {
         _ = GatewaySettingsStore.markGatewayConnected(
             stableID: stableID,
             atMs: Int(Date().timeIntervalSince1970 * 1000))
-        self.screen.errorText = nil
         UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
         LiveActivityManager.shared.handleReconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
@@ -4612,8 +4366,6 @@ extension NodeAppModel {
             guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
             self.gatewayRemoteAddress = address
         }
-        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
-        await showA2UIOnConnectIfNeeded()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
         let shouldContinue = self.gatewayRouteCheck(
             generation: routeGeneration,
@@ -4949,7 +4701,6 @@ extension NodeAppModel {
                         self.gatewayServerName = nil
                         self.gatewayRemoteAddress = nil
                         self.gatewayConnected = false
-                        self.showLocalCanvasOnDisconnect()
                     }
                     GatewayDiagnostics.log("gateway disconnected reason: \(reason)")
                 },
@@ -5083,7 +4834,6 @@ extension NodeAppModel {
             self.gatewayServerName = nil
             self.gatewayRemoteAddress = nil
             self.gatewayConnected = false
-            self.showLocalCanvasOnDisconnect()
         }
     }
 
@@ -5113,7 +4863,6 @@ extension NodeAppModel {
         // Retain the last verified routing contract for offline capture; reconnect compares it
         // with the live gateway before replay.
         self.synchronizeTalkSessionKey()
-        self.showLocalCanvasOnDisconnect()
     }
 
     private func shouldRequestOperatorApprovalScope(
@@ -5380,7 +5129,6 @@ extension NodeAppModel {
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"
         self.configureLocalGatewayFixtureSession(agents: AppleReviewDemoMode.agents)
-        self.homeCanvasRevision &+= 1
     }
 
     func enterScreenshotFixtureMode() {
@@ -5394,7 +5142,6 @@ extension NodeAppModel {
         self.hasOperatorAdminScope = true
         self.configureLocalGatewayFixtureSession(agents: ScreenshotFixtureMode.agents)
         self.talkMode.enterScreenshotFixtureMode()
-        self.homeCanvasRevision &+= 1
     }
 }
 
@@ -10213,14 +9960,11 @@ extension NodeAppModel {
             "agent deep link messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)")
 
         if message.count > IOSDeepLinkAgentPolicy.maxMessageChars {
-            self.screen.errorText = "Deep link too large (message exceeds "
-                + "\(IOSDeepLinkAgentPolicy.maxMessageChars) characters)."
             self.recordShareEvent("Rejected: message too large (\(message.count) chars).")
             return
         }
 
         guard await self.isGatewayConnected() else {
-            self.screen.errorText = "Gateway not connected (cannot forward deep link)."
             self.recordShareEvent("Failed: gateway not connected.")
             self.deepLinkLogger.error("agent deep link rejected: gateway not connected")
             return
@@ -10229,7 +9973,6 @@ extension NodeAppModel {
         let allowUnattended = self.isUnattendedDeepLinkAllowed(link.key)
         if !allowUnattended {
             if message.count > IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars {
-                self.screen.errorText = "Deep link blocked (message too long without key)."
                 self.recordShareEvent(
                     "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars) chars without key.")
                 self.deepLinkLogger.error(
@@ -10322,7 +10065,6 @@ extension NodeAppModel {
         guard let prompt = pendingAgentDeepLinkPrompt else { return }
         self.pendingAgentDeepLinkPrompt = nil
         guard await self.isGatewayConnected() else {
-            self.screen.errorText = "Gateway not connected (cannot forward deep link)."
             self.recordShareEvent("Failed: gateway not connected.")
             self.deepLinkLogger.error("agent deep link approval failed: gateway not connected")
             return
@@ -10333,7 +10075,6 @@ extension NodeAppModel {
     func declinePendingAgentDeepLinkPrompt() {
         guard self.pendingAgentDeepLinkPrompt != nil else { return }
         self.pendingAgentDeepLinkPrompt = nil
-        self.screen.errorText = "Deep link cancelled."
         self.recordShareEvent("Cancelled: deep link confirmation declined.")
         self.deepLinkLogger.info("agent deep link cancelled by local user")
     }
@@ -10395,12 +10136,10 @@ extension NodeAppModel {
     private func submitAgentDeepLink(_ link: AgentDeepLink, messageCharCount: Int) async {
         do {
             try await self.sendAgentRequest(link: link)
-            self.screen.errorText = nil
             self.recordShareEvent("Sent to gateway (\(messageCharCount) chars).")
             self.deepLinkLogger.info("agent deep link forwarded to gateway")
             self.openChatRequestID &+= 1
         } catch {
-            self.screen.errorText = "Agent request failed: \(error.localizedDescription)"
             self.recordShareEvent("Failed: \(error.localizedDescription)")
             self.deepLinkLogger.error("agent deep link send failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -10422,7 +10161,7 @@ extension NodeAppModel {
     private func isUnattendedDeepLinkAllowed(_ key: String?) -> Bool {
         let normalizedKey = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !normalizedKey.isEmpty else { return false }
-        return normalizedKey == Self.canvasUnattendedDeepLinkKey || normalizedKey == Self.expectedDeepLinkKey()
+        return normalizedKey == Self.expectedDeepLinkKey()
     }
 
     static func expectedDeepLinkKey() -> String {

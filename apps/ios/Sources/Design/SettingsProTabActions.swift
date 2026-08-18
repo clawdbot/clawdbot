@@ -1189,10 +1189,8 @@ extension SettingsProTab {
         var lines: [String] = []
         if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
         if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
-        let gw = gateway.gatewayPort.map(String.init)
-        let canvas = gateway.canvasPort.map(String.init)
-        if gw != nil || canvas != nil {
-            lines.append("Ports: gateway \(gw ?? "-") / canvas \(canvas ?? "-")")
+        if let gatewayPort = gateway.gatewayPort {
+            lines.append("Port: \(gatewayPort)")
         }
         return lines.isEmpty ? [gateway.debugID] : lines
     }
