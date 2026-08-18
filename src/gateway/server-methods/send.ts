@@ -1026,7 +1026,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               args: request.params,
               action: "send",
               mediaPolicy: resolveAttachmentMediaPolicy({
-                mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+                mediaAccess: resolvedMediaAccess,
               }),
             });
           }
