@@ -29,7 +29,7 @@ const boardSnapshot = {
       sizeW: 6,
       sizeH: 4,
       position: 0,
-      grantState: "none",
+      grantState: "pending",
       revision: 1,
       frameUrl: "about:blank#status",
     },
@@ -83,7 +83,7 @@ suite.define(() => {
             ...boardSnapshot,
             revision: 2,
             widgets: boardSnapshot.widgets.map((widget) =>
-              widget.name === "permissions" ? { ...widget, grantState: "granted" } : widget,
+              widget.name === "permissions" ? { ...widget, grantState: "rejected" } : widget,
             ),
           },
         },
@@ -102,16 +102,18 @@ suite.define(() => {
       const widget = document.locator('[data-widget-name="status"]');
       await widget.waitFor();
       expect(await widget.getAttribute("aria-label")).toContain("Dashboard widget: Status.");
-      await document.locator("iframe.board-widget__frame").waitFor();
       await document.getByRole("button", { name: "Close dashboard" }).waitFor();
       expect(new URL(page.url()).searchParams.get("session")).toBe(sessionKey);
 
-      await document.getByRole("button", { name: "Allow" }).click();
+      await document
+        .locator('[data-widget-name="permissions"]')
+        .getByRole("button", { name: "Reject" })
+        .click();
       const grant = await gateway.waitForRequest("board.widget.grant");
       expect(grant.params).toEqual({
         sessionKey,
         name: "permissions",
-        decision: "granted",
+        decision: "rejected",
         revision: 1,
       });
 
