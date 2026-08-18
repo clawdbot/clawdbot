@@ -3,11 +3,17 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  storageTargetForGateway,
+} from "../lib/chat/outbox-store.ts";
+import {
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -55,48 +61,67 @@ async function pastePng(composer: Locator): Promise<void> {
   }, ONE_PIXEL_PNG_B64);
 }
 
-async function waitForDurableDraft(
+async function waitForCommittedAttachmentDraft(
   page: Page,
   sessionKey: string,
-  expected: { text: string; attachments: number },
-) {
-  await expect
-    .poll(() =>
-      page.evaluate(async (targetKey) => {
-        const requestResult = <T>(request: IDBRequest<T>) =>
-          new Promise<T>((resolve, reject) => {
-            request.addEventListener("success", () => resolve(request.result), { once: true });
-            request.addEventListener(
-              "error",
-              () => reject(request.error ?? new Error("IndexedDB request failed")),
-              { once: true },
-            );
-          });
-        try {
-          const database = await requestResult(indexedDB.open("openclaw-control-ui", 1));
-          if (!database.objectStoreNames.contains("composerDrafts")) {
-            database.close();
-            return null;
-          }
-          const records = (await requestResult(
-            database
-              .transaction("composerDrafts", "readonly")
-              .objectStore("composerDrafts")
-              .getAll(),
-          )) as Array<{ attachments?: unknown[]; scopeKey?: string; text?: string }>;
-          database.close();
-          const record = records.find(
-            (candidate) => candidate.scopeKey === `${targetKey}\u0000agent:main`,
-          );
-          return record
-            ? { text: record.text, attachments: record.attachments?.length ?? 0 }
-            : null;
-        } catch {
-          return null;
+  text: string,
+): Promise<void> {
+  const gatewayUrl = await page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { connection: { gatewayUrl: string } } } };
+    };
+    return app.runtime?.context.gateway.connection.gatewayUrl ?? null;
+  });
+  if (!gatewayUrl) {
+    throw new Error("OpenClaw application Gateway URL is unavailable");
+  }
+  const storedScope = resolveStoredChatOutboxScope({ settings: { gatewayUrl } }, sessionKey);
+  await waitForCommittedState(
+    page,
+    async (expected) => {
+      const { gatewayOwner, recoveryScope, scopeKey, draftText, attachmentCount } = expected;
+      if (
+        typeof gatewayOwner !== "string" ||
+        typeof recoveryScope !== "string" ||
+        typeof scopeKey !== "string" ||
+        typeof draftText !== "string" ||
+        typeof attachmentCount !== "number"
+      ) {
+        return false;
+      }
+      try {
+        const storeUrl = performance
+          .getEntriesByType("resource")
+          .map((entry) => entry.name)
+          .find((name) => /\/composer-draft-store\.runtime-[^/]+\.js$/u.test(name));
+        if (!storeUrl) {
+          return false;
         }
-      }, sessionKey),
-    )
-    .toEqual(expected);
+        const draftStore = (await import(
+          /* @vite-ignore */ storeUrl
+        )) as typeof import("../lib/chat/composer-draft-store.runtime.ts");
+        const result = await draftStore.readDurableComposerDraft({
+          gatewayOwner,
+          recoveryScope,
+          scopeKey,
+        });
+        return (
+          result.status === "found" &&
+          result.draft.text === draftText &&
+          result.draft.attachments.length === attachmentCount
+        );
+      } catch {
+        return false;
+      }
+    },
+    {
+      gatewayOwner: storageTargetForGateway(gatewayUrl).gatewayOwner,
+      recoveryScope: "e2e-recovery-scope",
+      scopeKey: storedChatOutboxScopeKey(storedScope),
+      draftText: text,
+      attachmentCount: 1,
+    },
+  );
 }
 
 suite.define(() => {
@@ -141,6 +166,7 @@ suite.define(() => {
       await activeComposer(firstPage).fill("restart draft A with image");
       await pastePng(activeComposer(firstPage));
       await expect.poll(() => activeAttachments(firstPage).count()).toBe(1);
+      await waitForCommittedAttachmentDraft(firstPage, firstSession, "restart draft A with image");
 
       await navigateToControlUiSession(firstPage, secondSession);
       await activeComposer(firstPage).fill("restart draft B with removable file");
@@ -152,14 +178,11 @@ suite.define(() => {
           buffer: Buffer.from("remove this attachment"),
         });
       await expect.poll(() => activeAttachments(firstPage).count()).toBe(1);
-      await waitForDurableDraft(firstPage, firstSession, {
-        text: "restart draft A with image",
-        attachments: 1,
-      });
-      await waitForDurableDraft(firstPage, secondSession, {
-        text: "restart draft B with removable file",
-        attachments: 1,
-      });
+      await waitForCommittedAttachmentDraft(
+        firstPage,
+        secondSession,
+        "restart draft B with removable file",
+      );
       await firstPage.close();
 
       const restoredPage = await context.newPage();

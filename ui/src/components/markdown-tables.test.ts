@@ -60,9 +60,14 @@ function interactiveOwner(): {
     scrollLeft: { configurable: true, value: 0, writable: true },
     scrollWidth: { configurable: true, value: 300 },
   });
-  owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
   return { owner, shell, viewport };
+}
+
+function markdownTableInteractionEvent(target: Element): Event {
+  const event = new MouseEvent("click", { bubbles: true });
+  Object.defineProperty(event, "target", { value: target });
+  return event;
 }
 
 describe("Markdown table interactions", () => {
@@ -140,14 +145,14 @@ describe("Markdown table interactions", () => {
     vi.useFakeTimers();
     const { owner } = interactiveOwner();
     const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
-    copy.click();
+    handleMarkdownTableInteraction(markdownTableInteractionEvent(copy));
     expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
     await vi.advanceTimersByTimeAsync(0);
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
 
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;
     expand.focus();
-    expand.click();
+    handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
     const dialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
     expect(dialog.hasAttribute("open")).toBe(true);
     expect(dialog.querySelector("table")?.textContent).toContain("Alpha");
