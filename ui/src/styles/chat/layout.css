@@ -2351,8 +2351,8 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr[data-state="merged"] {
-  border-color: color-mix(in srgb, var(--pr-merged) 32%, var(--border));
-  background: color-mix(in srgb, var(--pr-merged) 7%, var(--panel));
+  border-color: color-mix(in srgb, var(--pr-merged) 18%, var(--border));
+  background: color-mix(in srgb, var(--pr-merged) 12%, var(--panel));
 }
 
 .chat-pr__link {
