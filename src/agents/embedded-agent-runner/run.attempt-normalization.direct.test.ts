@@ -342,4 +342,40 @@ describe("normalizeEmbeddedRunAttempt", () => {
       total: 43_000,
     });
   });
+
+  it("prefers the authoritative last-call snapshot over cumulative non-CLI assistant usage (#125333)", async () => {
+    const state = makePromptState();
+    // A non-CLI provider (e.g. openai-sub2api) reports cumulative usage across every
+    // tool-loop call in the attempt on the assistant message itself, while
+    // attempt.promptCache.lastCallUsage carries only the true final-call snapshot.
+    const cumulativeAssistant = {
+      role: "assistant",
+      api: "openai-sub2api",
+      provider: "openai-sub2api",
+      model: "gpt-5.6-sol",
+      content: [{ type: "text", text: "final reply" }],
+      usage: { input: 82_123, output: 3_000, cacheRead: 525_824, totalTokens: 610_947 },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    const attempt = makeAttempt();
+    attempt.lastAssistant = cumulativeAssistant as never;
+    attempt.currentAttemptAssistant = cumulativeAssistant as never;
+    attempt.promptCache = {
+      lastCallUsage: { input: 12_400, output: 3_000, cacheRead: 18_900, total: 34_300 },
+    } as never;
+
+    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+
+    expect(result.action).toBe("proceed");
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({
+      input: 12_400,
+      output: 3_000,
+      cacheRead: 18_900,
+      total: 34_300,
+    });
+  });
 });

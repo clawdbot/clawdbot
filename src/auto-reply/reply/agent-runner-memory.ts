@@ -400,12 +400,13 @@ function deriveTranscriptUsageSnapshot(
         trailingMessages: AgentMessage[];
       }
     | undefined,
+  contextWindowTokens?: number,
 ): SessionTranscriptUsageSnapshot | undefined {
   const usage = snapshot?.usage;
   if (!usage) {
     return undefined;
   }
-  const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
+  const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage, contextWindowTokens });
   const outputRaw = usage.output;
   const outputTokens =
     typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
@@ -497,6 +498,7 @@ function readSqliteSessionLogSnapshot(
     includeTurnTaint?: boolean;
     includeUsage: boolean;
     usageEventLimit?: number;
+    contextWindowTokens?: number;
   },
 ): SessionLogSnapshot {
   const snapshot: SessionLogSnapshot = {};
@@ -514,6 +516,7 @@ function readSqliteSessionLogSnapshot(
       if (options.includeUsage) {
         snapshot.usage = deriveTranscriptUsageSnapshot(
           readLatestNonzeroUsageSnapshotFromTranscriptEvents(events),
+          options.contextWindowTokens,
         );
       }
       if (options.includeTurnTaint) {
@@ -569,6 +572,7 @@ function readSessionLogSnapshot(params: {
   includeTurnTaint?: boolean;
   includeUsage: boolean;
   usageEventLimit?: number;
+  contextWindowTokens?: number;
 }): SessionLogSnapshot {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (params.sessionId && params.storePath && agentId) {
@@ -636,6 +640,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       storePath: params.storePath,
       includeByteSize: true,
       includeUsage: true,
+      contextWindowTokens: params.contextWindowTokens,
     });
     let usage = snapshot.usage;
     if (
@@ -651,6 +656,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         includeByteSize: false,
         includeUsage: true,
         usageEventLimit: snapshot.eventCount,
+        contextWindowTokens: params.contextWindowTokens,
       }).usage;
     }
     const normalizedOutputTokens =
@@ -1209,6 +1215,7 @@ export async function runMemoryFlushIfNeeded(params: {
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
         includeTurnTaint: shouldReadTurnTaint,
         includeUsage: shouldReadTranscript,
+        contextWindowTokens,
       })
     : undefined;
   const transcriptByteSize = sessionLogSnapshot?.byteSize;

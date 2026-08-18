@@ -162,10 +162,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
   const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
+  // promptCache.lastCallUsage is the authoritative final-call context fact: it is
+  // captured once per attempt specifically to exclude cumulative tool-loop/retry
+  // totals (see ContextEnginePromptCacheInfo.lastCallUsage). The assistant message's
+  // own `usage` field is not guaranteed to be call-scoped for every provider/API, so
+  // it must only be used as a fallback when no authoritative snapshot was captured.
   // Current-attempt evidence is newest. The session assistant is only a transcript fallback
   // and can predate a carried attempt snapshot after transcript rewrites or compaction.
   const callUsage = resolveLatestCallUsage({
-    currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
+    currentAttemptCandidates: [promptCacheLastCallUsage, currentAttemptAssistantUsage],
     carriedUsage: input.lastRunPromptUsage,
     transcriptFallback: lastAssistantUsage,
   });

@@ -378,9 +378,30 @@ export function deriveContextPromptTokens(params: {
   lastCallUsage?: NormalizedUsage;
   promptTokens?: number;
   usage?: NormalizedUsage;
+  /**
+   * The model's context window, when known. A derived prompt-token count larger than
+   * the window is physically impossible for a genuine context snapshot — it is a sign
+   * that `lastCallUsage`/`usage` actually carries cumulative multi-call usage rather
+   * than a true final-call fact (#125333). Bounding here, at the single choke point
+   * both the live-run and transcript-persistence write paths pass through, rejects
+   * that case instead of persisting or ratcheting on an impossible value.
+   */
+  contextWindowTokens?: number;
 }): number | undefined {
+  const withinWindow = (value: number | undefined): value is number =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    (!Number.isFinite(params.contextWindowTokens) ||
+      (params.contextWindowTokens as number) <= 0 ||
+      value <= (params.contextWindowTokens as number));
+
   const promptOverride = params.promptTokens;
-  if (typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0) {
+  if (
+    typeof promptOverride === "number" &&
+    Number.isFinite(promptOverride) &&
+    promptOverride > 0 &&
+    withinWindow(promptOverride)
+  ) {
     return promptOverride;
   }
 
@@ -388,20 +409,25 @@ export function deriveContextPromptTokens(params: {
     return undefined;
   }
   if (params.lastCallUsage?.contextUsage?.state === "available") {
-    return params.lastCallUsage.contextUsage.promptTokens;
+    return withinWindow(params.lastCallUsage.contextUsage.promptTokens)
+      ? params.lastCallUsage.contextUsage.promptTokens
+      : undefined;
   }
   const lastCallPromptTokens =
     derivePromptTokens(params.lastCallUsage) ?? derivePromptTokensFromTotal(params.lastCallUsage);
   if (lastCallPromptTokens !== undefined) {
-    return lastCallPromptTokens;
+    return withinWindow(lastCallPromptTokens) ? lastCallPromptTokens : undefined;
   }
   if (params.usage?.contextUsage?.state === "unavailable") {
     return undefined;
   }
   if (params.usage?.contextUsage?.state === "available") {
-    return params.usage.contextUsage.promptTokens;
+    return withinWindow(params.usage.contextUsage.promptTokens)
+      ? params.usage.contextUsage.promptTokens
+      : undefined;
   }
-  return derivePromptTokens(params.usage);
+  const usagePromptTokens = derivePromptTokens(params.usage);
+  return withinWindow(usagePromptTokens) ? usagePromptTokens : undefined;
 }
 
 /** Derive the session prompt-token snapshot stored for context display. */

@@ -2291,6 +2291,57 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBe(88_876);
   });
+  it("rejects a transcript-derived prompt snapshot larger than the model's context window (#125333)", async () => {
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(rootDir, "sessions.json");
+    // Non-CLI provider transcript event: `message.usage` is the raw provider usage for
+    // this event, which can reflect a multi-call/tool-loop total larger than the
+    // model's actual context window. There is no `api === "cli"` barrier for this
+    // provider, so this must be bounded some other way instead of being trusted outright.
+    const impossibleUsage = {
+      type: "message",
+      message: {
+        role: "assistant",
+        api: "openai-sub2api",
+        content: "reply after a long tool loop",
+        usage: { input: 82_123, output: 3_000, cacheRead: 525_824, totalTokens: 610_947 },
+      },
+    };
+    await writeTestSessionTranscript({ rootDir, sessionKey, events: [impossibleUsage] });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      compactionCount: 0,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "openai-sub2api",
+        model: "gpt-5.6-sol",
+        sessionId: "session",
+        sessionKey,
+      }),
+      promptForEstimate: "",
+      defaultModel: "openai-sub2api/gpt-5.6-sol",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const persisted = sessionStore[sessionKey]?.totalTokens;
+    expect(persisted === undefined || persisted <= 100_000).toBe(true);
+    if (compactEmbeddedAgentSessionMock.mock.calls.length > 0) {
+      expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeLessThanOrEqual(
+        100_000,
+      );
+    }
+  });
   it("ignores unversioned fresh state and legacy CLI usage on the first upgraded turn", async () => {
     const sessionKey = "agent:main:main";
     const storePath = path.join(rootDir, "sessions.json");
