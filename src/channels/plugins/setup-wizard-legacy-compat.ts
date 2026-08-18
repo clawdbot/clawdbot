@@ -19,10 +19,7 @@ type AllowFromResolution = {
   id?: string | null;
 };
 
-function resolveLegacyChannelConfig(
-  cfg: OpenClawConfig,
-  channel: string,
-): Record<string, unknown> {
+function resolveLegacyChannelConfig(cfg: OpenClawConfig, channel: string): Record<string, unknown> {
   return asObjectRecord(cfg.channels?.[channel]) ?? {};
 }
 
