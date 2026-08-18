@@ -457,7 +457,6 @@ export function createOpenClawTools(
   const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
     ...options,
     agentId: sessionAgentId,
-    config: resolvedConfig,
   })
     ? createProgressCardTool({
         agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
