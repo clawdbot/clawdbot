@@ -126,11 +126,43 @@ export function transportAbortError(signal?: AbortSignal): Error {
 
 type ProviderAcceptanceOptions = Pick<StreamOptions, "onProviderAccepted" | "onResponse">;
 
+async function awaitProviderLifecycleCallback(
+  callback: (() => void | Promise<void>) | undefined,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) {
+    throw transportAbortError(signal);
+  }
+  if (!callback) {
+    return;
+  }
+  const callbackPromise = Promise.resolve().then(callback);
+  if (!signal) {
+    await callbackPromise;
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      callbackPromise,
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(transportAbortError(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
 /** Report a real HTTP response before its body stream is consumed. */
 export async function notifyProviderHttpResponse(params: {
   options?: ProviderAcceptanceOptions;
   response: Response;
   model: Model;
+  signal?: AbortSignal;
 }): Promise<void> {
   if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
     return;
@@ -138,11 +170,22 @@ export async function notifyProviderHttpResponse(params: {
   const status = params.response.status;
   const headers = headersToRecord(params.response.headers);
   try {
-    await params.options.onProviderAccepted?.(
-      { kind: "http_response", status, headers },
-      params.model,
+    await awaitProviderLifecycleCallback(
+      params.options.onProviderAccepted
+        ? () =>
+            params.options?.onProviderAccepted?.(
+              { kind: "http_response", status, headers },
+              params.model,
+            )
+        : undefined,
+      params.signal,
     );
-    await params.options.onResponse?.({ status, headers }, params.model);
+    await awaitProviderLifecycleCallback(
+      params.options.onResponse
+        ? () => params.options?.onResponse?.({ status, headers }, params.model)
+        : undefined,
+      params.signal,
+    );
   } catch (error) {
     await params.response.body?.cancel(error).catch(() => undefined);
     throw error;
@@ -170,27 +213,11 @@ export function withProviderResponseHook<T = never>(params: {
 }): AsyncIterable<T> {
   return {
     async *[Symbol.asyncIterator]() {
-      let onAbort: (() => void) | undefined;
       try {
-        if (params.signal.aborted) {
-          throw transportAbortError(params.signal);
-        }
-        if (params.hook) {
-          await Promise.race([
-            Promise.resolve().then(params.hook),
-            new Promise<never>((_resolve, reject) => {
-              onAbort = () => reject(transportAbortError(params.signal));
-              params.signal.addEventListener("abort", onAbort, { once: true });
-            }),
-          ]);
-        }
+        await awaitProviderLifecycleCallback(params.hook, params.signal);
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;
-      } finally {
-        if (onAbort) {
-          params.signal.removeEventListener("abort", onAbort);
-        }
       }
       if (params.signal.aborted) {
         throw transportAbortError(params.signal);

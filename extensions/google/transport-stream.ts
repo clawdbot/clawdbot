@@ -1132,8 +1132,14 @@ async function notifyGoogleTransportHttpResponse(
   model: GoogleTransportModel,
   options: GoogleTransportOptions | undefined,
   response: Response,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await notifyProviderHttpResponse({ options, response, model: canonicalGoogleModel(model) });
+  await notifyProviderHttpResponse({
+    options,
+    response,
+    model: canonicalGoogleModel(model),
+    signal,
+  });
 }
 
 async function openGoogleSseAttempt(params: {
@@ -1177,7 +1183,7 @@ async function openGoogleSseAttempt(params: {
   }
   attemptSignal?.pauseDeadline();
   try {
-    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
+    await notifyGoogleTransportHttpResponse(params.model, params.options, response, signal);
   } catch (error) {
     attemptSignal?.cleanup();
     throw error;
@@ -1229,7 +1235,12 @@ async function openGoogleSseChunks(params: {
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }
-    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
+    await notifyGoogleTransportHttpResponse(
+      params.model,
+      params.options,
+      response,
+      params.options?.signal,
+    );
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
@@ -1247,7 +1258,12 @@ async function openGoogleSseChunks(params: {
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }
-    await notifyGoogleTransportHttpResponse(params.model, params.options, response);
+    await notifyGoogleTransportHttpResponse(
+      params.model,
+      params.options,
+      response,
+      params.options?.signal,
+    );
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
