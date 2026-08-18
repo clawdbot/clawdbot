@@ -79,6 +79,31 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expectConnectedStatus(manager, "1001"));
     });
 
+    it("does not join for a participant whose human identity is unresolved", async () => {
+      const client = createClient();
+      configureVoiceStateGateway(client, () => [
+        {
+          guild_id: "g1",
+          user_id: "unknown-member",
+          channel_id: "1001",
+        },
+      ]);
+      const manager = createManager(
+        makeVoiceConfig({
+          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+        }),
+        client,
+        {},
+        "default",
+        "bot-user",
+      );
+
+      await manager.autoJoin();
+
+      expect(manager.status()).toEqual([]);
+      expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+    });
+
     it("joins on the first human arrival and leaves when only bots remain", async () => {
       const client = createClient();
       const botState = {
