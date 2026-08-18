@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 describe("Telegram Desktop recorder CLI", () => {
-  it("parses start defaults and a shell-style user driver prefix", () => {
+  it("parses start defaults and a whitespace-separated user driver prefix", () => {
     expect(
       parseRecorderArgs([
         "start",
@@ -69,7 +69,7 @@ describe("Telegram Desktop recorder CLI", () => {
         "--chat",
         "-1001234567890",
         "--user-driver",
-        `python3 driver.py --account "qa shared"`,
+        "uv  run driver.py --json",
       ]),
     ).toEqual({
       chat: "-1001234567890",
@@ -83,7 +83,7 @@ describe("Telegram Desktop recorder CLI", () => {
       provider: "aws",
       recordFps: 24,
       ttl: "2h",
-      userDriver: ["python3", "driver.py", "--account", "qa shared"],
+      userDriver: ["uv", "run", "driver.py", "--json"],
     });
   });
 
@@ -136,9 +136,9 @@ describe("Telegram Desktop recorder CLI", () => {
         "--chat",
         "-1001234",
         "--user-driver",
-        `driver "unterminated`,
+        "   ",
       ]),
-    ).toThrow("valid shell-style command prefix");
+    ).toThrow("--user-driver is required");
   });
 });
 

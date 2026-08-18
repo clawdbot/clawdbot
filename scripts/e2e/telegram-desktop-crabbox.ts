@@ -30,7 +30,7 @@ export type CommandResult = {
 
 export type RunCommand = (params: RunCommandParams) => Promise<CommandResult>;
 
-export type RunCommandParams = {
+type RunCommandParams = {
   args: string[];
   command: string;
   cwd: string;
@@ -45,7 +45,7 @@ export type RunCommandParams = {
   windowsVerbatimArguments?: boolean;
 };
 
-export type TelegramRecordingPaths = {
+type TelegramRecordingPaths = {
   ffmpegLog: string;
   ffmpegPid: string;
   video: string;

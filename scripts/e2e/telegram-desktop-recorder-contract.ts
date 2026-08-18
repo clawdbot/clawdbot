@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import { z } from "zod";
-import { splitShellArgs } from "../../src/utils/shell-argv.ts";
 import type { CrabboxProvider } from "./telegram-desktop-crabbox.ts";
 
-export const recorderSessionSchema = z.object({
+const recorderSessionSchema = z.object({
   artifacts: z.record(z.string(), z.string()).optional(),
   chat: z.string().regex(/^-100\d+$/u),
   cleanupErrors: z.array(z.string()).optional(),
@@ -68,17 +67,12 @@ export type StatusOptions = {
   sessionPath: string;
 };
 
-export type RecorderOptions =
-  | ScreenshotOptions
-  | StartOptions
-  | StatusOptions
-  | StopOptions
-  | ViewOptions;
+type RecorderOptions = ScreenshotOptions | StartOptions | StatusOptions | StopOptions | ViewOptions;
 
 export function recorderUsageText(): string {
   return [
     "Usage:",
-    '  pnpm qa:telegram-desktop-recorder start --output-dir <dir> --chat <-100groupId> --user-driver "<cmd prefix>" [options]',
+    '  pnpm qa:telegram-desktop-recorder start --output-dir <dir> --chat <-100groupId> --user-driver "<space-separated cmd prefix>" [options]',
     "  pnpm qa:telegram-desktop-recorder view --session <recorder.json> --message-id <id>",
     "  pnpm qa:telegram-desktop-recorder screenshot --session <recorder.json> [--output <png>]",
     "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--keep-box]",
@@ -192,11 +186,10 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     if (!/^-100\d+$/u.test(chat)) {
       throw new Error("--chat must be a Telegram private-group id beginning with -100.");
     }
-    const userDriverRaw = requiredString(values, "--user-driver");
-    const userDriver = splitShellArgs(userDriverRaw);
-    if (!userDriver?.length) {
-      throw new Error("--user-driver must be a valid shell-style command prefix.");
-    }
+    // Whitespace-separated command prefix (e.g. `uv run /path/user-driver.py`); the
+    // recorder appends `confirm-qr …` / `terminate-session …`. No quoting: driver
+    // paths are our own tooling and never contain spaces.
+    const userDriver = requiredString(values, "--user-driver").split(/\s+/u);
     const provider = values.get("--provider") ?? "aws";
     if (provider !== "aws" && provider !== "hetzner") {
       throw new Error("--provider must be aws or hetzner.");
