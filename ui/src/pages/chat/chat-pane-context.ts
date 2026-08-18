@@ -202,7 +202,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls
+      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
+      state.automaticallyFetchFavicons === config.automaticallyFetchFavicons
     ) {
       return;
     }
@@ -212,6 +213,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
+    state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
     state.requestUpdate?.();
   }
 

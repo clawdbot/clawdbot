@@ -159,6 +159,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Fetch public-site favicons through the Gateway for Control UI links (default false). */
+  automaticallyFetchFavicons?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];

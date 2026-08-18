@@ -158,6 +158,7 @@ export function createPageState(
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
+    automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
     client: null,
     connected: false,
     connectionEpoch: 0,

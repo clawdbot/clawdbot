@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function bootstrapResponse(serverVersion: string): Response {
+function bootstrapResponse(serverVersion: string, automaticallyFetchFavicons = false): Response {
   const payload: ControlUiBootstrapConfig = {
     basePath: "",
     assistantName: "Assistant",
@@ -19,6 +19,7 @@ function bootstrapResponse(serverVersion: string): Response {
     serverVersion,
     terminalEnabled: false,
     cliAgentsEnabled: true,
+    automaticallyFetchFavicons,
     pluginFrameGrants: [],
   };
   return new Response(JSON.stringify(payload), {
@@ -32,6 +33,18 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("defaults automatic favicon fetching off and enables it only from bootstrap config", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => bootstrapResponse("test", true)),
+    );
+    const config = createApplicationConfigCapability({ basePath: "" });
+
+    expect(config.current.automaticallyFetchFavicons).toBe(false);
+    await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
+    expect(config.current.automaticallyFetchFavicons).toBe(true);
+  });
+
   it("returns null for a superseded bootstrap response", async () => {
     const firstResponse = deferred<Response>();
     const secondResponse = deferred<Response>();

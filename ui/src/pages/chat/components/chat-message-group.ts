@@ -19,6 +19,7 @@ import {
   persistedMessageEntryId,
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -92,6 +93,7 @@ type RenderMessageGroupOptions = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
@@ -171,6 +173,7 @@ function buildGroupedMessageRenderOptions(
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+    fetchLinkFavicon: opts.fetchLinkFavicon,
     resolveReplyPreview: opts.resolveReplyPreview,
     onResolveReply: opts.onResolveReply,
     onOpenReply: opts.onOpenReply,

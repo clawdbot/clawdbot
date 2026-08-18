@@ -24,6 +24,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX,
+  CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
   CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
@@ -593,9 +594,11 @@ export function createGatewayHttpServer(opts: {
       );
       addRequestStage(
         controlUiEnabled &&
-          [CONTROL_UI_PLUGIN_ICON_PATH_PREFIX, CONTROL_UI_CATALOG_ICON_PATH_PREFIX].some((prefix) =>
-            scopedRequestPath.startsWith(`${controlUiRouteBasePath}${prefix}/`),
-          ),
+          [
+            CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+            CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+            CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
+          ].some((prefix) => scopedRequestPath.startsWith(`${controlUiRouteBasePath}${prefix}/`)),
         async () =>
           (await getPluginIconHttpModule()).handlePluginIconHttpRequest(
             req,

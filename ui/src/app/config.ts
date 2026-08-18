@@ -43,6 +43,7 @@ type ApplicationConfig = {
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
+  automaticallyFetchFavicons: boolean;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
@@ -81,6 +82,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
+  automaticallyFetchFavicons: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
   pluginFrameGrants: [],
@@ -159,6 +161,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
           ? "strict"
           : "scripts",
     allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
+    automaticallyFetchFavicons: parsed.automaticallyFetchFavicons === true,
     terminalEnabled: parsed.terminalEnabled === true,
     cliAgentsEnabled: parsed.cliAgentsEnabled === true,
     pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
