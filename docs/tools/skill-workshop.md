@@ -66,6 +66,12 @@ Skills without applied Workshop create provenance are read-only and must receive
 skill created during collection review is recorded as an automatically applied
 `create` proposal, which makes that directory Workshop-owned. Disabled and
 agent-filtered skills stay untouched.
+
+Skills that predate ownership tracking, including skills that earlier reconcile
+runs created directly, have no applied `create` proposal. Skill Workshop
+intentionally classifies them as user-authored and read-only. It manages only
+skills it creates and records from now on.
+
 Shared workspaces use the union of each agent's allowed skills only when
 provider, model, and resolved auth identity match. Reconciliation must leave
 every sharing agent at least one visible skill.
@@ -82,6 +88,10 @@ The daily boundary is persisted per workspace, so Gateway restarts do not
 repeat a successful review. Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
+
+Every completed review records its kept, written, and dropped skill names in
+the shared state database, including the reason for each drop. OpenClaw retains
+the latest 90 outcomes per workspace.
 
 ## Chat
 

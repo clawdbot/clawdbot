@@ -52,7 +52,7 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import { assertWorkshopOwnedSkillDirs, listWorkshopOwnedSkillDirs } from "./ownership.js";
+import { listWorkshopOwnedSkillDirs } from "./ownership.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { withSkillCollectionLock } from "./target-lock.js";
@@ -147,6 +147,16 @@ export async function reconcileSkillCollection(params: {
         MAX_RECONCILED_SKILLS,
         params.approvedSkillNamesByAgent,
       );
+      const outcome = {
+        kept: plan.filter((entry) => entry.action === "keep").map((entry) => entry.name),
+        written: plan.filter((entry) => entry.action === "write").map((entry) => entry.name),
+        dropped: plan
+          .filter(
+            (entry): entry is Extract<SkillCollectionPlanEntry, { action: "drop" }> =>
+              entry.action === "drop",
+          )
+          .map((entry) => ({ name: entry.name, reason: entry.reason })),
+      };
       await assertCollectionReadsCurrent(
         current,
         params.readSkillHashes,
@@ -177,18 +187,15 @@ export async function reconcileSkillCollection(params: {
           current.map((skill) => skill.filePath),
           params.env ? { env: params.env } : {},
         );
+        const result: SkillCollectionReconcileResult = { backupId, ...outcome };
         recordSkillCollectionReviewSuccess(
           workspaceDir,
           Date.now(),
+          result,
           params.env ? { env: params.env } : {},
         );
         return {
-          result: {
-            backupId,
-            kept: plan.map((entry) => entry.name),
-            written: [],
-            dropped: [],
-          },
+          result,
           changes: [],
         };
       }
@@ -241,14 +248,6 @@ export async function reconcileSkillCollection(params: {
         for (const mutation of prepared) {
           await applyWorkspaceSkillMutation(mutation);
           appliedWrites.push(mutation);
-          const proposal = createProposals.get(mutation.skillFile.filePath);
-          if (proposal) {
-            await promoteCollectionCreateProposal({
-              proposal,
-              workspaceDir,
-              env: params.env,
-            });
-          }
         }
         for (const entry of plan) {
           if (entry.action !== "drop") {
@@ -280,9 +279,26 @@ export async function reconcileSkillCollection(params: {
         current.map((skill) => skill.filePath),
         params.env ? { env: params.env } : {},
       );
+      // Finalize the filesystem before recording ownership. Promotion failures
+      // leave newly written skills visible but read-only.
+      for (const mutation of prepared) {
+        const proposal = createProposals.get(mutation.skillFile.filePath);
+        if (proposal) {
+          await promoteCollectionCreateProposal({
+            proposal,
+            workspaceDir,
+            env: params.env,
+          });
+        }
+      }
+      const result: SkillCollectionReconcileResult = {
+        backupId: backup.manifest.id,
+        ...outcome,
+      };
       recordSkillCollectionReviewSuccess(
         workspaceDir,
         Date.now(),
+        result,
         params.env ? { env: params.env } : {},
       );
       await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
@@ -309,17 +325,7 @@ export async function reconcileSkillCollection(params: {
         }
       }
       return {
-        result: {
-          backupId: backup.manifest.id,
-          kept: plan.filter((entry) => entry.action === "keep").map((entry) => entry.name),
-          written: plan.filter((entry) => entry.action === "write").map((entry) => entry.name),
-          dropped: plan
-            .filter(
-              (entry): entry is Extract<SkillCollectionPlanEntry, { action: "drop" }> =>
-                entry.action === "drop",
-            )
-            .map((entry) => ({ name: entry.name, reason: entry.reason })),
-        },
+        result,
         changes,
       };
     },
@@ -357,11 +363,8 @@ export async function restoreLatestSkillCollectionBackup(params: {
         backupId,
         workspaceDir,
       });
-      assertWorkshopOwnedSkillDirs(
-        workspaceDir,
-        [...manifest.skillDirs, ...manifest.resultSkillDirs],
-        params.env ? { env: params.env } : {},
-      );
+      // Restore accepts legacy manifests from before ownership narrowing.
+      // The content-unchanged guard below protects post-cleanup user edits.
       await assertCollectionResultUnchanged(workspaceDir, manifest);
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];
       const shouldDispatch = hasCommittedSkillChangeHooks();

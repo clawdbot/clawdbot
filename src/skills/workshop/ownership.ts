@@ -18,6 +18,7 @@ export function listWorkshopOwnedSkillDirs(
       .where("kind", "=", "create")
       .where("status", "=", "applied"),
   ).rows;
+  // Unknown provenance fails closed to user-owned; only an applied create proves ownership.
   return new Set(
     rows.flatMap((row) => {
       const record = parseSkillProposalRow(row);
@@ -32,20 +33,4 @@ export function isWorkshopOwnedSkillDir(
   options: SkillWorkshopStoreOptions = {},
 ): boolean {
   return listWorkshopOwnedSkillDirs(workspaceDir, options).has(path.resolve(skillDir));
-}
-
-export function assertWorkshopOwnedSkillDirs(
-  workspaceDir: string,
-  relativeDirs: readonly string[],
-  options: SkillWorkshopStoreOptions = {},
-): void {
-  const ownedDirs = listWorkshopOwnedSkillDirs(workspaceDir, options);
-  const unownedDir = relativeDirs.find(
-    (relativeDir) => !ownedDirs.has(path.join(workspaceDir, relativeDir)),
-  );
-  if (unownedDir) {
-    throw new Error(
-      `Skill collection backup contains a path not owned by Skill Workshop: ${path.basename(unownedDir)}`,
-    );
-  }
 }

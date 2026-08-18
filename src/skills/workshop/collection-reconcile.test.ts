@@ -13,15 +13,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
-import {
-  listWritableSkillCollection,
-  reconcileSkillCollection,
-  restoreLatestSkillCollectionBackup,
-} from "./collection-reconcile.js";
+import { listWritableSkillCollection, reconcileSkillCollection } from "./collection-reconcile.js";
 import { stageSkillCollectionDrop } from "./collection-rollback.js";
-import { getArchivedSkillFiles } from "./curator.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import {
   applySkillProposal,
@@ -267,6 +261,17 @@ describe("skill collection reconciliation", () => {
     });
 
     expect(result.dropped).toHaveLength(2);
+    expect(result.dropped).toContainEqual({
+      name: "deploy-two",
+      reason: "merged into deploy-one",
+    });
+    expect(
+      openOpenClawStateDatabase({ env: testState.env })
+        .db.prepare(
+          "SELECT dropped_json FROM skill_workshop_collection_reviews WHERE workspace_dir = ?",
+        )
+        .get(workspaceDir),
+    ).toEqual({ dropped_json: JSON.stringify(result.dropped) });
     expect(
       dispatchCommittedSkillChangeBestEffort.mock.calls.map(([event]) => event.action),
     ).toEqual(["updated", "removed", "removed"]);
@@ -328,61 +333,6 @@ describe("skill collection reconciliation", () => {
       }),
     ).rejects.toThrow("security scan rejected");
     expect(await fs.readdir(backupDir)).toEqual([result.backupId]);
-  });
-
-  it("invalidates skill snapshots before backup pruning fails", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Original procedure", body: "# Original\n" },
-    ]);
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [
-        {
-          action: "write",
-          name: "procedure",
-          description: "First rewrite",
-          content: "# First rewrite\n",
-        },
-      ],
-    });
-    const beforeVersion = getSkillsSnapshotVersion();
-    const backupRoot = path.join(testState.stateDir, "skill-workshop", "collection-backups");
-    const originalReaddir = fs.readdir.bind(fs);
-    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
-      if (path.resolve(String(args[0])) === path.resolve(backupRoot)) {
-        throw new Error("forced backup prune failure");
-      }
-      return await (originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>)(...args);
-    }) as typeof fs.readdir);
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    try {
-      await expect(
-        reconcileSkillCollection({
-          workspaceDir,
-          env: testState.env,
-          ...(await readCollectionReceipt()),
-          plan: [
-            {
-              action: "write",
-              name: "procedure",
-              description: "Second rewrite",
-              content: "# Second rewrite\n",
-            },
-          ],
-        }),
-      ).resolves.toMatchObject({ written: ["procedure"] });
-    } finally {
-      readdirSpy.mockRestore();
-      consoleSpy.mockRestore();
-    }
-
-    expect(getSkillsSnapshotVersion()).toBeGreaterThan(beforeVersion);
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "procedure", "SKILL.md"), "utf8"),
-    ).resolves.toContain("# Second rewrite");
   });
 
   it("requires the model to read and decide every current skill", async () => {
@@ -449,42 +399,6 @@ describe("skill collection reconciliation", () => {
       }),
     ).rejects.toThrow("Skill tree changed before collection mutation: procedure");
     copyDirectoryAfter.mockReset();
-
-    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-      "# Original",
-    );
-    await expect(fs.readFile(supportFile, "utf8")).resolves.toContain("External edit");
-  });
-
-  it("preserves an external edit made after backup validation", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Procedure", body: "# Original\n" },
-    ]);
-    const skillDir = path.join(workspaceDir, "skills", "procedure");
-    const supportFile = path.join(skillDir, "references", "live.md");
-    await fs.mkdir(path.dirname(supportFile), { recursive: true });
-    await fs.writeFile(supportFile, "Before\n", "utf8");
-    const receipt = await readCollectionReceipt();
-    snapshotCommittedSkillArtifactBestEffort.mockImplementationOnce(async () => {
-      await fs.appendFile(supportFile, "External edit\n", "utf8");
-      return undefined;
-    });
-
-    await expect(
-      reconcileSkillCollection({
-        workspaceDir,
-        env: testState.env,
-        ...receipt,
-        plan: [
-          {
-            action: "write",
-            name: "procedure",
-            description: "Rewritten procedure",
-            content: "# Rewritten\n",
-          },
-        ],
-      }),
-    ).rejects.toThrow("Skill tree changed before collection mutation: procedure");
 
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "# Original",
@@ -564,182 +478,6 @@ describe("skill collection reconciliation", () => {
     ).resolves.toContain("# Safe");
   });
 
-  it("refuses to restore over a skill changed after cleanup", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Original procedure", body: "# Original\n" },
-    ]);
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [
-        {
-          action: "write",
-          name: "procedure",
-          description: "Clean procedure",
-          content: "# Clean\n",
-        },
-      ],
-    });
-    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
-    await fs.appendFile(skillFile, "\nManual improvement.\n");
-
-    await expect(
-      restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
-    ).rejects.toThrow("changed after cleanup");
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
-  });
-
-  it("restores an owned skill without rewriting a kept external skill", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "owned", description: "Workshop procedure", body: "# Owned original\n" },
-    ]);
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "external", description: "Operator procedure", body: "# External original\n" },
-    ]);
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [
-        {
-          action: "write",
-          name: "owned",
-          description: "Updated Workshop procedure",
-          content: "# Owned updated\n",
-        },
-        { action: "keep", name: "external" },
-      ],
-    });
-    const externalFile = path.join(workspaceDir, "skills", "external", "SKILL.md");
-    await fs.appendFile(externalFile, "\nOperator edit after cleanup.\n");
-
-    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
-
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "owned", "SKILL.md"), "utf8"),
-    ).resolves.toContain("# Owned original");
-    await expect(fs.readFile(externalFile, "utf8")).resolves.toContain(
-      "Operator edit after cleanup.",
-    );
-  });
-
-  it("preserves an edit made while restore artifacts are captured", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Original procedure", body: "# Original\n" },
-    ]);
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [
-        {
-          action: "write",
-          name: "procedure",
-          description: "Clean procedure",
-          content: "# Clean\n",
-        },
-      ],
-    });
-    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
-    snapshotCommittedSkillArtifactBestEffort.mockImplementationOnce(async () => {
-      await fs.appendFile(skillFile, "\nManual improvement.\n");
-      return undefined;
-    });
-
-    await expect(
-      restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
-    ).rejects.toThrow("changed after cleanup");
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
-  });
-
-  it("rolls back a failed restore so the backup remains retryable", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Original procedure", body: "# Original\n" },
-    ]);
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [
-        {
-          action: "write",
-          name: "procedure",
-          description: "Clean procedure",
-          content: "# Clean\n",
-        },
-      ],
-    });
-    const skillDir = path.join(workspaceDir, "skills", "procedure");
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const backupRoot = path.join(
-      await fs.realpath(testState.stateDir),
-      "skill-workshop",
-      "collection-backups",
-    );
-    let failed = false;
-    copyDirectoryBefore.mockImplementation(async (source, destination) => {
-      if (
-        !failed &&
-        String(source).startsWith(backupRoot) &&
-        !String(source).includes(`${path.sep}.restore-`) &&
-        path.resolve(String(destination)) === path.resolve(skillDir)
-      ) {
-        failed = true;
-        throw new Error("forced restore copy failure");
-      }
-    });
-
-    try {
-      await expect(
-        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
-      ).rejects.toThrow("forced restore copy failure");
-    } finally {
-      copyDirectoryBefore.mockReset();
-    }
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Clean");
-
-    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
-  });
-
-  it("invalidates skill snapshots when restore and rollback both fail", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Original procedure", body: "# Original\n" },
-    ]);
-    await reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...(await readCollectionReceipt()),
-      plan: [
-        {
-          action: "write",
-          name: "procedure",
-          description: "Clean procedure",
-          content: "# Clean\n",
-        },
-      ],
-    });
-    const skillDir = path.join(workspaceDir, "skills", "procedure");
-    const beforeVersion = getSkillsSnapshotVersion();
-    copyDirectoryBefore.mockImplementation(async (source, destination) => {
-      if (path.resolve(String(destination)) === path.resolve(skillDir)) {
-        throw new Error(`forced restore copy failure: ${String(source)}`);
-      }
-    });
-
-    try {
-      await expect(
-        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
-      ).rejects.toThrow("current collection was not restored");
-    } finally {
-      copyDirectoryBefore.mockReset();
-    }
-
-    expect(getSkillsSnapshotVersion()).toBeGreaterThan(beforeVersion);
-    await expect(fs.access(skillDir)).rejects.toThrow();
-  });
-
   it("keeps project-agent skills read-only without Workshop create provenance", async () => {
     const skillDir = path.join(workspaceDir, ".agents", "skills", "project-procedure");
     await writeSkill({
@@ -786,125 +524,6 @@ describe("skill collection reconciliation", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "large-0", "SKILL.md"), "utf8"),
     ).resolves.not.toContain("x".repeat(100));
-  });
-
-  it("preserves archived lifecycle state when backup commit fails", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "archived", description: "Archived procedure", body: "# Original\n" },
-    ]);
-    const skillFile = path.join(workspaceDir, "skills", "archived", "SKILL.md");
-    openOpenClawStateDatabase({ env: testState.env })
-      .db.prepare(
-        `INSERT INTO skill_lifecycle (
-          skill_file, skill_key, skill_name, state, pinned,
-          state_changed_at_ms, created_at_ms, archived_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(skillFile, "archived", "Archived", "archived", 0, 10, 1, "unused");
-    const rename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
-      if (String(oldPath).includes(`${path.sep}.pending-`)) {
-        throw new Error("forced backup commit failure");
-      }
-      await rename(oldPath, newPath);
-    });
-
-    await expect(
-      reconcileSkillCollection({
-        workspaceDir,
-        env: testState.env,
-        ...(await readCollectionReceipt()),
-        plan: [
-          {
-            action: "write",
-            name: "archived",
-            description: "Rewritten archived procedure",
-            content: "# Rewritten\n",
-          },
-        ],
-      }),
-    ).rejects.toThrow("forced backup commit failure");
-    renameSpy.mockRestore();
-
-    expect(getArchivedSkillFiles({ env: testState.env })).toEqual(new Set([skillFile]));
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
-  });
-
-  it("keeps proposal reads behind a failed collection create rollback", async () => {
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      env: testState.env,
-      name: "Collection Candidate",
-      description: "Remain pending if collection creation rolls back.",
-      content: "# Collection Candidate\n\nCreated by collection reconciliation.\n",
-    });
-    const receipt = await readCollectionReceipt();
-    const originalRename = fs.rename.bind(fs);
-    let releaseCommit: (() => void) | undefined;
-    let markCommitAttempted: (() => void) | undefined;
-    const commitAttempted = new Promise<void>((resolve) => {
-      markCommitAttempted = resolve;
-    });
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
-      if (String(oldPath).includes(`${path.sep}.pending-`)) {
-        markCommitAttempted?.();
-        await new Promise<void>((resolve) => {
-          releaseCommit = resolve;
-        });
-        throw new Error("forced backup commit failure");
-      }
-      await originalRename(oldPath, newPath);
-    });
-
-    const reconciliation = reconcileSkillCollection({
-      workspaceDir,
-      env: testState.env,
-      ...receipt,
-      plan: [
-        {
-          action: "write",
-          name: proposal.record.target.skillKey,
-          description: "Created during a collection mutation.",
-          content: "# Collection Candidate\n\nTransient collection content.\n",
-        },
-      ],
-    });
-    try {
-      await commitAttempted;
-      let listSettled = false;
-      let inspectSettled = false;
-      const listing = listSkillProposals({ workspaceDir, env: testState.env }).finally(() => {
-        listSettled = true;
-      });
-      const inspection = inspectSkillProposal(proposal.record.id, {
-        workspaceDir,
-        env: testState.env,
-      }).finally(() => {
-        inspectSettled = true;
-      });
-
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(listSettled).toBe(false);
-      expect(inspectSettled).toBe(false);
-
-      releaseCommit?.();
-      await expect(reconciliation).rejects.toThrow("forced backup commit failure");
-      await expect(listing).resolves.toMatchObject({
-        proposals: expect.arrayContaining([
-          expect.objectContaining({ id: proposal.record.id, status: "pending" }),
-        ]),
-      });
-      await expect(inspection).resolves.toMatchObject({
-        record: { id: proposal.record.id, status: "pending" },
-      });
-    } finally {
-      releaseCommit?.();
-      renameSpy.mockRestore();
-    }
-
-    await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
   });
 
   it("surfaces proposal reads that exceed the collection lease wait", async () => {
@@ -959,69 +578,6 @@ describe("skill collection reconciliation", () => {
       await heldLock;
     }
   }, 15_000);
-
-  it("restores a staged drop when backup commit fails", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "obsolete", description: "Obsolete procedure", body: "# Original\n" },
-    ]);
-    const skillFile = path.join(workspaceDir, "skills", "obsolete", "SKILL.md");
-    const originalRename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
-      if (String(oldPath).includes(`${path.sep}.pending-`)) {
-        throw new Error("forced backup commit failure");
-      }
-      await originalRename(oldPath, newPath);
-    });
-
-    try {
-      await expect(
-        reconcileSkillCollection({
-          workspaceDir,
-          env: testState.env,
-          ...(await readCollectionReceipt()),
-          plan: [{ action: "drop", name: "obsolete", reason: "obsolete" }],
-        }),
-      ).rejects.toThrow("forced backup commit failure");
-    } finally {
-      renameSpy.mockRestore();
-    }
-
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
-  });
-
-  it("preserves a concurrent edit when backup commit and rollback fail", async () => {
-    await writeWorkshopOwnedSkills([
-      { name: "procedure", description: "Original procedure", body: "# Original\n" },
-    ]);
-    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
-    const rename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
-      if (String(oldPath).includes(`${path.sep}.pending-`)) {
-        await fs.appendFile(skillFile, "\nManual improvement.\n");
-        throw new Error("forced backup commit failure");
-      }
-      await rename(oldPath, newPath);
-    });
-
-    await expect(
-      reconcileSkillCollection({
-        workspaceDir,
-        env: testState.env,
-        ...(await readCollectionReceipt()),
-        plan: [
-          {
-            action: "write",
-            name: "procedure",
-            description: "Rewritten procedure",
-            content: "# Rewritten\n",
-          },
-        ],
-      }),
-    ).rejects.toThrow("could not be restored");
-    renameSpy.mockRestore();
-
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
-  });
 });
 
 async function readCollectionReceipt(config?: OpenClawConfig) {

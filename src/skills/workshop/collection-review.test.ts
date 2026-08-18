@@ -7,6 +7,7 @@ import {
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -177,7 +178,12 @@ describe("skill collection review", () => {
     const nowMs = Date.UTC(2026, 7, 10);
 
     expect(isSkillCollectionReviewDue(workspaceDir, nowMs, { env: testState.env })).toBe(true);
-    recordSkillCollectionReviewSuccess(workspaceDir, nowMs, { env: testState.env });
+    recordSkillCollectionReviewSuccess(
+      workspaceDir,
+      nowMs,
+      { backupId: "backup-1", kept: ["useful"], written: [], dropped: [] },
+      { env: testState.env },
+    );
     expect(
       isSkillCollectionReviewDue(workspaceDir, nowMs + 23 * 60 * 60_000, {
         env: testState.env,
@@ -188,6 +194,26 @@ describe("skill collection review", () => {
         env: testState.env,
       }),
     ).toBe(true);
+  });
+
+  it("retains the latest 90 collection review outcomes per workspace", () => {
+    const workspaceDir = path.join(testState.stateDir, "retention-workspace");
+    for (let index = 0; index < 91; index += 1) {
+      recordSkillCollectionReviewSuccess(
+        workspaceDir,
+        index,
+        { backupId: `backup-${index}`, kept: [], written: [], dropped: [] },
+        { env: testState.env },
+      );
+    }
+
+    expect(
+      openOpenClawStateDatabase({ env: testState.env })
+        .db.prepare(
+          "SELECT COUNT(*) AS count, MIN(create_time) AS oldest FROM skill_workshop_collection_reviews WHERE workspace_dir = ?",
+        )
+        .get(path.resolve(workspaceDir)),
+    ).toEqual({ count: 90, oldest: 1 });
   });
 
   it("leaves disabled and agent-filtered skills outside the editable collection", async () => {

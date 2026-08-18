@@ -74,6 +74,7 @@ describe("Skill Workshop SQLite store", () => {
       DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
+      DROP TABLE skill_workshop_collection_reviews;
     `);
     existing.close();
 
@@ -94,6 +95,16 @@ describe("Skill Workshop SQLite store", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("skill_workshop_proposal_events"),
     ).toEqual({ name: "skill_workshop_proposal_events" });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("skill_workshop_collection_reviews"),
+    ).toEqual({ name: "skill_workshop_collection_reviews" });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+        .get("idx_skill_workshop_collection_reviews_workspace_time"),
+    ).toEqual({ name: "idx_skill_workshop_collection_reviews_workspace_time" });
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });

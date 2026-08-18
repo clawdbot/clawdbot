@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -13,11 +14,22 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import type { SkillCollectionReconcileResult } from "./collection-contracts.js";
+import {
+  databaseOptions,
+  ensureSkillWorkshopSchema,
+  type SkillWorkshopStoreOptions,
+} from "./store-sqlite-schema.js";
 
 const CURATOR_STATE_ID = 1;
 const REVIEW_INTERVAL_MS = 24 * 60 * 60_000;
 const REVIEW_CLAIM_MS = 11 * 60_000;
-type CollectionReviewDatabase = Pick<OpenClawStateDatabase, "skill_curator_state">;
+// Bound per-workspace history so unattended daily maintenance cannot grow state forever.
+const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
+type CollectionReviewDatabase = Pick<
+  OpenClawStateDatabase,
+  "skill_curator_state" | "skill_workshop_collection_reviews"
+>;
 
 function workspaceKey(workspaceDir: string): string {
   return sha256Hex(path.resolve(workspaceDir));
@@ -84,8 +96,10 @@ export function isSkillCollectionReviewDue(
 export function recordSkillCollectionReviewSuccess(
   workspaceDir: string,
   nowMs: number,
-  options: OpenClawStateDatabaseOptions = {},
+  result: SkillCollectionReconcileResult,
+  options: SkillWorkshopStoreOptions = {},
 ): void {
+  ensureSkillWorkshopSchema(options);
   runOpenClawStateWriteTransaction(({ db }) => {
     const kysely = getNodeSqliteKysely<CollectionReviewDatabase>(db);
     const current = executeSqliteQueryTakeFirstSync(
@@ -118,5 +132,32 @@ export function recordSkillCollectionReviewSuccess(
           }),
         ),
     );
-  }, options);
+    const resolvedWorkspaceDir = path.resolve(workspaceDir);
+    executeSqliteQuerySync(
+      db,
+      kysely.insertInto("skill_workshop_collection_reviews").values({
+        review_id: randomUUID(),
+        workspace_dir: resolvedWorkspaceDir,
+        backup_id: result.backupId,
+        create_time: nowMs,
+        kept_names_json: JSON.stringify(result.kept),
+        written_names_json: JSON.stringify(result.written),
+        dropped_json: JSON.stringify(result.dropped),
+      }),
+    );
+    const retainedReviewIds = kysely
+      .selectFrom("skill_workshop_collection_reviews")
+      .select("review_id")
+      .where("workspace_dir", "=", resolvedWorkspaceDir)
+      .orderBy("create_time", "desc")
+      .orderBy("review_id", "desc")
+      .limit(SKILL_COLLECTION_REVIEW_RETENTION_COUNT);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("skill_workshop_collection_reviews")
+        .where("workspace_dir", "=", resolvedWorkspaceDir)
+        .where("review_id", "not in", retainedReviewIds),
+    );
+  }, databaseOptions(options));
 }
