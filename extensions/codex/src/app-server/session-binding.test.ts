@@ -998,7 +998,7 @@ describe("Codex app-server binding store", () => {
       const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
         namespace: "app-server-thread-bindings-retirement-test",
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
+        overflowPolicy: "evict-oldest",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       });
       const store = createCodexAppServerBindingStore(state);

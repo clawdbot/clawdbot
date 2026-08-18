@@ -856,7 +856,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
+        overflowPolicy: "evict-oldest",
       });
       let migrated = 0;
       let partialImports = 0;

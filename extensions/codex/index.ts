@@ -126,7 +126,10 @@ export default definePluginEntry({
       (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
+        // A full namespace must not hard-fail every request (issue #125910):
+        // evicting the oldest binding only costs that session its thread
+        // continuity, while reject-new takes the whole gateway down.
+        overflowPolicy: "evict-oldest",
       }));
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.

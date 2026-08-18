@@ -56,7 +56,7 @@ function openBindingStore(env: NodeJS.ProcessEnv) {
   return createDoctorContext(env).openPluginStateKeyedStore<StoredCodexAppServerBinding>({
     namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
     maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
+    overflowPolicy: "evict-oldest",
   });
 }
 
@@ -1133,7 +1133,7 @@ describe("codex doctor contract", () => {
     const store = createDoctorContext(fixture.env).openPluginStateKeyedStore<unknown>({
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
+      overflowPolicy: "evict-oldest",
     });
     const malformed = { version: 1, state: "active" };
     await store.register(bindingKey, malformed);
