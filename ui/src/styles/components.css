@@ -2559,9 +2559,6 @@ openclaw-chat-session-rail {
 
 .json-collapse {
   margin-top: 0.75em;
-  overflow: visible;
-  border: 0;
-  background: transparent;
 }
 
 .json-collapse summary {

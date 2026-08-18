@@ -160,7 +160,7 @@ suite.define(() => {
         expect(geometry.collapsedSummaryTextX - geometry.detailsX).toBeGreaterThan(24);
         expect(geometry.chevronTransitionDuration).not.toBe("0s");
         expect(Math.abs(geometry.jsonDetailsX - geometry.rootX)).toBeLessThanOrEqual(1);
-        expect(Number.parseFloat(geometry.jsonBorderInlineStartWidth)).toBe(0);
+        expect(Number.parseFloat(geometry.jsonBorderInlineStartWidth)).toBe(1);
         expect(geometry.jsonSummaryDisplay).toBe("list-item");
         expect(Number.parseFloat(geometry.jsonSummaryPaddingInlineStart)).toBe(8);
         expect(geometry.jsonCopyFloat).toBe("right");
@@ -172,6 +172,40 @@ suite.define(() => {
             collapsedSummary.evaluate((summary) => getComputedStyle(summary, "::before").transform),
           )
           .not.toBe(geometry.chevronClosedTransform);
+      },
+    );
+  });
+
+  it("keeps user block art preformatted", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 800, width: 1180 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [{ type: "text", text: "```\n  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  \n```" }],
+              role: "user",
+              timestamp: Date.now(),
+            },
+          ],
+        });
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const blockArt = page.locator(".chat-group.user code.markdown-block-art");
+        await blockArt.waitFor();
+        await expect
+          .poll(() =>
+            blockArt.evaluate((code) => {
+              const style = getComputedStyle(code);
+              return [style.whiteSpace, style.overflowWrap, style.wordBreak];
+            }),
+          )
+          .toEqual(["pre", "normal", "normal"]);
       },
     );
   });

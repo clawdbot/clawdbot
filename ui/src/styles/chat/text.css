@@ -670,7 +670,8 @@
   white-space: pre;
 }
 
-.chat-text :where(pre code.markdown-block-art) {
+.chat-text :where(pre code.markdown-block-art),
+.chat-group.user .chat-text :where(pre code.markdown-block-art) {
   display: block;
   min-width: 100%;
   width: max-content;
