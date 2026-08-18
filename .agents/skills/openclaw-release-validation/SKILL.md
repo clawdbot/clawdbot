@@ -38,8 +38,10 @@ When the issue does not exist, become the campaign creator:
    `https://docs.openclaw.ai/maturity/scorecard.md`. From its **All surfaces**
    table, extract each unique surface's display name, taxonomy link, M-level,
    and maturity label. Also extract the score bands. Treat this live response as
-   the complete catalog; do not use a cached or hardcoded surface list. Stop
-   before issue creation when the scorecard is unavailable or cannot be parsed.
+   the complete catalog; do not use a cached or hardcoded surface list. Resolve
+   relative taxonomy links against `https://docs.openclaw.ai` before publishing.
+   Stop before issue creation when the scorecard is unavailable or cannot be
+   parsed.
 3. Read the complete release notes and group every user-visible or
    upgrade-sensitive item under one or more live scorecard surfaces. Use linked
    PR or commit metadata privately when it helps estimate change size, but never
