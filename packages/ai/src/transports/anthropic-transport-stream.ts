@@ -107,7 +107,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
-  notifyProviderStreamOpened,
+  notifyProviderHttpResponse,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
   transportAbortError,
@@ -144,7 +144,10 @@ type AnthropicMessagesClient = {
     stream(
       params: Record<string, unknown>,
       options?: { signal?: AbortSignal },
-    ): AsyncIterable<Record<string, unknown>>;
+    ): Promise<{
+      response: Response;
+      stream: AsyncIterable<Record<string, unknown>> | Iterable<Record<string, unknown>>;
+    }>;
   };
 };
 
@@ -742,7 +745,7 @@ function createAnthropicMessagesClient(params: {
   const url = resolveAnthropicMessagesUrl(params.baseURL);
   return {
     messages: {
-      async *stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+      async stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
         const headers = mergeTransportHeaders(
           {
             "content-type": "application/json",
@@ -762,10 +765,10 @@ function createAnthropicMessagesClient(params: {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
           throw new Error(formatAnthropicMessagesHttpError(response, detail));
         }
-        if (!response.body) {
-          return;
-        }
-        yield* parseAnthropicSseBody(response.body, options?.signal);
+        return {
+          response,
+          stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
+        };
       },
     },
   };
@@ -1194,10 +1197,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const anthropicStream = client.messages.stream(
+        const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
+        await notifyProviderHttpResponse({ options: transportOptions, response, model });
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
         const compactionCapture = createCompactionCapture(output, model, transportOptions);
@@ -1329,15 +1333,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             });
           }
         };
-        let providerAccepted = false;
         for await (const event of anthropicStream) {
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
             throw new Error(error?.message || "Anthropic Messages stream failed");
-          }
-          if (!providerAccepted) {
-            providerAccepted = true;
-            await notifyProviderStreamOpened({ options: transportOptions, model });
           }
           if (event.type === "message_start") {
             const message = event.message as
