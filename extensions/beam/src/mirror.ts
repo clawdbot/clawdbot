@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   fetchWithSsrFGuard,
+  GuardedFetchRedirectError,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -277,6 +278,7 @@ export function createBeamMirrorRunner(params: {
   const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   let lastWarnAt = 0;
+  let redirectBlockedEndpoint: string | undefined;
   let running = false;
 
   const warnThrottled = (message: string) => {
@@ -291,24 +293,45 @@ export function createBeamMirrorRunner(params: {
     token: string | undefined,
     payload: BeamMirrorUpload,
   ): Promise<boolean> => {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: endpoint,
-      fetchImpl: params.fetchFn,
-      timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
-      auditContext: "beam.mirror_upload",
-      // Only the configured receiver can acknowledge delivery. Following a redirect
-      // could fingerprint a payload that the receiver never accepted.
-      maxRedirects: 0,
-      init: {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    if (redirectBlockedEndpoint === endpoint) {
+      return false;
+    }
+    redirectBlockedEndpoint = undefined;
+
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    try {
+      guarded = await fetchWithSsrFGuard({
+        url: endpoint,
+        fetchImpl: params.fetchFn,
+        timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
+        auditContext: "beam.mirror_upload",
+        // Only the configured receiver can acknowledge delivery. Following a redirect
+        // could fingerprint a payload that the receiver never accepted.
+        maxRedirects: 0,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      },
-    });
+      });
+    } catch (error) {
+      if (error instanceof GuardedFetchRedirectError) {
+        // Redirect policy cannot recover on a later poll. Hold this exact endpoint
+        // until config changes instead of repeatedly sending the same sensitive POST.
+        redirectBlockedEndpoint = endpoint;
+        warnThrottled(
+          `beam mirror upload blocked for ${payload.source}: receiver returned redirect (${error.status}); redirects are not followed; configure the final endpoint`,
+        );
+        return false;
+      }
+      throw error;
+    }
+
+    const { response, release } = guarded;
     try {
       if (!response.ok) {
         warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);

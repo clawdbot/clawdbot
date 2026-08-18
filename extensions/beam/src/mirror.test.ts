@@ -308,21 +308,78 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
-  it("retries when the configured receiver redirects to a successful response", async () => {
-    const receiverBodies: string[] = [];
-    const redirectedBodies: string[] = [];
+  it.each([
+    { label: "301", status: 301, location: "/redirected?private=do-not-log" },
+    { label: "302", status: 302, location: "/redirected?private=do-not-log" },
+    { label: "303", status: 303, location: "/redirected?private=do-not-log" },
+    { label: "307", status: 307, location: "/redirected?private=do-not-log" },
+    { label: "308", status: 308, location: "/redirected?private=do-not-log" },
+    { label: "307 without Location", status: 307, location: undefined },
+  ])(
+    "blocks a $label redirect without retrying the configured endpoint",
+    async ({ status, location }) => {
+      const warnings: string[] = [];
+      const receiverBodies: string[] = [];
+      const redirectedBodies: string[] = [];
+      const server = createServer((req, res) => {
+        void readRequestBody(req).then(
+          (body) => {
+            if (req.url === "/redirected") {
+              redirectedBodies.push(body);
+              res.statusCode = 200;
+              res.end("ok");
+              return;
+            }
+            receiverBodies.push(body);
+            res.statusCode = status;
+            if (location) {
+              res.setHeader("Location", location);
+            }
+            res.end();
+          },
+          (error: unknown) => {
+            res.destroy(error instanceof Error ? error : new Error(String(error)));
+          },
+        );
+      });
+      try {
+        const origin = await listenOnLoopback(server);
+        const runner = createBeamMirrorRunner({
+          runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+          logger: { warn: (message) => warnings.push(message), info: () => {} },
+          now: () => NOW,
+          listCatalogs: () => [
+            fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+          ],
+        });
+
+        await runner.tick();
+        await runner.tick();
+
+        expect(receiverBodies).toHaveLength(1);
+        expect(redirectedBodies).toEqual([]);
+        expect(warnings).toEqual([
+          `beam mirror upload blocked for claude: receiver returned redirect (${status}); redirects are not followed; configure the final endpoint`,
+        ]);
+        expect(warnings.join(" ")).not.toContain("do-not-log");
+      } finally {
+        await closeTestServer(server);
+      }
+    },
+  );
+
+  it("resumes delivery after the blocked endpoint changes", async () => {
+    const requests: string[] = [];
     const server = createServer((req, res) => {
       void readRequestBody(req).then(
-        (body) => {
-          if (req.url === "/redirected") {
-            redirectedBodies.push(body);
+        () => {
+          requests.push(req.url ?? "");
+          if (req.url === "/redirecting") {
+            res.statusCode = 307;
+            res.setHeader("Location", "/redirected");
+          } else {
             res.statusCode = 200;
-            res.end("ok");
-            return;
           }
-          receiverBodies.push(body);
-          res.statusCode = 307;
-          res.setHeader("Location", "/redirected");
           res.end();
         },
         (error: unknown) => {
@@ -332,8 +389,12 @@ describe("createBeamMirrorRunner", () => {
     });
     try {
       const origin = await listenOnLoopback(server);
+      let endpoint = `${origin}/redirecting`;
+      const runtime = {
+        config: { current: () => mirrorConfig({ endpoint }) },
+      } as unknown as PluginRuntime;
       const runner = createBeamMirrorRunner({
-        runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+        runtime,
         logger: silentLogger,
         now: () => NOW,
         listCatalogs: () => [
@@ -343,9 +404,10 @@ describe("createBeamMirrorRunner", () => {
 
       await runner.tick();
       await runner.tick();
+      endpoint = `${origin}/direct`;
+      await runner.tick();
 
-      expect(receiverBodies).toHaveLength(2);
-      expect(redirectedBodies).toEqual([]);
+      expect(requests).toEqual(["/redirecting", "/direct"]);
     } finally {
       await closeTestServer(server);
     }
