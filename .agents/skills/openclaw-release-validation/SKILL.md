@@ -57,7 +57,7 @@ for <tag>.` when the issue is absent. When it exists, announce it once in the
 format above, then read its body and use the worksheet between
 `<!-- validation-worksheet:start -->` and
 `<!-- validation-worksheet:end -->`. Keep its release priorities and template
-unchanged.
+unchanged. Those exact bytes are the canonical campaign template for this run.
 
 In **Initialize campaign**, reuse the current issue unchanged when it already
 exists. When it does not exist, generate it:
@@ -131,8 +131,10 @@ exists. When it does not exist, generate it:
    maturity expectations. Remove the campaign-creator comment and ensure no
    template placeholder remains.
 8. Create the issue with the stable marker, a short participation note, and the
-   completed worksheet verbatim between the worksheet markers. Re-query open
-   issues for the marker after creation and fail on duplicates.
+   completed worksheet verbatim between the worksheet markers. Read it back and
+   require the marker contents to equal the rendered worksheet before treating
+   campaign initialization as complete. Re-query open issues for the marker
+   after creation and fail on duplicates.
 
 After the current issue exists, find open campaign issues whose marker names a
 release published before the current candidate. Comment on each with the current
@@ -144,7 +146,8 @@ initializer workflow without waiting for testing.
 Only **Initialize campaign** performs release-note analysis or generates the
 canonical template. Validation runs consume the issue body without rewriting
 it, but replace **Your changes in this release** in their private worksheet with
-the current tester's complete authored-PR list for the same tag range.
+the current tester's complete authored-PR list for the same tag range. The
+bundled worksheet asset is initializer-only; a validation run never reads it.
 
 ## 2. Choose and copy a real gateway
 
@@ -200,11 +203,17 @@ or gateway readiness is unresolved.
 ## 4. Create and reveal the worksheet
 
 Only after the upgrade gate above, copy the canonical worksheet between the
-shared issue's markers to
+shared issue's markers byte-for-byte to
 `.artifacts/openclaw-release-validation/<tag>-<timestamp>.md`. Fill in the
 source, shared issue URL, terminal upgrade result, and eligible upgrade findings
 without changing the campaign priorities. Refresh **Your changes in this
 release** for the current tester.
+
+Preserve every other heading, table, callout, surface order, maturity score,
+release theme, and recommended test exactly as copied. The only validation-run
+edits are the source fields, **Your changes in this release**, **Upgrade
+findings**, **Upgrade result**, non-empty **Testing notes** cells, and **Final
+feedback**. Never regenerate, reformat, or substitute the campaign template.
 
 Resolve and print the worksheet's absolute path, followed by one exact
 platform-appropriate command that opens it. Use this shape on macOS:
