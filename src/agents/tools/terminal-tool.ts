@@ -7,6 +7,7 @@ import {
   TerminalOpenDeadlineError,
   waitForTerminalOpenDeadline,
 } from "../../gateway/terminal/open-deadline.js";
+import type { TerminalAgentActionOutcome } from "../../gateway/terminal/session-manager.types.js";
 import { getAgentRunTaskRunId } from "../../infra/agent-run-registry.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
@@ -64,8 +65,26 @@ const TerminalToolOutputSchema = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object({ sessionId: Type.String(), text: Type.String() }, { additionalProperties: false }),
-  Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }),
+  Type.Object({ ok: Type.Literal(true) }, { additionalProperties: false }),
 ]);
+
+const TERMINAL_RECOVERY_GUIDANCE =
+  "Use action=list to find an owned terminal or action=open to acquire one.";
+const TERMINAL_UNAVAILABLE_MESSAGE = `Terminal session unavailable. ${TERMINAL_RECOVERY_GUIDANCE}`;
+
+function terminalActionResult(
+  action: "initial command" | "input" | "resize" | "close",
+  outcome: TerminalAgentActionOutcome,
+): ReturnType<typeof jsonResult> {
+  if (!outcome.ok) {
+    throw new ToolInputError(
+      outcome.code === "session_unavailable"
+        ? TERMINAL_UNAVAILABLE_MESSAGE
+        : `Terminal ${action} failed. ${TERMINAL_RECOVERY_GUIDANCE}`,
+    );
+  }
+  return jsonResult({ ok: true });
+}
 
 type TerminalToolGatewayContext = Pick<
   GatewayRequestContext,
@@ -252,12 +271,17 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         if (!outcome.ok) {
           throw new ToolInputError(outcome.message);
         }
-        if (
-          command !== undefined &&
-          !manager.writeAgent(agentSessionKey, outcome.sessionId, `${command}\r`, agentId)
-        ) {
-          manager.closeAgent(agentSessionKey, outcome.sessionId, agentId);
-          throw new ToolInputError("terminal command failed");
+        if (command !== undefined) {
+          const commandOutcome = manager.writeAgent(
+            agentSessionKey,
+            outcome.sessionId,
+            `${command}\r`,
+            agentId,
+          );
+          if (!commandOutcome.ok) {
+            manager.closeAgent(agentSessionKey, outcome.sessionId, agentId);
+            terminalActionResult("initial command", commandOutcome);
+          }
         }
         return jsonResult(outcome);
       }
@@ -266,7 +290,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       if (action === "read") {
         const raw = manager.snapshotAgent(agentSessionKey, sessionId, agentId);
         if (raw === undefined) {
-          throw new ToolInputError("terminal not owned by this agent session");
+          throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
         }
         return jsonResult({ sessionId, text: renderTerminalBufferText(raw) });
       }
@@ -276,23 +300,28 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           trim: false,
           allowEmpty: true,
         });
-        return jsonResult({
-          ok: manager.writeAgent(agentSessionKey, sessionId, data, agentId),
-        });
+        return terminalActionResult(
+          "input",
+          manager.writeAgent(agentSessionKey, sessionId, data, agentId),
+        );
       }
       if (action === "resize") {
-        return jsonResult({
-          ok: manager.resizeAgent(
+        return terminalActionResult(
+          "resize",
+          manager.resizeAgent(
             agentSessionKey,
             sessionId,
             readDimension(params, "cols"),
             readDimension(params, "rows"),
             agentId,
           ),
-        });
+        );
       }
       if (action === "close") {
-        return jsonResult({ ok: manager.closeAgent(agentSessionKey, sessionId, agentId) });
+        return terminalActionResult(
+          "close",
+          manager.closeAgent(agentSessionKey, sessionId, agentId),
+        );
       }
       throw new ToolInputError(`Unknown action: ${action}`);
     },

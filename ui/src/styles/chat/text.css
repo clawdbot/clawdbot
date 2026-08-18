@@ -26,31 +26,54 @@
   word-break: break-word;
 }
 
+.chat-message-disclosure {
+  position: relative;
+}
+
+.chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+}
+
 .chat-message-disclosure__toggle {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  margin-top: 8px;
-  padding: 4px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-  line-height: 1.2;
   cursor: var(--cursor-action);
 }
 
+.chat-message-disclosure__toggle[hidden] {
+  display: none;
+}
+
 .chat-message-disclosure__toggle:hover {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, currentColor 8%, transparent);
   color: var(--text);
 }
 
 .chat-message-disclosure__toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.chat-message-disclosure__toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-message-disclosure.has-overflow .chat-message-disclosure__content {
+  padding-right: 30px;
 }
 
 /* Exhausted full-message load: quiet inline error + manual retry. */
@@ -383,7 +406,7 @@
   font-size: calc(1em + 1px);
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)) {
+:is(.chat-text, .chat-thinking) :where(details) {
   box-sizing: border-box;
   width: 100%;
   padding: var(--space-4);
@@ -392,15 +415,15 @@
   background: transparent;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) details:not(.json-collapse)) {
+:is(.chat-text, .chat-thinking) :where(details details) {
   width: calc(100% - var(--space-3));
   margin-top: var(--space-3);
   margin-inline-start: var(--space-3);
 }
 
-/* Authored disclosures are complete content surfaces; JSON code blocks retain
-   their separate compact presentation. */
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary) {
+/* Authored disclosures are complete content surfaces; fenced code carries its own
+   reveal control inside the code-block wrapper instead. */
+:is(.chat-text, .chat-thinking) :where(details > summary) {
   position: relative;
   min-height: var(--space-5);
   padding-inline-start: var(--space-6);
@@ -408,12 +431,11 @@
   cursor: var(--cursor-action);
 }
 
-:is(.chat-text, .chat-thinking)
-  :where(details:not(.json-collapse) > summary)::-webkit-details-marker {
+:is(.chat-text, .chat-thinking) :where(details > summary)::-webkit-details-marker {
   display: none;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::before {
+:is(.chat-text, .chat-thinking) :where(details > summary)::before {
   position: absolute;
   content: "";
   inset-block-start: calc((1lh - var(--space-4)) / 2);
@@ -425,7 +447,7 @@
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary)::before {
+:is(.chat-text, .chat-thinking) :where(details[open] > summary)::before {
   transform: rotate(0deg);
 }
 
@@ -450,12 +472,12 @@
     center / 13px no-repeat;
 }
 
-:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary) {
+:is(.chat-text, .chat-thinking) :where(details[open] > summary) {
   margin-bottom: var(--space-2);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::before {
+  :is(.chat-text, .chat-thinking) :where(details > summary)::before {
     transition: none;
   }
 }
@@ -767,17 +789,156 @@
   width: 100%;
 }
 
+/* Interactive fences move horizontal scrolling to the viewport so a long line
+   never widens the transcript, and clip to a seven-line preview until revealed. */
+.code-block-viewport {
+  /* CODE_PREVIEW_LINE_COUNT in components/markdown-code-blocks.ts decides how many
+     lines the renderer reports as hidden; the clip below must show the same count. */
+  --code-block-preview-lines: 7;
+  --code-block-line-height: 18px;
+
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.code-block-viewport :where(pre) {
+  overflow: visible;
+}
+
+/* The overflow measurement reads code width against the viewport, so the code box
+   has to size to its content instead of collapsing to the inline box. */
+.code-block-viewport :where(pre code) {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  line-height: var(--code-block-line-height);
+}
+
+/* The preview lines plus the code element's own 4px/8px/6px vertical box. */
+.code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-viewport {
+  max-height: calc(var(--code-block-line-height) * var(--code-block-preview-lines) + 18px);
+  overflow-y: hidden;
+}
+
+.code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-wrap {
+  display: none;
+}
+
+.code-block-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  margin-inline-start: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: var(--cursor-action);
+}
+
+.code-block-wrapper.is-expanded .code-block-expand {
+  display: none;
+}
+
+.code-block-chevron,
+.code-block-wrap__enable,
+.code-block-wrap__disable {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: var(--code-block-icon) center / contain no-repeat;
+  -webkit-mask: var(--code-block-icon) center / contain no-repeat;
+}
+
+.code-block-chevron {
+  --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* The wrap control is offered only once a line measurably overflows, so it never
+   advertises an action that would change nothing. */
+.code-block-wrap {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.code-block-wrapper.has-horizontal-overflow .code-block-wrap,
+.code-block-wrapper.is-wrapped .code-block-wrap {
+  display: inline-flex;
+}
+
+.code-block-wrap__enable {
+  --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/%3E%3C/svg%3E");
+}
+
+.code-block-wrap__disable {
+  --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14m-4-4 4 4-4 4'/%3E%3C/svg%3E");
+  display: none;
+}
+
+.code-block-wrapper.is-wrapped .code-block-wrap__enable {
+  display: none;
+}
+
+.code-block-wrapper.is-wrapped .code-block-wrap__disable {
+  display: block;
+}
+
+.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code) {
+  width: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.code-block-wrapper.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+
+.code-block-wrap:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--text);
+}
+
+.code-block-expand:focus-visible,
+.code-block-wrap:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .chat-group.user .chat-text :where(pre) {
   margin-block: 1em;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
+  color: inherit;
+  font: inherit;
   overflow: visible;
   white-space: pre-wrap;
 }
 
-.chat-group.user .chat-text :where(pre code) {
+/* A user fence carries no code chrome, so it reads as the message it was typed
+   into rather than as a rendered code surface. */
+.chat-group.user .chat-text :where(pre code, pre code *) {
+  width: auto;
+  min-width: 0;
+  color: inherit;
+  font: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;

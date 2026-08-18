@@ -207,6 +207,8 @@ export type RunEmbeddedAgentParams = {
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
   sessionFile?: string;
   workspaceDir: string;
+  /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
+  bootstrapWorkspaceDir?: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
   permissionMode?: SessionEntry["permissionMode"];

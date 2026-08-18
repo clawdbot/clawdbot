@@ -78,6 +78,7 @@ import {
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
 } from "./reply-operation-abort.js";
+import { markReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
 type InternalFollowupRun = FollowupRun & {
@@ -248,6 +249,9 @@ async function executeAgentTurnInternalWithRetryState(
       return;
     }
     didNotifyAgentRunStart = true;
+    if (params.replyOperation) {
+      markReplyOperationExecutionStarted(params.replyOperation);
+    }
     params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
   };
   const signalExecutionPhaseForTyping = (

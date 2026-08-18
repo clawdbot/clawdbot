@@ -99,6 +99,7 @@ describe("OpenClaw shell dock suppression", () => {
           updateAvailable: null,
           updateRunning: false,
           updateStatusBanner: null,
+          recordedUpdateAttempt: null,
           controlUiRefreshRequired: false,
           approvalQueue: [],
           approvalBusy: false,

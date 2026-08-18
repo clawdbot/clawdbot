@@ -11,6 +11,8 @@ export type CloudSessionCreateParams = SessionCreateParams & {
   key?: string;
   agentId: string;
   message: "";
+  projectId?: string;
+  visibility?: "draft";
   worktree: true;
 };
 
@@ -39,7 +41,17 @@ const CLOUD_CREATE_STRING_FIELDS = [
   "cwd",
   "execNode",
   "catalogId",
+  "projectId",
 ] as const;
+const CLOUD_CREATE_FIELDS = new Set<string>([
+  "key",
+  "agentId",
+  "message",
+  "worktree",
+  "incognito",
+  "visibility",
+  ...CLOUD_CREATE_STRING_FIELDS,
+]);
 
 export function parseCloudSessionCreateParams(
   value: unknown,
@@ -50,21 +62,16 @@ export function parseCloudSessionCreateParams(
     return null;
   }
   const record = value;
-  const allowed = new Set<string>([
-    "key",
-    "agentId",
-    "message",
-    "worktree",
-    "incognito",
-    ...CLOUD_CREATE_STRING_FIELDS,
-  ]);
   if (
-    Object.keys(record).some((key) => !allowed.has(key)) ||
+    Object.keys(record).some((key) => !CLOUD_CREATE_FIELDS.has(key)) ||
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
+    (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.projectId !== undefined &&
+      (record.cwd !== undefined || record.execNode !== undefined)) ||
     CLOUD_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )

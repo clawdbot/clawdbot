@@ -22,6 +22,7 @@ import {
   DEFAULT_SCROLLBACK_CHARS,
 } from "./session-limits.js";
 import type {
+  TerminalAgentActionOutcome,
   TerminalEventSink,
   TerminalExitReason,
   TerminalOpenOutcome,
@@ -317,9 +318,17 @@ export class TerminalSessionManager {
   }
 
   /** Writes agent input after proving session-key ownership. */
-  writeAgent(agentSessionKey: string, sessionId: string, data: string, agentId?: string): boolean {
+  writeAgent(
+    agentSessionKey: string,
+    sessionId: string,
+    data: string,
+    agentId?: string,
+  ): TerminalAgentActionOutcome {
     const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
-    return session ? this.writeSession(session, data) : false;
+    if (!session) {
+      return { ok: false, code: "session_unavailable" };
+    }
+    return this.writeSession(session, data) ? { ok: true } : { ok: false, code: "backend_failed" };
   }
 
   private writeSession(session: TerminalSession, data: string): boolean {
@@ -350,9 +359,14 @@ export class TerminalSessionManager {
     cols: number,
     rows: number,
     agentId?: string,
-  ): boolean {
+  ): TerminalAgentActionOutcome {
     const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
-    return session ? this.resizeSession(session, cols, rows) : false;
+    if (!session) {
+      return { ok: false, code: "session_unavailable" };
+    }
+    return this.resizeSession(session, cols, rows)
+      ? { ok: true }
+      : { ok: false, code: "backend_failed" };
   }
 
   private resizeSession(session: TerminalSession, cols: number, rows: number): boolean {
@@ -402,13 +416,17 @@ export class TerminalSessionManager {
   }
 
   /** Closes an agent-owned PTY after proving session-key ownership. */
-  closeAgent(agentSessionKey: string, sessionId: string, agentId?: string): boolean {
+  closeAgent(
+    agentSessionKey: string,
+    sessionId: string,
+    agentId?: string,
+  ): TerminalAgentActionOutcome {
     const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     if (!session) {
-      return false;
+      return { ok: false, code: "session_unavailable" };
     }
     this.finalize(session, "closed", {});
-    return true;
+    return { ok: true };
   }
 
   /** Closes every live or spawning PTY owned by one exact agent session or task. */

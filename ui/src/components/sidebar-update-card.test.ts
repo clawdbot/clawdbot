@@ -6,6 +6,7 @@ import {
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import {
   answerConfirmDialog,
   cancelOpenModalDialogs,
@@ -37,6 +38,8 @@ type SidebarUpdateCardElement = HTMLElement & {
   refreshRequired: boolean;
   onRefresh: () => void;
   onHoldUpdate: () => Promise<boolean>;
+  statusBanner: ApplicationStatusBanner | null;
+  onReviewUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -204,6 +207,18 @@ describe("SidebarUpdateCard", () => {
       expect(element.querySelector(".sidebar-update-card")).toBeNull();
     },
   );
+
+  it("routes a recorded failure to update settings when availability is gone", async () => {
+    const element = await mount(null);
+    const onReviewUpdate = vi.fn();
+    element.statusBanner = { tone: "danger", text: "Update failed" };
+    element.onReviewUpdate = onReviewUpdate;
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Update failed");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__review")?.click();
+    expect(onReviewUpdate).toHaveBeenCalledOnce();
+  });
 
   it("renders nothing for a dismissed version and channel", async () => {
     localStorage.setItem(

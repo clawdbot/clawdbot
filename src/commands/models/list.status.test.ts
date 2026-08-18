@@ -592,6 +592,49 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("shows exact WHAM classification and canonical reason in status JSON", async () => {
+    const now = Date.now();
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<
+        string,
+        {
+          cooldownUntil: number;
+          cooldownReason: "auth";
+          cooldownClassification: "wham_token_expired";
+        }
+      >;
+    };
+    store.usageStats = {
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, profileId) =>
+      profileId === "openai:default" ? now + 60_000 : undefined,
+    );
+
+    try {
+      const jsonRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
+        expect.objectContaining({
+          profileId: "openai:default",
+          reason: "auth",
+          classification: "wham_token_expired",
+        }),
+      ]);
+
+      const textRuntime = createRuntime();
+      await modelsStatusCommand({}, textRuntime as never);
+      expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("cooldown:wham_token_expired");
+    } finally {
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     const now = Date.now();
     const profileId = "google-gemini-cli:legacy";

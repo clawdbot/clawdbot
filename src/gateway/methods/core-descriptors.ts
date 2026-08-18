@@ -552,6 +552,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     { controlPlaneWrite: true },
   ],
+  ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

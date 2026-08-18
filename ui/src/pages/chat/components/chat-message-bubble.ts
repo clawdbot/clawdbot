@@ -295,7 +295,8 @@ export function renderGroupedMessage(
   const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
-    codeBlockChrome: "copy",
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
@@ -386,6 +387,13 @@ export function renderGroupedMessage(
       : nothing;
 
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
+  const duplicateSuffix =
+    duplicateCount > 1
+      ? {
+          count: duplicateCount,
+          label: t("chat.messages.duplicatesCollapsed", { count: String(duplicateCount) }),
+        }
+      : undefined;
 
   // Pure tool messages (no text/images/attachments) skip the "Tool output"
   // shell and render as flat kind-aware rows, one disclosure level deep.
@@ -514,7 +522,11 @@ export function renderGroupedMessage(
                       ${assistantViewContent}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                            ${unsafeHTML(
+                              toSanitizedMarkdownHtml(reasoningMarkdown, {
+                                codeBlockInteraction: "interactive",
+                              }),
+                            )}
                           </div>`
                         : nothing}
                       ${jsonResult
@@ -531,7 +543,12 @@ export function renderGroupedMessage(
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
                         : markdown
-                          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                          ? renderMarkdownText(
+                              markdown,
+                              opts.isStreaming,
+                              markdownRenderOptions,
+                              duplicateSuffix,
+                            )
                           : nothing}
                       ${hasToolCards
                         ? expandsSingleToolCard && singleToolCard
@@ -583,7 +600,11 @@ export function renderGroupedMessage(
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                  ${unsafeHTML(
+                    toSanitizedMarkdownHtml(reasoningMarkdown, {
+                      codeBlockInteraction: "interactive",
+                    }),
+                  )}
                 </div>`
               : nothing}
             ${assistantViewContent}
@@ -597,15 +618,27 @@ export function renderGroupedMessage(
                 </details>`
               : markdown
                 ? normalizedRole === "user"
-                  ? renderUserMessageMarkdown(markdown, messageKey, opts, markdownRenderOptions)
+                  ? renderUserMessageMarkdown(
+                      markdown,
+                      messageKey,
+                      opts,
+                      markdownRenderOptions,
+                      duplicateSuffix,
+                    )
                   : normalizedRole === "assistant"
                     ? renderAssistantMessageMarkdown(
                         markdown,
                         opts.isStreaming,
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
+                        duplicateSuffix,
                       )
-                    : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                    : renderMarkdownText(
+                        markdown,
+                        opts.isStreaming,
+                        markdownRenderOptions,
+                        duplicateSuffix,
+                      )
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
@@ -623,7 +656,7 @@ export function renderGroupedMessage(
                 })
               : nothing}
           `}
-      ${duplicateCount > 1
+      ${duplicateCount > 1 && (!markdown || jsonResult)
         ? html`<div
             class="chat-duplicate-count"
             aria-label=${t("chat.messages.duplicatesCollapsed", {

@@ -1619,6 +1619,7 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    serverBuildId: "mock",
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -2442,6 +2443,82 @@ async function createChatPickerScenario(
           },
         ],
       },
+      // Saturated-main fixture so the debug page and overlay render queued and
+      // group-budget states, not just idle lanes.
+      "diagnostics.lanes": {
+        ts: baseTime,
+        lanes: [
+          {
+            lane: "cron",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+          },
+          {
+            lane: "cron-nested",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+            group: "cron-hooks",
+            groupActive: 2,
+            groupBudget: 4,
+          },
+          {
+            lane: "hook-dispatch",
+            queuedCount: 2,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+            group: "cron-hooks",
+            groupActive: 2,
+            groupBudget: 4,
+            reservedForLane: 1,
+            blockedBy: "group-budget",
+          },
+          {
+            lane: "main",
+            queuedCount: 3,
+            activeCount: 16,
+            maxConcurrent: 16,
+            draining: false,
+            generation: 7,
+            blockedBy: "lane",
+          },
+          {
+            lane: "nested",
+            queuedCount: 0,
+            activeCount: 0,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 1,
+          },
+          {
+            lane: "subagent",
+            queuedCount: 5,
+            activeCount: 8,
+            maxConcurrent: 8,
+            draining: false,
+            generation: 4,
+            blockedBy: "lane",
+          },
+        ],
+        dynamic: {
+          laneCount: 23,
+          activeCount: 9,
+          queuedCount: 4,
+          queuedLaneCount: 3,
+        },
+      },
+      status: {
+        eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },
+        uptimeMs: 5_412_000,
+      },
+      "last-heartbeat": { ts: baseTime },
       "sessions.list": {
         cases: [
           // Child fetches must precede the catch-all page case (subset match).
@@ -2784,7 +2861,7 @@ const server = await createServer({
       branch: null,
       dirty: null,
       release: false,
-      buildId: "mock",
+      buildId: scenario.serverBuildId,
     }),
   },
   logLevel: "error",

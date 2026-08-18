@@ -65,9 +65,10 @@ suite.define(() => {
       const beforeFailure = (await gateway.getRequests("models.list")).length;
       await model.click();
       await gateway.waitForRequest("models.list", { after: beforeFailure });
+      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await expect
-        .poll(() => composer.locator('[data-chat-model-catalog-state="error"]').textContent())
-        .toContain("Couldn’t refresh models");
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.5"]').count())
+        .toBe(1);
       await expect.poll(() => textarea.isEnabled()).toBe(true);
       await expect.poll(() => disabledReason.count()).toBe(0);
 
@@ -75,11 +76,15 @@ suite.define(() => {
         models: [{ ...coldModels[0], available: true }],
       });
       const beforeRetry = (await gateway.getRequests("models.list")).length;
-      await composer.locator('[data-chat-model-catalog-retry="true"]').click();
+      await model.click();
+      await model.click();
       const retry = await gateway.waitForRequest("models.list", { after: beforeRetry });
-      expect(retry.params).toEqual({ agentId: "main", refresh: true, view: "configured" });
+      expect(retry.params).toEqual({ agentId: "main", view: "configured" });
       await expect.poll(() => textarea.isEnabled()).toBe(true);
       await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.5"]').isEnabled())
+        .toBe(true);
     });
   });
 
@@ -307,6 +312,14 @@ suite.define(() => {
           (await effort.locator(".chat-controls__inline-select-label").textContent())?.trim(),
         )
         .toBe("High");
+      for (const trigger of [model, effort]) {
+        const title = await trigger.getAttribute("title");
+        expect(title).toBeTruthy();
+        await trigger.hover();
+        expect(await trigger.getAttribute("title")).toBe("");
+        await page.mouse.move(0, 0);
+        await expect.poll(() => trigger.getAttribute("title")).toBe(title);
+      }
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))

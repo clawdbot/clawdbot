@@ -41,6 +41,7 @@ type AttemptRuntime = {
   sessionKey?: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
@@ -298,6 +299,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
+    bootstrapWorkspaceDir: runtime.bootstrapWorkspaceDir,
     cwd: params.cwd,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,

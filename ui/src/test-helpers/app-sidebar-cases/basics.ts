@@ -78,6 +78,78 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar viewer presence", () => {
+  it("shows only other online identities with active-first ordering and idle dimming", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: { id: "self", name: "Self" },
+          lastInputSeconds: 0,
+          ts: 1,
+        },
+      ],
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: { id: "self", name: "Self" },
+          lastInputSeconds: 0,
+          ts: 1,
+        },
+        {
+          instanceId: "zed-instance",
+          user: { id: "zed", name: "Zed" },
+          lastInputSeconds: 20,
+          ts: 1,
+        },
+        {
+          instanceId: "alice-instance",
+          user: { id: "alice", name: "Alice" },
+          lastInputSeconds: 600,
+          ts: 1,
+        },
+        {
+          instanceId: "bob-instance",
+          user: { id: "bob", name: "Bob" },
+          ts: 1,
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      const rows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")];
+      expect(
+        rows.map((row) => row.querySelector(".sidebar-online__person-name")?.textContent?.trim()),
+      ).toEqual(["Bob", "Zed", "Alice"]);
+      expect(rows.map((row) => row.classList.contains("sidebar-online__person--away"))).toEqual([
+        false,
+        false,
+        true,
+      ]);
+    });
+    expect(sidebar.querySelector('[data-online-user-id="self"]')).toBeNull();
+
+    sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')?.click();
+    expect(onNavigate).toHaveBeenCalledWith("activity", {
+      pathname: "/activity",
+      search: "?person=alice",
+    });
+  });
+
   it("renders the self user's avatar route in the footer identity chip", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);

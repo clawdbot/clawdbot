@@ -30,6 +30,16 @@ export function realtimeVoiceAudioDurationMs(
   return (byteLength * 1000) / (format.sampleRateHz * format.channels * bytesPerSample);
 }
 
+export type OpenAICompatibleRealtimeAudioFormat =
+  | { type: "audio/pcm"; rate: 24000 }
+  | { type: "audio/pcmu" };
+
+export function toOpenAICompatibleRealtimeAudioFormat(
+  format: RealtimeVoiceAudioFormat,
+): OpenAICompatibleRealtimeAudioFormat {
+  return format.encoding === "pcm16" ? { type: "audio/pcm", rate: 24000 } : { type: "audio/pcmu" };
+}
+
 export const REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ: RealtimeVoiceAudioFormat = {
   encoding: "g711_ulaw",
   sampleRateHz: 8000,

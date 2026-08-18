@@ -91,6 +91,19 @@ function cacheChatMessages(
   });
 }
 
+function cacheEmptyChatSnapshot(host: ChatHost, sessionKey: string): void {
+  cacheChatSessionSnapshot(
+    requireChatMessageCache(host),
+    host,
+    { sessionKey },
+    {
+      messages: [],
+      pagination: { hasMore: false, completeSnapshot: true },
+      sessionId: "cached-session",
+    },
+  );
+}
+
 function createQueuedLocalCommand(
   id: string,
   text: string,
@@ -634,6 +647,36 @@ describe("refreshChat", () => {
       hasActiveRun: false,
       status: "done",
       updatedAt: 10,
+    });
+  });
+
+  it("reconciles queued history over a prior terminal session row", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row("main", {
+            hasActiveRun: true,
+            status: "queued",
+            updatedAt: 11,
+          }),
+        },
+      },
+      sessionKey: "main",
+      sessionsResult: createSessionsResult([
+        row("main", { hasActiveRun: false, status: "failed", updatedAt: 10 }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: true,
+      status: "queued",
+      updatedAt: 11,
     });
   });
 
@@ -4997,6 +5040,7 @@ describe("handleSendChat", () => {
         requestUpdate: vi.fn(),
       });
     }
+    cacheEmptyChatSnapshot(inactive, item.sessionKey);
     expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
     const event = {
       event: "chat",
@@ -5094,6 +5138,7 @@ describe("handleSendChat", () => {
         requestUpdate: vi.fn(),
       });
     }
+    cacheEmptyChatSnapshot(inactive, item.sessionKey);
     expect(admitQueuedMessageForSession(visible, item.sessionKey, item)).toBe(true);
     const event = {
       event: "chat",

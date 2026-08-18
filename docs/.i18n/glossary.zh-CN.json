@@ -1568,6 +1568,10 @@
     "target": "故障排查"
   },
   {
+    "source": "Update troubleshooting",
+    "target": "更新故障排查"
+  },
+  {
     "source": "Webhooks",
     "target": "Webhooks"
   },

@@ -1934,7 +1934,7 @@ src/agents/harness/context-engine-lifecycle.ts	3
 src/agents/harness/context-engine-turn-outbox.ts	3
 src/agents/harness/gateway-question.ts	6
 src/agents/harness/hook-helpers.ts	1
-src/agents/harness/host-capability.ts	4
+src/agents/harness/host-capability.ts	3
 src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
@@ -2661,7 +2661,7 @@ src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
-src/commands/onboard-helpers.ts	3
+src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	3
 src/commands/onboard-non-interactive/local/auth-choice-inference.ts	2
 src/commands/onboard-non-interactive/local/auth-choice.plugin-providers.ts	1
@@ -2761,7 +2761,7 @@ src/config/sessions/session-accessor.sqlite-archive.ts	3
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-checkpoint.ts	3
-src/config/sessions/session-accessor.sqlite-delta.ts	3
+src/config/sessions/session-accessor.sqlite-delta.ts	2
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry-cache.ts	3
 src/config/sessions/session-accessor.sqlite-entry.ts	1
@@ -3081,7 +3081,7 @@ src/gateway/server-resident-registry.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	3
 src/gateway/server-runtime-handles.ts	11
 src/gateway/server-runtime-state-prepare.ts	2
-src/gateway/server-session-events.ts	4
+src/gateway/server-session-events.ts	1
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-config.ts	1
@@ -4168,7 +4168,7 @@ ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
-ui/src/pages/chat/chat-history.ts	6
+ui/src/pages/chat/chat-history.ts	5
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
@@ -4184,7 +4184,7 @@ ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1
 ui/src/pages/chat/chat-send-timing.ts	6
 ui/src/pages/chat/chat-session-companion.ts	5
-ui/src/pages/chat/chat-state-events.ts	8
+ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	5
 ui/src/pages/chat/chat-state-route.ts	1
 ui/src/pages/chat/chat-thread-build.ts	2

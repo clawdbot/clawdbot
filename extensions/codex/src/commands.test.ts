@@ -2741,6 +2741,65 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    ["auth", "wham_token_expired"],
+    ["auth_permanent", "wham_account_dead"],
+  ] as const)(
+    "shows %s subscription cooldowns classified as %s as sign-in expired",
+    async (cooldownReason, cooldownClassification) => {
+      const config = {};
+      const now = Date.now();
+      installAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:expired@example.com": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: now + 60 * 60 * 1000,
+              email: "expired@example.com",
+            },
+            "openai:api-key": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+          },
+          order: {
+            openai: ["openai:expired@example.com", "openai:api-key"],
+          },
+          usageStats: {
+            "openai:expired@example.com": {
+              cooldownUntil: now + 60 * 60 * 1000,
+              cooldownReason,
+              cooldownClassification,
+            },
+          },
+        },
+        config,
+      );
+
+      const safeCodexControlRequest = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          value: { account: { type: "unknown" }, requiresOpenaiAuth: false },
+        })
+        .mockResolvedValueOnce({ ok: false, error: "rate limits unavailable" })
+        .mockResolvedValueOnce({ ok: false, error: "subscription limits unavailable" });
+
+      const result = await runCommand("account", { safeCodexControlRequest }, { config });
+
+      expect(result.text).toContain(
+        "\n  1. expired@example.com   ChatGPT subscription   — sign-in expired",
+      );
+      expect(result.text).toContain("\n  2. api-key   API key   — active now");
+      expect(result.text).not.toContain("temporarily unavailable");
+    },
+  );
+
   it("escapes successful Codex account fallback summaries before chat display", async () => {
     const unsafe = "<@U123> [trusted](https://evil) @here";
     const safeCodexControlRequest = vi

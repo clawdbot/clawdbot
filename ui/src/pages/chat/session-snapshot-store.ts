@@ -41,6 +41,7 @@ const paginationSchema = z.discriminatedUnion("hasMore", [
 
 const snapshotSchema = z
   .object({
+    deltaCursor: z.string().optional(),
     displayedLeafEntryId: z.string().nullable().optional(),
     messages: z.array(z.unknown()),
     pagination: paginationSchema,

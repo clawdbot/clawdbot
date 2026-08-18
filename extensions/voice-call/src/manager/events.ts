@@ -35,6 +35,7 @@ type EventContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
   | "onCallAnswered"
   | "streamSessionIssuer"
 >;
@@ -244,9 +245,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     startMaxDurationTimer({
       ctx,
       callId: activeCall.callId,
-      onTimeout: async (callId) => {
-        await endCall(ctx, callId, { reason: "timeout" });
-      },
+      onTimeout: (callId) => endCall(ctx, callId, { reason: "timeout" }),
     });
   };
   const prepareLiveDurationTimer = () => {

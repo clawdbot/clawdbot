@@ -17,7 +17,9 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { createTranscriptRawDeltaCursor } from "./session-accessor.sqlite-delta.js";
 import {
+  readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
@@ -336,6 +338,15 @@ export function readRecentSessionTranscriptHistoryEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
+    const generation = readTranscriptProjectionGeneration(projection);
+    const deltaCursor = generation
+      ? createTranscriptRawDeltaCursor({
+          agentId: projection.resolved.agentId,
+          generation,
+          lastSeq: projection.state.indexedSeq,
+          sessionId: projection.resolved.sessionId,
+        })
+      : undefined;
     const maxMessages = Math.min(
       MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
       Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
@@ -347,6 +358,7 @@ export function readRecentSessionTranscriptHistoryEvents(
     if (maxMessages === 0 || maxLines === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
+        ...(deltaCursor ? { deltaCursor } : {}),
         events: [],
         totalMessages: history.total,
       };
@@ -365,6 +377,7 @@ export function readRecentSessionTranscriptHistoryEvents(
     );
     return {
       activeLeafEntryId: projection.state.leafEventId,
+      ...(deltaCursor ? { deltaCursor } : {}),
       events: readVisibleHistoryRange(projection, selectedStart, history.total, history),
       totalMessages: history.total,
     };

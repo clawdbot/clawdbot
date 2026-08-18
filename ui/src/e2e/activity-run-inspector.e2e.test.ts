@@ -281,7 +281,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
-      expect(new URL(page.url()).search).toBe("");
+      expect(new URL(page.url()).search).toBe("?view=live");
       await page.goBack();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
     } finally {
@@ -295,7 +295,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     const gateway = await installMockGateway(page, { sessionKey: "main" });
 
     try {
-      await page.goto(`${server.baseUrl}activity`);
+      await page.goto(`${server.baseUrl}activity?view=live`);
       await page.getByText("No activity yet.", { exact: true }).waitFor();
 
       for (let index = 0; index < 40; index += 1) {

@@ -1155,7 +1155,7 @@
 .chat-working-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 22px;
+  gap: var(--space-2);
   min-height: 28px;
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

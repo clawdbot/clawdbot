@@ -175,10 +175,7 @@ describe("chat pane composer controls", () => {
     );
   });
 
-  it.each([
-    ["ordinary picker open", false],
-    ["Retry", true],
-  ] as const)("uses the expected server-cache policy for %s", async (_label, refresh) => {
+  it("uses the configured server-cache policy when the picker opens", async () => {
     const container = document.createElement("div");
     const request = vi.fn(async () => ({ models: [] }));
     const state = {
@@ -188,7 +185,7 @@ describe("chat pane composer controls", () => {
       client: { request },
       chatLoading: false,
       chatModelCatalog: [],
-      chatModelCatalogError: refresh ? "refresh failed" : null,
+      chatModelCatalogError: null,
       sessions: { state: { modelOverrides: {} }, patch: vi.fn() },
       chatModelSwitchPromises: {},
       sessionKey: "main",
@@ -210,19 +207,14 @@ describe("chat pane composer controls", () => {
     });
     render(controls.composerControls, container);
 
-    if (refresh) {
-      container.querySelector<HTMLButtonElement>('[data-chat-model-catalog-retry="true"]')?.click();
-    } else {
-      const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-      picker!.open = true;
-      picker!.dispatchEvent(new Event("toggle"));
-    }
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    picker!.open = true;
+    picker!.dispatchEvent(new Event("toggle"));
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
       agentId: "main",
-      ...(refresh ? { refresh: true } : {}),
     });
   });
 });

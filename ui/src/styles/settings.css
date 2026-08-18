@@ -595,6 +595,26 @@ textarea.settings-input {
   gap: var(--space-3);
 }
 
+.updates-attempt-details {
+  width: 100%;
+}
+
+.updates-attempt-details summary {
+  cursor: var(--cursor-action);
+  font-weight: 600;
+}
+
+.updates-attempt-details pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .updates-commit-list {
   width: 100%;
   overflow: hidden;

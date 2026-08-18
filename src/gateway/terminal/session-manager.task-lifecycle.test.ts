@@ -45,16 +45,19 @@ describe("TerminalSessionManager task lifecycle", () => {
       throw new Error("expected terminal session");
     }
 
-    expect(manager.writeAgent("agent:research:main", opened.sessionId, "nope", "research")).toBe(
-      false,
+    expect(manager.writeAgent("agent:research:main", opened.sessionId, "nope", "research")).toEqual(
+      { ok: false, code: "session_unavailable" },
     );
-    expect(manager.resizeAgent("agent:research:main", opened.sessionId, 90, 30, "research")).toBe(
-      false,
-    );
+    expect(
+      manager.resizeAgent("agent:research:main", opened.sessionId, 90, 30, "research"),
+    ).toEqual({ ok: false, code: "session_unavailable" });
     expect(
       manager.snapshotAgent("agent:research:main", opened.sessionId, "research"),
     ).toBeUndefined();
-    expect(manager.closeAgent("agent:research:main", opened.sessionId, "research")).toBe(false);
+    expect(manager.closeAgent("agent:research:main", opened.sessionId, "research")).toEqual({
+      ok: false,
+      code: "session_unavailable",
+    });
     expect(fake.killed).toBe(false);
   });
 

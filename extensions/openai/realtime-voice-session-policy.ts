@@ -5,6 +5,7 @@ import {
   resolveProviderAuthProfileApiKey,
 } from "openclaw/plugin-sdk/provider-auth";
 import type {
+  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
@@ -15,6 +16,7 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  toOpenAICompatibleRealtimeAudioFormat,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -191,13 +193,13 @@ type RealtimeGaSessionPolicy = {
   output_modalities: string[];
   audio: {
     input: {
-      format: OpenAIRealtimeAudioFormatConfig;
+      format: OpenAICompatibleRealtimeAudioFormat;
       turn_detection: RealtimeTurnDetectionConfig;
       noise_reduction: { type: "near_field" } | null;
       transcription: { model: string; language?: string };
     };
     output: {
-      format: OpenAIRealtimeAudioFormatConfig;
+      format: OpenAICompatibleRealtimeAudioFormat;
       voice: OpenAIRealtimeVoice;
     };
   };
@@ -226,15 +228,6 @@ export type RealtimeAzureDeploymentSessionUpdate = {
     tool_choice?: string;
   };
 };
-
-type OpenAIRealtimeAudioFormatConfig =
-  | {
-      type: "audio/pcm";
-      rate: 24000;
-    }
-  | {
-      type: "audio/pcmu";
-    };
 
 export function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
@@ -438,14 +431,6 @@ export function normalizeOpenAIRealtimeTools(
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function resolveOpenAIRealtimeAudioFormat(
-  audioFormat: RealtimeVoiceAudioFormat = REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-): OpenAIRealtimeAudioFormatConfig {
-  return audioFormat.encoding === "pcm16"
-    ? { type: "audio/pcm", rate: 24000 }
-    : { type: "audio/pcmu" };
-}
-
 export function buildOpenAIRealtimeTurnDetectionConfig(params: {
   autoRespondToAudio?: boolean;
   createResponse?: boolean;
@@ -485,7 +470,9 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   vadThreshold?: number;
   voice: OpenAIRealtimeVoice;
 }): RealtimeGaSessionPolicy {
-  const format = resolveOpenAIRealtimeAudioFormat(params.audioFormat);
+  const format = toOpenAICompatibleRealtimeAudioFormat(
+    params.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  );
   return {
     type: "realtime",
     model: params.model,
