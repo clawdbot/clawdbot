@@ -195,7 +195,7 @@ it("projects only durable profiles and configured agents as effective owners", (
   );
 });
 
-it("projects and filters the effective owner while preserving creation provenance", () => {
+it("filters immutable creator and effective owner separately while preserving projections", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:default-owner": {
       createdActor: { type: "human", id: "profile-ada" },
@@ -211,6 +211,12 @@ it("projects and filters the effective owner while preserving creation provenanc
       },
       sessionId: "session-assigned-owner",
       updatedAt: 1,
+    },
+    "agent:main:other-creator": {
+      createdActor: { type: "human", id: "profile-bob" },
+      owner: { actor: { type: "human", id: "profile-ada" } },
+      sessionId: "session-other-creator",
+      updatedAt: 0,
     },
   };
   const result = listSessionsFromStore({
@@ -241,6 +247,22 @@ it("projects and filters the effective owner while preserving creation provenanc
     },
     { type: "human", id: "profile-bob", label: "Bob" },
   ]);
+  const creatorFiltered = listSessionsFromStore({
+    cfg: {} as OpenClawConfig,
+    storePath: "/tmp/openclaw-session-owners",
+    store,
+    opts: { archived: "all", creatorId: "profile-ada" },
+  });
+  expect(creatorFiltered.sessions.map((row) => row.key)).toEqual([
+    "agent:main:default-owner",
+    "agent:main:assigned-owner",
+  ]);
+  expect(creatorFiltered.sessions.find((row) => row.key.endsWith(":assigned-owner"))).toMatchObject(
+    {
+      createdActor: { id: "profile-ada", label: "Ada" },
+      owner: { actor: { id: "profile-bob", label: "Bob" } },
+    },
+  );
   const ownerFiltered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
@@ -248,6 +270,10 @@ it("projects and filters the effective owner while preserving creation provenanc
     opts: { archived: "all", ownerId: "profile-bob" },
   });
   expect(ownerFiltered.sessions.map((row) => row.key)).toEqual(["agent:main:assigned-owner"]);
+  expect(ownerFiltered.sessions[0]).toMatchObject({
+    createdActor: { id: "profile-ada", label: "Ada" },
+    owner: { actor: { id: "profile-bob", label: "Bob" } },
+  });
 });
 
 it("projects participant identities and filters sessions involving the viewer", () => {
