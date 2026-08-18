@@ -1460,7 +1460,9 @@ describe("google transport stream", () => {
       options: {
         reasoning: "high",
         onProviderAccepted: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 25);
+          });
           throw new Error("acceptance callback failed");
         },
       },
