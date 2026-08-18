@@ -4325,19 +4325,3 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity: 1;
   }
 }
-itle {
-  color: color-mix(in srgb, var(--danger) 86%, var(--text));
-}
-
-.sidebar-recent-session__subtitle--narration {
-  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
-}
-
-@keyframes sidebar-narration-arrive {
-  from {
-    opacity: 0.45;
-  }
-  to {
-    opacity: 1;
-  }
-}

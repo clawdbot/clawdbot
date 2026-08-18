@@ -54,6 +54,7 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   onOpenApprovals?: () => void;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
+  toggleSection(sectionId: string): void;
 };
 
 type SidebarNativeGateway = {
