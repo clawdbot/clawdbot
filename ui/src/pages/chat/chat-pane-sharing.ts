@@ -18,7 +18,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -32,7 +31,7 @@ import {
 import { resetSessionCompanion } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { clearTypingActorForUserMessage } from "./chat-typing-presence.ts";
+import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
@@ -688,24 +687,27 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   }
 
   protected clearTypingActorForSessionMessage(payload: unknown): void {
-    const event = readSessionChangedEvent(payload);
     const state = this.state;
-    if (
-      !event ||
-      !state ||
-      !uiSessionEventMatches(
-        {
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-          sessionKey: state.sessionKey,
-        },
-        event.key,
-        event.agentId ?? undefined,
-      )
-    ) {
+    if (!state) {
       return;
     }
-    if (clearTypingActorForUserMessage(payload, this.typingActors, this.typingTimers)) {
+    if (
+      clearTypingActorForSessionMessage(
+        payload,
+        this.typingActors,
+        this.typingTimers,
+        (key, agentId) =>
+          uiSessionEventMatches(
+            {
+              agentsList: this.context.agents.state.agentsList,
+              hello: this.context.gateway.snapshot.hello,
+              sessionKey: state.sessionKey,
+            },
+            key,
+            agentId,
+          ),
+      )
+    ) {
       this.requestUpdate();
     }
   }
