@@ -1837,7 +1837,7 @@ src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	60
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	3
-src/agents/embedded-agent-runner/run-entry.ts	4
+src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	5
 src/agents/embedded-agent-runner/run/abortable.ts	2
@@ -2208,7 +2208,7 @@ src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-memory.ts	8
-src/auto-reply/reply/agent-runner-result-complete.ts	4
+src/auto-reply/reply/agent-runner-result-complete.ts	3
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1

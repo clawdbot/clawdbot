@@ -44,6 +44,13 @@ vi.mock("./models-config.js", async () => {
 const installRunEmbeddedMocks = () => {
   // Install the runner mocks before importing runEmbeddedAgent so the e2e path
   // exercises fallback orchestration without live model/provider calls.
+  vi.doMock("../plugins/runtime.js", () => ({
+    getActivePluginRegistry: () => null,
+    requireActivePluginRegistry: () => ({}),
+  }));
+  vi.doMock("./harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+  }));
   installEmbeddedRunnerBaseE2eMocks();
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
@@ -69,6 +76,7 @@ type TestRunEmbeddedAgent = (
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
+let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -77,6 +85,7 @@ beforeAll(async () => {
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
+  ({ runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js"));
 });
 
 beforeEach(() => {
@@ -281,6 +290,62 @@ async function runEmbeddedFallback(params: {
   });
 }
 
+async function runEmbeddedEntryFallback(params: {
+  agentDir: string;
+  workspaceDir: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  const cfg = makeConfig();
+  const sessionId = `session:${params.runId}`;
+  return await runEmbeddedAgentEntry({
+    selection: {
+      cfg,
+      provider: "openai",
+      model: "mock-1",
+      agentDir: params.agentDir,
+      manifestPlugins: [],
+    },
+    identity: {
+      runId: params.runId,
+      agentId: "test",
+      sessionId,
+      sessionKey: params.sessionKey,
+    },
+    harness: {
+      workspaceDir: params.workspaceDir,
+      sessionKey: params.sessionKey,
+      preparation: { kind: "direct" },
+      resolveRuntimeOverride: () => undefined,
+      resolveContextEngineHost: (provider, model) => ({
+        id: `embedded-e2e:${provider}/${model}`,
+        label: "embedded runner e2e",
+        capabilities: [],
+      }),
+    },
+    behavior: { kind: "maintenance" },
+    sessionOverride: { kind: "preserve" },
+    runCandidate: (provider, model, options) =>
+      runEmbeddedAgent({
+        sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: cfg,
+        prompt: "hello",
+        provider,
+        model,
+        authProfileIdSource: "auto",
+        isFinalFallbackAttempt: options.isFinalFallbackAttempt,
+        timeoutMs: 5_000,
+        runId: params.runId,
+        enqueue: async (task) => await task(),
+        contextEngineLogicalTurnLease: options.contextEngineLogicalTurnLease,
+        onContextEngineTurnCandidate: options.onContextEngineTurnCandidate,
+      }),
+  });
+}
+
 function mockPrimaryOverloadedThenFallbackSuccess() {
   mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD);
 }
@@ -422,6 +487,50 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it("carries failed outer candidates into the winning execution trace", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedEntryFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:execution-trace-fallback",
+        runId: "run:execution-trace-fallback",
+      });
+
+      expect(result.result.meta.executionTrace).toMatchObject({
+        winnerProvider: "groq",
+        winnerModel: "mock-2",
+        fallbackUsed: true,
+        runner: "embedded",
+      });
+      expect(result.result.meta.executionTrace?.attempts).toEqual([
+        expect.objectContaining({
+          provider: "openai",
+          model: "mock-1",
+          result: "candidate_failed",
+          reason: "overloaded",
+        }),
+        expect.objectContaining({
+          provider: "groq",
+          model: "mock-2",
+          result: "success",
+        }),
+      ]);
+      expect(result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
+        requested: { provider: "openai", model: "mock-1" },
+        effective: { provider: "groq", model: "mock-2" },
+        rerouted: true,
+      });
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        requested: { provider: "openai", model: "mock-1" },
+        effective: { provider: "groq", model: "mock-2" },
+        rerouted: true,
+      });
+    });
+  });
+
   it("keeps tool summary on incomplete side-effect terminal results", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

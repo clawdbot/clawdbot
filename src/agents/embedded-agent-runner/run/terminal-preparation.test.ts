@@ -318,6 +318,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     assistantTurns?: number;
     bridgeCalls?: { search: number; describe: number; call: number };
     config?: unknown;
+    assistantProvider?: string;
     provider?: string;
     model?: string;
     outerContextTokenMeta?: { contextTokens?: number };
@@ -336,7 +337,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     const model = statsInput.model ?? "cost-model";
     const assistant = {
       ...assistantMessage("stop"),
-      provider,
+      provider: statsInput.assistantProvider ?? provider,
       model,
       ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
@@ -494,9 +495,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       },
     });
 
-    expect(
-      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
-    ).toMatchObject({
+    expect(prepared.agentMeta.terminalReceipt).toMatchObject({
       runId: "run-1",
       sessionId: "session-1",
       turnId: "turn-7",
@@ -509,10 +508,22 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       successfulToolNames: ["exec", "read", "Zeta", "alpha", "zeta"],
       rerouted: true,
     });
-    expect(
-      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
-    ).not.toHaveProperty("terminalDisposition");
+    expect(prepared.agentMeta.terminalReceipt).not.toHaveProperty("terminalDisposition");
     expect(prepared.agentMeta.model).toBe("cost-model");
     expect(prepared.reportedModelRef.model).toBe("cost-model");
+  });
+
+  it("marks a provider-only response route as rerouted", async () => {
+    const prepared = await prepareStats({ assistantProvider: "routed-provider" });
+
+    expect(prepared.agentMeta.terminalReceipt).toMatchObject({
+      requested: { provider: "cost-test-provider", model: "cost-model" },
+      effective: {
+        provider: "routed-provider",
+        model: "cost-model",
+        responseModel: "cost-model",
+      },
+      rerouted: true,
+    });
   });
 });

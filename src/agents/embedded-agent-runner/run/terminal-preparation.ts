@@ -171,7 +171,10 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames,
-      rerouted: responseModel !== input.model,
+      rerouted:
+        reportedModelRef.provider !== input.provider ||
+        reportedModelRef.model !== input.model ||
+        responseModel !== input.model,
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
