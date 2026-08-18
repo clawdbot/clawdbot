@@ -34,6 +34,7 @@ function formatModelContextMeta(option: ChatModelPickerOption): string {
 }
 
 export type ChatModelPickerTargetGroup = {
+  errorLabel: string;
   id: string;
   label: string;
   options: readonly { label: string; value: string }[];

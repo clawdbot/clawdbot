@@ -315,6 +315,7 @@ export class NewSessionModelControl {
     }
     return [
       {
+        errorLabel: t("newSession.cliAgentsUnavailable"),
         id: "cliAgents",
         label: t("newSession.cliAgentsGroup"),
         options:

@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
+  pollLocatorText,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -79,8 +80,11 @@ suite.define(() => {
       await gateway.waitForRequest("chat.metadata");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await expect.poll(() => modelSelect.textContent()).toContain("Models unavailable");
-      expect(await page.locator('[data-chat-model-catalog-state="error"]').count()).toBe(1);
+      const errorState = page.locator('[data-chat-model-catalog-state="error"]');
+      await pollLocatorText(
+        errorState.locator(".chat-controls__model-catalog-state-label > span"),
+      ).toBe("Models unavailable");
+      expect(await errorState.count()).toBe(1);
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();
@@ -220,8 +224,18 @@ suite.define(() => {
         '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="error"]',
       );
       await expect.poll(() => errorState.isVisible()).toBe(true);
+      await pollLocatorText(
+        errorState.locator(".chat-controls__model-catalog-state-label > span"),
+      ).toBe("CLI agents unavailable");
       const retry = page.locator('[data-chat-model-target-retry="cliAgents"]');
       await expect.poll(() => retry.isEnabled()).toBe(true);
+      await pollLocatorText(retry).toContain("Retry");
+      await pollLocatorText(
+        page.locator(
+          '[data-chat-model-option="openai/gpt-5.6-luna"] .chat-controls__model-option-name',
+        ),
+      ).toBe("GPT-5.6 Luna");
+      expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
       await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       if (captureCatalogRetryProof) {
         await page.screenshot({
@@ -264,6 +278,14 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);
+      await pollLocatorText(
+        page.locator(
+          '[data-chat-model-target-group="cliAgents"] .chat-controls__provider-heading > span:last-child',
+        ),
+      ).toBe("CLI agents");
+      await pollLocatorText(
+        page.locator('[data-chat-model-target="anthropic"] .chat-controls__model-option-name'),
+      ).toBe("Claude Code");
       expect(await errorState.count()).toBe(0);
       if (captureCatalogRetryProof) {
         await page.screenshot({

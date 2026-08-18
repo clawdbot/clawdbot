@@ -160,4 +160,55 @@ describe("new-session CLI-agent model targets", () => {
     expect(container.querySelector('[data-chat-model-target="new-owner"]')).not.toBeNull();
     expect(container.querySelector('[data-chat-model-target="stale-owner"]')).toBeNull();
   });
+
+  it("ignores a stale response after the same client switches agent owners", async () => {
+    const mainCatalog = deferred<{ catalogs: Array<Record<string, unknown>> }>();
+    const researchCatalog = deferred<{ catalogs: Array<Record<string, unknown>> }>();
+    const { context, request } = contextWith(models, "openclaw", ["sessions.catalog.list"]);
+    request.mockImplementation((method: string, params?: { agentId?: string }) => {
+      if (method !== "sessions.catalog.list") {
+        return Promise.resolve({ models });
+      }
+      return params?.agentId === "research" ? researchCatalog.promise : mainCatalog.promise;
+    });
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.loadCatalogTargets(context, "main", true);
+    await vi.waitFor(() => expect(catalogCalls(request)).toHaveLength(1));
+    control.loadCatalogTargets(context, "research", true);
+    await vi.waitFor(() => expect(catalogCalls(request)).toHaveLength(2));
+
+    researchCatalog.resolve({
+      catalogs: [
+        {
+          id: "research-owner",
+          label: "Research owner",
+          capabilities: { createSession: { model: "openai/gpt-5.6-luna" } },
+          hosts: [],
+        },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-target="research-owner"]'),
+      ).not.toBeNull(),
+    );
+
+    mainCatalog.resolve({
+      catalogs: [
+        {
+          id: "main-owner",
+          label: "Main owner",
+          capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+          hosts: [],
+        },
+      ],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const container = renderControl(control, context);
+    expect(container.querySelector('[data-chat-model-target="research-owner"]')).not.toBeNull();
+    expect(container.querySelector('[data-chat-model-target="main-owner"]')).toBeNull();
+  });
 });

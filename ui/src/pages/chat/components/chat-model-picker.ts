@@ -230,6 +230,7 @@ function renderCatalogState(
   hasOptions: boolean,
   hasSelectableOptions: boolean,
   onModelSetup?: () => void,
+  errorLabel = t("chat.modelControls.modelsUnavailable"),
   retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
 ) {
   if (!state || (state.status === "ready" && hasSelectableOptions)) {
@@ -244,7 +245,7 @@ function renderCatalogState(
       : state.status === "refreshing"
         ? t("chat.modelControls.refreshingModels")
         : state.status === "error"
-          ? t("chat.modelControls.modelsUnavailable")
+          ? errorLabel
           : state.status === "ready"
             ? hasOptions
               ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
@@ -542,6 +543,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     false,
                                     false,
                                     undefined,
+                                    group.errorLabel,
                                     params.onTargetRetry
                                       ? {
                                           disabled: params.disabled,

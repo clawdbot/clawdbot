@@ -870,6 +870,7 @@ export const en: TranslationMap = {
     createOutcomeUnknown:
       "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
     cliAgentsGroup: "CLI agents",
+    cliAgentsUnavailable: "CLI agents unavailable",
     cloudSetupInterrupted:
       "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
