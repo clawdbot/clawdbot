@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
@@ -642,12 +643,36 @@ describe("worker placement restart recovery", () => {
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
+  it("does not adopt an active worker missing exec-authority launch support", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 1_000,
+    });
+    const harness = createHarness(placements);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: "session-1",
+    });
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentProtocolFeatures([WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it.each(["bundle", "provider"] as const)(
     "keeps stale pending recovery fenced when %s recovery is unavailable",
     async (failure) => {
       const currentReceipt: WorkerAdmissionHandshake = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       };
       let currentBundle: WorkerInstallationArtifact = {
         ...support.BUNDLE_ARTIFACT,
