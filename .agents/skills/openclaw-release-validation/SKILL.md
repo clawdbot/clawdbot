@@ -151,6 +151,31 @@ bundled worksheet asset is initializer-only; a validation run never reads it.
 
 ## 2. Choose and copy a real gateway
 
+First run `ocm --version`. If OCM is unavailable, pause before discovering or
+copying any gateway and say:
+
+```text
+OCM is required to create an isolated, disposable copy of your gateway for
+this release test and is not installed.
+
+Would you like me to install OCM now? This installs the OpenClaw Manager CLI
+on this machine. Reply exactly `install OCM` to approve, or install it yourself
+and reply `OCM installed`.
+```
+
+Install OCM only after the tester explicitly replies `install OCM`. Use the
+official release installer, then verify `ocm --version` before continuing:
+
+```sh
+curl -fsSL https://github.com/openclaw/ocm/releases/latest/download/install.sh | bash
+ocm --version
+```
+
+If the binary was installed to `~/.local/bin` but that directory is not on the
+current PATH, use `~/.local/bin/ocm` for this run and tell the tester to add it
+to their PATH for future shells. If installation or verification fails, report
+the exact error and remain paused. Do not replace OCM with a manual state copy.
+
 Discover once with `ocm env list --json`, then add plain `~/.openclaw` when it
 is not already represented. Keep this overview shallow: show each gateway's
 name, known version, and running state without inspecting every gateway's
