@@ -51,16 +51,15 @@ describe("native notifications", () => {
     expect(postMessage).toHaveBeenCalledWith({ type: "status" });
   });
 
-  it("seeds status from the native snapshot", () => {
+  it("accepts the permission-only native snapshot", () => {
     installBridge();
     (window as NativeNotificationsTestWindow)["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = {
       permission: "granted",
-      test: { state: "sent" },
     };
 
     capability = createNativeNotificationsCapability();
 
-    expect(capability?.snapshot).toEqual({ permission: "granted", test: { state: "sent" } });
+    expect(capability?.snapshot).toEqual({ permission: "granted", test: null });
   });
 
   it("publishes valid status events", () => {

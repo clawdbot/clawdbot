@@ -47,8 +47,11 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   if (typeof value !== "object" || value === null || !("permission" in value)) {
     return null;
   }
-  if (!isNativeNotificationsPermission(value.permission) || !("test" in value)) {
+  if (!isNativeNotificationsPermission(value.permission)) {
     return null;
+  }
+  if (!("test" in value)) {
+    return { permission: value.permission, test: null };
   }
   const test = value.test;
   if (test === null) {
