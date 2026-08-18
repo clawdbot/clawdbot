@@ -75,10 +75,10 @@ Install the `llama-cpp` plugin once for either provider:
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-| Model reference          | Server owner | Setup behavior                    |
-| ------------------------ | ------------ | --------------------------------- |
-| `llama-cpp/<model>`      | OpenClaw     | Installs and manages the runtime  |
-| `llama-server/<model>`   | User         | Connects to an existing endpoint  |
+| Model reference        | Server owner | Setup behavior                   |
+| ---------------------- | ------------ | -------------------------------- |
+| `llama-cpp/<model>`    | OpenClaw     | Installs and manages the runtime |
+| `llama-server/<model>` | User         | Connects to an existing endpoint |
 
 Both providers can be configured at the same time. Use `llama-cpp` when you
 want OpenClaw to manage the process. Use `llama-server` when another terminal,

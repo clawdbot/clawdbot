@@ -1,12 +1,12 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
 
-export type LlamaServerEndpoint = {
+type LlamaServerEndpoint = {
   origin: string;
   inferenceBaseUrl: string;
 };
 
-export const LLAMA_SERVER_LOCAL_SERVICE_ERROR =
+const LLAMA_SERVER_LOCAL_SERVICE_ERROR =
   "models.providers.llama-server.localService is not supported; use the llama-cpp provider when OpenClaw should manage the server";
 
 export function assertExternalLlamaServerConfig(provider: ModelProviderConfig): void {

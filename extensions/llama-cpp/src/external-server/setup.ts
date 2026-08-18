@@ -146,12 +146,15 @@ function buildAuthProfileRemovalPatch(config: OpenClawConfig): Partial<OpenClawC
       return [providerId, next.length > 0 ? next : undefined];
     }),
   );
-  return {
-    auth: {
-      ...(profilePatch ? { profiles: profilePatch } : {}),
-      ...(referencedOrders.length > 0 ? { order: orderPatch } : {}),
-    },
-  } as Partial<OpenClawConfig>;
+  const authPatch: NonNullable<OpenClawConfig["auth"]> = {};
+  // Config patches use undefined map values as deletion markers.
+  if (profilePatch) {
+    Reflect.set(authPatch, "profiles", profilePatch);
+  }
+  if (referencedOrders.length > 0) {
+    Reflect.set(authPatch, "order", orderPatch);
+  }
+  return { auth: authPatch };
 }
 
 function buildSetupResult(params: {

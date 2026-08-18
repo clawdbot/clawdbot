@@ -1,14 +1,11 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LLAMA_SERVER_PROVIDER_ID } from "./defaults.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 /** Disables chat-template reasoning when OpenClaw selected thinking off. */
-export function normalizeLlamaServerThinking(
+function normalizeLlamaServerThinking(
   payload: unknown,
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
 ): unknown {

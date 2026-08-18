@@ -10,8 +10,9 @@ function captureProvider() {
   const providers: Provider[] = [];
   const modelCatalogProviders: CatalogProvider[] = [];
   registerExternalLlamaServerProvider({
-    registerProvider: (provider) => providers.push(provider),
-    registerModelCatalogProvider: (provider) => modelCatalogProviders.push(provider),
+    registerProvider: (provider: Provider) => providers.push(provider),
+    registerModelCatalogProvider: (provider: CatalogProvider) =>
+      modelCatalogProviders.push(provider),
   } as unknown as OpenClawPluginApi);
   const provider = providers[0];
   if (!provider) {

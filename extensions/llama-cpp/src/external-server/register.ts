@@ -1,6 +1,6 @@
-import {
-  type OpenClawPluginApi,
-  type ProviderAuthMethodNonInteractiveContext,
+import type {
+  OpenClawPluginApi,
+  ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";

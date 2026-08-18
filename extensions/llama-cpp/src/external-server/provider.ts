@@ -197,7 +197,3 @@ export function resolveLlamaServerDynamicModel(
     .get(dynamicModelScopeKey(params))
     ?.find((model) => model.id === params.modelId);
 }
-
-export function clearLlamaServerDynamicModelsForTests(): void {
-  dynamicModels.clear();
-}

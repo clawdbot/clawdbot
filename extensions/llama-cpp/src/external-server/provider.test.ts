@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearLlamaServerDynamicModelsForTests,
   discoverLlamaServerProvider,
   listLlamaServerCatalog,
   prepareLlamaServerDynamicModels,
@@ -76,7 +75,6 @@ describe("llama-server provider catalog", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
-    clearLlamaServerDynamicModelsForTests();
   });
 
   it("builds the legacy runtime provider from live discovery", async () => {

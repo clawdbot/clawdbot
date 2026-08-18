@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearLlamaServerDiscoveryCacheForTests,
-  discoverLlamaServer,
-  type LlamaServerFetchGuard,
-} from "./discovery.js";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { discoverLlamaServer } from "./discovery.js";
+
+type LlamaServerFetchGuard = typeof fetchWithSsrFGuard;
+type DiscoveryParams = Parameters<typeof discoverLlamaServer>[0];
+
+async function discoverTest(params: DiscoveryParams) {
+  return await discoverLlamaServer({ cacheTtlMs: 0, ...params });
+}
 
 type RouteValue = Response | Error | (() => Response | Promise<Response>);
 
@@ -36,10 +40,6 @@ function json(value: unknown, status = 200): Response {
 }
 
 describe("llama-server discovery", () => {
-  beforeEach(() => {
-    clearLlamaServerDiscoveryCacheForTests();
-  });
-
   it("discovers a single model and reads runtime properties", async () => {
     const { guard, requests } = createFetchGuard({
       "http://localhost:8080/health": json({ status: "ok" }),
@@ -53,7 +53,7 @@ describe("llama-server discovery", () => {
       }),
     });
 
-    const result = await discoverLlamaServer({
+    const result = await discoverTest({
       baseUrl: "http://localhost:8080/v1",
       apiKey: "server-key",
       fetchGuard: guard,
@@ -110,7 +110,7 @@ describe("llama-server discovery", () => {
       }),
     });
 
-    const result = await discoverLlamaServer({
+    const result = await discoverTest({
       baseUrl: "http://localhost:8080",
       fetchGuard: guard,
       cacheTtlMs: 0,
@@ -157,7 +157,7 @@ describe("llama-server discovery", () => {
     }
     const { guard } = createFetchGuard(routes);
 
-    const result = await discoverLlamaServer({
+    const result = await discoverTest({
       baseUrl: "http://localhost:8080",
       fetchGuard: guard,
       cacheTtlMs: 0,
@@ -190,7 +190,7 @@ describe("llama-server discovery", () => {
     }
     const { guard, requests } = createFetchGuard(routes);
 
-    const result = await discoverLlamaServer({
+    const result = await discoverTest({
       baseUrl: "http://localhost:8080",
       fetchGuard: guard,
       cacheTtlMs: 0,
@@ -270,7 +270,7 @@ describe("llama-server discovery", () => {
     });
 
     for (let index = 0; index < 2; index += 1) {
-      await discoverLlamaServer({
+      await discoverTest({
         baseUrl: "http://localhost:8080",
         headers: { "X-Proxy-Key": "proxy-token" },
         fetchGuard: guard,
@@ -298,15 +298,17 @@ describe("llama-server discovery", () => {
       "http://localhost:8080/models": json({ data: [] }),
     });
 
-    await discoverLlamaServer({
+    await discoverTest({
       baseUrl: "http://localhost:8080",
       apiKey: "custom-local",
       fetchGuard: guard,
+      cacheTtlMs: 30_000,
     });
-    await discoverLlamaServer({
+    await discoverTest({
       baseUrl: "http://localhost:8080",
       apiKey: "custom-local",
       fetchGuard: guard,
+      cacheTtlMs: 30_000,
     });
     expect(guard).toHaveBeenCalledTimes(2);
   });
@@ -319,25 +321,28 @@ describe("llama-server discovery", () => {
     })) as unknown as LlamaServerFetchGuard;
 
     for (let index = 0; index <= 100; index += 1) {
-      await discoverLlamaServer({
+      await discoverTest({
         baseUrl: `http://localhost:${10_000 + index}`,
         apiKey: "custom-local",
         fetchGuard: guard,
+        cacheTtlMs: 30_000,
       });
     }
     expect(guard).toHaveBeenCalledTimes(202);
 
-    await discoverLlamaServer({
+    await discoverTest({
       baseUrl: "http://localhost:10100",
       apiKey: "custom-local",
       fetchGuard: guard,
+      cacheTtlMs: 30_000,
     });
     expect(guard).toHaveBeenCalledTimes(202);
 
-    await discoverLlamaServer({
+    await discoverTest({
       baseUrl: "http://localhost:10000",
       apiKey: "custom-local",
       fetchGuard: guard,
+      cacheTtlMs: 30_000,
     });
     expect(guard).toHaveBeenCalledTimes(204);
   });

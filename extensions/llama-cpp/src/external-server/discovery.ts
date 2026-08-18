@@ -4,6 +4,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildLlamaServerAuthHeaders } from "./auth.js";
 import {
   LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS,
@@ -17,7 +18,7 @@ import {
   type LlamaServerPropsWire,
 } from "./models.js";
 
-export type LlamaServerHealth = "ready" | "loading" | "unknown";
+type LlamaServerHealth = "ready" | "loading" | "unknown";
 
 export type LlamaServerDiscoveryResult =
   | {
@@ -45,7 +46,7 @@ export type LlamaServerDiscoveryResult =
       error: unknown;
     };
 
-export type LlamaServerFetchGuard = typeof fetchWithSsrFGuard;
+type LlamaServerFetchGuard = typeof fetchWithSsrFGuard;
 
 type FetchJsonResult =
   | { kind: "response"; status: number; ok: boolean; body?: unknown }
@@ -77,10 +78,6 @@ function cacheDiscovery(key: string, entry: CachedDiscovery, now: number): void 
     }
     discoveryCache.delete(oldest.value);
   }
-}
-
-export function clearLlamaServerDiscoveryCacheForTests(): void {
-  discoveryCache.clear();
 }
 
 async function fetchJson(params: {
@@ -134,10 +131,10 @@ async function fetchJson(params: {
 }
 
 function readModelRows(body: unknown): LlamaServerModelWire[] {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
+  if (!isRecord(body)) {
     throw new Error("llama-server model list must be an object");
   }
-  const data = (body as { data?: unknown }).data;
+  const data = body.data;
   if (!Array.isArray(data)) {
     throw new Error("llama-server model list must contain data[]");
   }
@@ -178,9 +175,7 @@ async function readModelProps(params: {
     readBody: true,
     fetchGuard: params.fetchGuard,
   });
-  return result.kind === "response" && result.ok
-    ? (result.body as LlamaServerPropsWire)
-    : undefined;
+  return result.kind === "response" && result.ok && isRecord(result.body) ? result.body : undefined;
 }
 
 /** Discovers llama-server models without loading, waking, or unloading them. */

@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LLAMA_SERVER_PROVIDER_ID } from "./defaults.js";
+import type { LlamaServerDiscoveryResult } from "./discovery.js";
 import {
   configureLlamaServerNonInteractive,
   detectLlamaServerSetup,
@@ -31,7 +32,7 @@ vi.mock("./auth.js", async (importOriginal) => ({
   resolveLlamaServerRuntimeApiKey: runtimeApiKeyMock,
 }));
 
-function successfulDiscovery() {
+function successfulDiscovery(): Extract<LlamaServerDiscoveryResult, { kind: "success" }> {
   return {
     kind: "success" as const,
     endpoint: {
@@ -101,16 +102,20 @@ describe("llama-server setup", () => {
 
   it("does not select a failed router model while a healthy model is available", async () => {
     const discovery = successfulDiscovery();
+    const baseModel = discovery.models[0];
+    if (!baseModel) {
+      throw new Error("expected discovery fixture model");
+    }
     discovery.models = [
       {
-        ...discovery.models[0],
-        config: { ...discovery.models[0].config, id: "qwen-failed", name: "qwen-failed" },
+        ...baseModel,
+        config: { ...baseModel.config, id: "qwen-failed", name: "qwen-failed" },
         status: "unloaded",
         failed: true,
       },
       {
-        ...discovery.models[0],
-        config: { ...discovery.models[0].config, id: "healthy-model", name: "healthy-model" },
+        ...baseModel,
+        config: { ...baseModel.config, id: "healthy-model", name: "healthy-model" },
         status: "unloaded",
         failed: false,
       },

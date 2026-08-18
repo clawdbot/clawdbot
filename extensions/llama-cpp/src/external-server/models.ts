@@ -7,10 +7,10 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean, asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { assertExternalLlamaServerConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
-export type LlamaServerModelStatus =
+type LlamaServerModelStatus =
   | "unloaded"
   | "loading"
   | "loaded"
@@ -61,14 +61,6 @@ export type LlamaServerDiscoveredModel = {
   totalSlots?: number;
 };
 
-function readBoolean(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): boolean | undefined {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
 function normalizeStatus(value: unknown): LlamaServerModelStatus {
   switch (value) {
     case "unloaded":
@@ -113,9 +105,8 @@ function buildCompat(
 ): NonNullable<ModelDefinitionConfig["compat"]> {
   const caps = props?.chat_template_caps;
   const supportsTools =
-    readBoolean(caps, "supports_tools") === true &&
-    readBoolean(caps, "supports_tool_calls") === true;
-  const supportsTypedContent = readBoolean(caps, "supports_typed_content") === true;
+    asBoolean(caps?.supports_tools) === true && asBoolean(caps?.supports_tool_calls) === true;
+  const supportsTypedContent = asBoolean(caps?.supports_typed_content) === true;
   return {
     supportsStore: false,
     supportsDeveloperRole: false,
@@ -165,7 +156,7 @@ export function mapLlamaServerModel(
 }
 
 /** Keeps explicit rows first and appends models discovered from the server. */
-export function mergeLlamaServerModels(params: {
+function mergeLlamaServerModels(params: {
   explicitModels?: ModelDefinitionConfig[];
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelDefinitionConfig[] {
