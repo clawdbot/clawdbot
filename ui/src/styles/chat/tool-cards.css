@@ -626,6 +626,10 @@
 }
 
 .chat-tool-card__header {
+  /* Header actions sit in a bordered row, so they run one size smaller than the
+     free-floating ones; the flush command reservation tracks whichever applies. */
+  --chat-tool-action-size: 28px;
+
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -654,12 +658,6 @@
 .chat-tool-card__header > .chat-tool-card__actions {
   opacity: 0;
   transition: opacity 120ms ease-out;
-}
-
-/* Header actions sit in a bordered row, so they run one size smaller than the
-   free-floating ones; the command reservation below tracks whichever applies. */
-.chat-tool-card__header {
-  --chat-tool-action-size: 28px;
 }
 
 .chat-tool-card__header:hover > .chat-tool-card__actions,
