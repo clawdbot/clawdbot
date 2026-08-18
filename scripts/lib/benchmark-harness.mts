@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { classifyBoundedUnsignedDecimal } from "./arg-utils.mts";
 
-export type BenchmarkCliOptions = {
+type BenchmarkCliOptions = {
   help: boolean;
   json: boolean;
   output?: string;
