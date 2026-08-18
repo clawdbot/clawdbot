@@ -40,6 +40,25 @@ describe("deliverTextOrMediaReply fenced MEDIA diagnostic (#41966)", () => {
     expect(arg?.[0]?.fencedSkippedMediaDirectives).toEqual(["MEDIA:/tmp/demo.png"]);
   });
 
+  it("stays silent when extractMediaDirectives is disabled on direct latch (#41966)", async () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const fenced = "```\nMEDIA:/tmp/demo.png\n```";
+    const sendMedia = vi.fn(async () => undefined);
+    const sendText = vi.fn(async () => undefined);
+
+    await expect(
+      deliverTextOrMediaReply({
+        payload: { text: fenced, extractMediaDirectives: false },
+        text: fenced,
+        sendText,
+        sendMedia,
+      }),
+    ).resolves.toBe("text");
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
+  });
+
   it("stays silent for unfenced MEDIA control on shared direct owner (#41966)", async () => {
     warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
     const plain = "MEDIA:/tmp/demo.png";
@@ -211,6 +230,28 @@ describe("createDirectAcceptedFencedMediaWarnLatch hard-split (#41966)", () => {
     latch.afterAcceptedVisibleText(["```", directive.slice(0, mid)].join("\n"));
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
     latch.afterAcceptedVisibleText(directive.slice(mid) + "\n```");
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createDirectAcceptedFencedMediaWarnLatch extractMediaDirectives mode (#41966)", () => {
+  it("does not warn when extractMediaDirectives is false even for fenced MEDIA", () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const fenced = "```\nMEDIA:/tmp/demo.png\n```";
+    const latch = createDirectAcceptedFencedMediaWarnLatch({
+      payload: { text: fenced, extractMediaDirectives: false },
+    });
+    latch.afterAcceptedVisibleText(fenced);
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
+  });
+
+  it("warns when extractMediaDirectives is enabled/default for fenced MEDIA", () => {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+    const fenced = "```\nMEDIA:/tmp/demo.png\n```";
+    const latch = createDirectAcceptedFencedMediaWarnLatch({
+      payload: { text: fenced },
+    });
+    latch.afterAcceptedVisibleText(fenced);
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalledTimes(1);
   });
 });

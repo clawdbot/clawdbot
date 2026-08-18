@@ -210,6 +210,7 @@ export async function applyMessageSendingHook(params: {
     const {
       mediaTokenSkippedInFence: _mediaTokenSkippedInFence,
       fencedSkippedMediaDirectives: _fencedSkippedMediaDirectives,
+      extractMediaDirectives: _extractMediaDirectives,
       ...payloadWithoutFencedSkip
     } = params.payload;
     const payload = {

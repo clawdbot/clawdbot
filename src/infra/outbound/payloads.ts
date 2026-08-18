@@ -82,6 +82,8 @@ type OutboundPayloadPlanContext = {
   surface?: string;
   conversationType?: SilentReplyConversationType;
   extractMarkdownImages?: boolean;
+  /** Honor upstream disabled media-directive parsing (#41966). */
+  extractMediaDirectives?: boolean;
 };
 
 /** Text/media projection used to mirror outbound replies into session state. */
@@ -223,13 +225,18 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
-  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  context: Pick<
+    OutboundPayloadPlanContext,
+    "extractMarkdownImages" | "extractMediaDirectives"
+  > = {},
 ): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
+  const extractMediaDirectives = context.extractMediaDirectives ?? payload.extractMediaDirectives;
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
     extractMarkdownImages: context.extractMarkdownImages,
+    extractMediaDirectives,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrls?.[0];
@@ -239,7 +246,9 @@ function createOutboundPayloadPlanEntry(
   );
   const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
   const strippedParsed =
-    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+    strippedText === (parsed.text ?? "")
+      ? parsed
+      : parseReplyDirectives(strippedText, { extractMediaDirectives });
   const parsedText = strippedParsed.text ?? "";
   if (
     (strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText)) &&
@@ -320,6 +329,7 @@ export function createOutboundPayloadPlan(
   for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
+      extractMediaDirectives: context.extractMediaDirectives,
     });
     if (!entry) {
       continue;

@@ -334,6 +334,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.text).toBe("Result\nMEDIA: ./image.png");
     expect(normalized.payload.mediaUrl).toBeUndefined();
     expect(normalized.payload.mediaUrls).toBeUndefined();
+    expect(normalized.payload.extractMediaDirectives).toBe(false);
   });
 
   it("does not mark plain replies as explicit reply_to_current opt-outs", () => {

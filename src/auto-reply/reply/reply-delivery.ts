@@ -65,6 +65,11 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+      // Preserve disabled extraction so direct-delivery latches do not reparse
+      // with defaults and false-warn on fenced MEDIA examples (#41966).
+      ...(params.extractMediaDirectives === false
+        ? { extractMediaDirectives: false as const }
+        : {}),
     }),
     isSilent: parsed?.isSilent ?? false,
   };

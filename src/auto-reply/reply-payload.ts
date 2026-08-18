@@ -72,6 +72,11 @@ export type ReplyPayload = {
   mediaTokenSkippedInFence?: boolean;
   /** Skipped fenced MEDIA identities for operator diagnostics. */
   fencedSkippedMediaDirectives?: string[];
+  /**
+   * When false, outbound plan/direct latch must not re-enable MEDIA directive
+   * extraction (block replies use extractMediaDirectives: false) (#41966).
+   */
+  extractMediaDirectives?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   /** Send video media as a round video note when the channel supports it. */

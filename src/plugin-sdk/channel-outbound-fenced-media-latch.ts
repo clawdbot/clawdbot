@@ -5,11 +5,28 @@
 import { createOutboundPayloadPlan } from "../infra/outbound/payloads.js";
 import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "./channel-outbound-fenced-media-warn.js";
 
+type LatchPayload = {
+  extractMediaDirectives?: boolean;
+  mediaTokenSkippedInFence?: boolean;
+  fencedSkippedMediaDirectives?: string[];
+  text?: string;
+};
+
 /** Latch fenced-MEDIA diagnostics to accepted visible direct-delivery text (#41966). */
 export function createDirectAcceptedFencedMediaWarnLatch(params: { payload: object }) {
-  // Plan builder only consumes extractMarkdownImages from context; no cfg/surface contract.
+  const payload = params.payload as LatchPayload;
+  // Honor upstream disabled media-directive parsing (block replies) — do not
+  // re-enable extraction with plan defaults (#41966 / ClawSweeper P2).
+  if (payload.extractMediaDirectives === false) {
+    return {
+      afterAcceptedVisibleText(_chunk: string) {},
+    };
+  }
+  // Plan builder only consumes extractMarkdownImages / extractMediaDirectives from context.
   // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
-  const planEntry = createOutboundPayloadPlan([params.payload as never])[0];
+  const planEntry = createOutboundPayloadPlan([params.payload as never], {
+    extractMediaDirectives: payload.extractMediaDirectives,
+  })[0];
   if (!planEntry?.mediaTokenSkippedInFence) {
     return {
       afterAcceptedVisibleText(_chunk: string) {},
