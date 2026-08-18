@@ -190,6 +190,24 @@ describe("Skill Workshop proposal RPCs", () => {
     expect(state.skillWorkshopProposals[0]?.kind).toBe("create");
   });
 
+  it("reports a failed inspect for a selection retained across refresh", async () => {
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopSelectedKey: "proposal-1",
+    });
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        return manifest();
+      }
+      throw new Error("inspect failed");
+    });
+
+    await loadSkillWorkshopProposals(state, context, { force: true });
+
+    expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
+    expect(state.skillWorkshopError).toContain("inspect failed");
+  });
+
   it("preserves capped support-file size formatting through the shared helper", async () => {
     const { state, context, request } = createFixture();
     const baseInspect = inspectResult();

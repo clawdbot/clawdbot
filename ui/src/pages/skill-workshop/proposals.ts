@@ -193,6 +193,10 @@ export async function loadSkillWorkshopProposals(
     }
     const selectedKey = state.skillWorkshopSelectedKey;
     if (selectedKey) {
+      // Route data retains the selection but not its ephemeral request fence.
+      if (!selectionRequestByState.has(state)) {
+        markSkillWorkshopSelectionRequest(state, selectedKey);
+      }
       await loadSkillWorkshopProposalDetail(state, context, selectedKey);
       // The Applied tab can be opened without a fresh click, so the predecessor
       // has to be warmed here too or the diff never has a baseline.
