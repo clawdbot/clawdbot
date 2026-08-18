@@ -21,7 +21,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { projectPresencePayload, type PresenceViewer } from "../../lib/presence-users.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -478,6 +478,7 @@ class ActivityPage extends OpenClawLightDomElement {
       this.routeData.mode === "sessions"
         ? this.routeData.filters
         : ({ personId: null, query: "", time: "7d" } satisfies SessionActivityFilters);
+    const presenceViewers = projectPresencePayload(this.presencePayload).users;
     const currentIdentity = filters.personId
       ? resolveActivityIdentity(filters.personId, this.presencePayload, sessionRows)
       : null;
@@ -517,6 +518,7 @@ class ActivityPage extends OpenClawLightDomElement {
           ? renderSessionActivityView({
               context: this.context,
               filters,
+              presenceViewers,
               retainedIdentity,
               rows: sessionRows,
               onFiltersChange: (next) =>

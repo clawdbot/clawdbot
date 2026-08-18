@@ -75,6 +75,34 @@ describe("session activity projection", () => {
     expect(filtered.timeCount).toBe(3);
   });
 
+  it("orders people by their latest activity instead of session count or online state", () => {
+    const activity = projectSessionActivity(
+      [
+        session("agent:main:older-1", "Older one", now - 3_000, {
+          id: "frequent",
+          label: "Frequent",
+        }),
+        session("agent:main:older-2", "Older two", now - 2_000, {
+          id: "frequent",
+          label: "Frequent",
+        }),
+        session("agent:main:newest", "Newest", now - 1_000, {
+          id: "recent",
+          label: "Recent",
+        }),
+      ],
+      { personId: null, query: "", time: "7d" },
+      now,
+    );
+
+    expect(
+      activity.people.map(({ id, count, lastActiveAt }) => ({ id, count, lastActiveAt })),
+    ).toEqual([
+      { id: "recent", count: 1, lastActiveAt: now - 1_000 },
+      { id: "frequent", count: 2, lastActiveAt: now - 2_000 },
+    ]);
+  });
+
   it("round-trips linkable filters in a stable query order", () => {
     const search = sessionActivitySearch({
       personId: "profile/a",
