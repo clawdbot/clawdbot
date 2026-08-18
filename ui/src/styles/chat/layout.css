@@ -1883,14 +1883,12 @@ button.chat-reply-preview--message:disabled {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  overflow: hidden;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .task-suggestion__position {
