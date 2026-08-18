@@ -13,7 +13,7 @@ metadata:
             {
               "id": "node",
               "kind": "node",
-              "package": "taskmarket-cli",
+              "package": "@lucid-agents/taskmarket",
               "bins": ["taskmarket"],
               "label": "Install TaskMarket CLI (npm)",
             },
