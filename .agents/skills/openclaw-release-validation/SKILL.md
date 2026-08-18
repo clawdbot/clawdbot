@@ -21,9 +21,34 @@ exactly `finish validation` when you are done.**
 Use an explicit beta when supplied; otherwise resolve the newest published tag
 matching `vYYYY.M.D-beta.N`. Record its version and commit.
 
-Use `gh` to get or create one shared issue for that exact release. Identify it
-with `<!-- openclaw-release-validation:<tag> -->`; fail clearly if duplicates
-exist. Anyone may create the issue when it does not exist.
+Use `gh` to find the open issue identified by
+`<!-- openclaw-release-validation:<tag> -->`. Ignore closed campaign issues and
+fail clearly if more than one open issue has the marker.
+
+When the issue exists, read its body and use the worksheet between
+`<!-- validation-worksheet:start -->` and
+`<!-- validation-worksheet:end -->`. Keep its release priorities and template
+unchanged.
+
+When the issue does not exist, become the campaign creator:
+
+1. Read the GitHub release notes for the exact tag. If they are empty or
+   incomplete, also read that tag's section of `CHANGELOG.md`.
+2. Map the user-visible and upgrade-sensitive changes to the subsystem headings
+   in `assets/validation-worksheet.md`. Select the three to five subsystems with
+   the largest changed surface or regression risk.
+3. Write a two- or three-sentence priority summary for each selected subsystem:
+   state what changed and what behavior a human should stress. Synthesize related
+   notes instead of copying the changelog.
+4. Make a working copy of the worksheet asset and fill it with the exact
+   candidate identity, release-notes URL, and priority summaries. Ensure no
+   template placeholder remains.
+5. Create the issue with the stable marker, a short participation note, and the
+   completed worksheet verbatim between the worksheet markers. Re-query open
+   issues for the marker after creation and fail on duplicates.
+
+Only the campaign creator performs release-note analysis or generates the
+canonical template. Later runs consume the issue body without rewriting it.
 
 ## 2. Choose and copy a real gateway
 
@@ -49,12 +74,14 @@ stop the current credential owner and restore it when validation ends.
 
 ## 3. Create the worksheet
 
-Copy `assets/validation-worksheet.md` to
+Copy the canonical worksheet between the shared issue's markers to
 `.artifacts/openclaw-release-validation/<tag>-<timestamp>.md`. Fill in the
-candidate, source, and shared issue. Give the tester a clickable link to it.
+source, shared issue URL, and local upgrade result without changing the campaign
+priorities. Give the tester a clickable link and briefly point out the three to
+five priority subsystems.
 
 This worksheet is the only checklist and note store. The tester may edit it in
-their editor or tell the agent what to check off and record.
+their editor or tell the agent what to record.
 
 ## 4. Upgrade and report errors
 
@@ -88,16 +115,18 @@ upgrade or gateway readiness is unresolved.
 
 ## 5. Human-driven testing
 
-Ask: **What do you want to test first?** The tester chooses one checklist item
-at a time, in any order. After each item, ask what to record and what they want
-to test next.
+Ask: **What do you want to test first?** Recommend starting with a release
+priority, but let the tester choose one subsystem at a time in any order. After
+each item, add their notes beneath that subsystem's `###` heading, then ask what
+they want to test next.
 
 The tester drives interactive surfaces such as the TUI, Control UI, onboarding,
 channels, pairing, and approvals. Provide the command or URL and explain what
 to look for, then wait for their result. Take control only when explicitly
 asked. Do not turn the checklist into an automated scenario runner.
 
-Successful checks need only a checked box. Add concise detail under **Release
+A subsystem counts as tested only when tester-authored text appears beneath its
+heading. An empty section means untouched. Add concise detail under **Release
 findings** when something feels broken, slow, confusing, or regressed.
 
 ## 6. Finish and publish
@@ -109,8 +138,8 @@ When the tester says `finish validation`:
 2. Stop the copied gateway and restore any source gateway stopped for channel
    ownership. Ask before destroying the disposable environment.
 3. Build one GitHub issue comment containing only candidate identity, source
-   version/commit, checked subsystem names, release findings, tester feedback,
-   and the yes/no promotion vote.
+   version/commit, subsystem names with non-empty note sections, release
+   findings, tester feedback, and the yes/no promotion vote.
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.
 5. Post the comment once with `gh` and show the tester its URL.
