@@ -2471,8 +2471,9 @@ private func waitUntil(
         controller.clearPendingTrustPrompt()
         probe.results.continuation.yield(.fingerprint("stale-fingerprint"))
         probe.results.continuation.finish()
-        await connectTask.value
+        let result = await connectTask.value
 
+        #expect(result == .superseded)
         #expect(controller.pendingTrustPrompt == nil)
     }
 
@@ -2505,10 +2506,10 @@ private func waitUntil(
             startDiscovery: false,
             forceReconnectReset: { _ in })
 
-        let failure = await controller.switchToGateway(stableID: stableID)
+        let result = await controller.switchToGateway(stableID: stableID)
         await waitUntil { appModel.activeGatewayConnectConfig != nil }
 
-        #expect(failure == nil)
+        #expect(result == .accepted)
         #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
         #expect(appModel.activeGatewayConnectConfig?.url == URL(string: "ws://127.0.0.1:1"))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
@@ -2531,10 +2532,33 @@ private func waitUntil(
         let appModel = NodeAppModel()
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-        let failure = await controller.switchToGateway(stableID: discoveredID)
+        let result = await controller.switchToGateway(stableID: discoveredID)
 
-        #expect(failure == "Kitchen Gateway is not currently discoverable on this network.")
+        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor
+    func `reconnect to active undiscoverable gateway returns failure without queuing connection`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let discoveredID = "bonjour|missing-active"
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: discoveredID,
+            kind: .discovered,
+            name: "Kitchen Gateway",
+            host: nil,
+            port: nil,
+            useTLS: true,
+            lastConnectedAtMs: nil), activate: true)
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        let result = await controller.connectActiveGateway()
+
+        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
+        #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == discoveredID)
         #expect(appModel.activeGatewayConnectConfig == nil)
     }
 
