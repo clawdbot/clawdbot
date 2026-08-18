@@ -10,6 +10,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { loadPublishedGatewayReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -196,6 +197,14 @@ export function startAgentRunExecution(params: {
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
         : params.agentId;
+      const replyDispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: params.activeSessionAgentId,
+      });
+      if (!replyDispatchRuntime?.pluginGeneration) {
+        throw new Error(
+          `prepared reply dispatch runtime was not published for ${params.activeSessionAgentId}`,
+        );
+      }
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -252,6 +261,10 @@ export function startAgentRunExecution(params: {
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(
           {
+            commandRuntimeContext: {
+              config: replyDispatchRuntime.config,
+              pluginGeneration: replyDispatchRuntime.pluginGeneration,
+            },
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
               message,

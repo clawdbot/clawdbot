@@ -3,6 +3,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
@@ -34,6 +35,7 @@ export async function prepareEmbeddedSessionState(params: {
   persistedVerbose?: VerboseLevel;
   verboseDefault?: VerboseLevel;
   sessionStateActor: Parameters<typeof recordSessionHumanDirectMessage>[0]["actor"];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
   const resolvedVerboseLevel =
@@ -77,6 +79,9 @@ export async function prepareEmbeddedSessionState(params: {
       }),
     },
     watch: false,
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
   });
   const needsSkillsSnapshot =
     params.isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;

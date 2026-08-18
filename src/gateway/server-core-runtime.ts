@@ -153,6 +153,7 @@ export async function startGatewayCoreRuntime(input: {
     residentRegistry,
     shutdownRuntime,
   } = runtime;
+  let currentPluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   }
@@ -612,6 +613,7 @@ export async function startGatewayCoreRuntime(input: {
       env: params.env,
       workspaceDir: pluginWorkspaceDir,
     });
+    currentPluginMetadataSnapshot = nextPluginMetadataSnapshot;
     replaceAttachedPluginRuntime(loaded);
     kernel.setPluginServices(null);
     if (previousPluginServices) {
@@ -673,5 +675,6 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
+    getPluginMetadataSnapshot: () => currentPluginMetadataSnapshot,
   };
 }

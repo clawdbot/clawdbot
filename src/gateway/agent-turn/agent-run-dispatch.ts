@@ -5,6 +5,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -127,6 +128,7 @@ export function dispatchAgentRunFromGateway(params: {
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
   canonicalSkillWorkspaceDir?: string;
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   onSettled?: (outcome: {
     terminalOutcome: AgentRunTerminalOutcome;
     onRecovered?: () => void;
@@ -197,6 +199,7 @@ export function dispatchAgentRunFromGateway(params: {
         {
           restoreAdmittedRecovery: params.restoreAdmittedRecovery,
         },
+        params.commandRuntimeContext,
       ),
     );
   const agentRun = cronCreatorAuthorityCapability

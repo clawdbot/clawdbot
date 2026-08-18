@@ -17,6 +17,7 @@ import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -429,6 +430,7 @@ async function waitForAcpRuntimeBackendReady(params: {
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
@@ -499,6 +501,7 @@ async function hydrateConfiguredExternalCliAuth(params: {
 
 async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
@@ -509,6 +512,9 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
     gatewayLifecycle: true,
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
     ...(params.startupTrace
       ? {
@@ -544,6 +550,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
 async function publishStartupModelRuntime(
   params: {
     cfg: OpenClawConfig;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     workspaceDir?: string;
     log: { warn: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
@@ -559,6 +566,7 @@ async function publishStartupModelRuntime(
 /** Start post-ready sidecars such as channels, hooks, plugin services, and cleanup tasks. */
 export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -648,6 +656,9 @@ export async function startGatewaySidecars(params: {
     publishStartupModelRuntime(
       {
         cfg: params.cfg,
+        ...(params.pluginMetadataSnapshot
+          ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+          : {}),
         workspaceDir: params.defaultWorkspaceDir,
         log: params.log,
         startupTrace: params.startupTrace,
@@ -1097,6 +1108,7 @@ export async function startGatewayPostAttachRuntime(
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
     pluginManifestRecords: readonly PluginManifestRecord[];
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
@@ -1339,6 +1351,9 @@ export async function startGatewayPostAttachRuntime(
               return await measureStartup(params.startupTrace, "sidecars.total", () =>
                 runtimeDeps.startGatewaySidecars({
                   cfg: params.gatewayPluginConfigAtStart,
+                  ...(params.pluginMetadataSnapshot
+                    ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+                    : {}),
                   pluginRegistry,
                   defaultWorkspaceDir: params.defaultWorkspaceDir,
                   deps: params.deps,

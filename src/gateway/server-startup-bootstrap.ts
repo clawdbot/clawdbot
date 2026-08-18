@@ -551,7 +551,7 @@ export async function prepareGatewayServerBootstrap(input: {
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot: currentPluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,
