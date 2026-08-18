@@ -289,7 +289,12 @@ function nodeEnrollmentSetupCommand(params: {
     "    fi",
     "  done",
     "fi",
-    'test -s "$package_spec_file"',
+    'if [ ! -s "$package_spec_file" ]; then',
+    `  printf "%s\\n" ${shellQuote(
+      `OpenClaw worker bootstrap could not install Gateway version ${enrollment.openclawVersion}; for an unreleased Gateway build, cloudWorkers profile setup must install that exact version globally before enrollment.`,
+    )} >&2`,
+    "  exit 1",
+    "fi",
     'package_spec="$(cat "$package_spec_file")"',
     'if [ "$package_spec" = "@global" ]; then',
     `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
