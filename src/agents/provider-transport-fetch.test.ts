@@ -886,6 +886,7 @@ describe("buildGuardedModelFetch", () => {
   it("does not add exact-origin trust for local-use NAT64 provider literals", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = {
@@ -905,6 +906,7 @@ describe("buildGuardedModelFetch", () => {
   it("uses only explicit private-network opt-in for local-use NAT64 provider literals", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: true,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     const model = {
@@ -924,6 +926,7 @@ describe("buildGuardedModelFetch", () => {
   it("explains the explicit opt-in when a local-use NAT64 provider literal is blocked", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
     fetchWithSsrFGuardMock.mockRejectedValueOnce(

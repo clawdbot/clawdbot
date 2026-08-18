@@ -752,7 +752,7 @@ function withModelProviderNetworkRemediation(
       `${baseOrigin}, which OpenClaw blocks by default. Move the provider to a ` +
       `loopback, LAN, or tailnet address, or set ` +
       `models.providers.${params.providerId}.request.allowPrivateNetwork=true only for an ` +
-      `operator-controlled endpoint. Original block: ${(error as Error).message}`,
+      `operator-controlled endpoint. Original block: ${error.message}`,
   );
 }
 
