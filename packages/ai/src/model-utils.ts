@@ -121,8 +121,8 @@ export function getSupportedThinkingLevels<TApi extends Api>(
   if (!model.reasoning && !mandatoryAdaptiveContract) {
     return ["off"];
   }
-  const compat = getCompatReasoningConfig(model);
-  if (compat?.supportsReasoningEffort === false) {
+  const reasoningCompat = getCompatReasoningConfig(model);
+  if (reasoningCompat?.supportsReasoningEffort === false) {
     return ["off"];
   }
   const thinkingLevelMap = resolveThinkingLevelMap(model);
