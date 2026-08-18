@@ -3911,7 +3911,16 @@ describe("update-cli", () => {
         });
       }
 
-      await updateCommand(options);
+      if (installKind === "package" && expectedChannel !== undefined) {
+        // Routing a package install into the git flow performs a real transactional
+        // clone. Left on the default <home>/openclaw it outlives this case and makes
+        // a later test fail with "OPENCLAW_GIT_DIR appeared while cloning".
+        await withEnvAsync({ OPENCLAW_GIT_DIR: createCaseDir("openclaw-update-git") }, async () => {
+          await updateCommand(options);
+        });
+      } else {
+        await updateCommand(options);
+      }
 
       if (expectedChannel !== undefined) {
         expectUpdateCallChannel(expectedChannel);
