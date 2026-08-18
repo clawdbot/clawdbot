@@ -698,6 +698,78 @@ describe("sessions_yield completion ownership", () => {
       markRequesterTurnYielded.mockRestore();
     }
   });
+
+  it("accepts a runtime completion owner while recording the registry claim", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(0);
+    const claimYieldCompletion = vi.fn(() => true);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          sessionId: "requester-session",
+          runId: "run-requester",
+          claimYieldCompletion,
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-requester", {})).resolves.toMatchObject({
+        details: { status: "yielded" },
+      });
+      expect(markRequesterTurnYielded).toHaveBeenCalledOnce();
+      expect(claimYieldCompletion).toHaveBeenCalledOnce();
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(claimYieldCompletion.mock.invocationCallOrder[0]).toBeLessThan(
+        markRequesterTurnYielded.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
+
+  it("fails before registry side effects when the runtime completion claimant throws", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(1);
+    const failure = new Error("runtime completion owner failed");
+    const claimYieldCompletion = vi.fn(() => {
+      throw failure;
+    });
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          sessionId: "requester-session",
+          runId: "run-requester",
+          claimYieldCompletion,
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-requester", {})).rejects.toBe(failure);
+      expect(markRequesterTurnYielded).not.toHaveBeenCalled();
+      expect(claimYieldCompletion).toHaveBeenCalledOnce();
+      expect(onYield).not.toHaveBeenCalled();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
 });
 
 function hasTool(tools: readonly { name: string }[], name: string): boolean {

@@ -30,6 +30,8 @@ export async function runCodexAppServerAttempt(
   const attemptContext = await prepareCodexAttemptContext(runtime, attemptTools);
   const attemptPrompt = await prepareCodexAttemptPrompt(attemptContext);
   const resources = prepareCodexAttemptResources(attemptPrompt);
+  attemptTools.runtimeYieldCompletionClaim.current = () =>
+    resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
   await startCodexAttemptRuntime(resources);
 
   const turnRuntime = createCodexAttemptTurnState(resources);

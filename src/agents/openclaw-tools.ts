@@ -220,8 +220,8 @@ export function createOpenClawTools(
     spawnWorkspaceDir?: string;
     /** Current runtime directory used as the default project for follow-up suggestions. */
     cwd?: string;
-    /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+    claimYieldCompletion?: () => boolean | Promise<boolean>;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext &
@@ -690,6 +690,7 @@ export function createOpenClawTools(
         requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
         requesterAgentId: sessionAgentId,
         requesterTurnRunId: options?.runId,
+        claimYieldCompletion: options?.claimYieldCompletion,
       }),
       onYield: options?.onYield,
     }),
