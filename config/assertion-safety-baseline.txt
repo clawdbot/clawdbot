@@ -4169,7 +4169,7 @@ ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
-ui/src/pages/chat/chat-history.ts	6
+ui/src/pages/chat/chat-history.ts	5
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
@@ -4185,7 +4185,7 @@ ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1
 ui/src/pages/chat/chat-send-timing.ts	6
 ui/src/pages/chat/chat-session-companion.ts	5
-ui/src/pages/chat/chat-state-events.ts	8
+ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	5
 ui/src/pages/chat/chat-state-route.ts	1
 ui/src/pages/chat/chat-thread-build.ts	2

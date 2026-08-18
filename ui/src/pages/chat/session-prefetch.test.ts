@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
+  cacheChatSessionSnapshot,
   observeChatCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -314,6 +315,71 @@ describe("recent session prefetch", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await settlePromises();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("rewarms a stored snapshot through delta replay and advances freshness", async () => {
+    const sessionKey = "agent:main:delta";
+    const cachedMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      __openclaw: { id: "assistant-tool", seq: 1 },
+    };
+    cacheChatSessionSnapshot(
+      cache,
+      snapshotHost,
+      { sessionKey },
+      {
+        deltaCursor: "cursor-1",
+        messages: [cachedMessage],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "session-delta",
+      },
+    );
+    await store.flush();
+    const previousSavedAt = store.readSavedAt(sessionKey);
+    cache.clear();
+    const deltaMessage = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+        { type: "toolResult", toolCallId: "call-1", text: "file contents" },
+      ],
+      __openclaw: { id: "assistant-tool", seq: 1 },
+    };
+    const request = vi.fn(async () => ({
+      kind: "delta",
+      messages: [
+        {
+          sessionKey,
+          message: deltaMessage,
+          messageId: "assistant-tool",
+          messageSeq: 1,
+        },
+      ],
+      deltaCursor: "cursor-2",
+      sessionInfo: { key: sessionKey, kind: "direct", sessionId: "session-delta", updatedAt: 2 },
+    }));
+
+    updatePrefetch({
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [row(sessionKey, NOW + 1)],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ cursor: "cursor-1", sessionKey }),
+    );
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
+      deltaCursor: "cursor-2",
+      messages: [deltaMessage],
+      pagination: { hasMore: false, completeSnapshot: true },
+      sessionId: "session-delta",
+    });
+    expect(store.readSavedAt(sessionKey)).toBeGreaterThan(previousSavedAt ?? 0);
   });
 
   it("skips the cycle when another tab holds the Web Lock", async () => {

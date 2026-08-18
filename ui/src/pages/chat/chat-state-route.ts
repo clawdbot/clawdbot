@@ -11,6 +11,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export function canCreateChatSession(state: ChatPageHost) {
@@ -64,7 +65,7 @@ export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string
   state.settings = patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
 }
 
-export function resolveChatAgentId(state: ChatPageHost) {
+export function resolveChatAgentId(state: ChatState) {
   return normalizeAgentId(
     parseAgentSessionKey(state.sessionKey)?.agentId ??
       scopedAgentParamsForSession(state, state.sessionKey).agentId ??

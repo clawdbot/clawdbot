@@ -94,6 +94,16 @@ describe("persistent chat session snapshots", () => {
     expect(reader.readSavedAt("agent:main:shared")).toBe(savedAt);
   });
 
+  it("round-trips the optional history delta cursor", async () => {
+    const sessionKey = "agent:main:cursor";
+    const writer = new SessionSnapshotStore();
+    const cached = { ...snapshot("cached"), deltaCursor: "cursor-1" };
+    writer.write(sessionKey, cached);
+    await writer.flush();
+
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(cached);
+  });
+
   it("seeds the savedAt index once for every synchronous lookup", async () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:first", snapshot("first"));
