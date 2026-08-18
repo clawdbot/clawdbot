@@ -130,6 +130,18 @@ type DeleteSessionEntryParams = SessionStoreReadParams & {
   expectedUpdatedAt?: number;
 };
 
+export type ProvisionalParentForkSettlement =
+  | "confirmed"
+  | "retired"
+  | "missing"
+  | "mismatch"
+  | "stale";
+
+type SettleProvisionalParentForkParams = SessionStoreReadParams & {
+  id: string;
+  outcome: "confirm" | "retire";
+};
+
 type SessionLifecycleArtifactsCleanupParams = {
   agentId?: string;
   archiveRemovedEntryTranscripts?: boolean;
@@ -553,6 +565,81 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
     },
   });
   return result.deleted;
+}
+
+/**
+ * Confirms or retires one delivery-gated parent fork. The id guard prevents a
+ * late Slack dispatch from mutating a replacement generation for the same
+ * canonical thread key.
+ */
+export async function settleProvisionalParentFork(
+  params: SettleProvisionalParentForkParams,
+): Promise<ProvisionalParentForkSettlement> {
+  const id = params.id.trim();
+  if (!id) {
+    return "mismatch";
+  }
+  if (params.outcome === "confirm") {
+    let settlement: ProvisionalParentForkSettlement = "missing";
+    await patchSessionEntry({
+      ...params,
+      preserveActivity: true,
+      replaceEntry: true,
+      skipMaintenance: true,
+      update: (entry) => {
+        const provisional = entry.provisionalParentFork;
+        if (!provisional) {
+          settlement = "missing";
+          return null;
+        }
+        if (provisional.id !== id) {
+          settlement = "mismatch";
+          return null;
+        }
+        const next = { ...entry };
+        delete next.provisionalParentFork;
+        settlement = "confirmed";
+        return next;
+      },
+    });
+    return settlement;
+  }
+
+  const scope = toSessionAccessScope(params);
+  // A final metadata write can land between the read and guarded lifecycle
+  // deletion. Retry the fresh snapshot, but never delete a different owner id.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const entry = loadSessionEntryReadOnly(scope);
+    const provisional = entry?.provisionalParentFork;
+    if (!entry || !provisional) {
+      return "missing";
+    }
+    if (provisional.id !== id) {
+      return "mismatch";
+    }
+    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+    const storePath =
+      params.storePath ??
+      resolveSessionStorePathCore(undefined, {
+        agentId,
+        env: params.env,
+      });
+    const result = await deleteAccessorSessionEntryLifecycle({
+      ...(agentId !== undefined ? { agentId } : {}),
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+      expectedEntry: entry,
+      storePath,
+      target: {
+        canonicalKey: params.sessionKey,
+        storeKeys: [params.sessionKey],
+      },
+    });
+    if (result.deleted) {
+      return "retired";
+    }
+  }
+  return "stale";
 }
 
 /** Resolves the file artifacts that should be backed up before mutating a session store. */

@@ -347,6 +347,8 @@ export type GetReplyOptions = {
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */
   onObservedReplyDelivery?: () => Promise<void> | void;
+  /** Keeps same-session follow-up admission closed through channel-owned post-dispatch finalization. */
+  replyOperationCompletionBarrier?: PromiseLike<unknown>;
   /** Emit tool result summaries for channel-owned progress UI even when verbose is off. */
   forceToolResultProgress?: boolean;
   disableBlockStreaming?: boolean;

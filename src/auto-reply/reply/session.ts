@@ -31,6 +31,7 @@ import {
 } from "../../config/sessions/reset.js";
 import {
   commitReplySessionInitialization,
+  deleteSessionEntryLifecycle,
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
@@ -220,7 +221,12 @@ type InitSessionStateAttemptContext = {
 
 type InitSessionStateAttemptOutcome =
   | { kind: "complete"; result: SessionInitResult }
-  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string };
+  | {
+      kind: "lifecycle-mutation";
+      sessionId: string;
+      sessionKey: string;
+      unconfirmedParentFork?: SessionEntry;
+    };
 
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
@@ -456,7 +462,14 @@ async function initSessionStateAttempt(
         // before interrupting, then reacquire any refreshed identity first.
         const revalidated = await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+          async () =>
+            await initSessionStateAttemptLocked(
+              params,
+              attemptContext,
+              false,
+              undefined,
+              candidate.unconfirmedParentFork,
+            ),
         );
         if (
           revalidated.kind === "complete" ||
@@ -485,7 +498,14 @@ async function initSessionStateAttempt(
         // must match this exact fenced identity before any rollover side effect.
         return await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
+          async () =>
+            await initSessionStateAttemptLocked(
+              params,
+              attemptContext,
+              false,
+              candidate,
+              candidate.unconfirmedParentFork,
+            ),
         );
       },
     });
@@ -501,6 +521,7 @@ async function initSessionStateAttemptLocked(
   attemptContext: InitSessionStateAttemptContext,
   staleSnapshotRetried: boolean,
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
+  unconfirmedParentForkCandidate?: SessionEntry,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
   const {
@@ -595,10 +616,32 @@ async function initSessionStateAttemptLocked(
     ctx,
   });
   const entry = initializationSnapshot.currentEntry;
+  const retiredUnconfirmedParentFork = entry ? undefined : unconfirmedParentForkCandidate;
+  if (retiredUnconfirmedParentFork) {
+    isNewSession = true;
+    resetTriggered = true;
+  }
   const createdNewEntry = entry === undefined;
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
+  }
+  const provisionalParentForkId = normalizeOptionalString(ctx.ProvisionalParentForkId);
+  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
+  const provisionalParentForkOwned =
+    !provisionalParentForkId ||
+    createdNewEntry ||
+    (entry?.provisionalParentFork?.id === provisionalParentForkId &&
+      entry.provisionalParentFork.parentSessionKey === parentSessionKey);
+  const resetUnconfirmedParentFork = Boolean(
+    entry?.provisionalParentFork && entry.provisionalParentFork.id !== provisionalParentForkId,
+  );
+  if (resetUnconfirmedParentFork) {
+    // The owning channel never confirmed this parent-seeded generation with a
+    // visible reply. Treat another inbound turn as a fresh isolated session so
+    // a user-created thread cannot observe the provisional parent transcript.
+    isNewSession = true;
+    resetTriggered = true;
   }
   // Locked model selection is coupled to the current native session id. Reject before
   // lifecycle cleanup so a reset cannot detach the durable harness binding.
@@ -633,9 +676,11 @@ async function initSessionStateAttemptLocked(
     Number.isFinite(entry.updatedAt);
   // Gateway admission pins the source session. A conversation or command target owns a
   // different session id, so applying the source constraint there rejects valid routing.
-  const expectedExistingSessionId = retargetedSession
+  const expectedExistingSessionId = retiredUnconfirmedParentFork
     ? undefined
-    : params.expectedExistingSessionId?.trim() || undefined;
+    : retargetedSession
+      ? undefined
+      : params.expectedExistingSessionId?.trim() || undefined;
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }
@@ -745,6 +790,7 @@ async function initSessionStateAttemptLocked(
       kind: "lifecycle-mutation",
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
+      ...(resetUnconfirmedParentFork ? { unconfirmedParentFork: previousSessionEntry } : {}),
     };
   }
   if (previousSessionEntry) {
@@ -753,6 +799,42 @@ async function initSessionStateAttemptLocked(
       agentId,
     });
   }
+  if (resetUnconfirmedParentFork && previousSessionEntry) {
+    const retired = await deleteSessionEntryLifecycle({
+      agentId,
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+      expectedEntry: previousSessionEntry,
+      storePath,
+      target: {
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+      },
+    });
+    if (retired.deleted) {
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        false,
+        undefined,
+        previousSessionEntry,
+      );
+    }
+    const currentEntry = loadReplySessionInitializationSnapshot({
+      agentId,
+      storePath,
+      sessionKey,
+    }).currentEntry;
+    return await initSessionStateAttemptLocked(
+      params,
+      attemptContext,
+      false,
+      undefined,
+      currentEntry ? undefined : previousSessionEntry,
+    );
+  }
+
+  const previousSessionEntryForLifecycle = previousSessionEntry ?? retiredUnconfirmedParentFork;
 
   const recoveredTerminalEntry =
     entry && recoverTerminalVisibleEntry
@@ -798,18 +880,22 @@ async function initSessionStateAttemptLocked(
   }
 
   const baseEntry = !isNewSession && effectiveFreshEntry ? reusableEntry : undefined;
-  const usageFamilyKey = previousSessionEntry
-    ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
-    : baseEntry?.usageFamilyKey;
-  const usageFamilySessionIds = previousSessionEntry
-    ? Array.from(
-        new Set([
-          ...(previousSessionEntry.usageFamilySessionIds ?? []),
-          previousSessionEntry.sessionId,
-          sessionId,
-        ]),
-      )
-    : baseEntry?.usageFamilySessionIds;
+  const usageFamilyKey = resetUnconfirmedParentFork
+    ? undefined
+    : previousSessionEntry
+      ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
+      : baseEntry?.usageFamilyKey;
+  const usageFamilySessionIds = resetUnconfirmedParentFork
+    ? undefined
+    : previousSessionEntry
+      ? Array.from(
+          new Set([
+            ...(previousSessionEntry.usageFamilySessionIds ?? []),
+            previousSessionEntry.sessionId,
+            sessionId,
+          ]),
+        )
+      : baseEntry?.usageFamilySessionIds;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
@@ -913,6 +999,13 @@ async function initSessionStateAttemptLocked(
     groupActivation: entry?.groupActivation,
     groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
   };
+  if (resetUnconfirmedParentFork || retiredUnconfirmedParentFork) {
+    sessionEntry.provisionalParentFork = undefined;
+    sessionEntry.forkSource = undefined;
+    // This generation is intentionally isolated, but the parent-seeding
+    // decision is settled so later turns cannot copy the parent back in.
+    sessionEntry.forkedFromParent = true;
+  }
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,
     sessionKey,
@@ -940,7 +1033,6 @@ async function initSessionStateAttemptLocked(
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
   }
-  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntryForkedFromParent(sessionEntry);
   if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");
@@ -983,7 +1075,7 @@ async function initSessionStateAttemptLocked(
     previousSessionEndReason === "daily"
       ? previousSessionEndReason
       : "reset";
-  const resetBoundaryAppended = previousSessionEntry !== undefined;
+  const sessionBoundaryCreated = previousSessionEntryForLifecycle !== undefined;
   const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
@@ -992,7 +1084,7 @@ async function initSessionStateAttemptLocked(
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
       log.warn(
-        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
+        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntryForLifecycle?.sessionId}`,
         { error: String(error) },
       );
     },
@@ -1011,6 +1103,8 @@ async function initSessionStateAttemptLocked(
         agentId,
         alreadyForked,
         parentSessionKey,
+        provisionalParentForkOwned,
+        provisionalParentForkId,
         readEntry,
         sessionEntry: entryToCommit,
         sessionKey,
@@ -1018,17 +1112,19 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
-    ...(previousSessionEntry ? { resetBoundaryReason: resetReason } : {}),
+    ...(previousSessionEntry && !resetUnconfirmedParentFork
+      ? { resetBoundaryReason: resetReason }
+      : {}),
     beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;
       }
-      if (resetBoundaryAppended) {
+      if (sessionBoundaryCreated) {
         clearAllCliSessions(entryToCommit);
         entryToCommit.agentHarnessId = undefined;
       }
     },
-    previousEntry: previousSessionEntry,
+    previousEntry: previousSessionEntryForLifecycle,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
     sessionKey,
@@ -1037,7 +1133,13 @@ async function initSessionStateAttemptLocked(
   });
   if (!committed.ok) {
     if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        true,
+        undefined,
+        retiredUnconfirmedParentFork,
+      );
     }
     // Propagate a typed conflict so initSessionState can retry with backoff
     // outside the store writer lane instead of surfacing this to the caller.
@@ -1069,7 +1171,7 @@ async function initSessionStateAttemptLocked(
     }
   }
   clearBootstrapSnapshotOnSessionBoundary({
-    boundaryAppended: resetBoundaryAppended,
+    boundaryAppended: sessionBoundaryCreated,
     sessionKey,
   });
   if (createdNewEntry) {
@@ -1094,10 +1196,10 @@ async function initSessionStateAttemptLocked(
     sessionStore,
   });
   const previousSessionTranscript = committed.previousSessionTranscript;
-  if (previousSessionEntry?.sessionId) {
+  if (previousSessionEntryForLifecycle?.sessionId) {
     emitSessionAutoResetHook({
       cfg,
-      sessionId: previousSessionEntry.sessionId,
+      sessionId: previousSessionEntryForLifecycle.sessionId,
       sessionKey,
       reason: previousSessionEndReason,
       sessionFile: previousSessionTranscript.sessionFile,
@@ -1105,14 +1207,14 @@ async function initSessionStateAttemptLocked(
       nextSessionId: sessionId,
       nextSessionKey: sessionKey,
       agentId,
-      workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
+      workspaceDir: previousSessionEntryForLifecycle.spawnedWorkspaceDir,
       storePath,
     });
   }
 
-  if (previousSessionEntry?.sessionId) {
+  if (previousSessionEntryForLifecycle?.sessionId) {
     await retireSessionMcpRuntime({
-      sessionId: previousSessionEntry.sessionId,
+      sessionId: previousSessionEntryForLifecycle.sessionId,
       reason: "reply-session-rollover",
       onError: (error, sessionIdLocal) => {
         log.warn(`failed to dispose bundle MCP runtime for session ${sessionIdLocal}`, {
@@ -1122,7 +1224,7 @@ async function initSessionStateAttemptLocked(
     });
     await resetRegisteredAgentHarnessSessions({
       agentId,
-      sessionId: previousSessionEntry.sessionId,
+      sessionId: previousSessionEntryForLifecycle.sessionId,
       sessionKey,
       sessionFile: sessionKey,
       reason: previousSessionEndReason ?? "unknown",
@@ -1139,7 +1241,11 @@ async function initSessionStateAttemptLocked(
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
-        sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
+        sessionKeys: [
+          previousSessionEntryForLifecycle.sessionId,
+          sessionKey,
+          runtimePolicySessionKey,
+        ],
         onWarn: (message) => log.warn(message),
         onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
       });
@@ -1162,14 +1268,14 @@ async function initSessionStateAttemptLocked(
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
-    if (previousSessionEntry?.sessionId) {
+    if (previousSessionEntryForLifecycle?.sessionId) {
       // The shutdown finalizer must not re-fire session_end for a session
       // that is being replaced here; forget unconditionally so the next drain
       // skips this id even when no `session_end` plugin is currently attached.
-      forgetActiveSessionForShutdown(previousSessionEntry.sessionId);
+      forgetActiveSessionForShutdown(previousSessionEntryForLifecycle.sessionId);
       if (hookRunner.hasHooks("session_end")) {
         const payload = buildSessionEndHookPayload({
-          sessionId: previousSessionEntry.sessionId,
+          sessionId: previousSessionEntryForLifecycle.sessionId,
           sessionKey,
           agentId,
           reason: previousSessionEndReason,
@@ -1202,7 +1308,7 @@ async function initSessionStateAttemptLocked(
         sessionId: effectiveSessionId,
         sessionKey,
         agentId,
-        resumedFrom: previousSessionEntry?.sessionId,
+        resumedFrom: previousSessionEntryForLifecycle?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         await hookRunner.runSessionStart(payload.event, payload.context);
@@ -1216,7 +1322,7 @@ async function initSessionStateAttemptLocked(
       sessionCtx,
       sessionEntry,
       sessionEntryHandle,
-      previousSessionEntry,
+      previousSessionEntry: previousSessionEntryForLifecycle,
       sessionStore,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),

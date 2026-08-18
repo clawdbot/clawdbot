@@ -140,7 +140,11 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
 
   const waitForDispatchLifecycleWorkAndDelivery = async (): Promise<void> => {
-    await Promise.allSettled(Array.from(dispatchLifecycleWork));
+    const completionBarrier = params.replyOptions?.replyOperationCompletionBarrier;
+    await Promise.allSettled([
+      ...dispatchLifecycleWork,
+      ...(completionBarrier ? [Promise.resolve(completionBarrier)] : []),
+    ]);
     await waitForReplyDispatcherIdle(params.dispatcher);
   };
 
@@ -483,7 +487,7 @@ export function createDispatchReplyOperationCoordinator(params: {
 
   const completeDispatchReplyOperation = () => {
     const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
+    void releasePreDispatchLifecycleAdmission(() => completionBarrier);
     if (dispatchReplyOperation) {
       dispatchReplyOperation.completeWithAfterClearBarrier(
         completionBarrier,
@@ -497,7 +501,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       agentRunTerminalOutcome = "failed";
     }
     const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
+    void releasePreDispatchLifecycleAdmission(() => completionBarrier);
     if (!dispatchReplyOperation) {
       return;
     }

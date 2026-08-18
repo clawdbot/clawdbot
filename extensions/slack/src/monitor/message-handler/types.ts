@@ -33,6 +33,7 @@ export type PreparedSlackMessage = {
     };
   };
   replyToMode: "off" | "first" | "all" | "batched";
+  provisionalParentFork?: { id: string; sessionKey: string };
   forcedReplyThreadTs?: string;
   slackMessageMetadata?: MessageMetadata;
   requireMention: boolean;

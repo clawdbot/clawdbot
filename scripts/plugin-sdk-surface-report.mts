@@ -297,7 +297,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
       // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
-      4331,
+      // +2: delivery-gated provisional parent-fork settlement result and helper.
+      4333,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -380,7 +381,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
       // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
-      2575,
+      // +1: delivery-gated provisional parent-fork settlement helper.
+      2576,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

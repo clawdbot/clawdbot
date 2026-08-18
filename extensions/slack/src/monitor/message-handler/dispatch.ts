@@ -12,6 +12,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -39,6 +40,7 @@ import {
 } from "../../streaming.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
+import { settleSlackProvisionalParentFork } from "./dispatch-parent-fork.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
 import { createSlackDispatchSetup } from "./dispatch-setup.js";
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
@@ -75,6 +77,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     useStreaming,
   } = setup;
   const delivery = createSlackStreamingDeliveryRuntime(setup);
+  const provisionalParentForkCompletion = prepared.provisionalParentFork
+    ? createDeferred<void>()
+    : undefined;
   const draftPreviewCommitted = { value: false };
   const progress = createSlackProgressRuntime({
     setup,
@@ -508,6 +513,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ? true
             : undefined,
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
+        replyOperationCompletionBarrier: provisionalParentForkCompletion?.promise,
         onPartialReply: useStreaming
           ? undefined
           : !previewStreamingEnabled
@@ -665,14 +671,29 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     fallbackDelivered: streamFallbackDelivered,
   });
 
-  if (pendingFailureNotice && anyReplyDelivered) {
-    recordSlackThreadFailureNotice(pendingFailureNotice);
-  }
+  try {
+    if (pendingFailureNotice && anyReplyDelivered) {
+      recordSlackThreadFailureNotice(pendingFailureNotice);
+    }
 
-  if (dispatchError || agentRunFailed) {
-    await progress.finalizeDraftProgressCard("error");
+    if (dispatchError || agentRunFailed) {
+      await progress.finalizeDraftProgressCard("error");
+    }
+    await progress.dropDetachedProgressCards();
+    const confirmedSlackReplyDelivered = delivery.observedReplyDelivery || streamFallbackDelivered;
+
+    if (prepared.provisionalParentFork) {
+      await settleSlackProvisionalParentFork({
+        agentId: route.agentId,
+        confirmedReplyDelivered: confirmedSlackReplyDelivered,
+        fork: prepared.provisionalParentFork,
+        runtime,
+        storePath: prepared.turn.storePath,
+      });
+    }
+  } finally {
+    provisionalParentForkCompletion?.resolve();
   }
-  await progress.dropDetachedProgressCards();
 
   if (statusReactionsEnabled) {
     if (dispatchError || agentRunFailed) {

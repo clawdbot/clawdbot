@@ -547,6 +547,7 @@ function buildChannelInboundEventContextValue(
     DmScope: params.route.dmScope,
     AccountId: params.route.accountId ?? params.accountId,
     ParentSessionKey: params.route.parentSessionKey,
+    ProvisionalParentForkId: params.route.provisionalParentForkId,
     ModelParentSessionKey: params.route.modelParentSessionKey,
     MessageSid: params.messageId,
     MessageSidFull: params.messageIdFull,

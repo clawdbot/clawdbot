@@ -593,6 +593,101 @@ describe("initSessionState thread forking", () => {
     warn.mockRestore();
   });
 
+  it("isolates a later thread turn from an unconfirmed provisional parent fork", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-provisional-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const parentSessionId = "parent-session";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:silent";
+    const provisionalId = "slack:default:t1:c1:silent";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const rootTurn = await initSessionState({
+      ctx: {
+        Body: "Start a bot-opened thread",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+        ProvisionalParentForkId: provisionalId,
+      },
+      cfg,
+    });
+
+    expect(rootTurn.sessionEntry.provisionalParentFork).toMatchObject({
+      id: provisionalId,
+      parentSessionKey,
+    });
+    expect(rootTurn.sessionEntry.forkSource).toEqual({
+      sessionKey: parentSessionKey,
+      sessionId: parentSessionId,
+    });
+
+    const userCreatedThreadTurn = await initSessionState({
+      ctx: {
+        Body: "A user opens the thread after the bot stayed silent",
+        SessionKey: threadSessionKey,
+      },
+      cfg,
+    });
+
+    expect(userCreatedThreadTurn.sessionEntry.provisionalParentFork).toBeUndefined();
+    expect(userCreatedThreadTurn.sessionEntry.forkSource).toBeUndefined();
+    expect(userCreatedThreadTurn.sessionEntry.forkedFromParent).toBe(true);
+    expect(userCreatedThreadTurn.sessionEntry.sessionId).not.toBe(rootTurn.sessionEntry.sessionId);
+    expect(userCreatedThreadTurn.sessionEntry.usageFamilySessionIds).toBeUndefined();
+    expect(userCreatedThreadTurn.sessionEntry.totalTokens).toBe(0);
+    expect(userCreatedThreadTurn.sessionEntry.totalTokensFresh).toBe(true);
+    expect(sessionForkMocks.forkSessionFromParent).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a user-created thread when a provisional bot root arrives late", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-delayed-root-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const parentSessionId = "parent-session";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:user-first";
+    const provisionalId = "slack:default:t1:c1:user-first";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const userTurn = await initSessionState({
+      ctx: {
+        Body: "A user creates the thread first",
+        SessionKey: threadSessionKey,
+      },
+      cfg,
+    });
+    const userSessionId = userTurn.sessionEntry.sessionId;
+
+    const delayedRoot = await initSessionState({
+      ctx: {
+        Body: "A delayed bot root tries to open the same thread",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+        ProvisionalParentForkId: provisionalId,
+      },
+      cfg,
+    });
+
+    expect(delayedRoot.sessionEntry.sessionId).toBe(userSessionId);
+    expect(delayedRoot.sessionEntry.forkedFromParent).toBe(true);
+    expect(delayedRoot.sessionEntry.provisionalParentFork).toBeUndefined();
+    expect(delayedRoot.sessionEntry.forkSource).toBeUndefined();
+    expect(delayedRoot.sessionEntry.totalTokens).toBe(0);
+    expect(delayedRoot.sessionEntry.totalTokensFresh).toBe(true);
+    expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
+  });
+
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
@@ -712,6 +807,40 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
     expect(result.sessionEntry.totalTokens).toBe(0);
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
+  });
+
+  it("starts an isolated Slack thread when the parent model selection is locked", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-locked-parent-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const parentSessionId = "locked-parent-session";
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:locked";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        modelSelectionLocked: true,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Start the bot-opened thread",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+    });
+
+    expect(result.sessionKey).toBe(threadSessionKey);
+    expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
+    expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.forkSource).toBeUndefined();
+    expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
+    expect(readSessionStoreFast(storePath)[parentSessionKey]).toMatchObject({
+      sessionId: parentSessionId,
+      modelSelectionLocked: true,
+    });
   });
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {

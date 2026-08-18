@@ -1071,6 +1071,41 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it("holds Slack follow-up admission through a channel completion barrier", async () => {
+    const { activeOperation, createCtx, sessionId, sessionKey } = createActiveSlackThread("U4b");
+    let releaseCompletionBarrier: () => void = () => {};
+    const replyOperationCompletionBarrier = new Promise<void>((resolve) => {
+      releaseCompletionBarrier = resolve;
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: createCtx({ BodyForAgent: "channel-owned finalization" }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: { replyOperationCompletionBarrier },
+        replyResolver: async () => undefined,
+      });
+      activeOperation.complete();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+        true,
+      );
+      releaseCompletionBarrier();
+      await vi.waitFor(() => {
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(false);
+      });
+    } finally {
+      releaseCompletionBarrier();
+      activeOperation.complete();
+    }
+  });
+
   it("holds a Slack bypass lease until queued delivery settles before revalidation", async () => {
     const { activeOperation, createCtx, sessionId, sessionKey } = createActiveSlackThread("U5");
     let releaseDelivery: () => void = () => {};

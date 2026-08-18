@@ -933,6 +933,7 @@ export async function prepareSlackMessage(params: {
     threadTs,
     isThreadReply,
     threadKeys,
+    provisionalParentForkId,
     sessionKey,
     historyKey,
   } = routing;
@@ -1311,6 +1312,7 @@ export async function prepareSlackMessage(params: {
       threadTs,
       isThreadReply,
       threadKeys,
+      provisionalParentForkId,
       sessionKey,
       historyKey,
     } = routing);
@@ -1699,6 +1701,7 @@ export async function prepareSlackMessage(params: {
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,
+      provisionalParentForkId,
     },
     reply: {
       to: replyRouteTarget,
@@ -1900,6 +1903,9 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
+    ...(provisionalParentForkId
+      ? { provisionalParentFork: { id: provisionalParentForkId, sessionKey } }
+      : {}),
     ...(forcedReplyThreadTs ? { forcedReplyThreadTs } : {}),
     ...(assistantThreadContext
       ? { slackMessageMetadata: buildSlackAssistantThreadMetadata(assistantThreadContext) }

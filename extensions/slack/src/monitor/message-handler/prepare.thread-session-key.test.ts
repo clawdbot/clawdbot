@@ -29,6 +29,7 @@ import { resolveSlackRoutingContext } from "./prepare-routing.js";
 function buildCtx(overrides?: {
   replyToMode?: "all" | "first" | "off" | "batched";
   dmScope?: "main" | "per-sender" | "per-channel-peer";
+  threadInheritParent?: boolean;
 }) {
   const replyToMode = overrides?.replyToMode ?? "all";
   return {
@@ -39,7 +40,7 @@ function buildCtx(overrides?: {
       },
     } as OpenClawConfig,
     teamId: "T1",
-    threadInheritParent: false,
+    threadInheritParent: overrides?.threadInheritParent,
     threadHistoryScope: "thread",
   } satisfies Parameters<typeof resolveSlackRoutingContext>[0]["ctx"];
 }
@@ -516,7 +517,61 @@ describe("thread-level session keys", () => {
     expect(followUp.sessionKey).toBe(expectedSessionKey);
     expect(root.historyKey).toBe("C0AHZFCAS1K");
     expect(followUp.historyKey).toBe(expectedSessionKey);
+    expect(root.threadKeys.parentSessionKey).toBe("agent:main:slack:channel:c0ahzfcas1k");
+    expect(followUp.threadKeys.parentSessionKey).toBeUndefined();
     expect(new Set([root.sessionKey, followUp.sessionKey]).size).toBe(1);
+  });
+
+  it("respects an explicit parent-inheritance opt-out for bot-opened threads", () => {
+    const routing = resolveSlackRoutingContext({
+      ctx: buildCtx({ replyToMode: "all", threadInheritParent: false }),
+      account: buildAccount("all"),
+      message: buildChannelMessage({ text: "<@B1> help with the discussion above" }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+      seedTopLevelRoomThread: true,
+    });
+
+    expect(routing.sessionKey).toContain(":thread:");
+    expect(routing.threadKeys.parentSessionKey).toBeUndefined();
+  });
+
+  it("keeps existing user-created threads isolated by default", () => {
+    const routing = resolveSlackRoutingContext({
+      ctx: buildCtx({ replyToMode: "all" }),
+      account: buildAccount("all"),
+      message: buildChannelMessage({
+        text: "reply",
+        ts: "1770408522.168859",
+        thread_ts: "1770408518.451689",
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    expect(routing.threadKeys.parentSessionKey).toBeUndefined();
+  });
+
+  it("inherits existing user-created threads when explicitly enabled", () => {
+    const routing = resolveSlackRoutingContext({
+      ctx: buildCtx({ replyToMode: "all", threadInheritParent: true }),
+      account: buildAccount("all"),
+      message: buildChannelMessage({
+        text: "reply",
+        ts: "1770408522.168859",
+        thread_ts: "1770408518.451689",
+      }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    expect(routing.threadKeys.parentSessionKey).toBe("agent:main:slack:channel:c123");
   });
 
   it("seeds top-level app mentions into the same parent session used by later thread replies", () => {

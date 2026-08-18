@@ -95,6 +95,7 @@ export type RouteFacts = {
   dispatchSessionKey?: string;
   persistedSessionKey?: string;
   parentSessionKey?: string;
+  provisionalParentForkId?: string;
   modelParentSessionKey?: string;
   mainSessionKey?: string;
   createIfMissing?: boolean;

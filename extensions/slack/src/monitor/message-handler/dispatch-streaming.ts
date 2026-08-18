@@ -112,6 +112,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     for (const delivery of streamedDeliveries) {
       delivery.acknowledged = true;
     }
+    // stopSlackStream marks the session delivered only after Slack accepts the
+    // finalization. Promote that transport acknowledgement to the shared
+    // delivery proof instead of relying on queued dispatcher counts.
+    state.observedReplyDelivery ||= session.delivered;
     emitAcknowledgedStreamedDeliveries(messageId);
   };
   const emitFailedPendingStreamedDeliveries = (error: string) => {

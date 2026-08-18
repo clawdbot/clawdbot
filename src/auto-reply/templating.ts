@@ -158,6 +158,12 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   AccountId?: string;
   ParentSessionKey?: string;
   /**
+   * Stable owner id for a parent-context fork that remains provisional until
+   * the channel confirms a visible reply. A later turn without the same id
+   * must not reuse the provisional transcript.
+   */
+  ProvisionalParentForkId?: string;
+  /**
    * Session key used only for inheriting session-scoped model/provider
    * overrides. Unlike ParentSessionKey, this must not trigger transcript
    * forking or parent-session lifecycle behavior.

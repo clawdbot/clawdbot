@@ -399,6 +399,15 @@ type SessionEntryCore = SessionRestartRecoveryState &
     previousSessionId?: string;
     /** Thread parent-seeding settled marker; also set when seeding is deliberately skipped. */
     forkedFromParent?: boolean;
+    /**
+     * Parent-seeded context that a channel has not yet confirmed with a visible
+     * reply. A turn with another owner id rolls this generation over before use.
+     */
+    provisionalParentFork?: {
+      id: string;
+      parentSessionKey: string;
+      createdAt: number;
+    };
     /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
     spawnDepth?: number;
     /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
