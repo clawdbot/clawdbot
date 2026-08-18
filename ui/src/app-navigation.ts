@@ -29,6 +29,10 @@ export const SIDEBAR_NAV_ROUTES = [
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
 
+// `route:workboard` shipped in browser and synced preferences before Workboard
+// became plugin-owned. Keep it as a placement slot, but not a customizable core route.
+const PERSISTED_SIDEBAR_ROUTES = ["workboard", ...SIDEBAR_NAV_ROUTES] as const;
+
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
 const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
@@ -50,9 +54,14 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+export type PersistedSidebarRoute = (typeof PERSISTED_SIDEBAR_ROUTES)[number];
+
+export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
+  return PERSISTED_SIDEBAR_ROUTES.includes(value as PersistedSidebarRoute);
+}
 
 export type SidebarZoneEntry =
-  | { type: "route"; route: SidebarNavRoute }
+  | { type: "route"; route: PersistedSidebarRoute }
   | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
@@ -71,9 +80,7 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("route:")) {
     const route = value.slice("route:".length);
-    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
-      ? { type: "route", route: route as SidebarNavRoute }
-      : null;
+    return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
   if (value.startsWith("session:")) {
     const key = value.slice("session:".length).trim();

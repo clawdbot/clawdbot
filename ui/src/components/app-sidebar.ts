@@ -475,6 +475,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
+    const occupiedPluginPlacements = new Set(
+      sidebarZone.entries.flatMap((entry) =>
+        entry.type === "route" ? [`route:${entry.route}`] : [],
+      ),
+    );
     return html`
       <aside
         class="sidebar"
@@ -512,9 +517,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                     sidebarZone.workboardRows,
                   ),
                 )}
-                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                  (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
+                  .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
+                  .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
               </div>
             </nav>
             ${this.renderSessions()}

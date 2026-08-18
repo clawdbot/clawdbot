@@ -64,6 +64,30 @@ describe("reconcileSidebarZone", () => {
     ).toEqual(["route:usage"]);
   });
 
+  it("preserves a shipped Workboard parent slot and renders it only for its descriptor", () => {
+    const args = [
+      ["route:usage", "route:workboard", "route:plugins"],
+      [],
+      SIDEBAR_NAV_ROUTES,
+      new Set<string>(),
+      [],
+      true,
+      true,
+    ] as const;
+    expect(reconcileSidebarZone(...args, false)).toEqual({
+      entries: [
+        { type: "route", route: "usage" },
+        { type: "route", route: "plugins" },
+      ],
+      sidebarEntries: ["route:usage", "route:workboard", "route:plugins"],
+    });
+    expect(reconcileSidebarZone(...args, true).entries).toEqual([
+      { type: "route", route: "usage" },
+      { type: "route", route: "workboard" },
+      { type: "route", route: "plugins" },
+    ]);
+  });
+
   it("keeps active Workboard boards, drops stale ids, and preserves plugin-off pins", () => {
     const boards = [
       { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },

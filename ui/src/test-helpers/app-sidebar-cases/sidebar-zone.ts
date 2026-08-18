@@ -306,6 +306,14 @@ describe("AppSidebar interleaved zone", () => {
     expect(entry?.getAttribute("href")).toBe("/workboard");
     expect(entry?.classList.contains("nav-item--active")).toBe(true);
 
+    sidebar.sidebarEntries = ["route:workboard", "route:plugins"];
+    await sidebar.updateComplete;
+    const savedEntry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="route:workboard"] > .nav-item',
+    );
+    expect(savedEntry?.getAttribute("href")).toBe("/workboard");
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
+
     gateway.publish({
       hello: {
         type: "hello-ok",
@@ -316,6 +324,7 @@ describe("AppSidebar interleaved zone", () => {
     });
     await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
+    expect(sidebar.querySelector('[data-sidebar-entry="route:workboard"]')).toBeNull();
   });
 
   it("renders a pinned Workboard board with its icon, color, label, and route", async () => {
