@@ -718,6 +718,7 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
       await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
+      await waitForAgentRunDrained("idem-2");
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -910,6 +911,10 @@ describe("gateway server chat", () => {
       const persistSpy = vi
         .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
         .mockImplementation(async (params) => {
+          if (params.event.runId !== "idem-dispatch-error-1") {
+            await persistLifecycleEvent(params);
+            return;
+          }
           persistenceEntered.resolve();
           await releasePersistence.promise;
           await persistLifecycleEvent(params);
