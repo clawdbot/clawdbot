@@ -1122,7 +1122,7 @@ export async function processGatewayAllowlist(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
-    const resolveApprovalForExecution = async (onFailure: () => void) => {
+    const resolveApprovalForExecution = async (onFailure: () => void | Promise<void>) => {
       const approvalOutcome = await resolveExecApprovalWaitOutcome({
         approvalId,
         preResolvedDecision,
@@ -1151,7 +1151,7 @@ export async function processGatewayAllowlist(
         };
       }
       if (approvalOutcome.kind === "request-failed") {
-        onFailure();
+        await onFailure();
         emitGatewayExecApprovalSecurityEvent({
           action: "exec.approval.denied",
           outcome: "error",
@@ -1329,15 +1329,9 @@ export async function processGatewayAllowlist(
     let gatewayInvocationStarted = false;
 
     void (async () => {
-      let approvalDecision: Awaited<ReturnType<typeof resolveApprovalForExecution>>;
-      try {
-        approvalDecision = await resolveApprovalForExecution(
-          () => void sendApprovalRequestFailedFollowup(),
-        );
-      } catch {
-        await denyApprovalStateWriteFailure();
-        return;
-      }
+      const approvalDecision = await resolveApprovalForExecution(
+        sendApprovalRequestFailedFollowup,
+      );
       if (approvalDecision.requestFailed) {
         return;
       }
@@ -1486,17 +1480,15 @@ export async function processGatewayAllowlist(
         approvalFollowupText,
       });
       await sendExecApprovalFollowupResult(followupTarget, summary);
-    })().catch(async (error: unknown): Promise<void> => {
-      // Once dispatch starts, a delivery failure cannot mean execution was denied.
-      if (
-        gatewayInvocationStarted ||
-        params.signal?.aborted ||
-        isExecApprovalRunAbortedError(error)
-      ) {
-        return;
-      }
-      await sendApprovalRequestFailedFollowup();
-    });
+    })()
+      .catch(async (): Promise<void> => {
+        // Once dispatch starts, a delivery failure cannot mean execution was denied.
+        if (gatewayInvocationStarted || params.signal?.aborted) {
+          return;
+        }
+        await sendApprovalRequestFailedFollowup();
+      })
+      .catch(() => undefined);
 
     return {
       pendingResult: buildExecApprovalPendingToolResult({

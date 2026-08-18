@@ -536,11 +536,15 @@ describe("processGatewayAllowlist", () => {
     outcome: ExecApprovalFollowupOutcome;
     sessionId?: string;
   }) {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
+    resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({
+      kind: "resolved",
+      decision: "allow-once",
+      state: {
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+        timeoutContext: undefined,
+      },
     });
     runExecProcessMock.mockResolvedValue({
       session: { id: params.sessionId ?? "sess-1" },
@@ -2251,16 +2255,31 @@ EOF`,
     }
   });
 
-  it("reports an unexpected detached pre-dispatch failure through a safe denial follow-up", async () => {
+  it.each([
+    {
+      name: "request failure",
+      outcome: { kind: "request-failed" as const },
+      firstFollowupReason: "approval-request-failed",
+    },
+    {
+      name: "denial",
+      outcome: {
+        kind: "resolved" as const,
+        decision: "deny",
+        state: {
+          baseDecision: { timedOut: false },
+          approvedByAsk: false,
+          deniedReason: "user-denied",
+          timeoutContext: undefined,
+        },
+      },
+      firstFollowupReason: "user-denied",
+    },
+  ])("consumes rejected detached pre-dispatch $name and fallback follow-ups", async (scenario) => {
     const unhandledRejections = captureProcessUnhandledRejections();
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: false,
-      deniedReason: "user-denied",
-    });
+    resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce(scenario.outcome);
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
-    sendExecApprovalFollowupResultMock.mockRejectedValueOnce(
+    sendExecApprovalFollowupResultMock.mockRejectedValue(
       new Error("pre-dispatch denial follow-up failed"),
     );
 
@@ -2277,7 +2296,7 @@ EOF`,
 
       expect(unhandledRejections.reasons).toEqual([]);
       expect(requireSentFollowupText(0)).toBe(
-        "Exec denied (gateway id=req-1, user-denied): side-effecting-command",
+        `Exec denied (gateway id=req-1, ${scenario.firstFollowupReason}): side-effecting-command`,
       );
       expect(requireSentFollowupText(1)).toBe(
         "Exec denied (gateway id=req-1, approval-request-failed): side-effecting-command",
