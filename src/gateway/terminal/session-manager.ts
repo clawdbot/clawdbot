@@ -325,7 +325,11 @@ export class TerminalSessionManager {
   }
 
   /** Writes agent input after proving session-key ownership. */
-  writeAgent(owner: AgentTerminalOwner, sessionId: string, data: string): TerminalAgentActionOutcome {
+  writeAgent(
+    owner: AgentTerminalOwner,
+    sessionId: string,
+    data: string,
+  ): TerminalAgentActionOutcome {
     const session = this.agentOwnedSession(owner, sessionId);
     if (!session) {
       return { ok: false, code: "session_unavailable" };
