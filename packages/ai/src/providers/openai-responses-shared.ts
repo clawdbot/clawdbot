@@ -185,6 +185,10 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
   if (model.thinkingLevelMap?.[reasoning] === null) {
     return undefined;
   }
+  const compat =
+    model.api === "openai-responses" && model.compat && typeof model.compat === "object"
+      ? model.compat
+      : undefined;
   const compatMapped =
     compat && "reasoningEffortMap" in compat ? compat.reasoningEffortMap?.[reasoning] : undefined;
   return compatMapped ?? model.thinkingLevelMap?.[reasoning] ?? reasoning;
