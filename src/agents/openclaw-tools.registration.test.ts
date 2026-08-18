@@ -699,6 +699,41 @@ describe("sessions_yield completion ownership", () => {
     }
   });
 
+  it("accepts a subagent self-yield without a pending child completion", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(0);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: "agent:main:subagent:worker",
+          sessionId: "subagent-session",
+          runId: "run-subagent",
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-subagent", {})).resolves.toMatchObject({
+        details: { status: "yielded" },
+      });
+      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:subagent:worker",
+        requesterTurnRunId: "run-subagent",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
+
   it("accepts a runtime completion owner while recording the registry claim", async () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
