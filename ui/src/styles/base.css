@@ -340,6 +340,7 @@
   }
 
   .agent-tool-card.agent-tool-card,
+  .chat-tool-card__preview.chat-tool-card__preview,
   .chat-thread.chat-thread,
   .chat-bubble.chat-bubble,
   .agent-chat__input.agent-chat__input,

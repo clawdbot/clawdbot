@@ -740,7 +740,7 @@
   width: 100%;
   max-width: 100%;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-lg);
   background: transparent;
   overflow: hidden;
 }
@@ -769,7 +769,7 @@
 
 .chat-tool-card__preview-panel {
   overflow: hidden;
-  border-radius: 0;
+  border-radius: inherit;
 }
 
 .chat-tool-card__widget-actions {
@@ -778,12 +778,19 @@
 }
 
 .chat-tool-card__widget-actions::part(menu) {
-  min-width: 176px;
+  min-width: 164px;
+  max-width: 208px;
   padding: var(--menu-padding);
   border: 1px solid var(--border-strong);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
+}
+
+.chat-tool-card__widget-actions .session-menu__item {
+  min-height: 32px;
+  padding-inline: 7px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-tool-card__widget-actions-trigger,

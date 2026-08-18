@@ -492,16 +492,20 @@ function renderWidgetActions(preview: ToolPreview, hasRawDetails: boolean) {
       >
         ${icons.moreHorizontal}
       </button>
-      <wa-dropdown-item value="copy">
-        <span slot="icon">${icons.copyImage}</span>${t("chat.toolCards.copyAsImage")}
+      <wa-dropdown-item class="session-menu__item" value="copy">
+        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copyImage}</span>
+        <span class="session-menu__text">${t("chat.toolCards.copyAsImage")}</span>
       </wa-dropdown-item>
-      <wa-dropdown-item value="download">
-        <span slot="icon">${icons.download}</span>${t("chat.toolCards.downloadAsImage")}
+      <wa-dropdown-item class="session-menu__item" value="download">
+        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.download}</span>
+        <span class="session-menu__text">${t("chat.toolCards.downloadAsImage")}</span>
       </wa-dropdown-item>
       ${hasRawDetails
-        ? html`<wa-dropdown-item value="raw-details">
-            <span slot="icon">${icons.fileText}</span>
-            <span data-raw-label>${t("chat.toolCards.showRawDetails")}</span>
+        ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.fileText}</span>
+            <span class="session-menu__text" data-raw-label
+              >${t("chat.toolCards.showRawDetails")}</span
+            >
           </wa-dropdown-item>`
         : nothing}
     </wa-dropdown>
