@@ -75,6 +75,7 @@ type WorkspaceSkillLoadOptions = {
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
   includeArchived?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export function normalizeWorkspaceSkillRoots(roots: WorkspaceSkillRoots): WorkspaceSkillRoots {
