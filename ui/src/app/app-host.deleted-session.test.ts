@@ -126,7 +126,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         updatedAt: expect.any(Number),
       });
       expect(toast.textContent).toContain(
-        "Session deleted, but browser draft cleanup failed. Clear this site's data to remove it.",
+        "Session deleted; browser draft remains. Clear site data.",
       );
     });
     expect(toast.querySelectorAll(".app-toast")).toHaveLength(1);

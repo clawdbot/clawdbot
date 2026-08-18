@@ -1,5 +1,8 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { RouteId } from "../../app-routes.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import { deleteStoredChatSessionSnapshots } from "../../pages/chat/session-snapshot-invalidation.runtime.ts";
+import { showToast } from "../toast.ts";
 import { retireDurableComposerDrafts } from "./composer-draft-store.runtime.ts";
 import { retireStoredComposerDrafts, storedChatOutboxScopeKey } from "./outbox-store.ts";
 
@@ -9,37 +12,53 @@ type DeletedComposerDraftTarget = {
   retireBeforeRevision: number;
 };
 
-export async function retireDeletedComposerDrafts(params: {
-  client: GatewayBrowserClient | null;
-  snapshotHost: Parameters<typeof deleteStoredChatSessionSnapshots>[0];
-  targets: readonly DeletedComposerDraftTarget[];
-  onFailure: () => void;
-}): Promise<void> {
-  void deleteStoredChatSessionSnapshots(params.snapshotHost, params.targets);
-  const client = params.client;
-  if (!client) {
-    params.onFailure();
-    return;
-  }
-  const stored = retireStoredComposerDrafts(
-    { settings: { gatewayUrl: client.gatewayUrl } },
-    params.targets,
-  );
-  let failed = stored.storageFailed;
-  if (!client.recoveryScopeReady || !client.recoveryScope) {
-    failed = true;
-  } else {
-    const durable = await retireDurableComposerDrafts(
-      { gatewayOwner: stored.gatewayOwner, recoveryScope: client.recoveryScope },
-      stored.retirements.map((retirement) => ({
-        scopeKey: storedChatOutboxScopeKey(retirement.scope),
-        minimumRevision: retirement.minimumRevision,
-        retireBeforeRevision: retirement.retireBeforeRevision,
-      })),
+export async function retireDeletedComposerDrafts(
+  context: ApplicationContext<RouteId>,
+  targets: readonly DeletedComposerDraftTarget[],
+): Promise<void> {
+  let failureReported = false;
+  const reportFailure = () => {
+    if (!failureReported) {
+      failureReported = true;
+      showToast({ message: t("sessionsView.draftCleanupFailed") });
+    }
+  };
+  void deleteStoredChatSessionSnapshots(
+    {
+      assistantAgentId: context.gateway.snapshot.assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    },
+    targets,
+  ).catch(reportFailure);
+  try {
+    const client = context.gateway.snapshot.client;
+    if (!client) {
+      reportFailure();
+      return;
+    }
+    const stored = retireStoredComposerDrafts(
+      { settings: { gatewayUrl: client.gatewayUrl } },
+      targets,
     );
-    failed ||= durable === "storage-failed";
-  }
-  if (failed) {
-    params.onFailure();
+    let failed = stored.storageFailed;
+    if (!client.recoveryScopeReady || !client.recoveryScope) {
+      failed = true;
+    } else {
+      const durable = await retireDurableComposerDrafts(
+        { gatewayOwner: stored.gatewayOwner, recoveryScope: client.recoveryScope },
+        stored.retirements.map((retirement) => ({
+          scopeKey: storedChatOutboxScopeKey(retirement.scope),
+          minimumRevision: retirement.minimumRevision,
+          retireBeforeRevision: retirement.retireBeforeRevision,
+        })),
+      );
+      failed ||= durable === "storage-failed";
+    }
+    if (failed) {
+      reportFailure();
+    }
+  } catch {
+    reportFailure();
   }
 }

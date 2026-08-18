@@ -12,14 +12,18 @@ import {
   readStoredOutboxStore,
   resolveComposerStorageScope,
   resolveStoredComposerSession,
+  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   storageTargetForGateway,
+  subscribeStoredChatOutboxChanges,
   UNRESOLVED_GLOBAL_AGENT_SCOPE,
   writeStoredOutboxStore,
   type ChatComposerScope,
   type ComposerStorageScope,
   type StoredChatOutboxScope,
 } from "./outbox-store.ts";
+
+export { resolveStoredChatOutboxScope, storedChatOutboxScopeKey, subscribeStoredChatOutboxChanges };
 
 export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] };
 

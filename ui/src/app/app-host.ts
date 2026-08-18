@@ -173,10 +173,7 @@ class OpenClawShell
     null;
   readonly outboxStoreImport = createIdleImport(
     () =>
-      Promise.all([
-        import("../lib/chat/outbox-store.ts"),
-        import("../lib/chat/outbox-store-projection.ts"),
-      ]).then(([store, projection]): OutboxStoreRuntime => ({ ...store, ...projection })),
+      import("../lib/chat/outbox-store-projection.ts").then((module): OutboxStoreRuntime => module),
     (runtime) => this.installOutboxStoreRuntime(runtime),
   );
   private lastNativeNavState: NativeNavState | undefined;
@@ -495,25 +492,10 @@ class OpenClawShell
     if (deletedSessions.length === 0) {
       return;
     }
-    const reportFailure = () => {
-      if (this.context === context) {
-        showToast({ message: t("sessionsView.deleteDraftCleanupFailed") });
-      }
-    };
-    void import("../lib/chat/composer-draft-retirement.runtime.ts")
-      .then(({ retireDeletedComposerDrafts }) =>
-        retireDeletedComposerDrafts({
-          client: context.gateway.snapshot.client,
-          snapshotHost: {
-            assistantAgentId: context.gateway.snapshot.assistantAgentId,
-            agentsList: context.agents.state.agentsList,
-            hello: context.gateway.snapshot.hello,
-          },
-          targets: deletedSessions,
-          onFailure: reportFailure,
-        }),
-      )
-      .catch(reportFailure);
+    void import("../lib/chat/composer-draft-retirement.runtime.ts").then(
+      ({ retireDeletedComposerDrafts }) => retireDeletedComposerDrafts(context, deletedSessions),
+      () => showToast({ message: t("sessionsView.draftCleanupFailed") }),
+    );
   }
 
   exitSettings() {
