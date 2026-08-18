@@ -20,9 +20,12 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
-import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/runtime/types.js";
+import type {
+  CreatePluginRuntimeOptions,
+  PluginRuntime,
+  RuntimeGatewayRequestOptions,
+} from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
@@ -59,23 +62,13 @@ type PluginSubagentOverridePolicy = {
   allowedModels: Set<string>;
 };
 
-type PluginSubagentPolicyState = {
-  policies: Record<string, PluginSubagentOverridePolicy>;
-};
+type PluginSubagentOverridePolicies = Record<string, PluginSubagentOverridePolicy>;
 
-const PLUGIN_SUBAGENT_POLICY_STATE_KEY: unique symbol = Symbol.for(
-  "openclaw.pluginSubagentOverridePolicyState",
-);
-
-const getPluginSubagentPolicyState = () =>
-  resolveGlobalSingleton<PluginSubagentPolicyState>(PLUGIN_SUBAGENT_POLICY_STATE_KEY, () => ({
-    policies: {},
-  }));
-
-export function setPluginSubagentOverridePolicies(cfg: OpenClawConfig): void {
-  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
+function resolvePluginSubagentOverridePolicies(
+  cfg: OpenClawConfig,
+): PluginSubagentOverridePolicies {
   const normalized = normalizePluginsConfig(cfg.plugins);
-  const policies: PluginSubagentPolicyState["policies"] = {};
+  const policies: PluginSubagentOverridePolicies = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
     const allowModelOverride = entry.subagent?.allowModelOverride === true;
     const hasConfiguredAllowlist = entry.subagent?.hasAllowedModelsConfig === true;
@@ -108,15 +101,15 @@ export function setPluginSubagentOverridePolicies(cfg: OpenClawConfig): void {
       allowedModels,
     };
   }
-  pluginSubagentPolicyState.policies = policies;
+  return policies;
 }
 
 function authorizeFallbackModelOverride(params: {
+  policies: PluginSubagentOverridePolicies;
   pluginId?: string;
   provider?: string;
   model?: string;
 }): { allowed: true } | { allowed: false; reason: string } {
-  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
     return {
@@ -124,7 +117,7 @@ function authorizeFallbackModelOverride(params: {
       reason: "provider/model override requires plugin identity in fallback subagent runs.",
     };
   }
-  const policy = pluginSubagentPolicyState.policies[pluginId];
+  const policy = params.policies[pluginId];
   if (!policy?.allowModelOverride) {
     return {
       allowed: false,
@@ -227,6 +220,7 @@ const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
 
 export function createGatewaySubagentRuntime(
   resolveGatewayContext?: GatewayContextResolver,
+  overridePolicies: PluginSubagentOverridePolicies = {},
 ): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const limit =
@@ -267,6 +261,7 @@ export function createGatewaySubagentRuntime(
       let allowSyntheticModelOverride = false;
       if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
         const fallbackAuth = authorizeFallbackModelOverride({
+          policies: overridePolicies,
           pluginId: scope?.pluginId,
           provider: params.provider,
           model: params.model,
@@ -431,15 +426,27 @@ export function createGatewayNodesRuntime(
 
 function createGatewayPluginRuntimeBindings(
   resolveGatewayContext: GatewayContextResolver,
-): Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> {
+  overridePolicies: PluginSubagentOverridePolicies,
+): Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> &
+  Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig"> {
   return {
+    dispatchReplyFromConfig: async (params) => {
+      const { dispatchReplyFromConfig } =
+        await import("../auto-reply/reply/dispatch-from-config.js");
+      const sessionWorkerPlacementContext =
+        getInProcessGatewayRequestContext(resolveGatewayContext);
+      return await dispatchReplyFromConfig({
+        ...params,
+        ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+      });
+    },
     gateway: {
       isAvailable: async () => hasInProcessGatewayContext(resolveGatewayContext),
       request: (method, params, options) =>
         dispatchTrustedPluginGatewayMethod(method, params, options, resolveGatewayContext),
     },
     nodes: createGatewayNodesRuntime(resolveGatewayContext),
-    subagent: createGatewaySubagentRuntime(resolveGatewayContext),
+    subagent: createGatewaySubagentRuntime(resolveGatewayContext, overridePolicies),
   };
 }
 
@@ -557,6 +564,7 @@ export function loadGatewayPlugins(params: {
   const loaderStatsBefore = getPluginModuleLoaderStats();
   const gatewayRuntimeBindings = createGatewayPluginRuntimeBindings(
     params.resolveGatewayContext ?? (() => undefined),
+    resolvePluginSubagentOverridePolicies(resolvedConfig),
   );
   const pluginRegistry = loadAndActivateRootPluginRegistry({
     config: resolvedConfig,

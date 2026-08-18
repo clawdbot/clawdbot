@@ -48,6 +48,9 @@ type HandleGatewayRequestOptions = GatewayRequestOptions & {
 const handleGatewayRequest = vi.hoisted(() =>
   vi.fn(async (_opts: HandleGatewayRequestOptions) => {}),
 );
+const dispatchReplyFromConfig = vi.hoisted(() =>
+  vi.fn(async () => ({ counts: {}, queuedFinal: false })),
+);
 
 vi.mock("../plugins/loader.js", () => ({
   loadAndActivateRootPluginRegistry: loadOpenClawPlugins,
@@ -82,6 +85,10 @@ vi.mock("../channels/plugins/configured-binding-registry.js", async () => {
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+
+vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
+  dispatchReplyFromConfig,
 }));
 
 vi.mock("./agent-turn/internal-facade.js", () => ({
@@ -471,6 +478,7 @@ beforeEach(() => {
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   normalizeProviderModelIdWithRuntime.mockReset().mockReturnValue(undefined);
+  dispatchReplyFromConfig.mockClear();
   pluginRuntimeLoaderLogger.info.mockClear();
   pluginRuntimeLoaderLogger.warn.mockClear();
   pluginRuntimeLoaderLogger.error.mockClear();
@@ -573,6 +581,32 @@ describe("loadGatewayPlugins", () => {
     });
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord", "telegram"]);
     expect(getLastPluginLoadOption("preferBuiltPluginArtifacts")).toBe(true);
+  });
+
+  test("binds channel reply dispatch to the owning Gateway context", async () => {
+    const context = {
+      label: "channel-reply-owner",
+      workerSessionPlacementService: { getMany: vi.fn(() => new Map()) },
+    } as unknown as GatewayRequestContext;
+    serverPluginsModule.setFallbackGatewayContext(context);
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest();
+    const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as
+      | Parameters<PluginRuntimeModule["createPluginRuntime"]>[0]
+      | undefined;
+    const boundDispatch = runtimeOptions?.dispatchReplyFromConfig;
+    if (!boundDispatch) {
+      throw new Error("Expected gateway plugin load to bind channel reply dispatch");
+    }
+    const params = {} as Parameters<typeof boundDispatch>[0];
+
+    await boundDispatch(params);
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledWith({
+      ...params,
+      sessionWorkerPlacementContext: context,
+    });
   });
 
   test("injects the process HOME-isolation fact into registry construction", () => {
@@ -1772,6 +1806,38 @@ describe("loadGatewayPlugins", () => {
     expect(params.provider).toBe("anthropic");
     expect(params.model).toBe("claude-haiku-4-5");
     expect(normalizeProviderModelIdWithRuntime).toHaveBeenCalledOnce();
+  });
+
+  test("keeps fallback model policy bound to the runtime that loaded it", async () => {
+    const allowedRuntime = await createSubagentRuntime(serverPluginsModule, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    const deniedRuntime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("fallback-policy-binding"));
+    const run = (runtime: PluginRuntime["subagent"]) =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-policy-binding",
+          message: "use trusted override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      );
+
+    await expect(run(allowedRuntime)).resolves.toMatchObject({ runId: expect.any(String) });
+    await expect(run(deniedRuntime)).rejects.toThrow(
+      'plugin "voice-call" is not trusted for fallback provider/model override requests.',
+    );
   });
 
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {

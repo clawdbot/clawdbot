@@ -279,7 +279,11 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
-    channel: createRuntimeChannel(),
+    channel: createRuntimeChannel(
+      _options.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: _options.dispatchReplyFromConfig }
+        : undefined,
+    ),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: {

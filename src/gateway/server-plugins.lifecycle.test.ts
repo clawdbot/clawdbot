@@ -3,7 +3,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -55,10 +55,12 @@ function installInstanceBindingProbeCoordinator(): InstanceBindingProbeCoordinat
 async function requireBoundRuntime(
   runtimes: readonly PluginRuntime[],
   label: string,
-): Promise<PluginRuntime> {
+): Promise<{ runtime: PluginRuntime }> {
   for (const runtime of runtimes) {
     if (await runtime.gateway.isAvailable()) {
-      return runtime;
+      // Plugin runtimes are proxies. Keep the async result non-thenable so
+      // Promise assimilation does not materialize the broad runtime graph.
+      return { runtime };
     }
   }
   throw new Error(`${label} Gateway did not register an instance-bound plugin runtime`);
@@ -174,7 +176,7 @@ describe("gateway plugin instance bindings", () => {
       await first.startupSettled;
       const firstRegistrationCount = coordinator.runtimes.length;
       expect(firstRegistrationCount).toBeGreaterThan(0);
-      const firstRuntime = await requireBoundRuntime(
+      const { runtime: firstRuntime } = await requireBoundRuntime(
         coordinator.runtimes.slice(0, firstRegistrationCount),
         "first",
       );
@@ -187,7 +189,7 @@ describe("gateway plugin instance bindings", () => {
       started.push(second);
       await second.startupSettled;
       expect(coordinator.runtimes.length).toBeGreaterThan(firstRegistrationCount);
-      const secondRuntime = await requireBoundRuntime(
+      const { runtime: secondRuntime } = await requireBoundRuntime(
         coordinator.runtimes.slice(firstRegistrationCount),
         "second",
       );
@@ -220,16 +222,18 @@ describe("gateway plugin instance bindings", () => {
       const { coordinator } = await prepareInstanceBindingTest();
 
       const port = await getFreePort();
+      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
       const server = await startTestGatewayServer(port, {
         auth: { mode: "none" },
         controlUiEnabled: false,
+        hotReloadRecovery,
         sidecarStartup: "start",
       });
       started.push(server);
       await server.startupSettled;
       const initialRegistrationCount = coordinator.runtimes.length;
       expect(initialRegistrationCount).toBeGreaterThan(0);
-      const initialRuntime = await requireBoundRuntime(
+      const { runtime: initialRuntime } = await requireBoundRuntime(
         coordinator.runtimes.slice(0, initialRegistrationCount),
         "initial",
       );
@@ -256,7 +260,7 @@ describe("gateway plugin instance bindings", () => {
       await expect
         .poll(() => coordinator.runtimes.length, { timeout: 300_000 })
         .toBeGreaterThan(initialRegistrationCount);
-      const reloadedRuntime = await requireBoundRuntime(
+      const { runtime: reloadedRuntime } = await requireBoundRuntime(
         coordinator.runtimes.slice(initialRegistrationCount),
         "hot-reloaded",
       );
@@ -265,6 +269,7 @@ describe("gateway plugin instance bindings", () => {
       expect(reloadedProbe.registryId).not.toBe(initialProbe.registryId);
       expect(reloadedProbe.sessionsId).toBe(initialProbe.sessionsId);
       expect(reloadedProbe.placementId).toBe(initialProbe.placementId);
+      expect(hotReloadRecovery).not.toHaveBeenCalled();
       await expect(
         reloadedRuntime.subagent.getSessionMessages({
           sessionKey: "agent:main:main",

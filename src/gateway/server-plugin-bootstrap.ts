@@ -16,7 +16,7 @@ import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worke
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayContextResolver } from "./server-plugin-in-process-dispatch.js";
-import { loadGatewayPlugins, setPluginSubagentOverridePolicies } from "./server-plugins.js";
+import { loadGatewayPlugins } from "./server-plugins.js";
 
 // Gateway plugin bootstrap applies activation/auto-enable config, loads plugins,
 // and primes channel bindings for startup/reload paths.
@@ -49,10 +49,6 @@ type GatewayPluginBootstrapParams = {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
 };
-
-function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
-  setPluginSubagentOverridePolicies(cfg);
-}
 
 // Diagnostics are logged after registry priming so startup output contains
 // plugin ids/source hints without exposing internal diagnostic objects.
@@ -114,9 +110,6 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       )
     : {};
   const autoEnabledReasons = { ...autoEnabled.autoEnabledReasons, ...durableReasons };
-  // Runtime bindings must be installed before loadGatewayPlugins so plugin
-  // hooks that inspect gateway/node/subagent helpers see current config.
-  installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
     activationSourceConfig,
