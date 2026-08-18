@@ -105,6 +105,24 @@ describe("readConfiguredLogTail", () => {
     });
   });
 
+  it("keeps the first line when the byte window starts exactly after a newline", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const line = (message: string) => `${message}${" ".repeat(199 - message.length)}\n`;
+    const content = Array.from({ length: 10_000 }, (_, index) =>
+      line(index === 5000 ? "first-line-in-window" : "filler"),
+    ).join("");
+
+    await fs.writeFile(file, content);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 5000, maxBytes: 1_000_000 });
+
+    expect(result.lines).toHaveLength(5000);
+    expect(result.lines[0]?.trimEnd()).toBe("first-line-in-window");
+  });
+
   it("falls back only within the active profile's rolling log family", async () => {
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const missing = path.join(tempDir, "openclaw-2026-01-22.log");

@@ -8,7 +8,7 @@ import {
 } from "../../channels/registry.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
-import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 export type ChannelsLogsOptions = {
@@ -20,37 +20,50 @@ export type ChannelsLogsOptions = {
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
-function listManifestChannelIds(): Set<string> {
-  return new Set(
-    listManifestChannelContributionIds({ includeDisabled: true, env: process.env })
-      .map((id) => normalizeLowercaseStringOrEmpty(id))
-      .filter(Boolean),
+type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
+type ManifestChannel = { id: string; pluginId: string };
+
+function listManifestChannels(): ManifestChannel[] {
+  return loadPluginManifestRegistryForPluginRegistry({
+    includeDisabled: true,
+    env: process.env,
+  }).plugins.flatMap((plugin) =>
+    plugin.channels.flatMap((rawChannel) => {
+      const id = normalizeLowercaseStringOrEmpty(rawChannel);
+      return id ? [{ id, pluginId: plugin.id }] : [];
+    }),
   );
 }
 
-function parseChannelFilter(raw?: string): string {
+function parseChannelFilter(raw?: string): ChannelLogFilter {
   if (raw === undefined) {
-    return "all";
+    return { channel: "all", pluginIds: new Set() };
   }
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (trimmed === "all") {
-    return "all";
+    return { channel: "all", pluginIds: new Set() };
   }
+  const manifestChannels = listManifestChannels();
   const bundled = normalizeBundledChannelId(trimmed);
-  if (bundled) {
-    return bundled;
+  const channel = bundled ?? trimmed;
+  const pluginIds = new Set(
+    manifestChannels.filter((entry) => entry.id === channel).map((entry) => entry.pluginId),
+  );
+  if (bundled || pluginIds.size > 0) {
+    return { channel, pluginIds };
   }
-  const manifestIds = listManifestChannelIds();
-  if (manifestIds.has(trimmed)) {
-    return trimmed;
-  }
+  const manifestIds = [...new Set(manifestChannels.map((entry) => entry.id))].toSorted();
   const validChannels = ["all", ...new Set([...CHAT_CHANNEL_ORDER, ...manifestIds])];
   throw new Error(
     `Unknown channel ${JSON.stringify(raw)}. Valid channels: ${validChannels.join(", ")}`,
   );
 }
 
-function matchesChannel(line: ParsedLogLine, channel: string) {
+function matchesChannel(
+  line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">,
+  filter: ChannelLogFilter,
+) {
+  const { channel } = filter;
   if (channel === "all") {
     return true;
   }
@@ -61,7 +74,7 @@ function matchesChannel(line: ParsedLogLine, channel: string) {
   if (line.module?.includes(channel)) {
     return true;
   }
-  return false;
+  return line.plugin !== undefined && filter.pluginIds.has(line.plugin);
 }
 
 function parseLinesOption(value: unknown): number {
@@ -80,12 +93,16 @@ export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const channel = parseChannelFilter(opts.channel);
+  const filter = parseChannelFilter(opts.channel);
+  const { channel } = filter;
   const limit = parseLinesOption(opts.lines);
 
-  const tail = await readConfiguredParsedLogTail({ limit: limit * 4, maxBytes: MAX_BYTES });
-  const filtered = tail.lines.filter((line) => matchesChannel(line, channel));
-  const lines = filtered.slice(Math.max(0, filtered.length - limit));
+  const tail = await readConfiguredParsedLogTail({
+    limit,
+    maxBytes: MAX_BYTES,
+    filter: (line) => matchesChannel(line, filter),
+  });
+  const lines = tail.lines;
 
   if (opts.json) {
     writeRuntimeJson(runtime, { file: tail.file, channel, lines });

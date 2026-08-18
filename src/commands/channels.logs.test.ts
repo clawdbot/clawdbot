@@ -4,17 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-  listPluginContributionIds: vi.fn(() => ["external-chat"]),
-}));
+const pluginRegistryMocks = vi.hoisted(() => {
+  const plugins = [{ id: "vendor-external-chat", channels: ["external-chat"] }];
+  return {
+    loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({ diagnostics: [], plugins })),
+  };
+});
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-  listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -26,13 +29,16 @@ vi.mock("../channels/plugins/index.js", () => ({
 import { channelsLogsCommand } from "./channels/logs.js";
 
 const runtime = createTestRuntime();
-function logLine(params: { module: string; message: string }) {
+function logLine(params: { module?: string; plugin?: string; message: string }) {
   return JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
     0: params.message,
     _meta: {
       logLevelName: "INFO",
-      name: JSON.stringify({ module: params.module }),
+      name: JSON.stringify({
+        ...(params.module ? { module: params.module } : {}),
+        ...(params.plugin ? { plugin: params.plugin } : {}),
+      }),
     },
   });
 }
@@ -56,12 +62,12 @@ describe("channelsLogsCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockClear();
-    pluginRegistryMocks.listPluginContributionIds.mockClear();
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockClear();
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetSecretRedactionRegistryForTest();
     setLoggerOverride(null);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -70,19 +76,18 @@ describe("channelsLogsCommand", () => {
     await fs.writeFile(
       logPath,
       [
-        logLine({ module: "gateway/channels/external-chat/send", message: "external sent" }),
+        logLine({ plugin: "vendor-external-chat", message: "external sent" }),
+        logLine({ plugin: "vendor-external-chat-shadow", message: "shadow sent" }),
         logLine({ module: "gateway/channels/slack/send", message: "slack sent" }),
       ].join("\n"),
     );
 
     await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
 
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledOnce();
-    const [contributionOptions] = pluginRegistryMocks.listPluginContributionIds.mock
-      .calls[0] as unknown as [{ contribution?: string; includeDisabled?: boolean }];
-    expect(contributionOptions?.contribution).toBe("channels");
-    expect(contributionOptions?.includeDisabled).toBe(true);
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
+      includeDisabled: true,
+      env: process.env,
+    });
     const payload = readJsonPayload();
     expect(payload.channel).toBe("external-chat");
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
@@ -108,12 +113,13 @@ describe("channelsLogsCommand", () => {
   );
 
   it("redacts credential-bearing channel lines in text output", async () => {
-    const fixtureCredential = "synthetic-channel-log-credential-1234567890";
+    const fixtureCredential = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(fixtureCredential);
     await fs.writeFile(
       logPath,
       logLine({
         module: "gateway/channels/slack/send",
-        message: `X-OpenClaw-Token: ${fixtureCredential}`,
+        message: `opaque=${fixtureCredential}`,
       }),
     );
 
@@ -121,24 +127,25 @@ describe("channelsLogsCommand", () => {
 
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain("2026-04-25T12:00:00.000Z info");
-    expect(output).toContain("X-OpenClaw-Token: synthe…7890");
+    expect(output).toContain("opaque=opaque…7890");
     expect(output).not.toContain(fixtureCredential);
   });
 
   it("redacts credential-bearing channel lines in JSON output", async () => {
-    const fixtureCredential = "synthetic-channel-log-credential-1234567890";
+    const fixtureCredential = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(fixtureCredential);
     await fs.writeFile(
       logPath,
       logLine({
         module: "gateway/channels/slack/send",
-        message: `X-OpenClaw-Token: ${fixtureCredential}`,
+        message: `opaque=${fixtureCredential}`,
       }),
     );
 
     await channelsLogsCommand({ channel: "slack", json: true }, runtime);
 
     const payload = readJsonPayload();
-    expect(payload.lines[0]?.message).toBe("X-OpenClaw-Token: synthe…7890");
+    expect(payload.lines[0]?.message).toBe("opaque=opaque…7890");
     expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
   });
 
@@ -157,6 +164,23 @@ describe("channelsLogsCommand", () => {
     const payload = readJsonPayload();
     expect(payload.channel).toBe("all");
     expect(payload.lines.map((line) => line.message)).toEqual(["second", "third"]);
+  });
+
+  it("finds sparse channel records beyond the shared 5000-line cap", async () => {
+    const filler = logLine({ module: "gateway/health", message: "ok" });
+    const lines = [
+      logLine({ module: "gateway/channels/slack/send", message: "first match" }),
+      ...Array.from({ length: 5000 }, () => filler),
+      logLine({ module: "gateway/channels/slack/send", message: "second match" }),
+    ];
+    await fs.writeFile(logPath, lines.join("\n"));
+
+    await channelsLogsCommand({ channel: "slack", lines: 2000, json: true }, runtime);
+
+    expect(readJsonPayload().lines.map((line) => line.message)).toEqual([
+      "first match",
+      "second match",
+    ]);
   });
 
   it("treats an omitted channel filter as all", async () => {

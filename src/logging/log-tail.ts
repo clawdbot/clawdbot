@@ -66,6 +66,7 @@ async function readLogSlice(params: {
   cursor?: number;
   limit: number;
   maxBytes: number;
+  filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
   const stat = await fs.stat(params.file).catch(() => null);
   if (!stat) {
@@ -140,6 +141,10 @@ async function readLogSlice(params: {
     if (lines.length > 0 && lines[lines.length - 1] === "") {
       lines = lines.slice(0, -1);
     }
+    if (params.filter) {
+      // Sparse consumers inspect the full byte-bounded window before the shared line cap.
+      lines = lines.filter(params.filter);
+    }
     if (lines.length > limit) {
       truncated = true;
       lines = lines.slice(lines.length - limit);
@@ -160,11 +165,10 @@ async function readLogSlice(params: {
 }
 
 /** Reads and redacts the configured log tail with bounded bytes and line count. */
-export async function readConfiguredLogTail(params?: {
-  cursor?: number;
-  limit?: number;
-  maxBytes?: number;
-}): Promise<LogTailPayload> {
+export async function readConfiguredLogTail(
+  params?: { cursor?: number; limit?: number; maxBytes?: number },
+  filter?: (line: string) => boolean,
+): Promise<LogTailPayload> {
   const target = getResolvedLoggerFileTarget();
   const file = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
@@ -172,6 +176,7 @@ export async function readConfiguredLogTail(params?: {
     cursor: params?.cursor,
     limit: params?.limit ?? DEFAULT_LIMIT,
     maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,
+    filter,
   });
   const redaction = resolveRedactOptions();
   return {
@@ -186,8 +191,12 @@ export async function readConfiguredParsedLogTail(params?: {
   cursor?: number;
   limit?: number;
   maxBytes?: number;
+  filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
 }): Promise<ParsedLogTailPayload> {
-  const tail = await readConfiguredLogTail(params);
+  const tail = await readConfiguredLogTail(params, (raw) => {
+    const parsed = parseLogLine(raw);
+    return parsed !== null && (params?.filter?.(parsed) ?? true);
+  });
   return {
     ...tail,
     lines: tail.lines.flatMap((line) => {

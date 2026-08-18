@@ -8,9 +8,11 @@ export type ParsedLogLine = {
   level?: string;
   subsystem?: string;
   module?: string;
+  plugin?: string;
   message: string;
   raw: string;
 };
+type LogContext = Pick<ParsedLogLine, "subsystem" | "module" | "plugin">;
 
 function extractMessage(value: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -28,7 +30,7 @@ function extractMessage(value: Record<string, unknown>): string {
   return parts.join(" ");
 }
 
-function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
+function parseMetaName(raw?: unknown): LogContext {
   if (typeof raw !== "string") {
     return {};
   }
@@ -37,6 +39,7 @@ function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
     return {
       subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
       module: typeof parsed.module === "string" ? parsed.module : undefined,
+      plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
     };
   } catch {
     return {};
@@ -46,12 +49,14 @@ function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
 function resolveContext(
   value: Record<string, unknown>,
   meta: Record<string, unknown> | undefined,
-): { subsystem?: string; module?: string } {
+): LogContext {
   const metadataContext = parseMetaName(meta?.name);
-  if (metadataContext.subsystem || metadataContext.module) {
-    return metadataContext;
-  }
-  return parseMetaName(value["0"]);
+  const positionalContext = parseMetaName(value["0"]);
+  return {
+    subsystem: metadataContext.subsystem ?? positionalContext.subsystem,
+    module: metadataContext.module ?? positionalContext.module,
+    plugin: metadataContext.plugin ?? positionalContext.plugin,
+  };
 }
 
 /** Parses a raw log line into compact metadata and message text, or null for non-JSON lines. */
@@ -74,6 +79,7 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
       level: normalizeOptionalLowercaseString(levelRaw),
       subsystem: context.subsystem,
       module: context.module,
+      plugin: context.plugin,
       message: typeof parsed.message === "string" ? parsed.message : extractMessage(parsed),
       raw,
     };
