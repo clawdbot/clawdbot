@@ -104,6 +104,7 @@ function buildGatewaySessionSnapshot(params: {
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
   activeRunIds?: string[];
 }): Record<string, unknown> {
@@ -124,6 +125,9 @@ function buildGatewaySessionSnapshot(params: {
     // scoped goal as the global/default session goal.
     delete session.goal;
   }
+  if (session && params.status !== undefined) {
+    session.status = params.status;
+  }
   if (session && params.hasActiveRun !== undefined) {
     session.hasActiveRun = params.hasActiveRun;
   }
@@ -138,6 +142,7 @@ function buildGatewaySessionSnapshot(params: {
       label: params.label,
       displayName: params.displayName,
       parentSessionKey: params.parentSessionKey,
+      status: params.status,
       hasActiveRun: params.hasActiveRun,
       activeRunIds: params.activeRunIds,
     }),
@@ -360,6 +365,7 @@ async function handleTranscriptUpdateBroadcast(
     sessionRow,
     agentId: routingAgentId,
     includeSession: true,
+    status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
     hasActiveRun: activeRunState?.active,
     activeRunIds: activeRunState?.runIds,
   });

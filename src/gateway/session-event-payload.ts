@@ -34,6 +34,7 @@ export function buildGatewaySessionEventFields(params: {
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
   activeRunIds?: string[];
 }): Record<string, unknown> {
@@ -116,7 +117,7 @@ export function buildGatewaySessionEventFields(params: {
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
-    status: sessionRow.status,
+    status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.

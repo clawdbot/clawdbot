@@ -26,7 +26,11 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  hasReplyOperationExecutionStarted,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -455,32 +459,44 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("signals typing from embedded harness execution phases before assistant text", async () => {
+  it("signals typing and records the execution boundary before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:execution-boundary",
+      sessionId: "execution-boundary",
+      resetTriggered: false,
+    });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
       params.onExecutionPhase?.({
         phase: "model_call_started",
         provider: "openai",
         model: "gpt-5.4",
       });
+      expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(true);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onAgentRunStart,
-        } satisfies GetReplyOptions,
-      }),
-      typingSignals,
-    });
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({
+          opts: {
+            onAgentRunStart,
+          } satisfies GetReplyOptions,
+        }),
+        replyOperation,
+        typingSignals,
+      });
 
-    expect(result.kind).toBe("success");
-    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
-    expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
-    expect(onAgentRunStart).toHaveBeenCalledOnce();
+      expect(result.kind).toBe("success");
+      expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
+      expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
+      expect(onAgentRunStart).toHaveBeenCalledOnce();
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("injects pending MCP App context exactly once without changing transcript text", async () => {

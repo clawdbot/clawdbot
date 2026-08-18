@@ -96,6 +96,7 @@ function broadcastSessionsChanged(
             ...buildGatewaySessionEventFields({
               sessionRow,
               agentId: effectiveAgentId,
+              status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
               hasActiveRun: activeRunState?.active,
               activeRunIds: activeRunState?.runIds,
             }),

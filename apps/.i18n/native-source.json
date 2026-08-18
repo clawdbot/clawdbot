@@ -12899,6 +12899,10 @@
       "sites": [
         {
           "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarComponents.kt"
+        },
+        {
+          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt"
         },
         {
@@ -39405,6 +39409,10 @@
         },
         {
           "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift"
+        },
+        {
+          "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Swarm.swift"
         }
       ]
@@ -47338,6 +47346,17 @@
       ]
     },
     {
+      "id": "native.apple.f909e3670ef8f380",
+      "source": "Thread queued",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.745fd928bca281ed",
       "source": "Thread running",
       "surface": "apple",
@@ -49106,6 +49125,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.941cd659e4ed6f94",
+      "source": "Waiting for a concurrency slot",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift"
         }
       ]
     },

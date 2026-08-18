@@ -999,12 +999,19 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
-  it("renders live and terminal run status badges", async () => {
+  it("renders queued, live, and terminal run status badges", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
         buildProps(
           buildMultiResult([
+            {
+              key: "agent:main:queued",
+              kind: "direct",
+              updatedAt: 40,
+              hasActiveRun: true,
+              status: "queued",
+            },
             {
               key: "agent:main:live",
               kind: "direct",
@@ -1042,12 +1049,14 @@ describe("sessions view", () => {
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".settings-status"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
+      "Queued",
       "Live",
       "Idle",
       "Failed",
       "Done",
     ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
+      ["settings-status", "settings-status--warn"],
       ["settings-status", "settings-status--ok"],
       ["settings-status"],
       ["settings-status", "settings-status--danger"],
@@ -1057,7 +1066,7 @@ describe("sessions view", () => {
       badges.map(
         (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
       ),
-    ).toEqual(["Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
+    ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
   it("renders session goals in the status cell and search index", async () => {
