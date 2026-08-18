@@ -987,7 +987,7 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
+  it("retains all sanitized details for OpenClaw transcript projection", async () => {
     const mcpAppPreview = {
       kind: "canvas",
       view: { id: "mcp-app-view-1", title: "Nearby food" },
@@ -1017,7 +1017,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { limit: 4 },
     });
 
-    expect(result.transcriptDetails).toEqual({ mcpAppPreview });
+    expect(result.transcriptDetails).toEqual({
+      mcpAppPreview,
+      structuredContent: { privateModelPayload: true },
+    });
     expect(Object.keys(result)).not.toContain("transcriptDetails");
     expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
     expect(JSON.stringify(result)).not.toContain("privateModelPayload");
