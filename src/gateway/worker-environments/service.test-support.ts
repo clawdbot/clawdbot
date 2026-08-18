@@ -170,7 +170,6 @@ export function createService(
       | "ensureNodeWorkerBundle"
       | "prepareNodeEnrollment"
       | "retireNodeEnrollment"
-      | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
@@ -188,7 +187,6 @@ export function createService(
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
-    resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
     generateWorkerCredential: () => CREDENTIAL,
     executeInference: async () => ({
       type: "error",
