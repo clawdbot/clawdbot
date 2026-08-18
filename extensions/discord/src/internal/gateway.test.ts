@@ -375,7 +375,10 @@ describe("GatewayPlugin", () => {
       },
     });
 
-    const initialStates = gateway.listVoiceChannelStates("g1", "c1");
+    const initialStates = expectDefined(
+      gateway.listVoiceChannelStates("g1", "c1"),
+      "initial guild voice snapshot",
+    );
     expect(initialStates.map((state) => state.user_id)).toEqual(["u1", "u2"]);
     expect(initialStates.map((state) => state.member?.user.username)).toEqual(["owner", "friend"]);
 
@@ -420,13 +423,14 @@ describe("GatewayPlugin", () => {
     });
 
     expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
-    expect(gateway.listVoiceChannelStates("g1", "c2").map((state) => state.user_id)).toEqual([
-      "u1",
-      "u3",
-    ]);
+    expect(
+      expectDefined(gateway.listVoiceChannelStates("g1", "c2"), "updated guild voice snapshot").map(
+        (state) => state.user_id,
+      ),
+    ).toEqual(["u1", "u3"]);
 
     await handleDispatch({ t: GatewayDispatchEvents.GuildDelete, d: { id: "g1" } });
-    expect(gateway.listVoiceChannelStates("g1", "c2")).toEqual([]);
+    expect(gateway.listVoiceChannelStates("g1", "c2")).toBeNull();
   });
 
   it("clears cached voice states when a fresh gateway session becomes ready", async () => {
@@ -451,7 +455,7 @@ describe("GatewayPlugin", () => {
       d: { session_id: "session-2", resume_gateway_url: "wss://gateway.discord.gg" },
     });
 
-    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toBeNull();
   });
 
   it("marks successful gateway resumes connected", async () => {
