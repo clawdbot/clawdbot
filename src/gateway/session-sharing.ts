@@ -264,7 +264,6 @@ export function authorizeSessionSharingTarget(params: {
 }
 
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
-
 const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutationTargetField[]>([
   ["agent", ["sessionKey"]],
   ["board.event", ["sessionKey"]],
@@ -291,8 +290,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.fork", ["sessionKey"]],
   ["sessions.patch", ["key"]],
   ["sessions.pluginPatch", ["key"]],
-  ["sessions.move", ["key"]],
-  ["sessions.reclaim", ["key"]],
+  ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
   ["sessions.recover", ["key"]],
   ["sessions.reset", ["key"]],
   ["sessions.rewind", ["sessionKey"]],
