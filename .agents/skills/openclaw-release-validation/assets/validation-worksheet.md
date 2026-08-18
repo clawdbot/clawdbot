@@ -14,37 +14,28 @@
 - Shared issue:
 - Upgrade result: pending
 
-## Test first
+## Upgrade findings
 
-[Release notes]({{RELEASE_NOTES_URL}})
-
-Themes summarize the complete release notes; linked issues are representative
-examples.
-
-{{RELEASE_PRIORITIES}}
-
-## How to use this worksheet
-
-Start with the priorities above or choose any subsystem you know well. Add notes
-directly beneath that subsystem's heading; an empty or comment-only section
-means you did not test it. Record failures, regressions, confusing behavior,
-and meaningful latency under **Release findings** as well.
-
-## Release findings
-
-Record candidate OpenClaw problems found during upgrade or testing. For each
-finding, note what you expected, what happened, and the affected subsystem.
-
-- None yet.
-
-## Private operator notes
-
-Record OCM, copying, setup, local tooling, and cleanup problems here. This
-section is never published to GitHub.
+Record candidate OpenClaw problems observed while upgrading or starting the
+copied gateway. For each finding, note what you expected, what happened, and
+the affected subsystem.
 
 - None yet.
 
 ## Subsystem notes
+
+> **Operator notes**
+> Add notes only to the subsystems you tested. For priority subsystems, write
+> under **Notes**; for all others, write directly beneath the subsystem name.
+> Leave untested sections empty.
+
+[Release notes]({{RELEASE_NOTES_URL}})
+
+### Priority for this release
+
+<!-- Campaign creator: move 3-5 selected subsystem sections here, add What changed, Recommended testing, and Notes subsections, then remove this comment. -->
+
+### Other subsystems
 
 #### Pairing
 
