@@ -666,7 +666,7 @@ describe("sessions_send agent targeting", () => {
             },
           },
         });
-        await prepareGatewayReplyRuntimeForTest();
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
         const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockImplementation(async (opts: unknown) =>
@@ -806,7 +806,7 @@ describe("sessions_send direct-message requester routing", () => {
             [targetSessionKey]: { sessionId: "dm-scope-orion", updatedAt: Date.now() },
           },
         });
-        await prepareGatewayReplyRuntimeForTest();
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
         const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockReset();
