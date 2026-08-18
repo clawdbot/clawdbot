@@ -111,41 +111,50 @@ export async function startHttpFixture(params: {
       stdio: ["ignore", "pipe", "pipe"],
     }),
   );
-  const pid = captured.child.pid;
-  if (pid === undefined) {
-    throw new Error("HTTP MCP fixture did not start");
+  let transferred = false;
+  let lines: ReturnType<typeof createInterface> | undefined;
+  try {
+    const pid = captured.child.pid;
+    if (pid === undefined) {
+      throw new Error("HTTP MCP fixture did not start");
+    }
+    if (!captured.child.stdout) {
+      throw new Error("HTTP MCP fixture stdout was not piped");
+    }
+    lines = createInterface({ input: captured.child.stdout });
+    const line = await Promise.race([
+      new Promise<string>((resolve) => {
+        lines?.once("line", resolve);
+      }),
+      captured.exited.then(() => {
+        throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
+      }),
+      delay(WAIT_TIMEOUT_MS, undefined, { ref: false }).then(() => {
+        throw new Error(`HTTP MCP fixture readiness timed out:\n${captured.logs()}`);
+      }),
+    ]);
+    const value: unknown = JSON.parse(line);
+    if (
+      !isRecord(value) ||
+      value.type !== FIXTURE_READY_TYPE ||
+      !isRecord(value.urls) ||
+      typeof value.urls.streamableHttp !== "string" ||
+      typeof value.urls.sse !== "string"
+    ) {
+      throw new Error(`HTTP MCP fixture returned invalid readiness: ${line}`);
+    }
+    transferred = true;
+    return {
+      ...captured,
+      pid,
+      urls: { streamableHttp: value.urls.streamableHttp, sse: value.urls.sse },
+    };
+  } finally {
+    lines?.close();
+    if (!transferred) {
+      await stopChild(captured);
+    }
   }
-  if (!captured.child.stdout) {
-    throw new Error("HTTP MCP fixture stdout was not piped");
-  }
-  const lines = createInterface({ input: captured.child.stdout });
-  const line = await Promise.race([
-    new Promise<string>((resolve) => {
-      lines.once("line", resolve);
-    }),
-    captured.exited.then(() => {
-      throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
-    }),
-    delay(WAIT_TIMEOUT_MS, undefined, { ref: false }).then(() => {
-      throw new Error(`HTTP MCP fixture readiness timed out:\n${captured.logs()}`);
-    }),
-  ]);
-  lines.close();
-  const value: unknown = JSON.parse(line);
-  if (
-    !isRecord(value) ||
-    value.type !== FIXTURE_READY_TYPE ||
-    !isRecord(value.urls) ||
-    typeof value.urls.streamableHttp !== "string" ||
-    typeof value.urls.sse !== "string"
-  ) {
-    throw new Error(`HTTP MCP fixture returned invalid readiness: ${line}`);
-  }
-  return {
-    ...captured,
-    pid,
-    urls: { streamableHttp: value.urls.streamableHttp, sse: value.urls.sse },
-  };
 }
 
 export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv): CapturedChild {
@@ -262,7 +271,7 @@ export async function waitForNode(
   return node;
 }
 
-export function parseProbeResult(value: unknown): ProbeResult {
+export function parseNodeMcpTextRecord(value: unknown): Record<string, unknown> {
   const payload = isRecord(value) && isRecord(value.payload) ? value.payload : value;
   if (!isRecord(payload) || !Array.isArray(payload.content)) {
     throw new Error(`MCP result omitted content: ${JSON.stringify(value)}`);
@@ -274,13 +283,20 @@ export function parseProbeResult(value: unknown): ProbeResult {
     throw new Error(`MCP result omitted text: ${JSON.stringify(value)}`);
   }
   const parsed: unknown = JSON.parse(text.text);
+  if (!isRecord(parsed)) {
+    throw new Error(`MCP text was not an object: ${text.text}`);
+  }
+  return parsed;
+}
+
+export function parseProbeResult(value: unknown): ProbeResult {
+  const parsed = parseNodeMcpTextRecord(value);
   if (
-    !isRecord(parsed) ||
     typeof parsed.label !== "string" ||
     typeof parsed.marker !== "string" ||
     typeof parsed.pid !== "number"
   ) {
-    throw new Error(`MCP result had invalid probe data: ${text.text}`);
+    throw new Error(`MCP result had invalid probe data: ${JSON.stringify(parsed)}`);
   }
   return { label: parsed.label, marker: parsed.marker, pid: parsed.pid };
 }

@@ -12,7 +12,7 @@ function stringifyMcpContent(value: unknown): string {
 }
 
 /** Converts untrusted MCP content into the agent text/image contract. */
-export function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBlock {
+function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBlock {
   if (!isRecord(block)) {
     return { type: "text", text: stringifyMcpContent(block) };
   }
@@ -55,7 +55,7 @@ export function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBl
   return { type: "text", text: stringifyMcpContent(block) };
 }
 
-export function projectMcpCallToolResultContent(result: {
+function projectMcpCallToolResultContent(result: {
   content?: unknown;
   structuredContent?: unknown;
 }): AgentToolResult<unknown>["content"] {
@@ -72,4 +72,33 @@ export function projectMcpCallToolResultContent(result: {
     ];
   }
   return sourceContent.map(mcpContentBlockToAgentContent);
+}
+
+/** Projects a raw MCP CallToolResult exactly once at the model boundary. */
+export function projectMcpCallToolResult(
+  result: { content?: unknown; structuredContent?: unknown; isError?: unknown },
+  details: Record<string, unknown> = {},
+): AgentToolResult<unknown> {
+  const isError = result.isError === true;
+  const content = projectMcpCallToolResultContent(result);
+  return {
+    content:
+      content.length > 0
+        ? content
+        : [
+            {
+              type: "text",
+              text: isError
+                ? "MCP tool failed without returning content."
+                : "MCP tool completed without returning content.",
+            },
+          ],
+    details: {
+      ...details,
+      ...(result.structuredContent !== undefined
+        ? { structuredContent: result.structuredContent }
+        : {}),
+      ...(isError ? { status: "error" } : {}),
+    },
+  };
 }

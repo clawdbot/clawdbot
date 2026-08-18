@@ -20,6 +20,7 @@ import { getFreePort } from "../test-utils/ports.js";
 import {
   closeActiveGatewayServers,
   EMPTY_STABILITY_SNAPSHOT,
+  startAgentTurnGateway,
   startCronListGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
@@ -208,6 +209,44 @@ async function runIsolatedGatewayCli(params: {
 }
 
 describe("gateway-backed CLI process exit", () => {
+  it.each([
+    { status: "ok" as const, text: "pong", exitCode: 0 },
+    { status: "error" as const, text: "provider failed", exitCode: 1 },
+  ])(
+    "exits $exitCode after an agent turn reports $status",
+    async ({ status, text, exitCode }) => {
+      const root = tempDirs.make(`openclaw-agent-turn-${status}-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const gateway = await startAgentTurnGateway({ status, text });
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: {
+            mode: "remote",
+            remote: { url: gateway.url, token: gateway.token },
+          },
+        }),
+      );
+
+      const result = await runIsolatedGatewayCli({
+        args: ["agent", "--agent", "main", "--message", "ping", "--json"],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: exitCode, signal: null, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status,
+        summary: status === "ok" ? "completed" : "failed",
+        result: { payloads: [{ text }] },
+      });
+    },
+    30_000,
+  );
+
   it.each([
     {
       label: "root-health-json",
