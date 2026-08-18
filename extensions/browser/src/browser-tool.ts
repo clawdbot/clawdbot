@@ -115,7 +115,7 @@ function readTargetUrlParam(params: Record<string, unknown>) {
 }
 
 function formatScreenshotShareHint(filePath: string): string {
-  return `[Screenshot saved to ${JSON.stringify(filePath)}. Use this path with the message tool to share the screenshot explicitly.]`;
+  return `[Screenshot saved to ${JSON.stringify(filePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
 }
 
 const SCREENSHOT_SHARE_UNAVAILABLE =
@@ -799,7 +799,7 @@ export function createBrowserTool(opts?: {
             // Screenshot viewing remains useful when optional outbound staging fails.
           }
           // Screenshots stay in the tool result for agent vision, but channel
-          // delivery must remain an explicit message-tool action.
+          // delivery must remain an explicit outbound-delivery action.
           const screenshotDetails = {
             ...(result as Record<string, unknown>),
             media: { outbound: false },
@@ -846,7 +846,7 @@ export function createBrowserTool(opts?: {
                   // a text description as the deliverable output. Exposing the raw
                   // screenshot as media would cause channel delivery to auto-send
                   // potentially sensitive page content. The text block carries the
-                  // staged outbound-copy path for an explicit message-tool send.
+                  // staged outbound-copy path for an explicit outbound-delivery send.
                   vision: {
                     provider: described.provider,
                     model: described.model,
