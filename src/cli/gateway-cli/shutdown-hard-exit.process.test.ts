@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 const WATCHDOG_DELAY_MS = 100;
 const CHILD_TIMEOUT_MS = 3_000;
@@ -10,10 +10,39 @@ const watchdogModuleUrl = pathToFileURL(
   path.resolve("src/cli/gateway-cli/shutdown-hard-exit.ts"),
 ).href;
 
-function runWatchdogChild(source: string) {
+function runWatchdogChild() {
   const script = `
+    import { writeSync } from "node:fs";
     import { armShutdownHardExitWatchdog } from ${JSON.stringify(watchdogModuleUrl)};
-    ${source}
+
+    const fail = (message) => {
+      writeSync(2, \`error:\${message}\\n\`);
+      process.exit(2);
+    };
+    const firstWatchdog = armShutdownHardExitWatchdog({
+      delayMs: ${WATCHDOG_DELAY_MS},
+      onError: (error) => fail(String(error)),
+    });
+    if (firstWatchdog === null) {
+      fail("first-watchdog-not-armed");
+    }
+    firstWatchdog.cancel();
+    await new Promise((resolve) => setTimeout(resolve, ${WATCHDOG_DELAY_MS * 2}));
+    writeSync(1, "cancelled-watchdog-deadline-survived\\n");
+
+    process.once("beforeExit", () => {
+      // Reaching beforeExit proves the cancelled worker no longer retains process liveness.
+      writeSync(1, "cancelled-watchdog-released-liveness\\n");
+      const secondWatchdog = armShutdownHardExitWatchdog({
+        delayMs: ${WATCHDOG_DELAY_MS},
+        onError: (error) => fail(String(error)),
+      });
+      if (secondWatchdog === null) {
+        fail("second-watchdog-not-armed");
+      }
+      writeSync(1, "second-watchdog-armed\\n");
+      while (true) {}
+    });
   `;
   const startedAt = Date.now();
   const result = spawnSync(
@@ -30,38 +59,34 @@ function runWatchdogChild(source: string) {
   return { elapsedMs: Date.now() - startedAt, result };
 }
 
-describe("shutdown hard-exit watchdog", () => {
-  it("kills a process whose main thread is synchronously blocked", () => {
-    const { elapsedMs, result } = runWatchdogChild(`
-      armShutdownHardExitWatchdog({
-        delayMs: ${WATCHDOG_DELAY_MS},
-        onError: (error) => console.error(error),
-      });
-      while (true) {}
-    `);
+it("cancels one watchdog before another kills a blocked main thread", () => {
+  const { elapsedMs, result } = runWatchdogChild();
+  const diagnostics = JSON.stringify(
+    {
+      elapsedMs,
+      status: result.status,
+      signal: result.signal,
+      error: result.error ? String(result.error) : undefined,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    },
+    null,
+    2,
+  );
+  const markers = [
+    "cancelled-watchdog-deadline-survived",
+    "cancelled-watchdog-released-liveness",
+    "second-watchdog-armed",
+  ];
+  let previousMarkerIndex = -1;
+  for (const marker of markers) {
+    const markerIndex = result.stdout.indexOf(marker);
+    expect(markerIndex, diagnostics).toBeGreaterThan(previousMarkerIndex);
+    previousMarkerIndex = markerIndex;
+  }
 
-    expect(result.error).toBeUndefined();
-    expect(result.signal).toBe("SIGKILL");
-    expect(elapsedMs).toBeLessThan(CHILD_TIMEOUT_MS);
-  });
-
-  it("lets a cancelled process survive beyond the deadline and exit cleanly", () => {
-    const { elapsedMs, result } = runWatchdogChild(`
-      const watchdog = armShutdownHardExitWatchdog({
-        delayMs: ${WATCHDOG_DELAY_MS},
-        onError: (error) => {
-          console.error(error);
-          process.exitCode = 2;
-        },
-      });
-      watchdog?.cancel();
-      await new Promise((resolve) => setTimeout(resolve, ${WATCHDOG_DELAY_MS * 2}));
-    `);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-    expect(result.signal).toBeNull();
-    expect(elapsedMs).toBeGreaterThanOrEqual(WATCHDOG_DELAY_MS * 2);
-    expect(elapsedMs).toBeLessThan(CHILD_TIMEOUT_MS);
-  });
+  expect(result.error, diagnostics).toBeUndefined();
+  expect(result.status, diagnostics).toBeNull();
+  expect(result.signal, diagnostics).toBe("SIGKILL");
+  expect(elapsedMs, diagnostics).toBeLessThan(CHILD_TIMEOUT_MS);
 });
