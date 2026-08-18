@@ -19,6 +19,7 @@ import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   agentId: string | null;
+  browserPresented: boolean;
   desktopAvailable: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
@@ -100,6 +101,7 @@ export function sidebarPanelDefinitions(
           data-chat-autotype-exempt
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
+          .presented=${params?.browserPresented ?? false}
           .basePath=${state.basePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`

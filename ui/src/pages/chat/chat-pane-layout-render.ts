@@ -24,6 +24,7 @@ import {
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
+  isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -89,9 +90,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
+    const browserPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
       agentId: currentAgentId,
+      browserPresented,
       desktopAvailable,
       hasBoard: board.hasBoard,
       chat,
