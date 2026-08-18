@@ -1,17 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WRITE_SCOPE } from "../../../gateway/method-scopes.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
-import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlers,
 } from "../../../gateway/server-methods/types.js";
 import { dispatchSubagentAnnounceAgent } from "./subagent-announce-delivery.runtime.js";
 
-function createContext(): GatewayRequestContext {
+function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext {
   return {
     deps: {},
     getRuntimeConfig: () => ({}),
+    getGatewayMethodRegistry: () => createRegistry(handlers),
     logGateway: {
       warn: vi.fn(),
       error: vi.fn(),
@@ -34,30 +34,16 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("subagent announce Gateway instance dispatch", () => {
-  let closeRuntime: (() => void) | undefined;
-
-  afterEach(() => {
-    closeRuntime?.();
-    closeRuntime = undefined;
-  });
-
-  it("delivers a detached announce after the originating request scope has ended", async () => {
-    const context = createContext();
+  it("delivers a detached announce through its explicit instance resolver", async () => {
+    const context = createContext({
+      agent: ({ respond }) => respond(true, { raw: true }),
+    });
     const idempotencyKey = "detached-subagent-announce";
     context.dedupe.set(`agent:${idempotencyKey}`, {
       ts: Date.now(),
       ok: true,
       payload: { runId: "announce-run", status: "ok", summary: "delivered" },
     });
-    const runtime = createGatewayInstanceRuntime({
-      getContext: () => context,
-      getMethodRegistry: () =>
-        createRegistry({
-          agent: ({ respond }) => respond(true, { raw: true }),
-        }),
-      isDispatchAvailable: () => true,
-    });
-    closeRuntime = runtime.close;
 
     await expect(
       dispatchSubagentAnnounceAgent(
@@ -65,7 +51,11 @@ describe("subagent announce Gateway instance dispatch", () => {
           message: "Process one completed child result.",
           idempotencyKey,
         },
-        { expectFinal: true, forceSyntheticClient: true },
+        {
+          expectFinal: true,
+          forceSyntheticClient: true,
+          resolveGatewayContext: () => context,
+        },
       ),
     ).resolves.toEqual({ runId: "announce-run", status: "ok", summary: "delivered" });
   });

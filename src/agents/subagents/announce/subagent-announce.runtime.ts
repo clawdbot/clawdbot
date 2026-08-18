@@ -5,7 +5,7 @@
  * IO without changing the announce logic itself.
  */
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-export { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "../../../gateway/server-recovery-runtime-context.js";
+export { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 export { getRuntimeConfig } from "../../../config/config.js";
 export {
   resolveAgentIdFromSessionKey,
