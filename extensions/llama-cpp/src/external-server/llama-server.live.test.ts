@@ -11,8 +11,8 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { discoverLlamaServer } from "./src/discovery.js";
-import { wrapLlamaServerStream } from "./src/stream.js";
+import { discoverLlamaServer } from "./discovery.js";
+import { wrapLlamaServerStream } from "./stream.js";
 
 const LIVE_URL = process.env.LLAMA_SERVER_LIVE_URL?.trim() ?? "";
 const LIVE_KEY = process.env.LLAMA_SERVER_API_KEY?.trim() ?? "";
@@ -21,6 +21,7 @@ const LIVE = isLiveTestEnabled(["LLAMA_SERVER_LIVE_TEST"]) && LIVE_URL.length > 
 const describeLive = LIVE ? describe : describe.skip;
 const liveStream = wrapLlamaServerStream({
   streamFn: streamSimple,
+  thinkingLevel: "off",
 } as unknown as ProviderWrapStreamFnContext);
 
 async function completeViaPlugin(
@@ -64,23 +65,6 @@ async function resolveLiveModel(): Promise<{
   };
 }
 
-function disableThinking(payload: unknown): unknown {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return payload;
-  }
-  const record = payload as Record<string, unknown>;
-  const current =
-    record.chat_template_kwargs &&
-    typeof record.chat_template_kwargs === "object" &&
-    !Array.isArray(record.chat_template_kwargs)
-      ? (record.chat_template_kwargs as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    chat_template_kwargs: { ...current, enable_thinking: false },
-  };
-}
-
 function echoTool(): Tool {
   return {
     name: "live_echo",
@@ -116,7 +100,6 @@ describeLive("llama-server live", () => {
           {
             apiKey: LIVE_KEY || "llama-server-local",
             maxTokens: 64,
-            onPayload: disableThinking,
           },
         ),
       ),
@@ -153,7 +136,6 @@ describeLive("llama-server live", () => {
           required: ["ok"],
           additionalProperties: false,
         },
-        onPayload: disableThinking,
       },
     );
     if (response.stopReason === "error") {
@@ -180,7 +162,6 @@ describeLive("llama-server live", () => {
         apiKey: LIVE_KEY || "llama-server-local",
         maxTokens: 4096,
         signal: controller.signal,
-        onPayload: disableThinking,
       },
     );
     setTimeout(() => controller.abort(), 250);
@@ -206,7 +187,6 @@ describeLive("llama-server live", () => {
       {
         apiKey: LIVE_KEY || "llama-server-local",
         maxTokens: 256,
-        onPayload: disableThinking,
       },
     );
     if (first.stopReason === "error") {
@@ -237,7 +217,6 @@ describeLive("llama-server live", () => {
       {
         apiKey: LIVE_KEY || "llama-server-local",
         maxTokens: 128,
-        onPayload: disableThinking,
       },
     );
     if (second.stopReason === "error") {

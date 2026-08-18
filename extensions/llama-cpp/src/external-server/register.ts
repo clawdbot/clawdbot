@@ -79,7 +79,7 @@ export function registerExternalLlamaServerProvider(api: OpenClawPluginApi): voi
     wizard: {
       setup: {
         choiceId: LLAMA_SERVER_PROVIDER_ID,
-        choiceLabel: LLAMA_SERVER_PROVIDER_LABEL,
+        choiceLabel: "Existing llama-server",
         choiceHint: "Connect to an existing llama.cpp server",
         groupId: "llama-cpp",
         groupLabel: "Local llama.cpp",

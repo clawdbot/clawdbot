@@ -1782,5 +1782,13 @@
   {
     "source": "CLI Automation",
     "target": "CLI 自动化"
+  },
+  {
+    "source": "llama-server",
+    "target": "llama-server"
+  },
+  {
+    "source": "llama-server (external llama.cpp)",
+    "target": "llama-server（外部 llama.cpp）"
   }
 ]

@@ -63,7 +63,7 @@ export function registerManagedLlamaCppProvider(api: OpenClawPluginApi): void {
     wizard: {
       setup: {
         choiceId: LLAMA_CPP_PROVIDER_ID,
-        choiceLabel: LLAMA_CPP_PROVIDER_LABEL,
+        choiceLabel: "Managed local server",
         choiceHint:
           "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
         groupId: LLAMA_CPP_PROVIDER_ID,
