@@ -153,12 +153,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           init == null ? await boundedFetcher(input) : await boundedFetcher(input, init);
         mistralResponse = response;
         if (!response.ok) {
-          await notifyProviderHttpResponse({
-            options,
-            response,
-            model,
-            accepted: false,
-          });
+          await notifyProviderHttpResponse({ options, response, model });
           reportedResponse = response;
         }
         return response;

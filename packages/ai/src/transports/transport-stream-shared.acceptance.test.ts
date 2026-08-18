@@ -37,12 +37,7 @@ describe("notifyProviderHttpResponse", () => {
     const options: StreamOptions = { onProviderAccepted, onResponse };
     const response = new Response("rejected", { status: 429 });
 
-    await notifyProviderHttpResponse({
-      options,
-      response,
-      model,
-      accepted: false,
-    });
+    await notifyProviderHttpResponse({ options, response, model });
 
     expect(onProviderAccepted).not.toHaveBeenCalled();
     expect(onResponse).toHaveBeenCalledWith(expect.objectContaining({ status: 429 }), model);

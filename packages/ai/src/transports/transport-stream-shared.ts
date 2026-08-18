@@ -166,7 +166,6 @@ export async function notifyProviderHttpResponse(params: {
   response: Response;
   model: Model;
   signal?: AbortSignal;
-  accepted?: boolean;
 }): Promise<void> {
   if (!params.options?.onProviderAccepted && !params.options?.onResponse) {
     return;
@@ -176,7 +175,7 @@ export async function notifyProviderHttpResponse(params: {
   const signal = params.signal ?? params.options?.signal;
   try {
     await awaitProviderLifecycleCallback(
-      params.accepted !== false && params.options.onProviderAccepted
+      params.response.ok && params.options.onProviderAccepted
         ? () =>
             params.options?.onProviderAccepted?.(
               { kind: "http_response", status, headers },
