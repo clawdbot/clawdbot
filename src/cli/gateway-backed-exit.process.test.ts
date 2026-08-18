@@ -694,6 +694,106 @@ describe("gateway-backed CLI process exit", () => {
   );
 
   it.each([
+    { label: "list", args: ["devices", "list", "--timeout", "250"] },
+    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
+    {
+      label: "remove",
+      args: ["devices", "remove", "test-device", "--timeout", "250"],
+    },
+    {
+      label: "clear",
+      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
+    },
+    {
+      label: "approve",
+      args: ["devices", "approve", "test-request", "--timeout", "250"],
+    },
+    {
+      label: "reject",
+      args: ["devices", "reject", "test-request", "--timeout", "250"],
+    },
+    {
+      label: "rename",
+      args: [
+        "devices",
+        "rename",
+        "--device",
+        "test-device",
+        "--name",
+        "Test Device",
+        "--timeout",
+        "250",
+      ],
+    },
+    {
+      label: "rotate",
+      args: [
+        "devices",
+        "rotate",
+        "--device",
+        "test-device",
+        "--role",
+        "operator",
+        "--timeout",
+        "250",
+      ],
+      machineOutput: true,
+    },
+    {
+      label: "revoke",
+      args: [
+        "devices",
+        "revoke",
+        "--device",
+        "test-device",
+        "--role",
+        "operator",
+        "--timeout",
+        "250",
+      ],
+      machineOutput: true,
+    },
+  ])(
+    "renders an unreachable gateway as expected guidance for devices $label",
+    async ({ label, args, machineOutput }) => {
+      const root = tempDirs.make(`openclaw-devices-${label}-transport-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const port = await getFreePort();
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          gateway: { mode: "local", port, auth: { mode: "token", token: "test-token" } },
+        })}\n`,
+        "utf8",
+      );
+
+      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
+
+      expect(result).toMatchObject({ code: 1, signal: null });
+      if (machineOutput) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Gateway not reachable") },
+        });
+      } else {
+        expect(result.stdout).toBe("");
+      }
+      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
+      expect(result.stderr).toContain(
+        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      );
+      expect(result.stderr).not.toContain("The CLI command failed");
+      expect(result.stderr).not.toContain("Could not start the CLI");
+      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+      expect(result.stderr).not.toContain("Stack:");
+      expect(result.stderr).not.toContain("openclaw doctor");
+    },
+    30_000,
+  );
+
+  it.each([
     { label: "absent", seeded: false },
     { label: "seeded", seeded: true },
   ])(

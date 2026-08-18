@@ -2902,7 +2902,7 @@ src/gateway/agent-turn/internal-facade.ts	4
 src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
-src/gateway/call.ts	7
+src/gateway/call.ts	6
 src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
