@@ -199,9 +199,13 @@ export function handleMarkdownTableInteraction(event: Event): void {
   if (copy) {
     void copyToClipboard(tableText(table)).then((copied) => {
       copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+      if (copied) {
+        render(icons.check, copy);
+      }
       clearTimeout(tableCopyResetTimers.get(copy));
       const resetTimer = setTimeout(
         () => {
+          render(icons.copy, copy);
           copy.setAttribute("aria-label", t("common.copyTable"));
           tableCopyResetTimers.delete(copy);
         },
