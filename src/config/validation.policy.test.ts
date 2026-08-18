@@ -73,7 +73,37 @@ function createSecretFixturePlugin(): PluginManifestRecord {
 }
 
 describe("config validation SecretRef policy guards", () => {
-  it("rejects an impossible SecretRef on a disabled registry-declared plugin target", () => {
+  it("allows an impossible SecretRef on a disabled registry-declared plugin target", () => {
+    const plugin = createSecretFixturePlugin();
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        plugins: {
+          entries: {
+            "secret-fixture": {
+              enabled: false,
+              config: {
+                credential: {
+                  source: "exec",
+                  provider: "shared",
+                  id: "PLUGIN_PRIVATE_CREDENTIAL",
+                },
+              },
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            shared: { source: "file", path: "/tmp/unused-secrets.json", mode: "json" },
+          },
+        },
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [plugin] } } },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("strictly rejects an impossible SecretRef on a disabled registry-declared plugin target", () => {
     const refId = "PLUGIN_PRIVATE_CREDENTIAL";
     const plugin = createSecretFixturePlugin();
     const result = validateConfigObjectRawWithPlugins(
@@ -94,7 +124,10 @@ describe("config validation SecretRef policy guards", () => {
           },
         },
       },
-      { pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [plugin] } } },
+      {
+        semanticValidation: "strict",
+        pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [plugin] } },
+      },
     );
 
     expect(result.ok).toBe(false);
@@ -130,6 +163,7 @@ describe("config validation SecretRef policy guards", () => {
           },
         },
         {
+          semanticValidation: "strict",
           pluginMetadataSnapshot: {
             manifestRegistry: { diagnostics: [], plugins: [createSecretFixturePlugin()] },
           },

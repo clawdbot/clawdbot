@@ -56,6 +56,8 @@ type ValidateConfigWithPluginsResult =
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
   pluginValidation?: "full" | "skip" | "core-only";
+  /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
+  semanticValidation?: "runtime" | "strict";
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -136,6 +138,7 @@ function validateConfigObjectWithPluginMode(
     applyDefaults,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
+    semanticValidation: params?.semanticValidation ?? "runtime",
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
@@ -725,7 +728,10 @@ function validateConfigObjectWithPluginsBase(
       warnings,
     });
   }
-  if (Object.keys(mutatedConfig.secrets?.providers ?? {}).length > 0) {
+  if (
+    opts.semanticValidation === "strict" &&
+    Object.keys(mutatedConfig.secrets?.providers ?? {}).length > 0
+  ) {
     issues.push(
       ...collectSecretRefProviderSourceIssues({
         config: mutatedConfig,

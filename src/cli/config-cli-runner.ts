@@ -36,6 +36,7 @@ import {
   unsetAtPath,
 } from "./config-cli-path.js";
 import {
+  assertStrictConfigForMutation,
   collectDryRunRefs,
   collectDryRunResolvabilityErrors,
   collectDryRunSchemaErrors,
@@ -369,7 +370,12 @@ export async function runConfigOperations(params: {
     }
     errors.push(...pluginIntegrationErrors);
     if (requiresFullSchemaValidation) {
-      errors.push(...collectDryRunSchemaErrors(nextConfig));
+      errors.push(
+        ...collectDryRunSchemaErrors(
+          nextConfig,
+          mutationStart.writeOptions.basePluginMetadataSnapshot,
+        ),
+      );
     }
     if (checksRefs) {
       errors.push(
@@ -453,6 +459,10 @@ export async function runConfigOperations(params: {
     );
   }
   if (params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig)) {
+    assertStrictConfigForMutation(
+      nextConfig,
+      mutationStart.writeOptions.basePluginMetadataSnapshot,
+    );
     runtime.log(info("No change"));
     return;
   }

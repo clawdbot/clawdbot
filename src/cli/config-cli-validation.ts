@@ -14,6 +14,7 @@ import {
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -86,6 +87,20 @@ export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRunti
 }
 
 export { formatInvalidConfigRepairHint };
+
+export function strictlyValidateConfigSnapshotForCli(
+  snapshot: ConfigFileSnapshot,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): ConfigFileSnapshot {
+  if (!snapshot.valid) {
+    return snapshot;
+  }
+  const validated = validateConfigObjectRawWithPlugins(snapshot.sourceConfig, {
+    semanticValidation: "strict",
+    pluginMetadataSnapshot,
+  });
+  return validated.ok ? snapshot : { ...snapshot, valid: false, issues: validated.issues };
+}
 
 function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
   const refs: SecretRef[] = [];
@@ -230,8 +245,14 @@ export function selectDryRunRefsForResolution(params: {
   return { refsToResolve, skippedExecRefs };
 }
 
-export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRawWithPlugins(config);
+function collectStrictConfigErrors(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRawWithPlugins(config, {
+    semanticValidation: "strict",
+    pluginMetadataSnapshot,
+  });
   if (validated.ok) {
     return [];
   }
@@ -239,6 +260,26 @@ export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryR
     kind: "schema",
     message,
   }));
+}
+
+export function assertStrictConfigForMutation(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): void {
+  const errors = collectStrictConfigErrors(config, pluginMetadataSnapshot);
+  if (errors.length === 0) {
+    return;
+  }
+  throw new Error(
+    ["Config validation failed.", ...errors.map((error) => `- ${error.message}`)].join("\n"),
+  );
+}
+
+export function collectDryRunSchemaErrors(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): ConfigSetDryRunError[] {
+  return collectStrictConfigErrors(config, pluginMetadataSnapshot);
 }
 
 function touchesSecretProviderCollection(path: readonly string[]): boolean {

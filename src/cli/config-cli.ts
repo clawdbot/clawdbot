@@ -3,11 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import {
-  readConfigFileSnapshot,
-  readConfigFileSnapshotWithPluginMetadata,
-  replaceConfigFile,
-} from "../config/config.js";
+import { readConfigFileSnapshotWithPluginMetadata, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -52,10 +48,12 @@ import {
   runConfigOperations,
 } from "./config-cli-runner.js";
 import {
+  assertStrictConfigForMutation,
   ensureValidConfigSnapshotForCli,
   formatInvalidConfigRepairHint,
   loadValidConfig,
   loadValidConfigForWrite,
+  strictlyValidateConfigSnapshotForCli,
 } from "./config-cli-validation.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
@@ -272,6 +270,10 @@ export async function runConfigUnset(opts: {
         runtime.exit(1);
         return;
       }
+      assertStrictConfigForMutation(
+        currentConfig,
+        mutationStart.writeOptions.basePluginMetadataSnapshot,
+      );
       runtime.log(info("No change"));
       return;
     }
@@ -287,6 +289,10 @@ export async function runConfigUnset(opts: {
     }
     const nextConfig = normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig);
     if (isDeepStrictEqual(currentConfig, nextConfig)) {
+      assertStrictConfigForMutation(
+        nextConfig,
+        mutationStart.writeOptions.basePluginMetadataSnapshot,
+      );
       runtime.log(info("No change"));
       return;
     }
@@ -348,7 +354,11 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
-    const snapshot = await readConfigFileSnapshot({ observe: false });
+    const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
+    const snapshot = strictlyValidateConfigSnapshotForCli(
+      read.snapshot,
+      read.pluginMetadataSnapshot,
+    );
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {

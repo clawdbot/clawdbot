@@ -103,7 +103,7 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 
-Validates the current config against the active schema without starting the gateway.
+Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
 
 ```bash
 openclaw config validate

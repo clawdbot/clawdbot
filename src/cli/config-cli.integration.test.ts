@@ -5,14 +5,22 @@ import path from "node:path";
 import { Command } from "commander";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configRuntime from "../config/config.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import * as runtimeSchema from "../config/runtime-schema.js";
 import { defaultRuntime } from "../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { registerConfigCli, runConfigGet, runConfigSet, runConfigUnset } from "./config-cli.js";
+import {
+  registerConfigCli,
+  runConfigGet,
+  runConfigPatch,
+  runConfigSet,
+  runConfigUnset,
+} from "./config-cli.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const registeredRuntimeLogs: string[] = [];
 const registeredRuntimeErrors: string[] = [];
 
@@ -82,7 +90,7 @@ async function withConfigFileHarness(
   raw: string,
   run: (params: { configPath: string; tempDir: string }) => Promise<void>,
 ): Promise<void> {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const tempDir = tempDirs.make(prefix);
   const configPath = path.join(tempDir, "openclaw.json");
   const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
   try {
@@ -96,7 +104,6 @@ async function withConfigFileHarness(
     envSnapshot.restore();
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -146,7 +153,7 @@ async function withExecDryRunConfigHarness(
     runtime: ReturnType<typeof createTestRuntime>;
   }) => Promise<void>,
 ) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const tempDir = tempDirs.make(prefix);
   const configPath = path.join(tempDir, "openclaw.json");
   const batchPath = path.join(tempDir, "batch.json");
   const markerPath = path.join(tempDir, "marker.txt");
@@ -184,7 +191,6 @@ async function withExecDryRunConfigHarness(
     envSnapshot.restore();
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -348,6 +354,45 @@ describe("config cli integration", () => {
     );
   });
 
+  it("rejects impossible provider/source refs during real config patch", async () => {
+    const raw = `${JSON.stringify(
+      {
+        channels: {
+          discord: {
+            enabled: false,
+            token: { source: "env", provider: "shared", id: "DISCORD_TEST_TOKEN" },
+          },
+        },
+        secrets: {
+          defaults: { env: "shared" },
+          providers: {
+            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    await withConfigFileHarness(
+      "openclaw-config-cli-patch-source-mismatch-",
+      raw,
+      async ({ configPath, tempDir }) => {
+        const patchPath = path.join(tempDir, "patch.json5");
+        fs.writeFileSync(patchPath, "{ secrets: { defaults: { env: null } } }\n", "utf8");
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(output.errors.join("\n")).toContain(
+          'provider "shared" has source "file" but ref requests "env"',
+        );
+      },
+    );
+  });
+
   it("rejects impossible provider/source refs during real config validate", async () => {
     const refId = "DISCORD_TEST_TOKEN";
     await withConfigFileHarness(
@@ -375,8 +420,8 @@ describe("config cli integration", () => {
       )}\n`,
       async () => {
         const snapshot = await configRuntime.readConfigFileSnapshot({ observe: false });
-        expect(snapshot.valid).toBe(false);
-        expect(JSON.stringify(snapshot.issues)).not.toContain(refId);
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.issues).toStrictEqual([]);
 
         await expect(runRegisteredConfigCommand(["config", "validate"])).rejects.toThrow(
           "__exit__:1",
@@ -386,6 +431,101 @@ describe("config cli integration", () => {
           'Secret provider "shared" has source "file" but ref requests "exec"',
         );
         expect(registeredRuntimeErrors.join("\n")).not.toContain(refId);
+      },
+    );
+  });
+
+  it("allows a config set that repairs an inactive provider/source mismatch", async () => {
+    const raw = `${JSON.stringify(
+      {
+        channels: {
+          discord: {
+            enabled: false,
+            token: { source: "exec", provider: "shared", id: "discord/token" },
+          },
+        },
+        secrets: {
+          providers: {
+            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    await withConfigFileHarness(
+      "openclaw-config-cli-repair-source-mismatch-",
+      raw,
+      async ({ configPath }) => {
+        const output = createTestRuntime();
+
+        await runConfigSet({
+          path: "channels.discord.token",
+          value: '{"source":"file","provider":"shared","id":"/discord/token"}',
+          cliOptions: { strictJson: true },
+          runtime: output.runtime,
+        });
+
+        expect(output.errors).toStrictEqual([]);
+        expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+          channels: {
+            discord: {
+              token: { source: "file", provider: "shared", id: "/discord/token" },
+            },
+          },
+        });
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "setting an authored value to itself",
+      run: (runtime: ReturnType<typeof createTestRuntime>["runtime"]) =>
+        runConfigSet({
+          path: "gateway.port",
+          value: "18789",
+          cliOptions: { strictJson: true },
+          runtime,
+        }),
+    },
+    {
+      name: "unsetting an absent authored value",
+      run: (runtime: ReturnType<typeof createTestRuntime>["runtime"]) =>
+        runConfigUnset({ path: "gateway.bind", runtime }),
+    },
+  ])("strictly validates an existing mismatch when $name is a no-op", async (testCase) => {
+    const raw = `${JSON.stringify(
+      {
+        gateway: { port: 18789 },
+        channels: {
+          discord: {
+            enabled: false,
+            token: { source: "exec", provider: "shared", id: "discord/token" },
+          },
+        },
+        secrets: {
+          providers: {
+            shared: { source: "file", path: "/tmp/openclaw-unused-secrets.json", mode: "json" },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    await withConfigFileHarness(
+      "openclaw-config-cli-noop-source-mismatch-",
+      raw,
+      async ({ configPath }) => {
+        const output = createTestRuntime();
+
+        await expect(testCase.run(output.runtime)).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(output.logs).not.toContain("No change");
+        expect(output.errors.join("\n")).toContain(
+          'provider "shared" has source "file" but ref requests "exec"',
+        );
       },
     );
   });
