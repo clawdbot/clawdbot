@@ -2559,22 +2559,25 @@ openclaw-chat-session-rail {
 
 .json-collapse {
   margin-top: 0.75em;
+  overflow: visible;
+  border: 0;
+  background: transparent;
 }
 
 .json-collapse summary {
-  display: flex;
-  font-size: 11px;
+  display: list-item;
+  padding: 4px 8px;
+  font-size: 12px;
   color: var(--muted);
-  list-style: none;
   user-select: none;
 }
 
-.json-collapse summary::-webkit-details-marker {
-  display: none;
+.json-collapse summary .code-block-copy {
+  float: right;
 }
 
 .json-collapse[open] summary {
-  border-radius: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .json-collapse summary:hover {
