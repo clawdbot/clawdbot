@@ -94,7 +94,7 @@ export function isLocalAttachmentPreviewAllowed(
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
     : source.trim().startsWith("~")
       ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
-          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, home)),
+          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, () => home)),
         )
       : [];
   if (comparableSources.length === 0) {
