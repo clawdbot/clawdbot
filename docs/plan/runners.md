@@ -27,8 +27,8 @@ advances a milestone.
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
 | 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                        |
 | 8   | Stop-and-continue moves                                    | landed      | #125036                                                                                                                                                                   |
-| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
-| 10  | Cloud convergence (provisioners run `openclaw connect`)    | in progress | —                                                                                                                                                                         |
+| 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | in progress | #125503                                                                                                                                                                   |
+| 10  | Cloud convergence (provisioners run `openclaw connect`)    | landed      | #125288, #125384, #125465                                                                                                                                                 |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
 vocabulary, the naming rulings, and the milestone skeleton after a
