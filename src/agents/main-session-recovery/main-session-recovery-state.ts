@@ -294,8 +294,16 @@ export function transitionMainSessionRecovery(
 ): MainSessionRecoveryTransitionResult {
   switch (command.kind) {
     case "mark_interrupted": {
-      if (!entry.mainRestartRecovery) {
+      const state = entry.mainRestartRecovery;
+      if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);
+      } else if (state.foregroundClaims || state.reservation) {
+        // Restart owns continuation now. Process-bound foreground and reservation
+        // leases cannot authorize the old lifecycle after this durable handoff.
+        updateRecoveryState(entry, state, {
+          foregroundClaims: undefined,
+          reservation: undefined,
+        });
       }
       entry.status = "running";
       entry.lifecycleRunId = undefined;

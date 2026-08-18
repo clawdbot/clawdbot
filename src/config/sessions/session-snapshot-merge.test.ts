@@ -402,7 +402,7 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("marks a claimed recovery healthy without erasing its owner aggregate", () => {
+  it("keeps a claimed recovery interrupted until its lifecycle owner settles", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
@@ -433,7 +433,7 @@ describe("session snapshot merge", () => {
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.abortedLastRun).toBe(true);
     expect(merged.restartRecoveryRuns).toBeUndefined();
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
@@ -473,7 +473,7 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toBeUndefined();
   });
 
-  it("preserves every concurrent owner while marking a recovered session healthy", () => {
+  it("preserves every concurrent owner and interruption until lifecycle settlement", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
@@ -504,7 +504,7 @@ describe("session snapshot merge", () => {
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.abortedLastRun).toBe(true);
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 
