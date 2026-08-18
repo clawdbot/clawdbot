@@ -104,6 +104,7 @@ export async function resolveExtraBootstrapPatternPaths(
     // cwd (ENOENT) legitimately means "no matches". Every other failure must
     // surface: the loader turns the rethrow into an operator-visible "io"
     // diagnostic, instead of silently dropping every configured bootstrap file.
+    // SAFETY: Node fs failures carry an ErrnoException-shaped `code`; the cast only reads that property.
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }

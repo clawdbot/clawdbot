@@ -290,7 +290,7 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   );
 }
 
-/** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
+/** Shared parameters for the bootstrap-file resolvers. */
 type BootstrapFileResolutionParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -302,9 +302,15 @@ type BootstrapFileResolutionParams = {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
   readOnlyState?: boolean;
-}): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFilesForRunWithTiming(params);
-}
+};
+
+/** `BootstrapFileResolutionParams` plus the embedded-runner substage-timing hook. */
+type BootstrapFileResolutionTimingParams = BootstrapFileResolutionParams & {
+  onBootstrapSubstageTiming?: (
+    name: "workspace-setup-state" | "workspace-file-load" | "hook-overrides",
+    durationMs: number,
+  ) => void;
+};
 
 /**
  * Timing-aware variant used only by the embedded runner to record bootstrap
@@ -312,22 +318,11 @@ type BootstrapFileResolutionParams = {
  * `src/plugin-sdk/agent-harness-runtime.ts`) so the public
  * `resolveBootstrapFilesForRun` signature stays callback-free.
  */
-export async function resolveBootstrapFilesForRunWithTiming(params: {
-  workspaceDir: string;
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  chatType?: ChatType;
-  agentId?: string;
-  warn?: (message: string) => void;
-  contextMode?: BootstrapContextMode;
-  runKind?: BootstrapContextRunKind;
-  readOnlyState?: boolean;
-  onBootstrapSubstageTiming?: (
-    name: "workspace-setup-state" | "workspace-file-load" | "hook-overrides",
-    durationMs: number,
-  ) => void;
-};
+export async function resolveBootstrapFilesForRunWithTiming(
+  params: BootstrapFileResolutionTimingParams,
+): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFiles(params, "registered");
+}
 
 // Diagnostics project declared files without executing registered hook handlers.
 type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
@@ -346,7 +341,7 @@ export async function resolveBootstrapFilesForRun(
 }
 
 async function resolveBootstrapFiles(
-  params: BootstrapFileResolutionParams,
+  params: BootstrapFileResolutionTimingParams,
   hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
