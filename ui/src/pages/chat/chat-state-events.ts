@@ -57,6 +57,8 @@ import { isAckedSteeredChip } from "./steered-chip.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
+const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+
 function sessionMessageMatchesChat(
   state: ChatPageHost,
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
@@ -216,7 +218,11 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (matchesChat && event?.isStructural) {
+  if (
+    matchesChat &&
+    typeof source?.reason === "string" &&
+    BRANCH_TOPOLOGY_REASONS.has(source.reason)
+  ) {
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
     state.chatBranchesConnectionEpoch = null;

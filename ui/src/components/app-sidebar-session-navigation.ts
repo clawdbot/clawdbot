@@ -87,6 +87,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       }),
     getSelectedAgentId: () => this.selectedAgentIdForSessions(),
     getGateway: () => this.context?.gateway,
+    getSessions: () => this.context?.sessions,
   });
 
   protected readonly compareSidebarSessionRows = (

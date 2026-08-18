@@ -80,7 +80,6 @@ type SessionChangedEventInfo = {
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
-  isStructural: boolean;
 };
 
 type ThinkingMetadataCarrier = {
@@ -342,12 +341,6 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       phase === "error" ||
       reason === "send" ||
       reason === "steer",
-    isStructural:
-      reason === "new" ||
-      reason === "reset" ||
-      reason === "branch-switch" ||
-      reason === "fork" ||
-      reason === "rewind",
   };
 }
 
@@ -365,7 +358,6 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
     status: parsed.status,
     archived: parsed.archived,
     isChatTurn: parsed.isChatTurn,
-    isStructural: parsed.isStructural,
   };
 }
 

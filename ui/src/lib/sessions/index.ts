@@ -16,10 +16,8 @@ import type { SessionCapability, SessionGateway, SessionState } from "./session-
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionEventMatches,
 } from "./session-key.ts";
@@ -100,7 +98,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const pullRequestEpochs = new Map<string, symbol>();
+  const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   let canonicalListRevision = 0;
@@ -124,7 +122,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const retirePullRequestSummary = (key: string) => {
     const normalizedKey = key.trim();
     pullRequestEpochs.delete(normalizedKey);
-    return pullRequestSummaries.delete(normalizedKey);
+    pullRequestSummaries.delete(normalizedKey);
   };
 
   // Canonical Gateway rows are the source of truth for everything except the
@@ -200,28 +198,23 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const pullRequestSummary = (key: string) => pullRequestSummaries.get(key.trim());
 
-  const capturePullRequestEpoch = (key: string): symbol => {
-    const normalizedKey = key.trim();
-    const epoch = Symbol(normalizedKey);
-    pullRequestEpochs.set(normalizedKey, epoch);
+  const capturePullRequestEpoch = (key: string): object => {
+    const epoch = {};
+    pullRequestEpochs.set(key.trim(), epoch);
     return epoch;
   };
 
   const setPullRequestSummary = (
     key: string,
     summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: symbol,
+    epoch?: object,
   ) => {
     const normalizedKey = key.trim();
     if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
       return;
     }
     const previous = pullRequestSummaries.get(normalizedKey);
-    const unchanged =
-      previous?.state === summary?.state &&
-      previous?.numbers.length === summary?.numbers.length &&
-      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
-    if (unchanged || (!previous && !summary)) {
+    if (previous === summary) {
       return;
     }
     if (summary) {
@@ -260,10 +253,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     );
   };
 
-  const reconcileChangedOptions = (
-    payload: unknown,
-    options?: SessionReconcileOptions,
-  ): SessionReconcileOptions | undefined => {
+  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
+    const previous = state.result;
     const eventInfo = readSessionChangedEvent(payload);
     const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
     const archivesSelectedSession =
@@ -280,25 +271,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           eventInfo.agentId,
         ),
       );
-    if (!archivesSelectedSession) {
-      return options;
-    }
     // The capability owns the shared roster, so every event consumer must
     // preserve the routed archive regardless of subscriber delivery order.
-    return {
-      ...options,
-      archivedFilter: "all",
-    };
-  };
-
-  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
-    const previous = state.result;
-    const eventInfo = readSessionChangedEvent(payload);
-    const reconciled = reconcileSessionChanged(
-      previous,
-      payload,
-      reconcileChangedOptions(payload, options),
-    );
+    const reconcileOptions = archivesSelectedSession
+      ? { ...options, archivedFilter: "all" as const }
+      : options;
+    const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
     if (reconciled.result !== previous && reconciled.key && eventInfo) {
       mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
     }
@@ -429,27 +407,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-    if (eventInfo?.isStructural) {
-      const aliasKey =
-        eventInfo.key === "global" && eventInfo.agentId
-          ? buildAgentMainSessionKey({
-              agentId: eventInfo.agentId,
-              mainKey: resolveUiConfiguredMainKey(gateway.snapshot),
-            })
-          : eventInfo.key;
-      const removed = retirePullRequestSummary(eventInfo.key);
-      const aliasRemoved = aliasKey !== eventInfo.key && retirePullRequestSummary(aliasKey);
-      if (aliasRemoved || removed) {
-        publish({ ...state });
-      }
-    }
     if (eventInfo?.archived !== null) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
+    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();

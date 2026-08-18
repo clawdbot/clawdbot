@@ -4,6 +4,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -80,6 +81,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       getRows: () => [],
       getSelectedAgentId: () => "main",
       getGateway: () => harness.gateway,
+      getSessions: () => undefined,
     });
 
     controller.hostConnected();
@@ -103,6 +105,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       getRows: () => [row],
       getSelectedAgentId: () => "main",
       getGateway: () => harness.gateway,
+      getSessions: () => undefined,
     });
 
     controller.hostConnected();
@@ -157,6 +160,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       getRows: () => [row],
       getSelectedAgentId: () => selectedAgentId,
       getGateway: () => harness.gateway,
+      getSessions: () => undefined,
     });
     controller.hostConnected();
     controller.hostUpdated();
@@ -198,11 +202,18 @@ describe("SessionPullRequestIndicatorsController", () => {
       isChild: false,
       worktreeId: "wt-demo",
     } as SidebarRecentSession;
+    const epoch = {};
+    const setPullRequestSummary = vi.fn();
     const controller = new SessionPullRequestIndicatorsController(host, {
       getConnected: () => true,
       getRows: () => [row],
       getSelectedAgentId: () => "main",
       getGateway: () => harness.gateway,
+      getSessions: () =>
+        ({
+          capturePullRequestEpoch: vi.fn(() => epoch),
+          setPullRequestSummary,
+        }) as unknown as SessionCapability,
     });
     controller.hostConnected();
     controller.hostUpdated();
@@ -221,5 +232,6 @@ describe("SessionPullRequestIndicatorsController", () => {
     harness.emit({ sessionKey: row.key, agentId: "main", reason: "rewind" }, "sessions.changed");
 
     expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+    expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(row.key, undefined, epoch);
   });
 });

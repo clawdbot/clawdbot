@@ -12,9 +12,21 @@ import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "./sessions/session-key.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  uiSessionEventMatches,
+} from "./sessions/session-key.ts";
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
+
+const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
+  "new",
+  "reset",
+  "branch-switch",
+  "fork",
+  "rewind",
+]);
 
 export type SessionPullRequestSnapshotStore = {
   watch: (
@@ -156,15 +168,29 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
-      if (!changed?.isStructural) {
+      const reason = asNullableRecord(event.payload)?.reason;
+      if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
         return;
       }
-      const scopedEventKey = scopedSessionPullRequestKey(changed.key, changed.agentId ?? undefined);
-      if (!watchedKeys().includes(scopedEventKey)) {
+      const matchingKeys = watchedKeys().filter((sessionKey) =>
+        uiSessionEventMatches(
+          {
+            assistantAgentId: gateway.snapshot.assistantAgentId,
+            hello: gateway.snapshot.hello,
+            sessionKey,
+          },
+          changed.key,
+          changed.agentId,
+        ),
+      );
+      if (matchingKeys.length === 0) {
         return;
       }
-      const removed = snapshots.delete(scopedEventKey);
-      pendingRefreshKeys.add(scopedEventKey);
+      let removed = false;
+      for (const sessionKey of matchingKeys) {
+        removed = snapshots.delete(sessionKey) || removed;
+        pendingRefreshKeys.add(sessionKey);
+      }
       retry.reset();
       if (removed) {
         notify();

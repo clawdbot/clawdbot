@@ -90,6 +90,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return;
     }
     if (!result) {
+      if (this.sessionPullRequests.length > 0 || this.sessionPullRequestsBranch !== undefined) {
+        scope.context.sessions.setPullRequestSummary(sessionKey, undefined, pullRequestEpoch);
+      }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
@@ -102,9 +105,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     }
     this.sessionPullRequests = result.pullRequests;
     if (!result.rateLimited || result.pullRequests.length > 0) {
+      const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
-        summarizeSessionPullRequests(result.pullRequests),
+        summarizeSessionPullRequests(result.pullRequests, previousSummary),
         pullRequestEpoch,
       );
     }

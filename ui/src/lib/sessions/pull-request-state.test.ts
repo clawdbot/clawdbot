@@ -23,7 +23,6 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     hello: null,
   };
   const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   return {
     gateway: {
       get snapshot() {
@@ -33,9 +32,8 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
+      subscribeEvents(_listener: (event: GatewayEventFrame) => void) {
+        return () => undefined;
       },
     },
     publish(connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) {
@@ -46,11 +44,6 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       };
       for (const listener of listeners) {
         listener(snapshot);
-      }
-    },
-    emit(payload: unknown) {
-      for (const listener of eventListeners) {
-        listener({ type: "event", event: "sessions.changed", payload, seq: 1 });
       }
     },
   };
@@ -97,47 +90,6 @@ describe("session pull-request state", () => {
     sessions.setPullRequestSummary(key, undefined, olderEpoch);
 
     expect(sessions.pullRequestSummary(key)).toEqual({ numbers: [111532], state: "draft" });
-    sessions.dispose();
-  });
-
-  it("retires summary ownership for a structural mutation", () => {
-    const harness = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionCapability(harness.gateway);
-    const key = "agent:main:shared-session";
-    const oldEpoch = sessions.capturePullRequestEpoch(key);
-    sessions.setPullRequestSummary(key, { numbers: [1], state: "open" }, oldEpoch);
-
-    harness.emit({ sessionKey: key, agentId: "main", reason: "rewind" });
-
-    expect(sessions.pullRequestSummary(key)).toBeUndefined();
-    sessions.setPullRequestSummary(key, { numbers: [1], state: "open" }, oldEpoch);
-    expect(sessions.pullRequestSummary(key)).toBeUndefined();
-    sessions.dispose();
-  });
-
-  it("retires a non-default agent's global alias", () => {
-    const harness = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionCapability(harness.gateway);
-    const key = "agent:work:main";
-    sessions.setPullRequestSummary(key, { numbers: [1], state: "open" });
-
-    harness.emit({ sessionKey: "global", agentId: "work", reason: "reset" });
-
-    expect(sessions.pullRequestSummary(key)).toBeUndefined();
-    sessions.dispose();
-  });
-
-  it("keeps summary ownership for ordinary send events", () => {
-    const harness = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionCapability(harness.gateway);
-    const key = "agent:main:shared-session";
-    const epoch = sessions.capturePullRequestEpoch(key);
-    sessions.setPullRequestSummary(key, { numbers: [1], state: "open" }, epoch);
-
-    harness.emit({ sessionKey: key, agentId: "main", reason: "send" });
-    harness.emit({ sessionKey: "agent:other:main", agentId: "other", reason: "reset" });
-
-    expect(sessions.pullRequestSummary(key)).toEqual({ numbers: [1], state: "open" });
     sessions.dispose();
   });
 

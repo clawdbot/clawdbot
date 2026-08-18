@@ -163,7 +163,7 @@ describe("session pull request snapshot store", () => {
       const owner = {};
       const listener = vi.fn();
       const globalAlias = reason === "rewind";
-      const key = globalAlias ? "agent:work:global" : "agent:main:demo";
+      const key = globalAlias ? "agent:work:main" : "agent:main:demo";
       const otherKey = "agent:main:other";
       store.watch(owner, [key, otherKey]);
       const unsubscribe = store.subscribe(listener);
