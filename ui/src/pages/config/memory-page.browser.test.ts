@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import "../../styles/base.css";
+import "../../styles/settings.css";
 import "../../styles/config.css";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
@@ -12,6 +14,59 @@ afterEach(() => {
 });
 
 describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
+  it("keeps header children fixed when Dreams drops the settings-page marker", async () => {
+    host = document.createElement("div");
+    host.className = "shell shell--settings";
+    host.innerHTML = `
+      <main class="content" style="box-sizing: border-box; width: 1152px">
+        <section class="memory-page">
+          <section
+            class="content-header content-header--page hub-page-header"
+            style="width: 100%; max-width: 1120px; margin-inline: auto"
+          >
+            <div class="hub-page-header__title">Memory</div>
+            <div class="hub-page-header__tabs">Overview Memories Dreams Settings</div>
+            <div class="hub-page-header__actions">Agent</div>
+          </section>
+          <div class="memory-page__panel"><div class="settings-page"></div></div>
+        </section>
+      </main>
+    `;
+    document.body.append(host);
+
+    const header = expectDefined(
+      host.querySelector<HTMLElement>(".hub-page-header"),
+      "Memory header",
+    );
+    const title = expectDefined(
+      host.querySelector<HTMLElement>(".hub-page-header__title"),
+      "Memory title",
+    );
+    const actions = expectDefined(
+      host.querySelector<HTMLElement>(".hub-page-header__actions"),
+      "Memory actions",
+    );
+    const before = {
+      paddingInlineStart: getComputedStyle(header).paddingInlineStart,
+      title: title.getBoundingClientRect(),
+      actions: actions.getBoundingClientRect(),
+    };
+
+    expectDefined(host.querySelector<HTMLElement>(".settings-page"), "settings page").remove();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const after = {
+      paddingInlineStart: getComputedStyle(header).paddingInlineStart,
+      title: title.getBoundingClientRect(),
+      actions: actions.getBoundingClientRect(),
+    };
+    expect(after.paddingInlineStart).toBe(before.paddingInlineStart);
+    expect(Math.abs(after.title.left - before.title.left)).toBeLessThanOrEqual(layoutTolerancePx);
+    expect(Math.abs(after.actions.right - before.actions.right)).toBeLessThanOrEqual(
+      layoutTolerancePx,
+    );
+  });
+
   it("keeps the hero fixed when a subview changes scrollbar state", async () => {
     host = document.createElement("div");
     host.className = "shell shell--settings";
