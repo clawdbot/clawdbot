@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./tooltip.ts";
+import { installNativeTitleGuard } from "./tooltip.ts";
 
 type TooltipElement = HTMLElement & {
   content: string;
@@ -220,6 +220,18 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
+  it("keeps a repeated-label tooltip with an explicit overflow marker", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
+    trigger.setAttribute("data-tooltip-overflow", "");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+  });
+
   it("keeps a repeated-label tooltip when a nested label clips", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
@@ -386,5 +398,110 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(0);
     vi.advanceTimersByTime(1);
     expectOpenCount(1);
+  });
+});
+
+describe("native title guard", () => {
+  let stopGuard: (() => void) | undefined;
+
+  beforeEach(() => {
+    stopGuard = installNativeTitleGuard(document);
+  });
+
+  afterEach(() => {
+    stopGuard?.();
+    document.body.replaceChildren();
+  });
+
+  it("suppresses a redundant title through open shadow DOM until true pointer leave", () => {
+    const host = document.createElement("div");
+    const shadowRoot = host.attachShadow({ mode: "open" });
+    const trigger = document.createElement("button");
+    trigger.title = "GPT-5.6 Sol";
+    const label = document.createElement("span");
+    label.textContent = "GPT-5.6 Sol";
+    trigger.append(label);
+    shadowRoot.append(trigger);
+    document.body.append(host);
+
+    label.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+
+    expect(trigger.getAttribute("title")).toBe("");
+    label.dispatchEvent(new MouseEvent("pointerleave", { composed: true }));
+    expect(trigger.getAttribute("title")).toBe("");
+
+    trigger.dispatchEvent(new MouseEvent("pointerleave", { composed: true }));
+    expect(trigger.title).toBe("GPT-5.6 Sol");
+  });
+
+  it.each([
+    {
+      name: "contextual",
+      title: "GPT-5.6 Sol · Chat only",
+      text: "GPT-5.6 Sol",
+      prepare: (_trigger: HTMLElement) => undefined,
+    },
+    {
+      name: "icon-only",
+      title: "Open settings",
+      text: "",
+      prepare: (_trigger: HTMLElement) => undefined,
+    },
+    {
+      name: "hidden-only label",
+      title: "Open settings",
+      text: "Open settings",
+      prepare: (trigger: HTMLElement) => {
+        trigger.firstElementChild?.setAttribute("hidden", "");
+      },
+    },
+  ])("keeps $name native titles", ({ title, text, prepare }) => {
+    const trigger = document.createElement("button");
+    trigger.title = title;
+    const label = document.createElement("span");
+    label.textContent = text;
+    trigger.append(label);
+    prepare(trigger);
+    document.body.append(trigger);
+
+    label.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+
+    expect(trigger.title).toBe(title);
+  });
+
+  it("restores a removed suppressed trigger when hover moves elsewhere", () => {
+    const removedTrigger = document.createElement("button");
+    removedTrigger.title = "High";
+    removedTrigger.textContent = "High";
+    document.body.append(removedTrigger);
+    removedTrigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    expect(removedTrigger.getAttribute("title")).toBe("");
+    removedTrigger.remove();
+
+    const nextTrigger = document.createElement("button");
+    nextTrigger.title = "Open settings";
+    document.body.append(nextTrigger);
+    nextTrigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+
+    expect(removedTrigger.title).toBe("High");
+    document.body.append(removedTrigger);
+    removedTrigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    expect(removedTrigger.getAttribute("title")).toBe("");
+    removedTrigger.dispatchEvent(new MouseEvent("pointerleave", { composed: true }));
+    expect(removedTrigger.title).toBe("High");
+  });
+
+  it("restores a suppressed title when the app-owned guard is disposed", () => {
+    const trigger = document.createElement("button");
+    trigger.title = "High";
+    trigger.textContent = "High";
+    document.body.append(trigger);
+    trigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    expect(trigger.getAttribute("title")).toBe("");
+
+    stopGuard?.();
+    stopGuard = undefined;
+
+    expect(trigger.title).toBe("High");
   });
 });

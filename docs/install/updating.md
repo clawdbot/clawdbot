@@ -280,6 +280,10 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 You can also choose the update channel and enable automatic updates from
 **Settings → Updates** (`/settings/updates`) in the Control UI.
+Recorded failures on that page include typed **Check status** and **Retry
+update** actions when the connected Gateway supports them. See [Update
+troubleshooting](/install/update-troubleshooting) for reason codes, guided
+recovery, CLI fallbacks, and diagnostics to collect.
 For a `dev` git install, opening this page refreshes the tracked upstream and
 shows whether the checkout is current, ahead, diverged, unavailable, or a
 specific number of commits behind. It also shows exact and relative build,
