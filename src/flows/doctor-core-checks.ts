@@ -662,6 +662,54 @@ function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): Health
   };
 }
 
+function createModelReferenceCheck(): HealthCheck {
+  return {
+    id: "core/doctor/model-references",
+    kind: "core",
+    description: "Configured model references have installed or configured provider owners.",
+    source: "doctor",
+    async detect(ctx) {
+      const { inspectConfiguredModelReferences } =
+        await import("../commands/models/model-reference-validation.js");
+      return inspectConfiguredModelReferences({
+        cfg: ctx.cfg,
+        env: ctx.env,
+        workspaceDir: ctx.cwd,
+      }).flatMap((inspection): HealthFinding[] => {
+        if (inspection.status === "unknown-provider") {
+          return [
+            {
+              checkId: "core/doctor/model-references",
+              severity: "warning",
+              source: "doctor",
+              target: inspection.ref,
+              message: `Configured model "${inspection.ref}" uses unknown provider "${inspection.provider}". No installed plugin manifest or models.providers entry declares it.`,
+              requirement: "an installed plugin manifest or models.providers configuration",
+              fixHint:
+                "Install a plugin that declares this provider, configure it under models.providers, or remove the model reference.",
+            },
+          ];
+        }
+        if (inspection.status === "unknown-model" && inspection.active) {
+          return [
+            {
+              checkId: "core/doctor/model-references",
+              severity: "info",
+              source: "doctor",
+              target: inspection.ref,
+              message: `Configured model "${inspection.ref}" uses a known provider but is not in the local model catalog. It may be newly released or self-hosted.`,
+              requirement: "a provider-supported model id",
+              fixHint:
+                "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+            },
+          ];
+        }
+        return [];
+      });
+    },
+  };
+}
+
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
 }
@@ -1343,6 +1391,7 @@ function createConvertedWorkflowChecks(
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createModelReferenceCheck(),
     createProviderCatalogProjectionCheck(deps),
     {
       id: "core/doctor/local-audio-acceleration",
