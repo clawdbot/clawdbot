@@ -186,7 +186,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         signal: options?.signal,
       });
       if (mistralResponse && mistralResponse !== reportedResponse) {
-        await notifyProviderHttpResponse({ options, response: mistralResponse, model });
+        try {
+          await notifyProviderHttpResponse({ options, response: mistralResponse, model });
+        } catch (error) {
+          // The SDK EventStream owns the locked response reader after chat.stream resolves.
+          // Cancellation is best effort and must not delay the lifecycle callback failure.
+          void mistralStream.cancel(error).catch(() => undefined);
+          throw error;
+        }
       }
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);

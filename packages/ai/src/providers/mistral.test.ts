@@ -299,6 +299,37 @@ describe("Mistral provider", () => {
     expect(hostFetch).toHaveBeenCalledOnce();
   });
 
+  it("cancels an unread Mistral stream when provider acceptance fails", async () => {
+    mistralMockState.requestThroughHttpClient = true;
+    const cancel = vi.fn(async () => undefined);
+    mistralMockState.streamResult = {
+      cancel,
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "resp-http-ack",
+            model: "mistral-large-latest",
+            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+          },
+        };
+      },
+    };
+    configureAiTransportHost({
+      buildModelFetch: () => async () => new Response("stream", { status: 200 }),
+    });
+    const hookError = new Error("acceptance callback failed");
+
+    const result = await runSimpleMistralFixture(context, {
+      onProviderAccepted: () => Promise.reject(hookError),
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance callback failed",
+    });
+    expect(cancel).toHaveBeenCalledWith(hookError);
+  });
+
   it("reports a rejected HTTP response without marking it accepted", async () => {
     mistralMockState.requestThroughHttpClient = true;
     const hostFetch = vi.fn<typeof fetch>(
