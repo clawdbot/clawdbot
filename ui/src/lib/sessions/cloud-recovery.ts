@@ -70,6 +70,8 @@ export function parseCloudSessionCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.projectId !== undefined &&
+      (record.cwd !== undefined || record.execNode !== undefined)) ||
     CLOUD_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )
