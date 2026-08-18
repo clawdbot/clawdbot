@@ -865,7 +865,8 @@ export class MediaStreamHandler {
     if (!marks) {
       return;
     }
-    for (const pending of [...marks.values()]) {
+    // Map iteration tolerates settle() deleting entries mid-walk.
+    for (const pending of marks.values()) {
       pending.settle(new Error("Telephony playback cleared before completion"), true);
     }
   }
