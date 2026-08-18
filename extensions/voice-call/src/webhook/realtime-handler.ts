@@ -27,12 +27,13 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { WebSocketServer } from "ws";
-import type { VoiceCallRealtimeConfig } from "../config.js";
+import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
   type StreamFrameAdapter,
   TelnyxStreamFrameAdapter,
@@ -311,7 +312,7 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type RealtimeCallEndCause = "hangup" | "stream-close" | "inactivity" | "error";
+type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
@@ -381,6 +382,7 @@ export class RealtimeCallHandler {
     private readonly provider: VoiceCallProvider,
     private readonly resolveCallRegistration: ResolveRealtimeCallRegistration,
     private readonly servePath: string,
+    private readonly streamDisconnectLifecycle: StreamDisconnectLifecycle,
     private readonly coreConfig?: OpenClawConfig,
   ) {}
 
@@ -388,10 +390,7 @@ export class RealtimeCallHandler {
     try {
       const parsed = new URL(url);
       this.publicOrigin = parsed.host;
-      const normalizedServePath = normalizeWebhookPath(this.servePath);
-      const normalizedPublicPath = normalizeWebhookPath(parsed.pathname);
-      const idx = normalizedPublicPath.indexOf(normalizedServePath);
-      this.publicPathPrefix = idx > 0 ? normalizedPublicPath.slice(0, idx) : "";
+      this.publicPathPrefix = resolveVoiceCallPublicPathPrefix(parsed.pathname, this.servePath);
     } catch {
       this.publicOrigin = null;
       this.publicPathPrefix = "";
@@ -461,7 +460,7 @@ export class RealtimeCallHandler {
       let telephonyBinding: RealtimeTelephonyBinding | null = null;
       let initialized = false;
       let activeCallSid = "unknown";
-      let stopReceived = false;
+      let activeStreamSid = "unknown";
       let lastMediaTimestamp: number | undefined;
       let lastMediaGapWarnAt = 0;
 
@@ -477,6 +476,7 @@ export class RealtimeCallHandler {
             }
             initialized = true;
             activeCallSid = frame.providerCallId;
+            activeStreamSid = frame.streamId;
             const nextBinding = this.handleCall(
               frame.streamId,
               frame.providerCallId,
@@ -488,6 +488,7 @@ export class RealtimeCallHandler {
               return;
             }
             telephonyBinding = nextBinding;
+            this.streamDisconnectLifecycle.connect(activeCallSid, activeStreamSid);
             return;
           }
           if (!telephonyBinding) {
@@ -524,26 +525,21 @@ export class RealtimeCallHandler {
             return;
           }
           if (frame.kind === "stop") {
-            stopReceived = true;
-            telephonyBinding.close("hangup");
+            telephonyBinding.close("disconnect");
           }
         } catch (error) {
           console.error("[voice-call] realtime WS parse failed:", error);
         }
       });
 
-      ws.on("close", (code) => {
+      ws.on("close", () => {
         this.activeSockets.delete(ws);
-        const reason =
-          this.serverClosingSockets.has(ws) || stopReceived || code === 1000 || code === 1005
-            ? "stream-close"
-            : "error";
+        const reason = this.serverClosingSockets.has(ws) ? "shutdown" : "disconnect";
         telephonyBinding?.close(reason);
       });
 
       ws.on("error", (error) => {
         console.error("[voice-call] realtime WS error:", error);
-        telephonyBinding?.close("error");
         ws.terminate();
       });
 
@@ -623,11 +619,26 @@ export class RealtimeCallHandler {
     const expiry = resolveExpiresAtMsFromDurationMs(STREAM_TOKEN_TTL_MS, { nowMs: now });
     if (expiry !== undefined) {
       this.pendingStreamTokens.set(token, { expiry, ...meta });
-    }
-    for (const [candidate, entry] of this.pendingStreamTokens) {
-      if (!isFutureDateTimestampMs(entry.expiry, { nowMs: now })) {
-        this.pendingStreamTokens.delete(candidate);
-      }
+      const host = this.publicOrigin || DEFAULT_HOST;
+      const streamPathPattern = this.getStreamPathPattern();
+      const timer = setTimeout(() => {
+        if (!this.pendingStreamTokens.has(token)) {
+          return;
+        }
+        this.pendingStreamTokens.delete(token);
+        if (this.closing) {
+          return;
+        }
+        const call = meta.callId ? ` for call ${meta.callId}` : "";
+        const endpoints = [meta.from ? `from ${meta.from}` : "", meta.to ? `to ${meta.to}` : ""]
+          .filter(Boolean)
+          .join(" ");
+        const participants = endpoints ? ` (${endpoints})` : "";
+        console.warn(
+          `[voice-call] Realtime stream WebSocket never connected within ${STREAM_TOKEN_TTL_MS / 1000}s${call}${participants} — the provider could not reach wss://${host}${streamPathPattern}/<token>. Verify the stream path is exposed (tailscale serve/funnel --set-path).`,
+        );
+      }, STREAM_TOKEN_TTL_MS);
+      timer.unref?.();
     }
     return token;
   }
@@ -676,9 +687,6 @@ export class RealtimeCallHandler {
       const reason: EndReason =
         cause === "error" ? "error" : cause === "inactivity" ? "timeout" : "completed";
       this.endCallInManager(callSid, callId, reason);
-      console.log(
-        `[voice-call] Realtime call ended callId=${callId} providerCallId=${callSid} reason=${cause}`,
-      );
       if (cause !== "error" && cause !== "inactivity") {
         return;
       }
@@ -1066,6 +1074,7 @@ export class RealtimeCallHandler {
         if (reason !== "error") {
           return;
         }
+        this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(1011, "Bridge disconnected");
         }
@@ -1170,7 +1179,12 @@ export class RealtimeCallHandler {
         );
       } finally {
         this.clearActiveTelephonyBinding(callId, binding);
-        if (ownsCall && cause) {
+        if (cause === "disconnect") {
+          this.streamDisconnectLifecycle.disconnect(callSid, streamSid);
+        } else {
+          this.streamDisconnectLifecycle.retire(callSid, streamSid);
+        }
+        if (ownsCall && cause && cause !== "disconnect") {
           emitCallEnd(cause);
         }
       }
@@ -1213,6 +1227,7 @@ export class RealtimeCallHandler {
     session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       const ownsCallState = this.isActiveBridgeOwner(callId, session);
+      this.streamDisconnectLifecycle.retire(callSid, streamSid);
       try {
         session.close();
       } catch (closeError) {

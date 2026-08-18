@@ -27,7 +27,7 @@ import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
-import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
+import * as drafts from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -46,7 +46,9 @@ import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-class NewSessionPage extends OpenClawLightDomElement {
+const { activateDraft, restoreDraft, restoreDraftOwner, retainDraft } = drafts;
+
+export class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
   @consume({ context: applicationContext, subscribe: true })
@@ -103,7 +105,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         onCloudState: (error) => this.submission.setError(error),
         onPendingCloudReset: () => this.submission.resetPendingCloudWithoutClearingStorage(),
         onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          this.submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+          restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
         onAdoptAgentDefaults: () =>
           this.place.adoptAgentDefaults({
             preserveSelectedAgent: true,
@@ -264,6 +266,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
+      this.submission.draftPersistence.persistNow();
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
@@ -289,6 +292,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       });
     }
     this.place.restorePreferenceSelections();
+    activateDraft(this.submission, openKey);
   }
 
   private invalidateGatewayDiscovery(
@@ -716,10 +720,3 @@ class NewSessionPage extends OpenClawLightDomElement {
     `;
   }
 }
-
-if (!customElements.get("openclaw-new-session-page")) {
-  customElements.define("openclaw-new-session-page", NewSessionPage);
-}
-
-export const render = (data: unknown) =>
-  html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

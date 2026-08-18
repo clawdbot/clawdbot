@@ -173,6 +173,48 @@
   font-weight: 500;
 }
 
+.chat-thread .chat-bubble .chat-text :where(table) {
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0;
+  border-collapse: collapse;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.chat-thread .chat-bubble .chat-text :where(table, thead, tbody, tr, th, td) {
+  background: transparent;
+}
+
+.chat-thread .chat-bubble .chat-text :where(th, td) {
+  padding-block: 12px;
+  border-right: 0;
+  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+  overflow-wrap: break-word;
+  white-space: normal;
+  word-break: normal;
+}
+
+.chat-thread .chat-bubble .chat-text :where(th:first-child, td:first-child) {
+  padding-inline-start: 0;
+}
+
+.chat-thread .chat-bubble .chat-text :where(th) {
+  border-bottom-color: var(--border-strong);
+  background: transparent;
+}
+
+.chat-thread .chat-bubble .chat-text :where(tbody tr) {
+  transition: none;
+}
+
+.chat-thread .chat-bubble .chat-text :where(tbody tr:nth-child(even), tbody tr:hover) {
+  background: transparent;
+}
+
 :is(.chat-text, .chat-thinking) {
   --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);

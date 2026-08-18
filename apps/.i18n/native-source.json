@@ -24455,7 +24455,7 @@
       "sites": [
         {
           "kind": "conditional-branch",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatPlanPill.swift"
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatProgressCard.swift"
         }
       ]
     },
@@ -29103,7 +29103,7 @@
       "sites": [
         {
           "kind": "conditional-branch",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatPlanPill.swift"
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatProgressCard.swift"
         }
       ]
     },

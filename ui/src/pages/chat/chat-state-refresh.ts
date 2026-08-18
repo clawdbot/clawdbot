@@ -236,6 +236,7 @@ async function refreshChat(
     }
     if (areUiSessionKeysEquivalent(history.sessionInfo.key, refreshedSessionKey)) {
       host.selectedChatSessionArchived = history.sessionInfo.archived === true;
+      host.selectedChatSessionIncognito = history.sessionInfo.incognito === true;
     }
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,

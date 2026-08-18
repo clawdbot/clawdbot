@@ -257,6 +257,41 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateConfiguredUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateRateLimited"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateUnverified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/panels-tools-skills.ts",
+      "text": "agentTools.githubStateVerified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/pages/channels/hub-meta.ts",
       "text": "@BotFather"
     },

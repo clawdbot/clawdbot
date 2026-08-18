@@ -342,6 +342,7 @@ export function renderSettingsSecretInput(props: {
   value: string;
   placeholder?: string;
   visible: boolean;
+  disabled?: boolean;
   showLabel: string;
   hideLabel: string;
   toggleLabel: string;
@@ -358,6 +359,7 @@ export function renderSettingsSecretInput(props: {
         spellcheck="false"
         .value=${props.value}
         placeholder=${props.placeholder ?? ""}
+        ?disabled=${props.disabled ?? false}
         @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
       />
       <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
@@ -366,6 +368,7 @@ export function renderSettingsSecretInput(props: {
           class="settings-secret__toggle"
           aria-label=${props.toggleLabel}
           aria-pressed=${props.visible}
+          ?disabled=${props.disabled ?? false}
           @click=${props.onToggle}
         >
           ${props.visible ? icons.eye : icons.eyeOff}

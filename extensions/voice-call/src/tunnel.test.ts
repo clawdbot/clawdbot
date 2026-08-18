@@ -85,12 +85,18 @@ function startNgrokTunnel(config: {
   );
 }
 
-function startTailscaleTunnel(config: { mode: "serve" | "funnel"; port: number; path: string }) {
+function startTailscaleTunnel(config: {
+  mode: "serve" | "funnel";
+  port: number;
+  path: string;
+  streamPaths?: Array<{ publicPath: string; localPath: string }>;
+}) {
   return requireTunnel(
     startTunnel({
       provider: config.mode === "serve" ? "tailscale-serve" : "tailscale-funnel",
       port: config.port,
       path: config.path,
+      streamPaths: config.streamPaths,
     }),
   );
 }
@@ -154,6 +160,7 @@ describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getTailscaleDnsName.mockReset();
+    mocks.runCommand.mockReset();
     mocks.runCommand.mockResolvedValue(commandResult());
   });
 
@@ -359,6 +366,85 @@ describe("voice-call tunnels", () => {
         "http://127.0.0.1:3334/voice/webhook",
       ],
       expect.objectContaining({ timeoutMs: 10_000 }),
+    );
+  });
+
+  it.each(["serve", "funnel"] as const)(
+    "mounts and stops every Tailscale %s stream path",
+    async (mode) => {
+      mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
+      const tunnel = await startTailscaleTunnel({
+        mode,
+        port: 3334,
+        path: "/voice/webhook",
+        streamPaths: [
+          {
+            publicPath: "/edge/voice/stream/realtime",
+            localPath: "/voice/stream/realtime",
+          },
+          { publicPath: "/edge/voice/stream", localPath: "/voice/stream" },
+        ],
+      });
+
+      await tunnel.stop();
+
+      expect(mocks.runCommand.mock.calls.map(([command]) => command)).toEqual([
+        [
+          "tailscale",
+          mode,
+          "--bg",
+          "--yes",
+          "--set-path",
+          "/voice/webhook",
+          "http://127.0.0.1:3334/voice/webhook",
+        ],
+        [
+          "tailscale",
+          mode,
+          "--bg",
+          "--yes",
+          "--set-path",
+          "/edge/voice/stream/realtime",
+          "http://127.0.0.1:3334/voice/stream/realtime",
+        ],
+        [
+          "tailscale",
+          mode,
+          "--bg",
+          "--yes",
+          "--set-path",
+          "/edge/voice/stream",
+          "http://127.0.0.1:3334/voice/stream",
+        ],
+        ["tailscale", mode, "off", "/voice/webhook"],
+        ["tailscale", mode, "off", "/edge/voice/stream/realtime"],
+        ["tailscale", mode, "off", "/edge/voice/stream"],
+      ]);
+    },
+  );
+
+  it("rejects when a Tailscale stream path cannot be mounted", async () => {
+    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
+    mocks.runCommand
+      .mockResolvedValueOnce(commandResult())
+      .mockResolvedValueOnce(commandResult({ code: 1, stderr: "stream mount failed" }));
+
+    await expect(
+      startTailscaleTunnel({
+        mode: "funnel",
+        port: 3334,
+        path: "/voice/webhook",
+        streamPaths: [
+          {
+            publicPath: "/voice/stream/realtime",
+            localPath: "/voice/stream/realtime",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Tailscale funnel failed with code 1: stream mount failed");
+    expect(mocks.runCommand).toHaveBeenLastCalledWith(
+      ["tailscale", "funnel", "off", "/voice/webhook"],
+      expect.objectContaining({ timeoutMs: 5_000 }),
     );
   });
 

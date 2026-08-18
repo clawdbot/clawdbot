@@ -286,6 +286,9 @@ async function executeWorkerTurn(params: {
       handoffAbort.abort(handoffError);
     }
   };
+  if (!tunnel.launchTurn) {
+    throw new Error("Worker tunnel does not support worker turns");
+  }
   const processPromise = tunnel.launchTurn({
     plan,
     turnClaim: params.turnClaim,

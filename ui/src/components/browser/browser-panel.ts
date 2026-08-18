@@ -60,15 +60,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private embeddedRefreshTimer: number | null = null;
-  private readonly viewportResizeObserver = new ResizeObserver((entries) => {
-    const entry = entries[0];
-    if (entry) {
-      this.browserPanelController.handleViewportResize(
-        entry.contentRect.width,
-        entry.contentRect.height,
-      );
-    }
-  });
+  private viewportResizeObserver: ResizeObserver | null = null;
   private observedViewportElement: Element | null = null;
 
   static override styles = [
@@ -95,7 +87,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     this.clearEmbeddedRefresh();
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    this.viewportResizeObserver.disconnect();
+    this.viewportResizeObserver?.disconnect();
+    this.viewportResizeObserver = null;
     this.observedViewportElement = null;
   }
 
@@ -135,9 +128,18 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     const viewportElement = this.renderRoot.querySelector(".bp-viewport");
     if (viewportElement !== this.observedViewportElement) {
       // The viewport is transient while the dock opens, closes, or becomes unavailable.
-      this.viewportResizeObserver.disconnect();
+      this.viewportResizeObserver?.disconnect();
       this.observedViewportElement = viewportElement;
-      if (viewportElement) {
+      if (viewportElement && typeof ResizeObserver === "function") {
+        this.viewportResizeObserver ??= new ResizeObserver((entries) => {
+          const entry = entries[0];
+          if (entry) {
+            this.browserPanelController.handleViewportResize(
+              entry.contentRect.width,
+              entry.contentRect.height,
+            );
+          }
+        });
         this.viewportResizeObserver.observe(viewportElement);
       }
     }

@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 // Module-internal: ChatViewModel extension files share this logger.
@@ -99,6 +100,11 @@ public final class OpenClawChatViewModel {
     var hasActiveSessionRunWithoutChatSnapshot = false
     var activeSessionRunIDs: [String] = []
     var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
+    public internal(set) var progressCard: ProgressCard?
+    @ObservationIgnored
+    var progressCardGeneration: UInt64 = 0
+    @ObservationIgnored
+    var lastIssuedProgressCardRequestID: UInt64 = 0
 
     public private(set) var sessionKey: String {
         didSet {
@@ -113,10 +119,6 @@ public final class OpenClawChatViewModel {
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
     var subagentActivities: [ChatSubagentActivity] = []
     var hiddenWorkingSubagentCount = 0
-    public internal(set) var planSteps: [OpenClawChatPlanStep] = []
-    public internal(set) var planExplanation: String?
-    var planRunId: String?
-
     private(set) var timelineRevision: UInt64 = 0
     /// Setter is module-internal for the transcript-cache extension only.
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
@@ -889,7 +891,6 @@ extension OpenClawChatViewModel {
         clearPendingRuns(reason: nil)
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
-        clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
         let historyRequest = self.beginHistoryRequest(captureLatestUserTurn: requestedSessionKey == nil)
@@ -1012,7 +1013,6 @@ extension OpenClawChatViewModel {
             {
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                clearPlan()
                 // Keep a known run ID authoritative so its stream and terminal
                 // events still route here. Synthesize activity only after the
                 // client has no run identity to preserve.
@@ -1024,7 +1024,6 @@ extension OpenClawChatViewModel {
                     hapticEvent: assistantHapticEventAfterLatestUser())
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                clearPlan()
             }
         }
         await pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
@@ -1259,7 +1258,7 @@ extension OpenClawChatViewModel {
         self.pendingToolCallsById = [:]
         self.clearSubagentActivities()
         self.updateStreamingAssistantText(nil)
-        clearPlan()
+        self.clearProgressCard()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.activeSessionRunIDs = []
         self.liveRunStateByRunID.removeAll()

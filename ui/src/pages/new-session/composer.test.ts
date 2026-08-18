@@ -35,7 +35,10 @@ function renderComposer(
   } = {},
 ) {
   const container = document.createElement("div");
-  const attachmentDraft = new NewSessionAttachmentDraft(() => undefined);
+  const attachmentDraft = new NewSessionAttachmentDraft(
+    () => undefined,
+    () => undefined,
+  );
   attachmentDrafts.push(attachmentDraft);
   const textareaController =
     overrides.textareaController ?? new NewSessionComposerTextareaController();

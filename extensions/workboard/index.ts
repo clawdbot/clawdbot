@@ -28,6 +28,11 @@ export default definePluginEntry({
       store,
       gateway: api.runtime.gateway,
     });
+    const lifecycleSync = createWorkboardLifecycleService({
+      store,
+      readSessions: async (options) =>
+        await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+    });
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "board",
@@ -50,13 +55,9 @@ export default definePluginEntry({
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
     api.registerService(automationNudge);
-    api.registerService(
-      createWorkboardLifecycleService({
-        store,
-        readSessions: async (options) =>
-          await readWorkboardLifecycleSessions(api.runtime.gateway, options),
-      }),
-    );
+    api.registerService(lifecycleSync);
+    api.on("gateway_start", () => lifecycleSync.onGatewayStart());
+    api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
     api.on("subagent_ended", async (event) => {
       await Promise.all([
         syncWorkboardSubagentEnded({ store, event, onMatched: automationNudge.nudge }),

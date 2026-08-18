@@ -1397,7 +1397,7 @@ extensions/voice-call/src/realtime-agent-context.ts	1
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	3
 extensions/voice-call/src/tts-provider-voice.ts	1
-extensions/voice-call/src/webhook.ts	12
+extensions/voice-call/src/webhook.ts	11
 extensions/voice-call/src/webhook/realtime-handler.ts	3
 extensions/voice-call/src/webhook/stream-frame-adapter.ts	2
 extensions/volcengine/tts.ts	2
@@ -3083,8 +3083,7 @@ src/gateway/server-reload-utils.ts	1
 src/gateway/server-resident-registry.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	3
 src/gateway/server-runtime-handles.ts	11
-src/gateway/server-runtime-state-prepare.ts	3
-src/gateway/server-runtime-state.ts	1
+src/gateway/server-runtime-state-prepare.ts	2
 src/gateway/server-session-events.ts	4
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1

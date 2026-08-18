@@ -48,6 +48,7 @@ import {
   agentDiscoveryMock,
   dispatchInboundMessageMock,
   embeddedRunMock,
+  mockGetReplyFromConfigOnce,
   onceMessage,
   rpcReq,
   testState,
@@ -1408,6 +1409,144 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   }
 });
 
+test("sessions.create runs an existing managed worktree cwd for initial and follow-up turns", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-existing-worktree-cwd-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentsConfig = {
+    list: [
+      { id: "main", default: true },
+      { id: "roboclaw", workspace },
+    ],
+  };
+  const { storePath } = await createSessionStoreDir();
+  const worktree = await managedWorktrees.create({
+    repoRoot: workspace,
+    ownerKind: "manual",
+    name: "roboclaw-existing-worktree",
+    runSetupScript: false,
+  });
+  const requestedCwd = await fs.realpath(worktree.path);
+  const { prepareAgentCommandExecution } = await import("../agents/command/prepare.js");
+  const { resolveIngressWorkspaceOverrideForSessionRun } =
+    await import("../agents/spawned-context.js");
+  const acpManagerModule = await import("../acp/control-plane/manager.js");
+  const getAcpSessionManager = vi
+    .spyOn(acpManagerModule, "getAcpSessionManager")
+    .mockReturnValue({ resolveSession: () => null } as never);
+  const { defaultRuntime } = await import("../runtime.js");
+  const preparedRuntime = vi.fn<(params: { cwd?: string; workspaceDir?: string }) => void>();
+  const mockPreparedRuntime = () =>
+    mockGetReplyFromConfigOnce(async (ctx, opts) => {
+      const sessionKey = requireNonEmptyString(ctx.SessionKey, "prepared session key");
+      const loaded = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
+      const workspaceDir =
+        resolveIngressWorkspaceOverrideForSessionRun({
+          spawnedBy: loaded?.spawnedBy,
+          workspaceDir: loaded?.spawnedWorkspaceDir,
+          cwd: loaded?.spawnedCwd,
+        }) ?? workspace;
+      const prepared = await prepareAgentCommandExecution(
+        {
+          agentId: "roboclaw",
+          message: "exercise the prepared runtime cwd",
+          runId: opts?.runId,
+          sessionKey,
+          workspaceDir,
+        },
+        defaultRuntime,
+      );
+      try {
+        preparedRuntime({ cwd: prepared.cwd, workspaceDir: prepared.workspaceDir });
+      } finally {
+        await prepared.runLease?.release();
+      }
+      return { text: "ok" };
+    });
+  const { ws } = await openClient({
+    scopes: ["operator.admin"],
+    deviceIdentityPath: path.join(openClawState.root, "roboclaw-device.json"),
+  });
+
+  try {
+    mockPreparedRuntime();
+    const created = await rpcReq<{
+      entry?: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
+      key?: string;
+      runId?: string;
+      runStarted?: boolean;
+      sessionId?: string;
+    }>(ws, "sessions.create", {
+      agentId: "roboclaw",
+      cwd: requestedCwd,
+      permissionMode: "full",
+      task: "start in the existing worktree",
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry).toMatchObject({
+      spawnedCwd: requestedCwd,
+      sessionRoot: requestedCwd,
+      permissionMode: "full",
+    });
+    expect(created.payload?.runStarted).toBe(true);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "roboclaw session key");
+    const sessionId = requireNonEmptyString(created.payload?.sessionId, "roboclaw session id");
+    await expect(
+      loadTranscriptEvents({
+        agentId: "roboclaw",
+        sessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toContainEqual(expect.objectContaining({ cwd: requestedCwd, type: "session" }));
+    const createRunId = requireNonEmptyString(created.payload?.runId, "roboclaw create run id");
+    const createWait = await rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
+    expect(createWait, JSON.stringify(createWait)).toMatchObject({
+      ok: true,
+      payload: { status: "ok" },
+    });
+    await waitForFast(() => expect(preparedRuntime).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    expect(preparedRuntime.mock.calls[0]?.[0]).toEqual({
+      cwd: requestedCwd,
+      workspaceDir: requestedCwd,
+    });
+
+    preparedRuntime.mockClear();
+    mockPreparedRuntime();
+    const followup = await rpcReq<{ runId?: string }>(ws, "sessions.send", {
+      key: sessionKey,
+      message: "continue in the existing worktree",
+      idempotencyKey: "roboclaw-existing-worktree-followup",
+    });
+    expect(followup.ok, JSON.stringify(followup.error)).toBe(true);
+    await waitForFast(() => expect(preparedRuntime).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    expect(preparedRuntime.mock.calls[0]?.[0]).toEqual({
+      cwd: requestedCwd,
+      workspaceDir: requestedCwd,
+    });
+    const followupRunId = requireNonEmptyString(followup.payload?.runId, "follow-up run id");
+    const followupWait = await rpcReq(ws, "agent.wait", {
+      runId: followupRunId,
+      timeoutMs: 10_000,
+    });
+    expect(followupWait, JSON.stringify(followupWait)).toMatchObject({
+      ok: true,
+      payload: { status: "ok" },
+    });
+  } finally {
+    ws.close();
+    getAcpSessionManager.mockRestore();
+    await managedWorktrees.remove({ id: worktree.id, reason: "test-cleanup", force: true });
+    closeOpenClawStateDatabaseForTest();
+    testState.agentsConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.create preserves a committed worktree when initial-turn setup fails", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
@@ -2097,18 +2236,30 @@ test("sessions.create allows a write-scoped cwd inside the configured workspace"
 
 test("sessions.create records the selected agent workspace when cwd is omitted", async () => {
   const workspace = tempDirs.make("openclaw-session-default-root-");
+  const expectedRoot = await fs.realpath(workspace);
   testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
   try {
     const created = await directSessionReq<{
       entry: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
+      key?: string;
+      sessionId?: string;
     }>("sessions.create", { agentId: "main", permissionMode: "guarded" });
 
     expect(created.ok).toBe(true);
     expect(created.payload?.entry).toMatchObject({
       permissionMode: "guarded",
-      sessionRoot: await fs.realpath(workspace),
+      sessionRoot: expectedRoot,
     });
     expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: requireNonEmptyString(created.payload?.sessionId, "guarded session id"),
+        sessionKey: requireNonEmptyString(created.payload?.key, "guarded session key"),
+        storePath,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ cwd: expectedRoot, type: "session" })]);
   } finally {
     testState.agentConfig = undefined;
   }

@@ -132,12 +132,7 @@ channel.
 
 ### Worker ingress on the public endpoint (milestone 5)
 
-Today the worker ingress is a dedicated loopback-only listener reached via
-`ssh -R`; the main ingress rejects worker frames. For node runners the same
-admission is exposed on a path-tagged upgrade route on the public TLS
-endpoint (`connectionKind = "worker"` forced by route instead of listener).
-The loopback listener stays for SSH-provisioned cloud workers until
-milestone 10.
+Worker admission is exposed only on a path-tagged upgrade route on the public TLS endpoint (`connectionKind = "worker"` is forced by the route). Node-hosted worker children dial that endpoint directly. The former loopback listener and SSH reverse-forward carrier were removed after Crabbox converged onto node-backed worker turns; SSH remains only for `remote-exec` workspace transport and separately owned desktop tunnels.
 
 Hardening that ships with the exposure, not after it:
 

@@ -30,8 +30,9 @@ import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-ser
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type {
-  WorkerTunnelHandle,
   WorkerTunnelStatus,
+  WorkerTurnLaunchRequest,
+  WorkerTurnTunnelHandle,
   WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -72,7 +73,7 @@ type NodeWorkerLaunch = (request: {
     gatewayNamespace: string;
     expectedBundleHash: string;
     placementGeneration: number;
-    descriptor: Parameters<WorkerTunnelHandle["launchTurn"]>[0]["plan"];
+    descriptor: WorkerTurnLaunchRequest["plan"];
   };
   isDispatchAuthorized: () => boolean;
   isCancellationAuthorized: () => boolean;
@@ -113,10 +114,10 @@ type NodeWorkerTunnelStartRequest = {
 type NodeTunnelEntry = NodeWorkerTunnelStartRequest & {
   abortController: AbortController;
   gatewayNamespace: string;
-  handle?: WorkerTunnelHandle;
+  handle?: WorkerTurnTunnelHandle;
   initialization?: Promise<void>;
   launchTasks: Set<Promise<unknown>>;
-  readiness: Deferred<WorkerTunnelHandle>;
+  readiness: Deferred<WorkerTurnTunnelHandle>;
   stopPromise?: Promise<void>;
 };
 
@@ -311,7 +312,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const createHandle = (
     entry: Omit<NodeTunnelEntry, "handle" | "readiness" | "initialization">,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
-  ): { handle: WorkerTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
+  ): { handle: WorkerTurnTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
     let workspaceReady = restoredWorkspace !== undefined;
     const exec = async (command: Parameters<typeof runWorkspaceCommand>[2]) => {
       if (!workspaceReady) {
@@ -379,7 +380,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
     };
     const reconcileWorkspace = async (
-      request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0],
+      request: Parameters<WorkerTurnTunnelHandle["reconcileWorkspace"]>[0],
     ) => {
       const pending = request.journal.load();
       if (pending) {
@@ -514,7 +515,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
       }
     };
-    const handle: WorkerTunnelHandle = {
+    const handle: WorkerTurnTunnelHandle = {
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
       launchTurn: async (request) => {
@@ -633,7 +634,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     bindWorkspaceBindingResolver(resolver: NodeWorkerWorkspaceBindingResolver): void {
       resolveWorkspaceBinding = resolver;
     },
-    async start(request: NodeWorkerTunnelStartRequest): Promise<WorkerTunnelHandle> {
+    async start(request: NodeWorkerTunnelStartRequest): Promise<WorkerTurnTunnelHandle> {
       const current = entries.get(request.environmentId);
       if (current) {
         if (request.ownerEpoch < current.ownerEpoch) {
@@ -651,7 +652,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           return current.readiness.promise; // Share restored-workspace validation without false readiness.
         }
       }
-      const readiness = createDeferredCore<WorkerTunnelHandle>();
+      const readiness = createDeferredCore<WorkerTurnTunnelHandle>();
       void readiness.promise.catch(() => undefined);
       const entry: NodeTunnelEntry = {
         ...request,

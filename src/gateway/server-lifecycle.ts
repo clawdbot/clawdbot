@@ -51,7 +51,6 @@ export async function prepareGatewayLifecycle(params: {
   const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
   const {
     minimalTestGateway,
-    workerGatewayEndpoint,
     transportBridge,
     sessionMessageSubscribers,
     isConnectionActive,
@@ -88,7 +87,6 @@ export async function prepareGatewayLifecycle(params: {
     bindDeviceNodeControl,
     workerPlacementRuntime,
   } = runtime;
-  workerGatewayEndpoint.resolve = transportBridge.getWorkerIngressEndpoint;
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
     sessionKey,

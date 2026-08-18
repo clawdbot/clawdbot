@@ -69,6 +69,22 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(true);
   });
 
+  it("mounts when ResizeObserver is unavailable", async () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
+  });
+
   it("uses the shared surface empty state when the embedded browser has no tabs", async () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;

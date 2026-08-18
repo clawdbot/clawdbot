@@ -22,7 +22,6 @@ type WorkerEnvironmentAccessOptions = {
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
-  resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
   now: () => number;
   identityResolverFor: (
     record: WorkerEnvironmentRecord,
@@ -161,17 +160,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!tunnels) {
         throw serviceError("invalid_state", "Worker SSH tunnel runtime is unavailable");
       }
-      const gateway = options.resolveWorkerGateway?.();
-      if (!gateway) {
-        throw serviceError("invalid_state", "Worker gateway ingress is unavailable");
-      }
       const provider = providerFor(record.providerId);
-      // Tunnel ownership is registered synchronously by the manager. Release the durable-state
-      // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
+      // Workspace ownership is registered synchronously by the manager. Release the durable-state
+      // lock while SSH identity material is prepared so drain/destroy can fence initialization.
       startup = tunnels.start({
         ...request,
         bundleHash: currentBundle.bundleHash,
-        gateway,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),

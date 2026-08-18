@@ -7,6 +7,7 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
+  resolveVoiceCallStreamExposurePaths: vi.fn(),
   resolveTwilioAuthToken: vi.fn(),
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   webhookSetRealtimeHandler: vi.fn(),
   webhookGetRealtimeHandler: vi.fn(),
   webhookGetMediaStreamHandler: vi.fn(),
+  webhookGetStreamDisconnectLifecycle: vi.fn(),
   webhookCtorArgs: [] as unknown[][],
   realtimeHandlerCtorArgs: [] as unknown[][],
   realtimeHandlerRegisterToolHandler: vi.fn(),
@@ -66,6 +68,7 @@ vi.mock("./config.js", () => ({
     return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
   },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
+  resolveVoiceCallStreamExposurePaths: mocks.resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
 }));
@@ -87,6 +90,7 @@ vi.mock("./webhook.js", () => ({
     setRealtimeHandler = mocks.webhookSetRealtimeHandler;
     getRealtimeHandler = mocks.webhookGetRealtimeHandler;
     getMediaStreamHandler = mocks.webhookGetMediaStreamHandler;
+    getStreamDisconnectLifecycle = mocks.webhookGetStreamDisconnectLifecycle;
   },
 }));
 
@@ -238,6 +242,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
     });
     mocks.webhookGetMediaStreamHandler.mockReturnValue(undefined);
+    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue({
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      retire: vi.fn(),
+    });
     mocks.webhookCtorArgs.length = 0;
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.realtimeHandlerRegisterToolHandler.mockReset();
@@ -248,6 +257,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     mocks.resolveRealtimeFastContextConsult.mockReset();
     mocks.resolveRealtimeFastContextConsult.mockResolvedValue({ handled: false });
+    mocks.resolveVoiceCallStreamExposurePaths.mockReset();
+    mocks.resolveVoiceCallStreamExposurePaths.mockReturnValue([
+      {
+        localPath: "/voice/stream/realtime",
+        publicPath: "/voice/stream/realtime",
+      },
+    ]);
     mocks.startTunnel.mockResolvedValue(null);
     mocks.setupTailscaleExposure.mockResolvedValue(null);
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
@@ -270,6 +286,16 @@ describe("createVoiceCallRuntime lifecycle", () => {
       }),
     ).rejects.toThrow("init failed");
 
+    expect(mocks.startTunnel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        streamPaths: [
+          {
+            localPath: "/voice/stream/realtime",
+            publicPath: "/voice/stream/realtime",
+          },
+        ],
+      }),
+    );
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
@@ -366,6 +392,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
+    expect(mocks.realtimeHandlerCtorArgs[0]?.[5]).toBe(
+      mocks.webhookGetStreamDisconnectLifecycle.mock.results[0]?.value,
+    );
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     if (typeof resolveCallRegistration !== "function") {
       throw new Error("expected per-call realtime registration resolver");

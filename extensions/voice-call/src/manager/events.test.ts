@@ -52,6 +52,7 @@ const {
 
 beforeEach(() => {
   setup();
+  logSpy.clearLogEntries();
 });
 
 afterEach(() => {
@@ -80,6 +81,7 @@ describe("processEvent (functional)", () => {
         transcript: [],
         processedEventIds: [],
       };
+      const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=hangup-user`;
       ctx.activeCalls.set(call.callId, call);
       ctx.providerCallIdMap.set("provider-before", call.callId);
       const resolve = vi.fn();
@@ -114,6 +116,7 @@ describe("processEvent (functional)", () => {
       expect(resolve).not.toHaveBeenCalled();
       expect(reject).not.toHaveBeenCalled();
       expect(ctx.maxDurationTimers.has(call.callId)).toBe(kind === "terminal");
+      expect(logSpy.logEntries).not.toContain(terminalLog);
 
       failPersistence = false;
       processEvent(ctx, event);
@@ -122,6 +125,11 @@ describe("processEvent (functional)", () => {
       expect(reject).toHaveBeenCalledTimes(kind === "terminal" ? 1 : 0);
       expect(onCallAnswered).toHaveBeenCalledTimes(kind === "answered" ? 1 : 0);
       expect(ctx.activeCalls.has(call.callId)).toBe(kind !== "terminal");
+      if (kind === "terminal") {
+        expect(logSpy.logEntries.filter((entry) => entry === terminalLog)).toHaveLength(1);
+      } else {
+        expect(logSpy.logEntries).not.toContain(terminalLog);
+      }
     },
   );
 
