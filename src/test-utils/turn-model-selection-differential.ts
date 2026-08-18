@@ -3,7 +3,7 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
-export type TurnModelSelectionSource =
+type TurnModelSelectionSource =
   | "locked"
   | "explicit"
   | "heartbeat"
@@ -21,9 +21,9 @@ export const TURN_MODEL_CHANNEL_REF = {
   model: "channel-model",
 } as const;
 export const TURN_MODEL_SESSION_REF = { provider: "google", model: "session-model" } as const;
-export const TURN_MODEL_PARENT_REF = { provider: "xai", model: "parent-model" } as const;
+const TURN_MODEL_PARENT_REF = { provider: "xai", model: "parent-model" } as const;
 export const TURN_MODEL_OVERRIDE_REF = { provider: "mistral", model: "turn-model" } as const;
-export const TURN_MODEL_LOCKED_REF = { provider: "cohere", model: "locked-model" } as const;
+const TURN_MODEL_LOCKED_REF = { provider: "cohere", model: "locked-model" } as const;
 export const TURN_MODEL_PERSISTED_CHANNEL_REF = {
   provider: "anthropic",
   model: "persisted-channel-model",
@@ -36,11 +36,11 @@ export const TURN_MODEL_PERSISTED_PEER_REF = {
   provider: "xai",
   model: "persisted-peer-model",
 } as const;
-export const TURN_MODEL_LIVE_PEER_REF = {
+const TURN_MODEL_LIVE_PEER_REF = {
   provider: "mistral",
   model: "live-peer-model",
 } as const;
-export const TURN_MODEL_COMMAND_STALE_PEER_REF = {
+const TURN_MODEL_COMMAND_STALE_PEER_REF = {
   provider: "cohere",
   model: "command-stale-peer-model",
 } as const;

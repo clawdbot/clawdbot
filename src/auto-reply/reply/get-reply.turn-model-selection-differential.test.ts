@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -193,7 +194,16 @@ afterEach(() => {
 });
 
 describe("getReplyFromConfig channel model input boundary", () => {
-  const matrix = [
+  const matrix: Array<{
+    name: string;
+    childOverride?: ModelRef;
+    directUserId?: string;
+    groupId?: string;
+    groupChannel?: string;
+    omitPersistedChannel?: boolean;
+    omitChannelConfig?: boolean;
+    expected: ModelRef;
+  }> = [
     {
       name: "child stored override",
       childOverride: TURN_MODEL_SESSION_REF,
@@ -230,7 +240,7 @@ describe("getReplyFromConfig channel model input boundary", () => {
       omitChannelConfig: true,
       expected: TURN_MODEL_DEFAULT_REF,
     },
-  ] as const;
+  ];
 
   it.each(matrix)("selects $name", async (testCase) => {
     const storePath = path.join(tempDirs.make("turn-model-reply-matrix-"), "sessions.json");

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
@@ -54,7 +55,7 @@ function observeHarnessSelection(fixture: TurnModelDifferentialFixture): TurnMod
   const storePath = path.join(tempDirs.make("turn-model-harness-"), "sessions.json");
   const sessionKey = "agent:main:telegram:group:selection";
   replaceSessionEntrySync({ agentId: "main", storePath, sessionKey }, fixture.child);
-  const sessionStore = { [sessionKey]: fixture.child };
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: fixture.child };
   if (fixture.parent) {
     replaceSessionEntrySync(
       { agentId: "main", storePath, sessionKey: fixture.parent.key },
