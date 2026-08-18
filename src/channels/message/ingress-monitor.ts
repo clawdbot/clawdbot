@@ -454,9 +454,15 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     return drain;
   };
 
-  const pruneIfDue = async (): Promise<void> => {
+  const pruneIfDue = async (owner: "admission" | "pump"): Promise<void> => {
+    const admissionOwned = pruneIntervalMs <= 0;
+    // Zero preserves admission-owned channel compatibility: prune once per external
+    // admission operation, never from idle, timer, or requested drain pumps.
+    if ((owner === "admission") !== admissionOwned) {
+      return;
+    }
     const currentTime = now();
-    if (currentTime - lastPrunedAt < pruneIntervalMs) {
+    if (!admissionOwned && currentTime - lastPrunedAt < pruneIntervalMs) {
       return;
     }
     await getQueue().prune({ ...pruneOptions, now: currentTime });
@@ -498,7 +504,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     try {
       for (;;) {
         requested = false;
-        await pruneIfDue();
+        await pruneIfDue("pump");
         // Stop may win the async prune race; keep lazy drain creation behind this fence.
         if (!running || isAborted()) {
           break;
@@ -647,7 +653,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const scheduleAdmission = <T>(work: () => Promise<T>): Promise<T> => {
     // Append retries stay serialized so backoff cannot invert one lane's arrival order.
-    const admission = admissionTail.then(() => withAdmissionClaimLock(work));
+    const run = async () => {
+      await pruneIfDue("admission");
+      return await work();
+    };
+    const admission = admissionTail.then(() => withAdmissionClaimLock(run));
     admissionTail = admission.then(
       () => undefined,
       () => undefined,

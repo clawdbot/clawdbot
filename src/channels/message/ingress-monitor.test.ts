@@ -63,6 +63,7 @@ function createMonitor(
               failedTtlMs: number;
               failedMaxEntries: number;
             }>;
+        now?: () => number;
         waitForDeliveryIdleBeforeRepump?: boolean;
         waitForDeliveryIdleOnStop?: boolean;
         retryPolicy?: IngressRetryPolicyConfig;
@@ -141,11 +142,16 @@ describe("channel ingress monitor", () => {
       [{ completedMaxEntries: 1_000 }, 1_000],
     ] as const) {
       await withQueue(async (queue) => {
+        let currentTime = CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
         const prune = vi.spyOn(queue, "prune");
-        const monitor = createMonitor(queue, vi.fn(), { retention });
+        const monitor = createMonitor(queue, vi.fn(), {
+          retention,
+          now: () => currentTime,
+        });
         monitor.start();
         await monitor.waitForIdle();
 
+        expect(prune).toHaveBeenCalledOnce();
         expect(prune).toHaveBeenCalledWith({
           completedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
           completedMaxEntries,
@@ -153,9 +159,71 @@ describe("channel ingress monitor", () => {
           failedMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedMaxEntries,
           now: expect.any(Number),
         });
+
+        currentTime += CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
+        monitor.requestDrain();
+        await monitor.waitForPumpIdle();
+        expect(prune).toHaveBeenCalledTimes(2);
         await monitor.stop();
       });
     }
+  });
+
+  it("does not prune zero-interval retention from startup or idle polls", async () => {
+    await withQueue(async (queue) => {
+      const prune = vi.spyOn(queue, "prune");
+      const monitor = createMonitor(queue, vi.fn(), {
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+      });
+
+      monitor.start();
+      await sleep(65);
+      await monitor.stop();
+
+      expect(prune).not.toHaveBeenCalled();
+    });
+  });
+
+  it("prunes zero-interval retention once before one admission enqueue", async () => {
+    await withQueue(async (queue) => {
+      const prune = vi.spyOn(queue, "prune");
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const monitor = createMonitor(queue, vi.fn(), {
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+      });
+
+      await monitor.admit({ id: "event-one", lane: "a", text: "hello" });
+
+      expect(prune).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
+        Math.min(...enqueue.mock.invocationCallOrder),
+      );
+      await monitor.stop();
+    });
+  });
+
+  it("prunes zero-interval retention once before a multi-event batch", async () => {
+    await withQueue(async (queue) => {
+      const prune = vi.spyOn(queue, "prune");
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const monitor = createMonitor(queue, vi.fn(), {
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+      });
+
+      await monitor.admitBatch([
+        { id: "event-batch-1", lane: "a", text: "first" },
+        { id: "event-batch-2", lane: "b", text: "second" },
+        { id: "event-batch-3", lane: "c", text: "third" },
+      ]);
+
+      expect(prune).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
+        Math.min(...enqueue.mock.invocationCallOrder),
+      );
+      await monitor.stop();
+    });
   });
 
   it("adopts terminal no-dispatch events", async () => {
