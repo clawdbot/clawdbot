@@ -179,7 +179,7 @@ describe("AppSidebar session mutation feedback", () => {
     }
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     row.owner = { actor: row.createdActor };
-    result.creators = [
+    result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];

@@ -187,7 +187,6 @@ function filterSessionEntries(params: {
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
-  const creatorId = normalizeOptionalString(opts.creatorId);
   const ownerId = normalizeOptionalString(opts.ownerId);
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
@@ -319,9 +318,6 @@ function filterSessionEntries(params: {
         cfg,
         configuredAgentIds,
       );
-    }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
-      continue;
     }
     if (ownerId && effectiveOwner?.id !== ownerId) {
       continue;
@@ -479,7 +475,7 @@ function buildSessionsListResult(params: {
     offset: list.offset > 0 ? list.offset : undefined,
     nextOffset: list.nextOffset,
     hasMore: list.hasMore,
-    creators: list.ownerFacet,
+    owners: list.ownerFacet,
     defaults: getSessionDefaults(params.cfg, params.modelCatalog, {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       allowPluginNormalization: false,

@@ -487,7 +487,7 @@ export function reconcileSessionChanged(
       existing?.owner?.assignedAt !== row.owner?.assignedAt);
   // The facet covers unloaded pages, so an ownership event invalidates it until
   // the session capability's canonical list refresh supplies a complete replacement.
-  const reconciledResult = ownershipChanged ? { ...timestamped, creators: undefined } : timestamped;
+  const reconciledResult = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
   const reconciledRow = reconciledResult.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,

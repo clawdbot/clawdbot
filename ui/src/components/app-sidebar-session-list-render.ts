@@ -161,7 +161,7 @@ function renderSessionSection(params: {
             ? html`
                 <button
                   type="button"
-                  class="sidebar-session-group-actions sidebar-session-sort ${host.sessionCreatorFilterActive
+                  class="sidebar-session-group-actions sidebar-session-sort ${host.sessionOwnerFilterActive
                     ? "sidebar-session-sort--filtered"
                     : ""}"
                   title=${t("chat.sidebar.sortSessions")}
@@ -346,7 +346,7 @@ function renderSessionCatalog(params: {
       onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
       onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
       viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
-      creatorFilterActive: host.sessionCreatorFilterActive,
+      ownerFilterActive: host.sessionOwnerFilterActive,
       onOpenViewMenu: (catalogId, trigger, position) => {
         if (position) {
           host.sidebarMenus.openCatalogViewMenu(catalogId, position.x, position.y, trigger);

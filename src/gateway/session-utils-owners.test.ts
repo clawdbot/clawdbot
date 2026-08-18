@@ -57,12 +57,12 @@ it("lets configured agents win id-only owner facet collisions", () => {
       cfg: {
         agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
       } as OpenClawConfig,
-      storePath: "/tmp/openclaw-session-creator-order",
+      storePath: "/tmp/openclaw-session-owner-order",
       store,
       opts: { archived: "all" },
     });
 
-    expect(result.creators).toEqual([{ type: "agent", id: "shared-id", label: "Shared agent" }]);
+    expect(result.owners).toEqual([{ type: "agent", id: "shared-id", label: "Shared agent" }]);
   }
 });
 
@@ -84,14 +84,14 @@ it("returns the complete deterministic owner facet independently of pagination",
 
   const result = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-creators",
+    storePath: "/tmp/openclaw-session-owners",
     store,
     opts: { archived: "all", limit: 1 },
   });
 
   expect(result.count).toBe(1);
   expect(result.totalCount).toBe(2);
-  expect(result.creators).toEqual([
+  expect(result.owners).toEqual([
     {
       type: "human",
       id: "profile-ada",
@@ -115,12 +115,12 @@ it("returns the complete deterministic owner facet independently of pagination",
 
   const filtered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-creators",
+    storePath: "/tmp/openclaw-session-owners",
     store,
-    opts: { archived: "all", creatorId: "profile-bob", limit: 1 },
+    opts: { archived: "all", ownerId: "profile-bob", limit: 1 },
   });
   expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:bob"]);
-  expect(filtered.creators).toEqual(result.creators);
+  expect(filtered.owners).toEqual(result.owners);
 });
 
 it("projects only durable profiles and configured agents as effective owners", () => {
@@ -164,7 +164,7 @@ it("projects only durable profiles and configured agents as effective owners", (
     opts: { archived: "all" },
   });
 
-  expect(result.creators).toEqual([
+  expect(result.owners).toEqual([
     {
       type: "human",
       id: "profile-ada",
@@ -195,7 +195,7 @@ it("projects only durable profiles and configured agents as effective owners", (
   );
 });
 
-it("projects and filters the effective owner while preserving creator provenance", () => {
+it("projects and filters the effective owner while preserving creation provenance", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:default-owner": {
       createdActor: { type: "human", id: "profile-ada" },
@@ -232,7 +232,7 @@ it("projects and filters the effective owner while preserving creator provenance
       assignedAt: 10,
     },
   });
-  expect(result.creators).toEqual([
+  expect(result.owners).toEqual([
     {
       type: "human",
       id: "profile-ada",
@@ -240,16 +240,6 @@ it("projects and filters the effective owner while preserving creator provenance
       avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
     },
     { type: "human", id: "profile-bob", label: "Bob" },
-  ]);
-  const creatorFiltered = listSessionsFromStore({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owners",
-    store,
-    opts: { archived: "all", creatorId: "profile-ada" },
-  });
-  expect(creatorFiltered.sessions.map((row) => row.key)).toEqual([
-    "agent:main:default-owner",
-    "agent:main:assigned-owner",
   ]);
   const ownerFiltered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
@@ -341,7 +331,7 @@ it("projects participant identities and filters sessions involving the viewer", 
   });
 });
 
-it("preserves legacy list output across visibility, scope, creator, and search filters", async () => {
+it("preserves list output across visibility, scope, owner, and search filters", async () => {
   const now = 1_000_000;
   vi.spyOn(Date, "now").mockReturnValue(now);
   getUserProfileDisplay.mockImplementation((profileId: string) => ({
@@ -436,7 +426,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
     });
     return {
       count: result.count,
-      creators: result.creators,
+      owners: result.owners,
       hasMore: result.hasMore,
       keys: result.sessions.map((row) => row.key),
       nextOffset: result.nextOffset,
@@ -457,7 +447,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   ).toBe(
     JSON.stringify({
       count: 5,
-      creators: [
+      owners: [
         { type: "human", id: "profile-ada", label: "Ada" },
         { type: "human", id: "profile-bob", label: "Bob" },
       ],
@@ -472,7 +462,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
       await project({
         agentId: "main",
         archived: "all",
-        creatorId: "profile-bob",
+        ownerId: "profile-bob",
         includeGlobal: true,
         includeUnknown: true,
         search: "needle",
@@ -481,7 +471,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   ).toBe(
     JSON.stringify({
       count: 2,
-      creators: [
+      owners: [
         { type: "human", id: "profile-ada", label: "Ada" },
         { type: "human", id: "profile-bob", label: "Bob" },
       ],
@@ -521,7 +511,7 @@ it("keeps the serialized list response deterministic for the current filter path
     storePath: "/tmp/openclaw-session-byte-parity",
   });
   const expectedSerializedResponse = [
-    '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"creators":[]',
+    '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
     ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
   ].join("");

@@ -174,7 +174,7 @@ test("sessions.changed invalidates the complete owner facet until canonical refr
       owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
     },
   ]);
-  result.creators = [{ type: "human", id: "profile-ada", label: "Ada" }];
+  result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -185,7 +185,7 @@ test("sessions.changed invalidates the complete owner facet until canonical refr
   });
 
   expect(reconciled.result?.sessions[0]?.createdActor?.id).toBe("profile-bob");
-  expect(reconciled.result?.creators).toBeUndefined();
+  expect(reconciled.result?.owners).toBeUndefined();
 });
 
 test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
@@ -194,7 +194,7 @@ test("sessions.changed preserves the owner facet when ownership is unchanged", (
   const result = buildResult([
     { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
   ]);
-  result.creators = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
+  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -204,7 +204,7 @@ test("sessions.changed preserves the owner facet when ownership is unchanged", (
     owner: { actor: createdActor },
   });
 
-  expect(reconciled.result?.creators).toEqual([
+  expect(reconciled.result?.owners).toEqual([
     { type: createdActor.type, id: createdActor.id, label: createdActor.label },
   ]);
 });
@@ -215,7 +215,7 @@ test("sessions.changed applies reassignment and invalidates the complete owner f
   const result = buildResult([
     { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
   ]);
-  result.creators = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
+  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -232,7 +232,7 @@ test("sessions.changed applies reassignment and invalidates the complete owner f
     actor: { id: "research" },
     assignedAt: 2,
   });
-  expect(reconciled.result?.creators).toBeUndefined();
+  expect(reconciled.result?.owners).toBeUndefined();
 });
 
 describe("reconcileSessionChanged", () => {

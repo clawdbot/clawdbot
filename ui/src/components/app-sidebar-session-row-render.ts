@@ -89,7 +89,7 @@ export interface SessionListHost {
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
-  readonly sessionCreatorFilterActive: boolean;
+  readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnershipVisible: boolean;
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (

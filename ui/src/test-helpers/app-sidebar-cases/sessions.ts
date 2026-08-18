@@ -279,9 +279,7 @@ describe("AppSidebar session source lifecycle", () => {
     const gateway = createGatewayHarness(client);
     const sessions = createSessionsHarness("main", ["main-a", "main-b"]);
     if (sessions.sessions.state.result) {
-      sessions.sessions.state.result.creators = [
-        { type: "human", id: "profile-ada", label: "Ada" },
-      ];
+      sessions.sessions.state.result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
     }
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     const cachedResult = sidebar.sessionData.sessionsResult;
@@ -293,7 +291,7 @@ describe("AppSidebar session source lifecycle", () => {
     expect(sidebar.sessionData.sessionsResult).toBe(cachedResult);
     expect(sidebar.sessionData.sessionsAgentId).toBe("main");
     expect(Object.keys(sidebar.sessionData.sessionResultsByAgent)).toEqual(["main"]);
-    expect(sidebar.sessionData.sessionResultsByAgent.main?.creators).toEqual([
+    expect(sidebar.sessionData.sessionResultsByAgent.main?.owners).toEqual([
       { type: "human", id: "profile-ada", label: "Ada" },
     ]);
     expect([...sidebar.sessionData.sessionCreatedOrder.keys()]).toEqual(["main-a", "main-b"]);
