@@ -8,8 +8,25 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const writeText = vi.fn(async (_text: string) => undefined);
+
+let clipboardDescriptor: PropertyDescriptor | undefined;
+let mutationObserverDescriptor: PropertyDescriptor | undefined;
+let resizeObserverDescriptor: PropertyDescriptor | undefined;
+let showModalDescriptor: PropertyDescriptor | undefined;
+let closeDescriptor: PropertyDescriptor | undefined;
+
+function restoreProperty(
+  target: object,
+  key: PropertyKey,
+  descriptor: PropertyDescriptor | undefined,
+) {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(target, key);
+}
 
 const markdown = `Open agent:main:dashboard:table
 
@@ -74,8 +91,21 @@ describe("Markdown table interactions", () => {
   beforeEach(() => {
     TestMutationObserver.instances = [];
     TestResizeObserver.instances = [];
-    vi.stubGlobal("MutationObserver", TestMutationObserver);
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    mutationObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, "MutationObserver");
+    resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
+    showModalDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+    closeDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+    Object.defineProperty(globalThis, "MutationObserver", {
+      configurable: true,
+      writable: true,
+      value: TestMutationObserver,
+    });
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: TestResizeObserver,
+    });
     writeText.mockClear();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -98,12 +128,11 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.unstubAllGlobals();
-    if (clipboardDescriptor) {
-      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-    } else {
-      Reflect.deleteProperty(navigator, "clipboard");
-    }
+    restoreProperty(navigator, "clipboard", clipboardDescriptor);
+    restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
+    restoreProperty(globalThis, "ResizeObserver", resizeObserverDescriptor);
+    restoreProperty(HTMLDialogElement.prototype, "showModal", showModalDescriptor);
+    restoreProperty(HTMLDialogElement.prototype, "close", closeDescriptor);
     document.body.replaceChildren();
   });
 
@@ -141,11 +170,13 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
   });
 
-  it("copies TSV and restores focus after the table dialog closes", async () => {
+  it("copies TSV and updates the copy label", async () => {
     vi.useFakeTimers();
     const { owner } = interactiveOwner();
     const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
+
     handleMarkdownTableInteraction(markdownTableInteractionEvent(copy));
+
     expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
     await vi.advanceTimersByTimeAsync(0);
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
@@ -153,10 +184,15 @@ describe("Markdown table interactions", () => {
     await vi.advanceTimersByTimeAsync(1500);
     expect(copy.getAttribute("aria-label")).toBe("Copy table");
     expect(copy.querySelector("svg rect")).not.toBeNull();
+  });
 
+  it("restores focus after the table dialog closes", () => {
+    const { owner } = interactiveOwner();
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;
     expand.focus();
+
     handleMarkdownTableInteraction(markdownTableInteractionEvent(expand));
+
     const dialog = document.querySelector<HTMLDialogElement>(".markdown-table-dialog")!;
     expect(dialog.hasAttribute("open")).toBe(true);
     expect(dialog.querySelector("table")?.textContent).toContain("Alpha");
