@@ -952,12 +952,14 @@ export function createSessionMcpRuntime(params: {
       return catalog;
     }
     if (!catalog) {
-      let currentCatalog = catalog;
-      while (!currentCatalog) {
-        await loadCatalog();
-        currentCatalog = catalog;
+      await loadCatalog();
+      if (catalog) {
+        return catalog;
       }
-      return currentCatalog;
+      // Replay one in-flight invalidation before accepting the latest completed
+      // snapshot. A server that invalidates every list must not block its siblings.
+      const replayedCatalog = await loadCatalog();
+      return catalog ?? replayedCatalog;
     }
 
     const staleCatalog = catalog;

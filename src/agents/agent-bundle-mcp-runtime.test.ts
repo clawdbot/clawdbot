@@ -103,6 +103,7 @@ async function writeListToolsMcpServer(params: {
   hangToolCallsUntilRestartMarkerPath?: string;
   notifyListChangedOnInitialized?: boolean;
   notifyListChangedAfterFirstList?: boolean;
+  notifyListChangedBeforeEveryListResponse?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   listToolsJsonRpcErrorMessage?: string;
@@ -139,6 +140,7 @@ const hangToolCallsUntilRestartMarkerPath = ${JSON.stringify(
     )};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
+const notifyListChangedBeforeEveryListResponse = ${params.notifyListChangedBeforeEveryListResponse === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
@@ -259,6 +261,10 @@ function handle(message) {
     const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
     const sendListResponse = () => {
+      if (notifyListChangedBeforeEveryListResponse) {
+        log("notify tools/list_changed before response");
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      }
       send({
         jsonrpc: "2.0",
         id: message.id,
@@ -1941,6 +1947,57 @@ process.on("SIGINT", shutdown);`,
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds catalog replay when a server invalidates every tools/list response", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-continuous-invalidation-");
+    const noisyServerPath = path.join(tempDir, "noisy-server.mjs");
+    const noisyLogPath = path.join(tempDir, "noisy-server.log");
+    const healthyServerPath = path.join(tempDir, "healthy-server.mjs");
+    const healthyLogPath = path.join(tempDir, "healthy-server.log");
+    await writeListToolsMcpServer({
+      filePath: noisyServerPath,
+      logPath: noisyLogPath,
+      capabilities: { tools: { listChanged: true } },
+      tools: [{ name: "noisy_tool", inputSchema: { type: "object", properties: {} } }],
+      notifyListChangedBeforeEveryListResponse: true,
+    });
+    await writeListToolsMcpServer({
+      filePath: healthyServerPath,
+      logPath: healthyLogPath,
+      tools: [{ name: "healthy_tool", inputSchema: { type: "object", properties: {} } }],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-continuous-invalidation",
+      sessionKey: "agent:test:session-continuous-invalidation",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            noisy: { command: process.execPath, args: [noisyServerPath] },
+            healthy: { command: process.execPath, args: [healthyServerPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await withTestTimeout(
+        runtime.getCatalog(),
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        "continuous tools/list invalidation blocked the catalog",
+      );
+
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+        "healthy_tool",
+        "noisy_tool",
+      ]);
+      const noisyLog = await fs.readFile(noisyLogPath, "utf8");
+      expect(noisyLog.match(/tools\/list cursor/g)).toHaveLength(2);
+    } finally {
+      await runtime.dispose();
     }
   });
 
