@@ -43,6 +43,15 @@ const CLOUD_CREATE_STRING_FIELDS = [
   "catalogId",
   "projectId",
 ] as const;
+const CLOUD_CREATE_FIELDS = [
+  "key",
+  "agentId",
+  "message",
+  "worktree",
+  "incognito",
+  "visibility",
+  ...CLOUD_CREATE_STRING_FIELDS,
+] as const;
 
 export function parseCloudSessionCreateParams(
   value: unknown,
@@ -53,17 +62,8 @@ export function parseCloudSessionCreateParams(
     return null;
   }
   const record = value;
-  const allowed = new Set<string>([
-    "key",
-    "agentId",
-    "message",
-    "worktree",
-    "incognito",
-    "visibility",
-    ...CLOUD_CREATE_STRING_FIELDS,
-  ]);
   if (
-    Object.keys(record).some((key) => !allowed.has(key)) ||
+    Object.keys(record).some((key) => !(CLOUD_CREATE_FIELDS as readonly string[]).includes(key)) ||
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
