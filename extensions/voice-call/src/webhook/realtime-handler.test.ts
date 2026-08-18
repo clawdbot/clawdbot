@@ -964,7 +964,17 @@ describe("RealtimeCallHandler path routing", () => {
       processEvent,
       "abnormal-disconnect-grace-expired",
     );
-    const disconnect = vi.spyOn(streamDisconnectLifecycle, "disconnect");
+    let resolveDisconnect: (() => void) | undefined;
+    const disconnected = new Promise<void>((resolve) => {
+      resolveDisconnect = resolve;
+    });
+    const originalDisconnect = streamDisconnectLifecycle.disconnect.bind(streamDisconnectLifecycle);
+    const disconnect = vi
+      .spyOn(streamDisconnectLifecycle, "disconnect")
+      .mockImplementation((disconnectedProviderCallId, disconnectedStreamId) => {
+        originalDisconnect(disconnectedProviderCallId, disconnectedStreamId);
+        resolveDisconnect?.();
+      });
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
@@ -989,6 +999,7 @@ describe("RealtimeCallHandler path routing", () => {
       const closed = waitForClose(ws);
       ws.terminate();
       expect(await closed).toEqual({ code: 1006, reason: "" });
+      await disconnected;
 
       expect(close).toHaveBeenCalledTimes(1);
       expect(disconnect).toHaveBeenCalledExactlyOnceWith(providerCallId, streamId);

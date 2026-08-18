@@ -210,12 +210,28 @@ describe("voice-call realtime route ownership", () => {
         ws.close(1000);
         await closed;
       }
-      await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0));
-      expect(hangupCall).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0), {
+        timeout: 3_000,
+      });
+      expect(hangupCall).toHaveBeenCalledTimes(2);
+      expect(hangupCall).toHaveBeenCalledWith(
+        expect.objectContaining({ providerCallId: "CA-sales", reason: "hangup-bot" }),
+      );
+      expect(hangupCall).toHaveBeenCalledWith(
+        expect.objectContaining({ providerCallId: "CA-support", reason: "hangup-bot" }),
+      );
       await expect(runtime.manager.getCallHistory()).resolves.toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ providerCallId: "CA-sales", state: "completed" }),
-          expect.objectContaining({ providerCallId: "CA-support", state: "completed" }),
+          expect.objectContaining({
+            endReason: "hangup-bot",
+            providerCallId: "CA-sales",
+            state: "hangup-bot",
+          }),
+          expect.objectContaining({
+            endReason: "hangup-bot",
+            providerCallId: "CA-support",
+            state: "hangup-bot",
+          }),
         ]),
       );
     } finally {
