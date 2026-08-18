@@ -363,6 +363,7 @@ export function buildWorkspaceSkillStatus(
     opts?.entries ??
       loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
+        agentId: opts?.agentId,
         managedSkillsDir,
         bundledSkillsDir: bundledContext.dir,
         includeArchived: true,

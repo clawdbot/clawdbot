@@ -371,6 +371,7 @@
     "scripts/lib/tsx-cli-shim.mjs",
     "patches/",
     "skills/",
+    "custodian-skills/",
     "scripts/prepare-git-hooks.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/lib/official-external-channel-catalog.json",
