@@ -158,4 +158,32 @@ describe("runGatewayHealthJsonRoute", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("falls back to default timeout when rpc.timeout produces NaN", async () => {
+    const runtime = createRuntime();
+    const error = new Error("gateway unavailable");
+    const callGateway = vi.fn(async () => {
+      throw error;
+    });
+    const emitReachableGatewayAuthDiagnostic = vi.fn(async () => false);
+
+    await runGatewayHealthJsonRoute(
+      { rpc: { json: true, timeout: "not-a-number" } },
+      runtime as never,
+      {
+        callGateway,
+        readBestEffortConfig: async () => ({}),
+        emitReachableGatewayAuthDiagnostic: emitReachableGatewayAuthDiagnostic as never,
+        formatGatewayAuthErrorJson: vi.fn(() => null) as never,
+        formatGatewayClientRequestErrorJson: vi.fn(() => null) as never,
+        formatGatewayTransportErrorJson: vi.fn(() => null) as never,
+      },
+    );
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 10_000,
+      }),
+    );
+  });
 });
