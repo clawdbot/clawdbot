@@ -10,9 +10,12 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
+     while the nav is collapsed, which is exactly when this width applies. */
   --shell-chrome-controls-collapsed-width: calc(
     var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
+      var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
+      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
       var(--shell-chrome-controls-gap)
   );
   --shell-chrome-safe-area-left: calc(
