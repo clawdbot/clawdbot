@@ -1245,8 +1245,11 @@ describe("tools.invoke Gateway RPC", () => {
       expect(manager.listAgent(currentOwner).map((entry) => entry.sessionId)).toEqual([
         openedSessionId,
       ]);
-      expect(manager.writeAgent(oldOwner, openedSessionId, "stale")).toBe(false);
-      expect(manager.writeAgent(currentOwner, openedSessionId, "current")).toBe(true);
+      expect(manager.writeAgent(oldOwner, openedSessionId, "stale")).toEqual({
+        ok: false,
+        code: "session_unavailable",
+      });
+      expect(manager.writeAgent(currentOwner, openedSessionId, "current")).toEqual({ ok: true });
 
       sessionEntries.delete(sessionKey);
       const missing = await invokeToolsRpc(

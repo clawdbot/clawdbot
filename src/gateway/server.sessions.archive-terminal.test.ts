@@ -54,11 +54,16 @@ test("sessions.patch closes only the exact terminal session incarnation", async 
   expect(archived.ok).toBe(true);
   expect(oldPty.killed).toBe(true);
   expect(manager.listAgent(oldOwner)).toEqual([]);
-  expect(manager.writeAgent(oldOwner, oldSession.sessionId, "stale")).toBe(false);
-  expect(manager.writeAgent(replacementOwner, replacementSession.sessionId, "replacement")).toBe(
-    true,
+  expect(manager.writeAgent(oldOwner, oldSession.sessionId, "stale")).toEqual({
+    ok: false,
+    code: "session_unavailable",
+  });
+  expect(manager.writeAgent(replacementOwner, replacementSession.sessionId, "replacement")).toEqual(
+    { ok: true },
   );
-  expect(manager.writeAgent(unrelatedOwner, unrelatedSession.sessionId, "unrelated")).toBe(true);
+  expect(manager.writeAgent(unrelatedOwner, unrelatedSession.sessionId, "unrelated")).toEqual({
+    ok: true,
+  });
   expect(replacementPty).toMatchObject({ killed: false, writes: ["replacement"] });
   expect(unrelatedPty).toMatchObject({ killed: false, writes: ["unrelated"] });
   expect(manager.size).toBe(2);

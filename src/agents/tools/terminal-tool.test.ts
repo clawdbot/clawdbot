@@ -536,6 +536,7 @@ describe("terminal tool", () => {
       const tool = createTerminalTool({
         agentId: "main",
         agentSessionKey: "agent:main:main",
+        sessionId: "main-session-id",
         getGatewayContext: () => makeContext(manager),
       });
 
