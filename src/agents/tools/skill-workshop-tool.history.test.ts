@@ -42,8 +42,8 @@ describe("skill_workshop collection history", () => {
     const review = {
       createTime: new Date(createTime).toISOString(),
       backupId: "backup-42",
-      kept: ["deploy"],
-      written: ["recover"],
+      kept: { count: 1, names: ["deploy"] },
+      written: { count: 1, names: ["recover"] },
       dropped: [{ name: "old-notes", reason: "merged into deploy" }],
     };
 
@@ -54,8 +54,61 @@ describe("skill_workshop collection history", () => {
           text: `Recent collection reviews, newest first:\n${JSON.stringify(review)}`,
         },
       ],
-      details: { reviews: [review] },
+      details: { reviews: [review], truncated: false },
     });
+  });
+
+  it("caps names and aggregate history output", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skill-collection-history-caps-state-",
+    });
+    cleanups.push(async () => await testState.cleanup());
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-history-caps-");
+    const names = (kind: string, review: number) =>
+      Array.from(
+        { length: 200 },
+        (_, index) => `${kind}-${review}-${index}-long-enough-to-fill-the-history-budget`,
+      );
+    for (let review = 0; review < 20; review += 1) {
+      recordSkillCollectionReviewSuccess(
+        workspaceDir,
+        review,
+        {
+          backupId: `backup-${review}`,
+          kept: names("kept", review),
+          written: names("written", review),
+          dropped: [{ name: `dropped-${review}`, reason: `reason-${review}` }],
+        },
+        { env: testState.env },
+      );
+    }
+
+    const result = await createSkillWorkshopTool({ workspaceDir, env: testState.env }).execute(
+      "history",
+      { action: "history" },
+    );
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    const firstTenKept = names("kept", 19).slice(0, 10);
+
+    expect(text.length).toBeLessThanOrEqual(8_000);
+    expect(text).toContain(JSON.stringify({ count: 200, names: [...firstTenKept, "+190 more"] }));
+    expect(text).toContain('"dropped":[{"name":"dropped-19","reason":"reason-19"}]');
+    expect(text).toMatch(/\(history truncated\)$/u);
+    expect(result.details).toMatchObject({
+      truncated: true,
+      reviews: expect.arrayContaining([
+        expect.objectContaining({
+          kept: { count: 200, names: [...firstTenKept, "+190 more"] },
+          written: expect.objectContaining({ count: 200 }),
+          dropped: [{ name: "dropped-19", reason: "reason-19" }],
+        }),
+      ]),
+    });
+    // The cap drops whole rows once the aggregate budget is exhausted.
+    const boundedReviews = (result.details as { reviews: unknown[] }).reviews;
+    expect(boundedReviews.length).toBeGreaterThan(0);
+    expect(boundedReviews.length).toBeLessThan(20);
   });
 
   it("keeps isolated collection reviews limited to read and reconcile", () => {

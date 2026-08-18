@@ -21,6 +21,20 @@ import { stringEnum } from "../schema/typebox.js";
 import { readToolStringParam, ToolInputError } from "./common.js";
 
 const SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS = 300;
+const SKILL_COLLECTION_HISTORY_NAME_LIMIT = 10;
+const SKILL_COLLECTION_HISTORY_TEXT_MAX_CHARS = 8_000;
+const SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER = "\n(history truncated)";
+
+function summarizeSkillNames(names: string[]) {
+  const remaining = names.length - SKILL_COLLECTION_HISTORY_NAME_LIMIT;
+  return {
+    count: names.length,
+    names: [
+      ...names.slice(0, SKILL_COLLECTION_HISTORY_NAME_LIMIT),
+      ...(remaining > 0 ? [`+${remaining} more`] : []),
+    ],
+  };
+}
 
 export async function recordSkillCollectionReadReceipt(params: {
   context: SkillCollectionReconcileContext;
@@ -139,33 +153,48 @@ export function executeSkillCollectionHistory(params: {
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  const reviews = listSkillCollectionReviewOutcomes(
+  const outcomes = listSkillCollectionReviewOutcomes(
     params.workspaceDir,
     params.env ? { env: params.env } : {},
-  ).map((review) => ({
-    createTime: new Date(review.createTime).toISOString(),
-    backupId: review.backupId,
-    kept: review.kept,
-    written: review.written,
-    dropped: review.dropped.map((entry) => ({
-      name: entry.name,
-      reason:
-        entry.reason.length > SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS
-          ? `${truncateUtf16Safe(entry.reason, SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS - 1)}…`
-          : entry.reason,
-    })),
-  }));
+  );
+  const reviews = [];
+  let text = "Recent collection reviews, newest first:";
+  let truncated = false;
+  const textLimit =
+    SKILL_COLLECTION_HISTORY_TEXT_MAX_CHARS - SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER.length;
+  for (const outcome of outcomes) {
+    const review = {
+      createTime: new Date(outcome.createTime).toISOString(),
+      backupId: outcome.backupId,
+      kept: summarizeSkillNames(outcome.kept),
+      written: summarizeSkillNames(outcome.written),
+      dropped: outcome.dropped.map((entry) => ({
+        name: entry.name,
+        reason:
+          entry.reason.length > SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS
+            ? `${truncateUtf16Safe(entry.reason, SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS - 1)}…`
+            : entry.reason,
+      })),
+    };
+    const candidate = `${text}\n${JSON.stringify(review)}`;
+    if (truncateUtf16Safe(candidate, textLimit) !== candidate) {
+      truncated = true;
+      break;
+    }
+    reviews.push(review);
+    text = candidate;
+  }
+  if (truncated) {
+    text = `${truncateUtf16Safe(text, textLimit)}${SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER}`;
+  }
   return {
     content: [
       {
         type: "text" as const,
-        text:
-          reviews.length === 0
-            ? "No recorded collection reviews."
-            : `Recent collection reviews, newest first:\n${reviews.map((review) => JSON.stringify(review)).join("\n")}`,
+        text: outcomes.length === 0 ? "No recorded collection reviews." : text,
       },
     ],
-    details: { reviews },
+    details: { reviews, truncated },
   };
 }
 
