@@ -150,7 +150,7 @@ describe("AppSidebar section reordering", () => {
     expect(header.getAttribute("draggable")).toBe("false");
     expect(header.getAttribute("title")).toBeTruthy();
     expect(row?.getAttribute("draggable")).toBe("false");
-    expect(row?.getAttribute("title")).toBeTruthy();
+    expect(row?.hasAttribute("title")).toBe(false);
 
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(header, "dragstart", dataTransfer);

@@ -300,6 +300,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });
+        expect(await row.getAttribute("title")).toBeNull();
         expect(await row.locator(".sidebar-recent-session__link").getAttribute("title")).toBeNull();
         await row.hover();
 

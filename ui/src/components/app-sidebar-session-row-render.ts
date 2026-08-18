@@ -256,7 +256,6 @@ export function renderRecentSession(params: {
       data-session-key=${session.key}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
-      title=${!session.isChild && !groupWriteAccess.allowed ? groupWriteAccess.reason : nothing}
       @dragstart=${!rowDraggable
         ? nothing
         : (event: DragEvent) => {
