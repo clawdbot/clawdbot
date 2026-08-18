@@ -20,6 +20,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { sessionKeyUuid } from "../pages/chat/route-loader-short-cache.ts";
+import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import {
   SESSION_HOVERCARD_OPEN_DELAY_MS,
   sessionLinkAnchorFromEvent,
@@ -29,9 +30,6 @@ const SESSION_LINK_SELECTOR = "a.markdown-session-link[data-session-key]";
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
-const VIEWPORT_PADDING = 12;
-const CARD_GAP = 10;
-const CLOSE_DELAY_MS = 120;
 
 type SessionPreview = Extract<ControlUiSessionPreview, { status: "ok" }>;
 
@@ -164,12 +162,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
   private readonly cache = new Map<string, CacheEntry>();
   private activeAnchor: HTMLAnchorElement | null = null;
   private activeTarget: SessionPreviewTarget | null = null;
-  private card: HTMLDivElement | null = null;
-  private closeTimer: number | null = null;
-  private focusInside = false;
-  private openTimer: number | null = null;
-  private pointerInside = false;
-  private pointerOverCard = false;
+  private readonly hovercard = new PortaledHovercardController(() => this.close());
   private renderedPreview: SessionPreview | null = null;
   private renderedUnavailable = false;
   private scanAnimationFrame: number | null = null;
@@ -180,7 +173,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     args: () => [this.activeTarget] as const,
     task: ([target]) => (target ? this.loadPreview(target) : initialState),
     onComplete: (preview) => {
-      const card = this.card;
+      const card = this.hovercard.card;
       if (!card) {
         return;
       }
@@ -189,16 +182,16 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
         this.stampAnchor(this.activeAnchor, this.activeTarget, preview);
       }
       renderPreview(card, preview);
-      this.positionCard();
+      this.hovercard.position();
     },
     onError: () => {
-      const card = this.card;
+      const card = this.hovercard.card;
       if (!card) {
         return;
       }
       this.renderedUnavailable = true;
       renderUnavailable(card);
-      this.positionCard();
+      this.hovercard.position();
     },
   });
   private readonly subtreeObserver = new MutationObserver((records) => {
@@ -276,7 +269,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
   }
 
   private readonly handleLocaleChange = () => {
-    const card = this.card;
+    const card = this.hovercard.card;
     if (!card) {
       return;
     }
@@ -287,7 +280,7 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     } else {
       renderLoading(card);
     }
-    this.positionCard();
+    this.hovercard.position();
   };
 
   private mainKey(): string {
@@ -479,8 +472,8 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
       return;
     }
-    this.pointerInside = false;
-    this.scheduleClose();
+    this.hovercard.pointerInside = false;
+    this.hovercard.scheduleClose();
   };
 
   private readonly handleFocusIn = (event: Event) => {
@@ -496,19 +489,19 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       this.activeAnchor &&
       !(event.relatedTarget instanceof Node && this.activeAnchor.contains(event.relatedTarget))
     ) {
-      this.focusInside = false;
-      this.scheduleClose();
+      this.hovercard.focusInside = false;
+      this.hovercard.scheduleClose();
     }
   };
 
   private readonly handleCardPointerEnter = () => {
-    this.pointerOverCard = true;
-    this.clearCloseTimer();
+    this.hovercard.pointerOverCard = true;
+    this.hovercard.clearClose();
   };
 
   private readonly handleCardPointerLeave = () => {
-    this.pointerOverCard = false;
-    this.scheduleClose();
+    this.hovercard.pointerOverCard = false;
+    this.hovercard.scheduleClose();
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
@@ -536,132 +529,39 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
     this.close();
     this.activeAnchor = anchor;
     this.activeTarget = target;
-    anchor.setAttribute("aria-haspopup", "dialog");
-    anchor.setAttribute("aria-expanded", "false");
+    this.hovercard.markTrigger(anchor);
     if (trigger === "pointer") {
-      this.pointerInside = true;
+      this.hovercard.pointerInside = true;
     } else {
-      this.focusInside = true;
+      this.hovercard.focusInside = true;
     }
-    this.openTimer = window.setTimeout(() => {
-      this.openTimer = null;
-      this.show(anchor, target);
-    }, delay);
+    this.hovercard.scheduleOpen(delay, () => this.show(anchor, target));
   }
 
   private show(anchor: HTMLAnchorElement, target: SessionPreviewTarget): void {
     if (this.activeAnchor !== anchor || this.activeTarget?.sessionKey !== target.sessionKey) {
       return;
     }
-    const card = document.createElement("div");
     nextHovercardId += 1;
-    card.id = `openclaw-session-hovercard-${nextHovercardId}`;
-    card.className = "session-link-hovercard";
-    card.dataset.open = "true";
-    card.setAttribute("role", "dialog");
+    const card = createPortaledHovercard(
+      `openclaw-session-hovercard-${nextHovercardId}`,
+      "session-link-hovercard",
+    );
     this.renderedPreview = null;
     this.renderedUnavailable = false;
     renderLoading(card);
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    document.body.append(card);
-    this.card = card;
-    anchor.setAttribute("aria-controls", card.id);
-    anchor.setAttribute("aria-expanded", "true");
-    this.listenForViewportChanges();
-    this.positionCard();
+    this.hovercard.mount(anchor, card, "vertical");
     void this.previewTask.run([target]);
   }
 
-  private get hoverIntentHeld(): boolean {
-    return this.pointerInside || this.pointerOverCard || this.focusInside;
-  }
-
-  private clearCloseTimer(): void {
-    if (this.closeTimer !== null) {
-      window.clearTimeout(this.closeTimer);
-      this.closeTimer = null;
-    }
-  }
-
-  private scheduleClose(): void {
-    this.clearCloseTimer();
-    if (this.hoverIntentHeld) {
-      return;
-    }
-    if (!this.card) {
-      this.close();
-      return;
-    }
-    this.closeTimer = window.setTimeout(() => {
-      this.closeTimer = null;
-      if (!this.hoverIntentHeld) {
-        this.close();
-      }
-    }, CLOSE_DELAY_MS);
-  }
-
   private close(): void {
-    if (this.openTimer !== null) {
-      window.clearTimeout(this.openTimer);
-      this.openTimer = null;
-    }
-    this.clearCloseTimer();
+    this.hovercard.reset();
     void this.previewTask.run([null]);
-    if (this.activeAnchor) {
-      this.activeAnchor.removeAttribute("aria-controls");
-      this.activeAnchor.removeAttribute("aria-expanded");
-      this.activeAnchor.removeAttribute("aria-haspopup");
-    }
-    this.card?.remove();
-    this.card = null;
     this.renderedPreview = null;
     this.renderedUnavailable = false;
     this.activeAnchor = null;
     this.activeTarget = null;
-    this.focusInside = false;
-    this.pointerInside = false;
-    this.pointerOverCard = false;
-    this.stopListeningForViewportChanges();
-  }
-
-  private readonly handleViewportChange = () => {
-    this.positionCard();
-  };
-
-  private listenForViewportChanges(): void {
-    window.addEventListener("resize", this.handleViewportChange);
-    window.addEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.addEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.addEventListener("scroll", this.handleViewportChange);
-  }
-
-  private stopListeningForViewportChanges(): void {
-    window.removeEventListener("resize", this.handleViewportChange);
-    window.removeEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.removeEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.removeEventListener("scroll", this.handleViewportChange);
-  }
-
-  private positionCard(): void {
-    const anchor = this.activeAnchor;
-    const card = this.card;
-    if (!anchor || !card) {
-      return;
-    }
-    const anchorRect = anchor.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    const fitsBelow =
-      anchorRect.bottom + CARD_GAP + cardRect.height + VIEWPORT_PADDING <= innerHeight;
-    const side = fitsBelow ? "bottom" : "top";
-    const top =
-      side === "bottom"
-        ? anchorRect.bottom + CARD_GAP
-        : anchorRect.top - cardRect.height - CARD_GAP;
-    const maxLeft = Math.max(VIEWPORT_PADDING, innerWidth - cardRect.width - VIEWPORT_PADDING);
-    const maxTop = Math.max(VIEWPORT_PADDING, innerHeight - cardRect.height - VIEWPORT_PADDING);
-    card.dataset.side = side;
-    card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
-    card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
   }
 }

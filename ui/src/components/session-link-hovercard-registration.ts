@@ -1,6 +1,11 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
+import {
+  hovercardBootstrapIntentActive,
+  LazyHovercardBootstrap,
+  remainingHovercardOpenDelay,
+  type HovercardBootstrapTrigger,
+} from "./lazy-hovercard-registration.ts";
 import {
   isPotentialSessionLink,
   SESSION_HOVERCARD_OPEN_DELAY_MS,
@@ -13,41 +18,25 @@ const SESSION_LINK_SELECTOR = "a.markdown-session-link";
 
 let bootstrapObserver: MutationObserver | null = null;
 
-type HovercardProviderElement = HTMLElement & {
-  client: GatewayBrowserClient | null;
-  context: ApplicationContext | null;
-};
+type HovercardProviderElement = SessionLinkHovercardProvider;
 
-function providerForAnchor(anchor: HTMLAnchorElement): SessionLinkHovercardProvider | null {
-  return anchor.closest<SessionLinkHovercardProvider>(HOVERCARD_TAG);
-}
-
-function removeBootstrapActivation(): void {
-  document.removeEventListener("pointerover", handleBootstrapPointerOver, true);
-  document.removeEventListener("focusin", handleBootstrapFocusIn, true);
-  bootstrapObserver?.disconnect();
-  bootstrapObserver = null;
-}
-
-async function defineProvider(): Promise<void> {
-  const pendingProviders = new Map(
-    [...document.querySelectorAll<HovercardProviderElement>(HOVERCARD_TAG)].map((provider) => [
-      provider,
-      { client: provider.client, context: provider.context },
-    ]),
-  );
-  await ensureCustomElementDefined(HOVERCARD_TAG, async () => {
-    const runtime = await import("./session-link-hovercard.runtime.ts");
-    if (!customElements.get(HOVERCARD_TAG)) {
-      customElements.define(HOVERCARD_TAG, runtime.SessionLinkHovercardProvider);
-    }
-    for (const [provider, properties] of pendingProviders) {
-      provider.client = properties.client;
-      provider.context = properties.context;
-    }
-  });
-  removeBootstrapActivation();
-}
+const bootstrap = new LazyHovercardBootstrap<
+  HovercardProviderElement,
+  { client: GatewayBrowserClient | null; context: ApplicationContext | null }
+>({
+  tag: HOVERCARD_TAG,
+  load: async () =>
+    (await import("./session-link-hovercard.runtime.ts")).SessionLinkHovercardProvider,
+  snapshot: (provider) => ({ client: provider.client, context: provider.context }),
+  restore: (provider, properties) => {
+    provider.client = properties.client;
+    provider.context = properties.context;
+  },
+  onDefined: () => {
+    bootstrapObserver?.disconnect();
+    bootstrapObserver = null;
+  },
+});
 
 function handleBootstrapMutations(records: MutationRecord[]): void {
   for (const record of records) {
@@ -56,53 +45,40 @@ function handleBootstrapMutations(records: MutationRecord[]): void {
         continue;
       }
       if (node.matches(SESSION_LINK_SELECTOR) || node.querySelector(SESSION_LINK_SELECTOR)) {
-        void defineProvider();
+        void bootstrap.define();
         return;
       }
     }
   }
 }
 
-async function activateHovercard(event: Event, trigger: "focus" | "pointer"): Promise<void> {
+async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (trigger === "pointer" && "pointerType" in event && event.pointerType === "touch") {
     return;
   }
   const anchor = sessionLinkAnchorFromEvent(event);
-  const provider = anchor ? providerForAnchor(anchor) : null;
+  const provider = anchor ? bootstrap.providerFor(anchor) : null;
   if (!anchor || !provider || !isPotentialSessionLink(anchor, provider.context?.basePath)) {
     return;
   }
   const startedAt = performance.now();
-  await defineProvider();
-  const upgraded = providerForAnchor(anchor);
-  const stillActive =
-    trigger === "pointer" ? anchor.matches(":hover") : document.activeElement === anchor;
-  if (!upgraded || !anchor.isConnected || !stillActive) {
+  await bootstrap.define();
+  const upgraded = bootstrap.providerFor(anchor);
+  if (!upgraded || !anchor.isConnected || !hovercardBootstrapIntentActive(anchor, trigger)) {
     return;
   }
   const delay =
     trigger === "pointer"
-      ? Math.max(0, SESSION_HOVERCARD_OPEN_DELAY_MS - (performance.now() - startedAt))
+      ? remainingHovercardOpenDelay(startedAt, SESSION_HOVERCARD_OPEN_DELAY_MS)
       : 0;
   upgraded.activateFromBootstrap(anchor, trigger, delay);
 }
 
-function handleBootstrapPointerOver(event: Event): void {
-  void activateHovercard(event, "pointer");
-}
-
-function handleBootstrapFocusIn(event: Event): void {
-  void activateHovercard(event, "focus");
-}
-
-if (customElements.get(HOVERCARD_TAG)) {
-  removeBootstrapActivation();
-} else {
-  document.addEventListener("pointerover", handleBootstrapPointerOver, true);
-  document.addEventListener("focusin", handleBootstrapFocusIn, true);
+bootstrap.install(activateHovercard);
+if (!customElements.get(HOVERCARD_TAG)) {
   bootstrapObserver = new MutationObserver(handleBootstrapMutations);
   bootstrapObserver.observe(document, { childList: true, subtree: true });
   if (document.querySelector(SESSION_LINK_SELECTOR)) {
-    void defineProvider();
+    void bootstrap.define();
   }
 }

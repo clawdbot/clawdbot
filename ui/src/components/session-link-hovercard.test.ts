@@ -275,14 +275,18 @@ describe("openclaw-session-link-hovercard-provider", () => {
 
     resolvePreview?.(previewResponse());
     await vi.advanceTimersByTimeAsync(0);
-    expect(document.querySelector(".session-link-hovercard")?.textContent).toContain(
-      "Research plan",
-    );
+    const card = document.querySelector<HTMLElement>(".session-link-hovercard");
+    expect(card?.textContent).toContain("Research plan");
+    expect(card?.getAttribute("role")).toBe("dialog");
+    expect(anchor.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(anchor.getAttribute("aria-controls")).toBe(card?.id);
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
 
     anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     expect(document.querySelector(".session-link-hovercard")).toBeNull();
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
+    expect(anchor.hasAttribute("aria-controls")).toBe(false);
+    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
     expect(document.activeElement).toBe(anchor);
   });
 
