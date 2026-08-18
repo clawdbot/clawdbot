@@ -28,6 +28,7 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
@@ -104,12 +105,16 @@ export function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): void {
   const { prepared } = params;
+  let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
+    const refsToDiscard = unpersistedOffloadedRefs;
+    unpersistedOffloadedRefs = [];
     prepared.activeRunAbort.cleanup(options);
     prepared.activeGatewayWorkAdmission.release();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
+    void discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
   };
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();

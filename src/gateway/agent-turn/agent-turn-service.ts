@@ -565,8 +565,8 @@ export function createAgentTurnService({
         return;
       }
       resolvedSessionId = admittedSessionId;
-      // Sessionless and persistence-suppressed runs transfer prepared media to
-      // execution only after dispatch is fully admitted.
+      // The prepared dispatch now owns either transcript-persisted media or its
+      // closed unpersisted ref set; admission must not retain a second owner.
       preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
       // This captures ambient root admission synchronously, then settles the final
