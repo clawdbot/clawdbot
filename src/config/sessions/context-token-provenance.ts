@@ -26,19 +26,26 @@ export function resolveTrustedSessionContextTokens(params: {
   if (contextTokens === undefined) {
     return undefined;
   }
+  const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
+  const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
+  const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
+  const currentModel = normalizeLowercaseStringOrEmpty(params.model);
   // Locked sessions own their native window, including rows created before
-  // context-window provenance was persisted.
+  // context-window provenance was persisted. A known selection mismatch is a
+  // different owner, while missing identity remains a supported legacy state.
   if (params.entry?.modelSelectionLocked === true) {
+    if (
+      (entryProvider && currentProvider && entryProvider !== currentProvider) ||
+      (entryModel && currentModel && entryModel !== currentModel)
+    ) {
+      return undefined;
+    }
     return contextTokens;
   }
   if (params.entry?.contextTokensSource !== "runtime") {
     return undefined;
   }
-  const entryProvider = normalizeLowercaseStringOrEmpty(params.entry.modelProvider);
-  const entryModel = normalizeLowercaseStringOrEmpty(params.entry.model);
   const entryHarness = normalizeLowercaseStringOrEmpty(params.entry.agentHarnessId);
-  const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
-  const currentModel = normalizeLowercaseStringOrEmpty(params.model);
   const currentHarness = normalizeLowercaseStringOrEmpty(params.agentHarnessId);
   if (
     !entryProvider ||

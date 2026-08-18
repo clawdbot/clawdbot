@@ -64,6 +64,24 @@ describe("resolveTrustedSessionContextTokens", () => {
       }),
     ).toBe(272_000);
   });
+
+  it.each([
+    { name: "provider", patch: { modelProvider: "openrouter" } },
+    { name: "model", patch: { model: "gpt-5.5" } },
+  ])("rejects a locked window owned by a different $name", ({ patch }) => {
+    expect(
+      resolveTrustedSessionContextTokens({
+        entry: {
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          modelSelectionLocked: true,
+          contextTokens: 272_000,
+          ...patch,
+        },
+        ...currentSelection,
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveProjectedSessionContextTokens", () => {
