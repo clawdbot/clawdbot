@@ -55,6 +55,7 @@ function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
   useTrustedEnvProxy?: boolean;
   ssrfPolicy?: ssrf.SsrFPolicy;
+  hostnameAllowlist?: string[];
   cacheTtlMinutes?: number;
 }) {
   return createWebFetchTool({
@@ -84,6 +85,7 @@ function createWebFetchToolForTest(params?: {
       },
     },
     lookupFn: lookupMock,
+    hostnameAllowlistRef: { value: params?.hostnameAllowlist },
   });
 }
 
@@ -193,6 +195,54 @@ describe("web_fetch SSRF protection", () => {
 
     const result = await tool?.execute?.("call", { url: "https://example.com" });
     expectRawFetchSuccessDetails(result?.details);
+  });
+
+  it("blocks a turn-scoped domain-policy miss with recovery guidance", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("not permitted"));
+    const tool = createWebFetchToolForTest({
+      hostnameAllowlist: ["example.com", "*.example.com"],
+    });
+
+    await expectBlockedUrl(
+      tool,
+      "https://www.nytimes.com/",
+      /domain policy blocked.*example\.com.*Try a URL on a permitted domain/i,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a turn-scoped domain-policy match", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("permitted"));
+    const tool = createWebFetchToolForTest({
+      hostnameAllowlist: ["example.com", "*.example.com"],
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/" });
+
+    expectRawFetchSuccessDetails(result?.details);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse an unrestricted cache entry across a domain policy", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("cached outside content"));
+    const url = "https://outside.test/cached-policy-boundary";
+    const unrestricted = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await unrestricted?.execute?.("call", { url });
+    const restricted = createWebFetchToolForTest({
+      ssrfPolicy: { hostnameAllowlist: ["example.com", "*.example.com"] },
+      cacheTtlMinutes: 1,
+    });
+
+    await expectBlockedUrl(
+      restricted,
+      url,
+      /domain policy.*example\.com.*Try a URL on a permitted domain/i,
+    );
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
   it("preserves trailing Unicode URL text through tool argument parsing", async () => {

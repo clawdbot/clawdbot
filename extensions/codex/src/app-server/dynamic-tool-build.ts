@@ -21,6 +21,7 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
+import { buildHostnameAllowlistPolicyFromSuffixAllowlist } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
@@ -247,6 +248,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
+  const webSearchPlan = resolveCodexWebSearchPlan({
+    config: params.config,
+    disableTools: params.disableTools,
+    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
+  });
+  const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   const buildOpenClawCodingTools = () =>
     params.hostCapabilities.bindToolSurface(
       createOpenClawCodingTools({
@@ -321,6 +329,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
           },
         ),
         suppressManagedWebSearch: false,
+        webFetchHostnameAllowlistRef,
         currentChannelId: params.currentChannelId,
         currentMessagingTarget: params.currentMessagingTarget,
         hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
@@ -371,12 +380,6 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
-  const webSearchPlan = resolveCodexWebSearchPlan({
-    config: params.config,
-    disableTools: params.disableTools,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-  });
   const readableAllTools = [...readableAllToolProjection.tools];
   const normallyProfiledTools =
     input.nativeToolSurfaceEnabled === false
@@ -472,7 +475,14 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("runtime-normalization");
   // Resolve policy before hiding the managed tool. Hosted search follows the
   // same effective policy, while only one search implementation is exposed.
-  input.onWebSearchPolicyResolved?.(normalizedTools.some((tool) => tool.name === "web_search"));
+  const webSearchAllowed = normalizedTools.some((tool) => tool.name === "web_search");
+  webFetchHostnameAllowlistRef.value =
+    webSearchPlan.kind === "native-hosted" && webSearchAllowed
+      ? buildHostnameAllowlistPolicyFromSuffixAllowlist(
+          params.config?.tools?.web?.search?.openaiCodex?.allowedDomains,
+        )?.hostnameAllowlist
+      : undefined;
+  input.onWebSearchPolicyResolved?.(webSearchAllowed);
   const exposedTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
     : normalizedTools;
