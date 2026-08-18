@@ -197,9 +197,17 @@ describe("runConfigureWizard default-agent ownership", () => {
       expect.objectContaining({
         nextConfig: expect.objectContaining({
           agents: expect.objectContaining({
-            entries: expect.objectContaining({
-              MAIN: expect.objectContaining({ workspace: "/tmp/new-main-workspace" }),
-            }),
+            defaults: expect.objectContaining({ workspace: "/tmp/global-workspace" }),
+            entries: {
+              MAIN: {
+                agentDir: "/tmp/main-agent",
+                workspace: "/tmp/new-main-workspace",
+              },
+              ops: {
+                agentDir: "/tmp/ops-agent",
+                workspace: "/tmp/ops-workspace",
+              },
+            },
           }),
         }),
       }),
@@ -277,6 +285,63 @@ describe("runConfigureWizard default-agent ownership", () => {
           }),
         }),
       }),
+    );
+  });
+
+  it("keeps a workspace-less legacy owner on the global workspace", async () => {
+    const baseConfig = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/global-workspace",
+          systemAgent: { agentId: "main" },
+        },
+        entries: {
+          main: { agentDir: "/tmp/main-agent" },
+          ops: {
+            default: true,
+            agentDir: "/tmp/ops-agent",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "config-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+      issues: [],
+    };
+    mocks.text.mockResolvedValue("/tmp/new-global-workspace");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["workspace", "plugins", "skills"] },
+      runtime,
+    );
+
+    expect(mocks.commitConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ workspace: "/tmp/new-global-workspace" }),
+            entries: baseConfig.agents.entries,
+          }),
+        }),
+      }),
+    );
+    expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/new-global-workspace" }),
+    );
+    expect(mocks.setupSkills).toHaveBeenCalledWith(
+      expect.any(Object),
+      "/tmp/new-global-workspace",
+      runtime,
+      expect.any(Object),
+    );
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/new-global-workspace",
+      runtime,
+      expect.objectContaining({ agentId: "ops" }),
     );
   });
 

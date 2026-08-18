@@ -10,6 +10,7 @@ import {
   applyOnboardingPrimaryModel,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -43,6 +44,30 @@ describe("onboarding agent target", () => {
     expect(resolveOnboardingAgentTarget(config)).toMatchObject({
       agentId: "ops",
       workspaceDir: "/srv/ops",
+    });
+  });
+
+  it("resolves shared system-agent setup to the configured system agent on a legacy roster", () => {
+    const config = {
+      agents: {
+        defaults: {
+          workspace: "/srv/global",
+          systemAgent: { agentId: "main" },
+        },
+        entries: {
+          main: { workspace: "/srv/main" },
+          ops: { default: true, workspace: "/srv/ops" },
+        },
+      },
+    };
+
+    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
+      agentId: "ops",
+      workspaceDir: "/srv/ops",
+    });
+    expect(resolveSystemAgentOnboardingTarget(config)).toMatchObject({
+      agentId: "main",
+      workspaceDir: "/srv/main",
     });
   });
 
