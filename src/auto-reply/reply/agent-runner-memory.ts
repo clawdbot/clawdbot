@@ -1513,8 +1513,9 @@ export async function runMemoryFlushIfNeeded(params: {
               }
             }
             if (evt.stream === "compaction") {
-              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              // "end" fires for aborted/failed compactions too (completed: false); only a
+              // successful rewrite should invalidate the persisted compaction count.
+              if (evt.data.phase === "end" && evt.data.completed === true) {
                 memoryCompactionCompleted = true;
               }
             }
