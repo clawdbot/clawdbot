@@ -1,6 +1,7 @@
 // Chat UI cards for model-proposed follow-up tasks.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import type { TaskSuggestion } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
@@ -55,6 +56,14 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
 // because the Control UI cannot import core src/ modules.
 function sanitizeTaskSuggestionText(text: string): string {
   return text.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+}
+
+function updateTaskSuggestionPathFade(element: Element): void {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  const hasContentToRight = element.scrollLeft + element.clientWidth < element.scrollWidth - 1;
+  element.toggleAttribute("data-overflow-right", hasContentToRight);
 }
 
 function renderChatTaskSuggestions(props: {
@@ -176,7 +185,15 @@ function renderChatTaskSuggestions(props: {
                   >
                 </summary>
                 <div class="task-suggestion__instruction-body">
-                  <code>${cwd}</code>
+                  <code
+                    ${ref((element) => {
+                      if (element) {
+                        requestAnimationFrame(() => updateTaskSuggestionPathFade(element));
+                      }
+                    })}
+                    @scroll=${(event: Event) => updateTaskSuggestionPathFade(event.currentTarget as Element)}
+                    >${cwd}</code
+                  >
                   <pre>${prompt}</pre>
                 </div>
               </details>

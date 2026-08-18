@@ -2044,9 +2044,13 @@ button.chat-reply-preview--message:disabled {
   overflow-x: auto;
   overflow-y: hidden;
   border-radius: 9px 9px 0 0;
-  background: var(--panel-strong);
+  background: var(--panel-hover);
   scrollbar-width: none;
   white-space: nowrap;
+}
+
+.task-suggestion__instruction-body code[data-overflow-right] {
+  mask-image: linear-gradient(to right, black 0, black calc(100% - 28px), transparent 100%);
 }
 
 .task-suggestion__instruction-body code::-webkit-scrollbar {
