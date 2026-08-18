@@ -251,13 +251,24 @@ describe("session activity live status", () => {
           context,
           rows: [
             row("Digest run", owner, now, {
-              activeRunIds: ["fallback-run"],
+              activeRunIds: ["fallback-run", "digest run:a/b"],
               hasActiveRun: true,
               observerDigest: {
                 headline: "Running",
                 health: "on-track",
                 revision: 1,
                 runId: "digest run:a/b",
+                updatedAt: now,
+              },
+            }),
+            row("Stale digest", owner, now - 500, {
+              activeRunIds: ["current-run"],
+              hasActiveRun: true,
+              observerDigest: {
+                headline: "Running",
+                health: "on-track",
+                revision: 1,
+                runId: "ended-run",
                 updatedAt: now,
               },
             }),
@@ -280,6 +291,7 @@ describe("session activity live status", () => {
       ),
     ).toEqual([
       "/control/activity?view=run&run=digest%20run%3Aa%2Fb",
+      "/control/activity?view=run&run=current-run",
       "/control/activity?view=run&run=fallback%20run%3Aa%2Fb",
     ]);
   });
