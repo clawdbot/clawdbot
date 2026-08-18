@@ -50,4 +50,13 @@ export type ApplicationGateway = {
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
   updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
+  /** True when this browser holds a stored operator device token for the current gateway. */
+  hasStoredDeviceToken?: () => boolean;
+  /**
+   * Forget the operator device token this browser stores for the current
+   * gateway, then reconnect without it. Token-only reset: the browser device
+   * identity and other gateways' tokens survive. Returns false when no
+   * credential was stored.
+   */
+  forgetDeviceToken?: () => boolean;
 };

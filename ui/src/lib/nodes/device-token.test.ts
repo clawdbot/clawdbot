@@ -5,6 +5,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
+  peekStoredDeviceIdentityId,
   revokeDeviceToken,
   rotateDeviceToken,
   storeDeviceAuthToken,
@@ -85,6 +86,34 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("peekStoredDeviceIdentityId", () => {
+  it("reads the stored device id without minting or fingerprint-verifying an identity", () => {
+    // A hanging digest would stall any path that verifies the identity; the
+    // peek must answer synchronously without touching it (render-gate contract).
+    const { digestMock } = deferIdentityFingerprint();
+    storeIdentity();
+
+    expect(peekStoredDeviceIdentityId()).toBe("00");
+    expect(digestMock).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(1);
+  });
+
+  it.each([
+    { name: "no stored identity", raw: null },
+    { name: "malformed JSON", raw: "{not-json" },
+    { name: "unsupported version", raw: JSON.stringify({ version: 2, deviceId: "00" }) },
+    { name: "missing device id", raw: JSON.stringify({ version: 1 }) },
+  ])("returns null for $name without creating one", ({ raw }) => {
+    if (raw !== null) {
+      localStorage.setItem("openclaw-device-identity-v1", raw);
+    }
+    const before = localStorage.length;
+
+    expect(peekStoredDeviceIdentityId()).toBeNull();
+    expect(localStorage.length).toBe(before);
+  });
 });
 
 describe("device token request lifecycle", () => {
@@ -278,6 +307,21 @@ describe("device token request lifecycle", () => {
     const store = JSON.parse(localStorage.getItem(key) ?? "null");
     store.tokens[" operator "] = store.tokens.operator;
     localStorage.setItem(key, JSON.stringify(store));
+
+    clearDeviceAuthToken(tokenParams);
+
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
+  });
+
+  it("clears a token persisted only under a role alias", () => {
+    // Regression: an alias-only entry is readable via loadDeviceAuthToken, so
+    // the clearer must not miss it with a raw-key presence check.
+    storeDeviceAuthToken({ ...tokenParams, token: "operator-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens = { " operator ": store.tokens.operator };
+    localStorage.setItem(key, JSON.stringify(store));
+    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("operator-token");
 
     clearDeviceAuthToken(tokenParams);
 

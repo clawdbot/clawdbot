@@ -98,4 +98,52 @@ describe("AppSidebar footer identity menu", () => {
     expect(onNavigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
     expect(sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
   });
+
+  it("forgets the stored browser credential only after confirmation", async () => {
+    const gatewayHarness = createGatewayHarness({
+      instanceId: "self-instance",
+    } as GatewayBrowserClient);
+    const forgetDeviceToken = vi.fn(() => true);
+    const gateway = gatewayHarness.gateway as typeof gatewayHarness.gateway & {
+      hasStoredDeviceToken?: () => boolean;
+      forgetDeviceToken?: () => boolean;
+    };
+    gateway.hasStoredDeviceToken = () => true;
+    gateway.forgetDeviceToken = forgetDeviceToken;
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const openMenuAndSelectForget = async () => {
+      const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
+      identity?.click();
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
+      const forgetRow = menu?.querySelector<HTMLElement>(
+        'wa-dropdown-item[value="command:forget-device"]',
+      );
+      expect(forgetRow).not.toBeNull();
+      menu?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: forgetRow }, bubbles: true }),
+      );
+      await sidebar.updateComplete;
+    };
+
+    await openMenuAndSelectForget();
+    const cancelButton = [
+      ...document.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+    ].find((button) => !button.classList.contains("danger"));
+    expect(cancelButton).not.toBeUndefined();
+    cancelButton?.click();
+    await Promise.resolve();
+    expect(forgetDeviceToken).not.toHaveBeenCalled();
+
+    await openMenuAndSelectForget();
+    const confirmButton = document.querySelector<HTMLButtonElement>(
+      ".exec-approval-actions button.danger",
+    );
+    expect(confirmButton).not.toBeNull();
+    confirmButton?.click();
+    await vi.waitFor(() => expect(forgetDeviceToken).toHaveBeenCalledOnce());
+  });
 });

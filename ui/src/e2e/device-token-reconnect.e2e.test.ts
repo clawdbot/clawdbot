@@ -313,4 +313,148 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     await rotateReveal.getByRole("button", { name: "I saved this token", exact: true }).click();
     await rotateReveal.waitFor({ state: "detached" });
   });
+
+  it("forgets this browser's stored credential from the identity menu", async () => {
+    const context = await createContext();
+    // Seed the stored device token through a shared-token first visit, then
+    // close that page so its session token cannot mask credential selection.
+    const seed = await openGatewayPage({
+      appBaseUrl: server.baseUrl,
+      context,
+      deviceToken: ROSITA_DEVICE_TOKEN,
+      gatewayUrl: ROSITA_GATEWAY_URL,
+      sharedToken: "shared-rosita",
+    });
+    expect(requireConnectAuth(seed.connect).token).toBe("shared-rosita");
+    const storeKey = `openclaw.device.auth.v1:` + gatewayCredentialScope(ROSITA_GATEWAY_URL);
+    await expect
+      .poll(() =>
+        seed.page.evaluate((key) => {
+          const raw = localStorage.getItem(key);
+          if (!raw) {
+            return undefined;
+          }
+          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
+          return store.tokens?.operator;
+        }, storeKey),
+      )
+      .toBeDefined();
+    await seed.page.close();
+
+    // The fresh page has no shared token: this connect must ride the stored
+    // device-token path, so post-forget selection cannot be masked.
+    const { gateway, page } = await openGatewayPage({
+      appBaseUrl: server.baseUrl,
+      context,
+      deviceToken: ROSITA_DEVICE_TOKEN,
+      gatewayUrl: ROSITA_GATEWAY_URL,
+    });
+    const storedConnect = await gateway.waitForRequest("connect");
+    expect(requireConnectAuth(storedConnect)).toMatchObject({
+      deviceToken: ROSITA_DEVICE_TOKEN,
+      token: ROSITA_DEVICE_TOKEN,
+    });
+    const identityBefore = await page.evaluate(() =>
+      localStorage.getItem("openclaw-device-identity-v1"),
+    );
+    expect(identityBefore).not.toBeNull();
+
+    await page.locator(".sidebar-identity-card").click();
+    const forgetRow = page.locator('wa-dropdown-item[value="command:forget-device"]');
+    await forgetRow.waitFor({ state: "visible" });
+    await captureProof(page, "identity-menu-forget-device.png");
+    await forgetRow.click();
+    const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
+    await confirmButton.waitFor({ state: "visible" });
+    await confirmButton.click();
+
+    // The forget-triggered reconnect must offer no credential at all: with no
+    // shared token in this tab, a surviving stored token would appear here.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const mock = (
+            window as Window & {
+              openclawControlUiE2eGateway?: { requests: Array<{ method: string }> };
+            }
+          ).openclawControlUiE2eGateway;
+          return mock?.requests.filter((request) => request.method === "connect").length ?? 0;
+        }),
+      )
+      .toBeGreaterThanOrEqual(2);
+    const reconnect = await gateway.waitForRequest("connect");
+    expect(readConnectAuth(reconnect)?.token).toBeUndefined();
+    expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+    await captureProof(page, "after-forget-reconnect.png");
+
+    // Token-only reset: the browser device identity survives.
+    const identityAfter = await page.evaluate(() =>
+      localStorage.getItem("openclaw-device-identity-v1"),
+    );
+    expect(identityAfter).toBe(identityBefore);
+  });
+
+  it("forgetting in a token-bearing tab drops the shared credential too", async () => {
+    // Review P1 regression: shared auth outranks stored device auth, so the
+    // same tab that signed in with #token=… must not resume the old session.
+    const context = await createContext();
+    const { gateway, page } = await openGatewayPage({
+      appBaseUrl: server.baseUrl,
+      context,
+      deviceToken: WILFRED_DEVICE_TOKEN,
+      gatewayUrl: WILFRED_GATEWAY_URL,
+      sharedToken: "shared-wilfred",
+    });
+    const seededConnect = await gateway.waitForRequest("connect");
+    expect(requireConnectAuth(seededConnect).token).toBe("shared-wilfred");
+    const storeKey = `openclaw.device.auth.v1:` + gatewayCredentialScope(WILFRED_GATEWAY_URL);
+    await expect
+      .poll(() =>
+        page.evaluate((key) => {
+          const raw = localStorage.getItem(key);
+          if (!raw) {
+            return undefined;
+          }
+          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
+          return store.tokens?.operator;
+        }, storeKey),
+      )
+      .toBeDefined();
+
+    await page.locator(".sidebar-identity-card").click();
+    const forgetRow = page.locator('wa-dropdown-item[value="command:forget-device"]');
+    await forgetRow.waitFor({ state: "visible" });
+    await forgetRow.click();
+    const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
+    await confirmButton.waitFor({ state: "visible" });
+    await confirmButton.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const mock = (
+            window as Window & {
+              openclawControlUiE2eGateway?: { requests: Array<{ method: string }> };
+            }
+          ).openclawControlUiE2eGateway;
+          return mock?.requests.filter((request) => request.method === "connect").length ?? 0;
+        }),
+      )
+      .toBeGreaterThanOrEqual(2);
+    const reconnect = await gateway.waitForRequest("connect");
+    expect(readConnectAuth(reconnect)?.token).toBeUndefined();
+    expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+
+    // The tab-scoped shared token is gone from session storage as well.
+    const sessionToken = await page.evaluate(() => {
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const key = sessionStorage.key(i);
+        if (key?.includes("token") && sessionStorage.getItem(key)?.trim()) {
+          return { key, present: true };
+        }
+      }
+      return null;
+    });
+    expect(sessionToken).toBeNull();
+  });
 });

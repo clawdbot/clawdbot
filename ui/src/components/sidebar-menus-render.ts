@@ -23,6 +23,7 @@ import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
@@ -115,9 +116,12 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
+  const gateway = host.sessionDataContext?.gateway;
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
+    // Probe browser storage only while the menu is actually open.
+    canForgetDevice: position !== null && (gateway?.hasStoredDeviceToken?.() ?? false),
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
     selfName: selfUser?.name ?? undefined,
@@ -134,6 +138,18 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     },
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
+    onForgetDevice: () => {
+      void showConfirmDialog({
+        title: t("profilePage.identity.forgetDeviceConfirmTitle"),
+        message: t("profilePage.identity.forgetDeviceConfirmMessage"),
+        confirmLabel: t("profilePage.identity.forgetDeviceConfirmLabel"),
+        danger: true,
+      }).then((confirmed) => {
+        if (confirmed) {
+          gateway?.forgetDeviceToken?.();
+        }
+      });
+    },
     onRetryConnect: host.onRetryConnect,
   });
 }

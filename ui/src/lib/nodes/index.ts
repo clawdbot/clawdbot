@@ -876,10 +876,13 @@ export function clearDeviceAuthToken(params: {
     return;
   }
   const role = normalizeDeviceAuthRole(params.role);
-  if (!store.tokens[role]) {
+  // Canonicalize before the presence check: loadDeviceAuthToken reads
+  // alias-keyed entries (e.g. " operator "), so an alias-only credential must
+  // also be clearable — a raw-key check here would leave it readable forever.
+  const tokens = canonicalDeviceAuthTokens(store.tokens);
+  if (!tokens[role]) {
     return;
   }
-  const tokens = canonicalDeviceAuthTokens(store.tokens);
   delete tokens[role];
   writeStore(params.gatewayUrl, { ...store, tokens });
 }
@@ -929,6 +932,29 @@ async function generateIdentity(): Promise<DeviceIdentity> {
     publicKey: base64UrlEncode(publicKey),
     privateKey: base64UrlEncode(privateKey),
   };
+}
+
+/**
+ * Synchronous identity probe for render gating: reads the stored device id
+ * without creating, repairing, or fingerprint-verifying an identity, so a
+ * "do we hold credentials?" check stays side-effect free before connect().
+ */
+export function peekStoredDeviceIdentityId(): string | null {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) &&
+      parsed.version === 1 &&
+      typeof parsed.deviceId === "string" &&
+      parsed.deviceId
+      ? parsed.deviceId
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 // Storage-blocked pages (for example private browsing) must still present one

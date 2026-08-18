@@ -3322,6 +3322,11 @@ export const en: TranslationMap = {
       displayNameDescription: "Shown to other people using this gateway.",
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
+      forgetDevice: "Forget this browser",
+      forgetDeviceConfirmTitle: "Forget this browser?",
+      forgetDeviceConfirmMessage:
+        "Removes the sign-in token this browser stores for the current gateway, then reconnects without it. Other gateways, your preferences, and this browser's device identity are kept. You may need to sign in or approve this browser again.",
+      forgetDeviceConfirmLabel: "Forget",
       avatarErrors: {
         invalid: "That image could not be processed.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",
