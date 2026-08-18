@@ -81,7 +81,7 @@ export function ensureUserProfilesSchema(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      db.exec(USER_PROFILES_SCHEMA_SQL);
+      db.exec(USER_PROFILES_SCHEMA_SQL); // sqlite-allow-raw -- Canonical feature-local additive DDL.
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
     },
     options,
