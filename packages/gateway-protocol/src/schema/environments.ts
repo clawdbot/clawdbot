@@ -61,10 +61,14 @@ const NodeWorkerBundleStatusSchema = Type.Union([
 ]);
 
 /** Bounded live worker slots advertised by a connected node host. */
-export const WorkerSlotSummarySchema = closedObject({
-  total: Type.Integer({ minimum: 1, maximum: 1_024 }),
-  available: Type.Integer({ minimum: 0, maximum: 1_024 }),
-});
+export const WorkerSlotSummarySchema = Type.Refine(
+  closedObject({
+    total: Type.Integer({ minimum: 1, maximum: 1_024 }),
+    available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+  }),
+  (slots) => slots.available <= slots.total,
+  (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
+);
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({

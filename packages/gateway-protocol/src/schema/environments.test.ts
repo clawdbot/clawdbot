@@ -163,8 +163,17 @@ describe("worker environment protocol schemas", () => {
       }),
     ).toBe(true);
     expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 3 })).toBe(false);
     expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
     expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: { total: 2, available: 3 },
+      }),
+    ).toBe(false);
   });
 
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
