@@ -525,6 +525,34 @@ describe("DevicesPage gateway lifecycle", () => {
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 
+  it("drops a confirmed token revoke when pairing access is lost", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = createConnectedPage(client);
+
+    const pending = page.confirmTokenRevoke("device-1", "operator");
+    await waitForRenderedModalDialog(document.body);
+    const generation = page.requestGeneration;
+    const downgraded = gatewaySnapshot(client, true);
+    downgraded.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["device.token.revoke"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    applyGatewaySnapshot(page, downgraded);
+    expect(page.requestGeneration).toBe(generation);
+
+    clickDialogButton(t("devices.inventory.revoke"));
+    await pending;
+
+    expect(request).not.toHaveBeenCalledWith("device.token.revoke", {
+      deviceId: "device-1",
+      role: "operator",
+    });
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+  });
+
   it("reveals a rotated token with a copy control until it is acknowledged", async () => {
     stubLocalDeviceIdentity();
     const client = rotatingClient(ROTATED_TOKEN);

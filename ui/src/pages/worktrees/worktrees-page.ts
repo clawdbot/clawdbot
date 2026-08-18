@@ -172,6 +172,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         danger: true,
       })) ||
       !this.gateway.isCurrent(scope) ||
+      !this.canAdmin ||
       this.operationPending
     ) {
       return;
@@ -193,7 +194,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         confirmLabel: t("common.delete"),
         danger: true,
       });
-      if (!this.gateway.isCurrent(scope)) {
+      if (!this.gateway.isCurrent(scope) || !this.canAdmin) {
         return;
       }
       if (!force) {

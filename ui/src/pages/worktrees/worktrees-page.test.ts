@@ -425,6 +425,56 @@ describe("WorktreesPage lifecycle", () => {
     expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
   });
 
+  it("does not remove after admin access is lost during confirmation", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list" ? { worktrees: [] } : {},
+    );
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    const removing = page.removeWorktree(worktree());
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    source.setScopes(["operator.read"]);
+    confirmation.resolve(true);
+    await removing;
+
+    expect(request).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
+  });
+
+  it("does not force-remove after admin access is lost during confirmation", async () => {
+    const forceConfirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog)
+      .mockResolvedValueOnce(true)
+      .mockReturnValueOnce(forceConfirmation.promise);
+    const request = vi.fn((method: string, params?: Record<string, unknown>) => {
+      if (method === "worktrees.remove" && !params?.force) {
+        return Promise.resolve({ removed: false, snapshotError: "nested gitlink" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    const removing = page.removeWorktree(worktree());
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
+    source.setScopes(["operator.read"]);
+    forceConfirmation.resolve(true);
+    await removing;
+
+    expect(request).not.toHaveBeenCalledWith("worktrees.remove", {
+      id: "worktree-1",
+      force: true,
+    });
+  });
+
   it("surfaces the snapshot failure after a forced removal", async () => {
     const request = vi.fn((method: string, params?: Record<string, unknown>) => {
       if (method === "worktrees.remove") {

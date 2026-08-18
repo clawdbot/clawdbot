@@ -336,7 +336,7 @@ class DevicesPage extends OpenClawLightDomElement {
 
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
-  // scope is revalidated before the operation runs against a different server.
+  // scope and current authority are revalidated before the operation runs.
   private async confirmDestructiveAction(
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
@@ -361,7 +361,8 @@ class DevicesPage extends OpenClawLightDomElement {
       controller.signal.aborted ||
       generation !== this.requestGeneration ||
       client !== this.gateway.client ||
-      !this.gateway.connected
+      !this.gateway.connected ||
+      !this.canManagePairing
     ) {
       return;
     }
