@@ -6678,9 +6678,13 @@ describe("handleSendChat", () => {
       });
       expect(sendAttempts).toBe(1);
       await vi.advanceTimersByTimeAsync(100);
-      expect(sendAttempts).toBe(2);
+      // The retry timer only kicks off a fire-and-forget drain, so the resend
+      // lands after the tick returns. Wait for the outcome, not the tick.
+      await waitForFast(() => {
+        expect(sendAttempts).toBe(2);
+        expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      });
       expect(sendRunIds[1]).toBe(sendRunIds[0]);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -6727,9 +6731,12 @@ describe("handleSendChat", () => {
       expect(historyAttempts).toBe(1);
       expect(sendAttempts).toBe(0);
       await vi.advanceTimersByTimeAsync(100);
-      expect(sendAttempts).toBe(1);
-      expect(historyAttempts).toBeGreaterThanOrEqual(2);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      // Same fire-and-forget retry hand-off as the send-rejection case above.
+      await waitForFast(() => {
+        expect(sendAttempts).toBe(1);
+        expect(historyAttempts).toBeGreaterThanOrEqual(2);
+        expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      });
     } finally {
       vi.useRealTimers();
     }
