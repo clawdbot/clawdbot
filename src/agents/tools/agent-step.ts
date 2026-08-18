@@ -18,14 +18,6 @@ import {
 import { callSessionHandoffAgent } from "./session-handoff-agent-call.js";
 
 type GatewayCaller = AgentToolGatewayRequestCaller;
-type TranscriptAgentStepRunner = (params: {
-  sessionKey: string;
-  message: string;
-  transcriptMessage: string;
-}) => Promise<string | undefined>;
-
-let transcriptAgentStepRunnerForTest: TranscriptAgentStepRunner | undefined;
-
 /** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
   agentId?: string;
@@ -55,18 +47,6 @@ export async function runAgentStep(params: {
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
-  if (params.transcriptMessage !== undefined && transcriptAgentStepRunnerForTest) {
-    const reply = await transcriptAgentStepRunnerForTest({
-      sessionKey: params.sessionKey,
-      message,
-      transcriptMessage: params.transcriptMessage,
-    });
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
-    });
-    return reply;
-  }
   if (params.transcriptMessage !== undefined && !params.handoffContext) {
     throw new Error("private transcript agent step requires session handoff authority");
   }
@@ -126,12 +106,4 @@ export async function runAgentStep(params: {
     return undefined;
   }
   return result.replyText;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentStepTestApi")] = {
-    setTranscriptRunnerForTest(runner?: TranscriptAgentStepRunner) {
-      transcriptAgentStepRunnerForTest = runner;
-    },
-  };
 }

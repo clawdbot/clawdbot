@@ -637,11 +637,13 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.approvalOwnerPluginId
       ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
       : {}),
-    ...(handoff?.executionIdentity
-      ? { executionIdentity: handoff.executionIdentity }
-      : payload.executionIdentity
-        ? { executionIdentity: payload.executionIdentity }
-        : {}),
+    ...(sessionHandoff?.executionIdentity
+      ? { executionIdentity: sessionHandoff.executionIdentity }
+      : handoff?.executionIdentity
+        ? { executionIdentity: handoff.executionIdentity }
+        : payload.executionIdentity
+          ? { executionIdentity: payload.executionIdentity }
+          : {}),
     ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
     ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
     ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),

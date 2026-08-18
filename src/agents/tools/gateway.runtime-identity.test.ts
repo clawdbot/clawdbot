@@ -19,6 +19,7 @@ import {
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
+import { runWithGatewaySessionHandoffContext } from "./gateway-session-handoff-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
 import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "./gateway.js";
@@ -261,6 +262,63 @@ describe("gateway tool runtime identity", () => {
       verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken),
     ).resolves.toBeUndefined();
   });
+
+  it.each([false, true])(
+    "redeems session handoff with audit collection=%s without duplicating private facts",
+    async (enabled) => {
+      mocks.callGateway.mockResolvedValueOnce({ runId: "target-run" });
+      const operationalRunInstance = createOperationalRunInstanceRef("run-handoff-audit");
+      const executionIdentityToken = enabled
+        ? createExecutionIdentityAdmissionToken(operationalRunInstance.runId)
+        : undefined;
+
+      const identity = await withActiveGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          operationalRunInstance,
+          executionIdentityToken,
+        },
+        async () => {
+          await runWithGatewaySessionHandoffContext(
+            {
+              inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
+              requester: { messageProvider: "discord", senderId: "speaker-private" },
+            },
+            () =>
+              callGatewayTool(
+                "agent",
+                {},
+                {
+                  sessionKey: "agent:helper:main",
+                  message: "test",
+                  idempotencyKey: "target-run",
+                },
+                { requireAgentRuntimeIdentity: true },
+              ),
+          );
+          const token = capturedGatewayCall().agentRuntimeIdentityToken ?? "";
+          const [encodedPayload] = token.split(".");
+          expect(Buffer.from(encodedPayload ?? "", "base64url").toString("utf8")).not.toContain(
+            "speaker-private",
+          );
+          return await verifyAgentRuntimeIdentityToken(token);
+        },
+      );
+
+      expect(identity).toMatchObject({
+        operationalRunInstance,
+        sessionHandoffContext: {
+          inheritedToolPolicy: { allow: ["read"], deny: ["exec"] },
+          requester: { messageProvider: "discord", senderId: "speaker-private" },
+        },
+        ...(executionIdentityToken ? { executionIdentity: executionIdentityToken } : {}),
+      });
+      if (!executionIdentityToken) {
+        expect(identity).not.toHaveProperty("executionIdentity");
+      }
+    },
+  );
 
   it("mints message action identity only for an exact admitted source turn", async () => {
     const capabilityInput = {

@@ -431,6 +431,9 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
             operationalRunInstance: identity.operationalRunInstance,
             delegatedAuthority: activeAuthority,
             context: sessionHandoffContext,
+            ...(identity.executionIdentityToken
+              ? { executionIdentity: identity.executionIdentityToken }
+              : {}),
             target: {
               sessionKey: targetSessionKey,
               idempotencyKey: targetIdempotencyKey,
@@ -452,6 +455,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
             ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
             : {}),
         ...(sessionHandoff ? { sessionHandoffId: sessionHandoff.id } : {}),
+        ...(sessionHandoff ? { executionIdentityToken: undefined } : {}),
       });
     } catch (error) {
       lineageHandoff?.revoke();

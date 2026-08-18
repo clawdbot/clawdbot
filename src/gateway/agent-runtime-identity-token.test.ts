@@ -334,11 +334,16 @@ describe("agent runtime identity token", () => {
     const runtimeToken = await importRuntimeTokenModule();
     const sessionHandoff = await import("./agent-runtime-session-handoff.js");
     const run = operationalRun("run-handoff");
+    const executionIdentity = createExecutionIdentityAdmissionToken("run-handoff", {
+      contextId: "private-handoff-context",
+      executionId: "private-handoff-execution",
+    });
     const handoff = sessionHandoff.createAgentRuntimeSessionHandoff({
       agentId: "main",
       sessionKey: "agent:main:main",
       operationalRunInstance: run.operationalRunInstance,
       delegatedAuthority: run.delegatedAuthority,
+      executionIdentity,
       context: {
         inheritedToolPolicy: {
           version: 1,
@@ -364,11 +369,16 @@ describe("agent runtime identity token", () => {
     const decodedPayload = Buffer.from(payload ?? "", "base64url").toString("utf8");
     expect(decodedPayload).not.toContain("speaker-1");
     expect(decodedPayload).not.toContain("sessions_send");
+    expect(decodedPayload).not.toContain("private-handoff-context");
+    expect(decodedPayload).not.toContain("private-handoff-execution");
 
     const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
-    expect(identity?.sessionHandoffContext).toMatchObject({
-      inheritedToolPolicy: { allow: ["sessions_send", "read"], deny: ["message"] },
-      requester: { messageProvider: "discord", senderId: "speaker-1" },
+    expect(identity).toMatchObject({
+      executionIdentity,
+      sessionHandoffContext: {
+        inheritedToolPolicy: { allow: ["sessions_send", "read"], deny: ["message"] },
+        requester: { messageProvider: "discord", senderId: "speaker-1" },
+      },
     });
     expect(
       identity &&

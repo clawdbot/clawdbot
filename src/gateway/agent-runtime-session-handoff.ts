@@ -1,3 +1,4 @@
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import { createAgentRuntimeOneShotHandoffRegistry } from "./agent-runtime-one-shot-handoff.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
@@ -34,6 +35,11 @@ type SessionHandoffRedemptionCarrier = {
   [AGENT_RUNTIME_SESSION_HANDOFF_REDEMPTION]: SessionHandoffRedemption;
 };
 
+type SessionHandoffPayload = Readonly<{
+  context: AgentRuntimeSessionHandoffContext;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
+}>;
+
 function sameTarget(
   left: AgentRuntimeSessionHandoffTarget,
   right: AgentRuntimeSessionHandoffTarget,
@@ -42,21 +48,24 @@ function sameTarget(
 }
 
 const sessionHandoffs = createAgentRuntimeOneShotHandoffRegistry<
-  AgentRuntimeSessionHandoffContext,
+  SessionHandoffPayload,
   AgentRuntimeSessionHandoffTarget
 >({
   globalKey: Symbol.for("openclaw.agentRuntimeSessionHandoffs"),
   sameTarget,
-  snapshotPayload: (context) => ({
-    inheritedToolPolicy: {
-      version: 1,
-      allow: [...context.inheritedToolPolicy.allow],
-      deny: [...context.inheritedToolPolicy.deny],
+  snapshotPayload: (payload) => ({
+    context: {
+      inheritedToolPolicy: {
+        version: 1,
+        allow: [...payload.context.inheritedToolPolicy.allow],
+        deny: [...payload.context.inheritedToolPolicy.deny],
+      },
+      requester: { ...payload.context.requester },
+      ...(payload.context.transcriptMessage !== undefined
+        ? { transcriptMessage: payload.context.transcriptMessage }
+        : {}),
     },
-    requester: { ...context.requester },
-    ...(context.transcriptMessage !== undefined
-      ? { transcriptMessage: context.transcriptMessage }
-      : {}),
+    ...(payload.executionIdentity ? { executionIdentity: payload.executionIdentity } : {}),
   }),
 });
 
@@ -67,8 +76,15 @@ export function createAgentRuntimeSessionHandoff(params: {
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>;
   delegatedAuthority: AgentRunDelegatedAuthority;
   context: AgentRuntimeSessionHandoffContext;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
   target: AgentRuntimeSessionHandoffTarget;
 }): Readonly<{ id: string; revoke: () => void }> | undefined {
+  if (
+    params.executionIdentity !== undefined &&
+    params.executionIdentity.runId !== params.operationalRunInstance.runId
+  ) {
+    throw new Error("session handoff execution identity disagrees with its source admission");
+  }
   return sessionHandoffs.create({
     owner: {
       agentId: params.agentId,
@@ -76,7 +92,10 @@ export function createAgentRuntimeSessionHandoff(params: {
       operationalRunInstance: params.operationalRunInstance,
       delegatedAuthority: params.delegatedAuthority,
     },
-    payload: params.context,
+    payload: Object.freeze({
+      context: params.context,
+      ...(params.executionIdentity ? { executionIdentity: params.executionIdentity } : {}),
+    }),
     target: params.target,
   });
 }
@@ -91,6 +110,7 @@ export function redeemAgentRuntimeSessionHandoff(params: {
 }):
   | Readonly<{
       context: AgentRuntimeSessionHandoffContext;
+      executionIdentity?: ExecutionIdentityAdmissionToken;
       redemption: SessionHandoffRedemption;
     }>
   | undefined {
@@ -107,9 +127,12 @@ export function redeemAgentRuntimeSessionHandoff(params: {
     return undefined;
   }
   return Object.freeze({
-    context: handoff.payload,
+    context: handoff.payload.context,
+    ...(handoff.payload.executionIdentity
+      ? { executionIdentity: handoff.payload.executionIdentity }
+      : {}),
     redemption: Object.freeze({
-      consume: handoff.consume,
+      consume: (target: AgentRuntimeSessionHandoffTarget) => handoff.consume(target)?.context,
     }),
   });
 }
