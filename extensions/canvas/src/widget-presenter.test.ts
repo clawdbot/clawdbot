@@ -71,7 +71,15 @@ describe("Canvas widget presenter", () => {
 
   it("maps missing eligible nodes and node invocation failures", async () => {
     const unavailable = createCanvasWidgetPresenter(
-      createNodesRuntime([{ nodeId: "offline", connected: false, caps: ["canvas"], commands }]),
+      createNodesRuntime([
+        {
+          nodeId: "offline",
+          platform: "macos",
+          connected: false,
+          caps: ["canvas"],
+          commands,
+        },
+      ]),
     );
     await expect(unavailable.availability({})).resolves.toMatchObject({
       ok: false,
@@ -81,6 +89,7 @@ describe("Canvas widget presenter", () => {
     const runtime = createNodesRuntime([
       {
         nodeId: "mac-panel",
+        platform: "macos",
         connected: true,
         caps: ["canvas"],
         invocableCommands: commands,
@@ -98,5 +107,34 @@ describe("Canvas widget presenter", () => {
       ok: false,
       error: { code: "node_error", message: "panel disabled", nodeId: "mac-panel" },
     });
+  });
+
+  it("rejects Linux nodes that cannot resolve hosted document paths", async () => {
+    const runtime = createNodesRuntime([
+      {
+        nodeId: "linux-panel",
+        platform: "linux",
+        connected: true,
+        caps: ["canvas"],
+        invocableCommands: commands,
+      },
+    ]);
+    const presenter = createCanvasWidgetPresenter(runtime);
+
+    await expect(presenter.availability({})).resolves.toMatchObject({
+      ok: false,
+      error: { code: "no_eligible_node" },
+    });
+    await expect(
+      presenter.present({
+        documentUrlPath: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        title: "Status",
+        sessionContext: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "no_eligible_node" },
+    });
+    expect(runtime.invoke).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,9 @@ function isEligibleCanvasNode(node: CanvasRuntimeNode): boolean {
     node.caps?.includes("canvas") === true ||
     commands.some((command) => command.startsWith("canvas."));
   return (
+    // macOS is the only panel whose resolver handles hosted document paths;
+    // other platforms' Canvas surfaces are being retired.
+    node.platform === "macos" &&
     node.connected === true &&
     hasCanvasCapability &&
     REQUIRED_WIDGET_COMMANDS.every((command) => commands.includes(command))

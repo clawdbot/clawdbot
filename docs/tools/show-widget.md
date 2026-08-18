@@ -105,9 +105,9 @@ The core result includes a Canvas preview handle, so the Control UI and supporte
 
 ## Show on a device
 
-When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected Canvas-capable device, and opens its native panel at that document. The tool result names the selected device.
+When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected macOS Canvas node, and opens its native panel at that document. The tool result names the selected Mac.
 
-If no eligible device is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a device or open the OpenClaw app, then retry. Widgets shown in a native panel are render-only in this first version; widget actions remain disabled there.
+If no eligible Mac is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a Mac running OpenClaw or open the macOS app, then retry. Widgets shown in a native panel are render-only in this first version; widget actions remain disabled there.
 
 ## Interactive widgets
 
