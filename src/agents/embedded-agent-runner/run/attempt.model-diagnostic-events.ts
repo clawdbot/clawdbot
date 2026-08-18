@@ -25,7 +25,7 @@ const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
  * existing "long but bounded" local-operation ceiling
  * (`MAX_JOB_TTL_MS` in bash-process-registry.ts).
  */
-export const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
+const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
 
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
   if (value === null || typeof value !== "object") {

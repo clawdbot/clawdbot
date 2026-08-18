@@ -18,10 +18,13 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS,
-  wrapStreamFnWithDiagnosticModelCallEvents,
-} from "./attempt.model-diagnostic-events.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+
+// Mirrors the module-private LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS in
+// attempt.model-diagnostic-events.ts (kept unexported to match this
+// codebase's "long but bounded" local-operation ceiling convention, e.g.
+// MAX_JOB_TTL_MS in bash-process-registry.ts).
+const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
 
 async function collectModelCallEvents(
   run: () => Promise<void>,

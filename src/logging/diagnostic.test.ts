@@ -2,7 +2,6 @@ import fs from "node:fs";
 // Diagnostic logger tests cover event emission, metrics, and support output.
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS } from "../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
@@ -61,6 +60,12 @@ import {
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
 } from "./diagnostic.test-support.js";
+
+// Mirrors the module-private LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS in
+// attempt.model-diagnostic-events.ts (kept unexported to match this
+// codebase's "long but bounded" local-operation ceiling convention, e.g.
+// MAX_JOB_TTL_MS in bash-process-registry.ts).
+const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
 
 function startDiagnosticHeartbeat(
   config?: Parameters<typeof startDiagnosticHeartbeatImpl>[0],
