@@ -29,7 +29,6 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
 import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
@@ -135,10 +134,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         timeoutMs: 5_000,
       });
       descendantPid = await waitForPidFile(descendantPidPath);
-      const processGroupId = (spawnMock.mock.results[0]?.value as ChildProcess | undefined)?.pid;
-      if (!processGroupId) {
-        throw new Error("scenario command did not expose its process group id");
-      }
       const startedAt = Date.now();
       const deadline = new AbortController();
       const result = await Promise.race([
@@ -155,7 +150,10 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         stdout: "Docker scheduling finished\ndelayed descendant output\n",
         stderr: "",
       });
-      expect(isQaPosixProcessGroupAlive(processGroupId)).toBe(false);
+      if (descendantPid === undefined) {
+        throw new Error("scenario command descendant did not expose its pid");
+      }
+      expect(isProcessRunning(descendantPid)).toBe(false);
     } finally {
       if (descendantPid && isProcessRunning(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
