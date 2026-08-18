@@ -36,6 +36,7 @@ const {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerWarnMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -86,10 +87,24 @@ function buildVoiceTestHarness() {
       }),
     );
     textToSpeechStreamMock.mockReset();
-    textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
+    textToSpeechStreamMock.mockResolvedValue({
+      success: false,
+      error: "TTS conversion failed: elevenlabs: upstream unavailable",
+      attemptedProviders: ["elevenlabs"],
+      attempts: [
+        {
+          provider: "elevenlabs",
+          outcome: "failed",
+          reasonCode: "provider_error",
+          latencyMs: 12,
+          error: "elevenlabs: upstream unavailable",
+        },
+      ],
+    });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
+    loggerWarnMock.mockClear();
     updateVoiceStateMock.mockClear();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
@@ -550,8 +565,10 @@ function buildVoiceTestHarness() {
         route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
         connection: createConnectionMock(),
         player: createAudioPlayerMock(),
+        sessionLifecycle: { status: "active" },
         playbackQueue: Promise.resolve(),
         processingQueue: Promise.resolve(),
+        ttsStreamFallbackWarned: false,
         capture: createVoiceCaptureState(),
         receiveRecovery: createVoiceReceiveRecoveryState(),
       },
@@ -612,6 +629,7 @@ function buildVoiceTestHarness() {
     textToSpeechStreamMock,
     textToSpeechMock,
     logVerboseMock,
+    loggerWarnMock,
     resolveConfiguredRealtimeVoiceProviderMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,

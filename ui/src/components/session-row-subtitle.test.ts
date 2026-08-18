@@ -38,6 +38,18 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toEqual({ subtitle: "~/Projects/openclaw", narration: undefined });
   });
 
+  it("explains when admitted work is waiting for a concurrency slot", () => {
+    expect(
+      resolveSidebarSessionSubtitle({
+        session: { ...workSession(), hasActiveRun: true, status: "queued" },
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        narrationLine: undefined,
+      }),
+    ).toEqual({ subtitle: "Waiting for a concurrency slot", narration: undefined });
+  });
+
   it("uses attention, agent status, observer, narration, then work subtitle precedence", () => {
     const session: SidebarRecentSession = {
       ...workSession(),
@@ -120,29 +132,54 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(resolve("run-2")).toEqual({ subtitle: "Old digest", narration: undefined });
   });
 
-  it("shows an unread idle final digest until the row is read", () => {
+  it("prefers an unread idle final digest over the last reply", () => {
     const observerDigest = {
       headline: "Finished with warnings",
       health: "done" as const,
       updatedAt: 2_000,
       revision: 2,
     };
-    const session = { ...workSession(), observerDigest, lastReadAt: 1_999 };
-    const resolve = (lastReadAt: number) =>
+    expect(
       resolveSidebarSessionSubtitle({
-        session: { ...session, lastReadAt },
+        session: {
+          ...workSession(),
+          lastMessagePreview: "The final reply is durable.",
+          observerDigest,
+          lastReadAt: 1_999,
+        },
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
         narrationLine: undefined,
         observerDigest: null,
-      });
-
-    expect(resolve(1_999).subtitle).toBe("Finished with warnings");
-    expect(resolve(2_000).subtitle).toBe("~/Projects/openclaw");
+      }).subtitle,
+    ).toBe("Finished with warnings");
   });
 
-  it("prefers the durable final reply over a stale idle digest and backing path", () => {
+  it("falls back to the last reply after the idle final digest is read", () => {
+    expect(
+      resolveSidebarSessionSubtitle({
+        session: {
+          ...workSession(),
+          lastMessagePreview: "The final reply is durable.",
+          observerDigest: {
+            headline: "Finished with warnings",
+            health: "done",
+            updatedAt: 2_000,
+            revision: 2,
+          },
+          lastReadAt: 2_000,
+        },
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        narrationLine: undefined,
+        observerDigest: null,
+      }).subtitle,
+    ).toBe("The final reply is durable.");
+  });
+
+  it("keeps attention and agent status ahead of the idle digest and last reply", () => {
     const session = {
       ...workSession(),
       lastMessagePreview: "The final reply is durable.",
@@ -154,17 +191,20 @@ describe("resolveSidebarSessionSubtitle", () => {
         revision: 2,
       },
     };
-
-    expect(
+    const resolve = (overrides: Partial<SidebarRecentSession>) =>
       resolveSidebarSessionSubtitle({
-        session,
+        session: { ...session, ...overrides },
         hasDisplay: false,
         displaySubtitle: undefined,
         sidebarLiveActivity: true,
         narrationLine: undefined,
         observerDigest: null,
-      }).subtitle,
-    ).toBe("The final reply is durable.");
+      }).subtitle;
+
+    expect(resolve({ agentStatusNote: "Waiting for deployment" })).toBe("Waiting for deployment");
+    expect(
+      resolve({ attention: { kind: "question" }, agentStatusNote: "Waiting for deployment" }),
+    ).toBe("Waiting for your answer");
   });
 
   it("does not let a prior last-message preview displace running activity", () => {

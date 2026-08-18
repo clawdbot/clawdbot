@@ -29,7 +29,6 @@ async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
 
 function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMcpManager {
   return {
-    configuredServerCount: 1,
     descriptors: [],
     callMcpTool,
     close: async () => undefined,
@@ -37,7 +36,7 @@ function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMc
 }
 
 describe("mcp.tools.call.v1", () => {
-  it("dispatches validated params and preserves text/image content", async () => {
+  it("dispatches validated params and preserves raw MCP content for one final projection", async () => {
     const callMcpTool = vi.fn<NodeHostMcpManager["callMcpTool"]>().mockResolvedValue({
       content: [
         { type: "text", text: "pong" },
@@ -68,20 +67,35 @@ describe("mcp.tools.call.v1", () => {
       content: [
         { type: "text", text: "pong" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        { type: "text", text: "[Report] https://example.com/report" },
+        {
+          type: "resource_link",
+          uri: "https://example.com/report",
+          name: "report",
+          title: "Report",
+        },
       ],
       structuredContent: { ok: true },
     });
   });
 
-  it("maps MCP tool errors and unavailable servers to failed invokes", async () => {
+  it("returns MCP tool errors as results while thrown failures fail the invoke", async () => {
     const toolError = await invokeMcp(
-      managerWith(async () => ({ isError: true, content: [{ type: "text", text: "bad query" }] })),
+      managerWith(async () => ({
+        isError: true,
+        content: [{ type: "text", text: "bad query" }],
+        structuredContent: { retryable: true },
+      })),
       { server: "docs", tool: "search" },
     );
-    expect(toolError).toMatchObject({
-      ok: false,
-      error: { code: "MCP_TOOL_ERROR", message: "bad query" },
+    expect(toolError).toEqual({
+      id: "invoke-mcp",
+      nodeId: "node-1",
+      ok: true,
+      payload: {
+        content: [{ type: "text", text: "bad query" }],
+        structuredContent: { retryable: true },
+        isError: true,
+      },
     });
 
     const unavailable = await invokeMcp(
@@ -179,6 +193,44 @@ describe("mcp.tools.call.v1", () => {
       { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
     ]);
     expect(payload.structuredContent).toBeUndefined();
+  });
+
+  it("preserves structured content and recovery guidance when an exact JSON mirror is oversized", async () => {
+    const structuredContent = {
+      oversized: "S".repeat(Math.floor(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
+    };
+    const recovery = "authentication expired; run login";
+    const result = await invokeMcp(
+      managerWith(async () => ({
+        content: [
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+          {
+            type: "image",
+            data: "I".repeat(Math.floor(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
+            mimeType: "image/png",
+          },
+          { type: "text", text: recovery },
+        ],
+        structuredContent,
+        isError: true,
+      })),
+      { server: "docs", tool: "recover" },
+    );
+    const payload = result.payload as {
+      content: Array<{ type: string; text?: string }>;
+      structuredContent?: Record<string, unknown>;
+      isError?: boolean;
+    };
+    expect(payload.isError).toBe(true);
+    expect(payload.structuredContent).toBeDefined();
+    expect(payload.structuredContent?.oversized).toHaveLength(structuredContent.oversized.length);
+    expect(payload.content).toEqual([
+      { type: "text", text: recovery },
+      { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
+    ]);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
+      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
+    );
   });
 
   it("sends MCP payloads as structured invoke data without double JSON escaping", async () => {

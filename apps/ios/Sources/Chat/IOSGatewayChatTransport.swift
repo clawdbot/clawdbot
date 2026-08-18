@@ -551,6 +551,22 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
+    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        return await self.gateway.supportsServerMethod(
+            "progressCard.get",
+            ifCurrentRoute: route)
+    }
+
+    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.progressCardGet(sessionKey: target.sessionKey)
+        let data = try await self.gateway.request(request)
+        let result = try JSONDecoder().decode(ProgressCardGetResult.self, from: data)
+        guard !(result.card.value is NSNull) else { return nil }
+        return try GatewayPayloadDecoding.decode(result.card, as: ProgressCard.self)
+    }
+
     func resolveInlineWidgetResource(
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?

@@ -8,7 +8,10 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
+import {
+  filterSkillWorkshopProposals,
+  type SkillWorkshopAppliedDiffMode,
+} from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs } from "../plugins/plugins-hub.ts";
@@ -96,9 +99,15 @@ function renderSkillWorkshopPage(
             state.skillWorkshopStatusFilter,
             state.skillWorkshopQuery,
           );
-          const selectedIndex = visibleProposals.findIndex(
+          const selectedProposal = state.skillWorkshopProposals.find(
             (proposal) => proposal.key === state.skillWorkshopSelectedKey,
           );
+          const isSelectedProposal = (proposal: (typeof visibleProposals)[number]) =>
+            proposal.key === state.skillWorkshopSelectedKey ||
+            (state.skillWorkshopStatusFilter === "applied" &&
+              selectedProposal?.status === "applied" &&
+              proposal.slug === selectedProposal?.slug);
+          const selectedIndex = visibleProposals.findIndex(isSelectedProposal);
           const selectProposal = (key: string) => {
             state.skillWorkshopFilePreviewKey = null;
             void selectSkillWorkshopProposal(state, context, key).finally(requestUpdate);
@@ -118,10 +127,7 @@ function renderSkillWorkshopPage(
             }
           };
           const selectVisibleFallback = (proposals: typeof visibleProposals) => {
-            if (
-              proposals.length === 0 ||
-              proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)
-            ) {
+            if (proposals.length === 0 || proposals.some(isSelectedProposal)) {
               return;
             }
             const firstProposal = proposals[0];
@@ -142,6 +148,7 @@ function renderSkillWorkshopPage(
               inspectingKey: state.skillWorkshopInspectingKey,
               proposals: state.skillWorkshopProposals,
               selectedKey: state.skillWorkshopSelectedKey,
+              appliedDiffMode: state.skillWorkshopAppliedDiffMode,
               statusFilter: state.skillWorkshopStatusFilter,
               query: state.skillWorkshopQuery,
               filePreviewKey: state.skillWorkshopFilePreviewKey,
@@ -192,6 +199,10 @@ function renderSkillWorkshopPage(
               },
               onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
               onSelect: selectProposal,
+              onAppliedDiffModeChange: (mode: SkillWorkshopAppliedDiffMode) => {
+                state.skillWorkshopAppliedDiffMode = mode;
+                requestUpdate();
+              },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
               onApply: (key) => {

@@ -245,3 +245,31 @@ export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up"
     target.selectionEnd = caret;
   });
 }
+
+// Shared by the slash and skill composer menus, which resolve their own
+// active-option id but scroll the same ".slash-menu__scroll" viewport shape.
+export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
+  if (!activeId) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const activeOption = document.getElementById(activeId);
+    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
+    if (!activeOption || !scrollRegion) {
+      return;
+    }
+    const menuBounds = scrollRegion.getBoundingClientRect();
+    const optionBounds = activeOption.getBoundingClientRect();
+    // scrollIntoView also moves the short-landscape composer and page. Keep
+    // keyboard navigation owned by the menu so textarea focus stays stable.
+    if (optionBounds.top < menuBounds.top) {
+      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
+    } else if (optionBounds.bottom > menuBounds.bottom) {
+      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    }
+  });
+}
+
+export function paneDomId(paneId: string, suffix: string): string {
+  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
+}

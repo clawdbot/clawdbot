@@ -669,36 +669,6 @@ suite.define(() => {
     }
   });
 
-  it("shows the Workboard route when the plugin is enabled in config", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config: { plugins: { entries: { workboard: { enabled: true } } } },
-            },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-nav__head-action").click();
-        await expect
-          .poll(() =>
-            trimmedTextContents(
-              sidebar.locator("wa-dropdown.sidebar-more-menu").getByRole("menuitem"),
-            ),
-          )
-          .toContain("Workboard");
-      },
-    );
-  });
-
   it("opens the start screen from the sidebar action without carrying the active session", async () => {
     await suite.withPage(
       {

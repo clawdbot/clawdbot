@@ -33,3 +33,43 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;
 };
+
+export type WorkboardBoardCardAggregate = {
+  boardId: string;
+  status: WorkboardCard["status"];
+  total: number;
+  archived: number;
+  updatedAt: number;
+};
+
+export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
+
+export type WorkboardCardStore = WorkboardKeyedStore & {
+  registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean>;
+  registerIfUpdatedAt(
+    key: string,
+    value: PersistedWorkboardCard,
+    expectedUpdatedAt: number,
+  ): Promise<boolean>;
+  claimIfOwnerAvailable(
+    key: string,
+    value: PersistedWorkboardCard,
+    expectedUpdatedAt: number,
+    ownerId: string,
+    now: number,
+  ): Promise<WorkboardOwnerClaimResult>;
+  listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;
+};
+
+export function isWorkboardCardStore(store: WorkboardKeyedStore): store is WorkboardCardStore {
+  return (
+    "listBoardAggregates" in store &&
+    typeof store.listBoardAggregates === "function" &&
+    "registerIfAbsent" in store &&
+    typeof store.registerIfAbsent === "function" &&
+    "registerIfUpdatedAt" in store &&
+    typeof store.registerIfUpdatedAt === "function" &&
+    "claimIfOwnerAvailable" in store &&
+    typeof store.claimIfOwnerAvailable === "function"
+  );
+}

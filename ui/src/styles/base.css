@@ -234,6 +234,26 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* One profile for every scroll surface: 12px hit target, 6px visible thumb
+     (transparent border + content-box clip). Derived from --muted so every
+     theme family and both modes follow with no override. scrollbar-color is a
+     real property, not a token, but it lives here (not a second :root block)
+     to satisfy no-duplicate-selectors; it also inherits into shadow roots,
+     which is what gives Web Awesome ::part() surfaces their thumb tint. */
+  --scrollbar-size: 12px;
+  --scrollbar-thumb-inset: 3px;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+
+  /* Corner-scale signal: whatever the @supports block below sets this to,
+     tests and other introspection can read it to learn the active multiplier
+     without duplicating the @supports check. It is intentionally not part of
+     the calc() above — the tokens stay usable by consumers that must not
+     inherit the widened surface treatment (excluded selectors, the tokens
+     exported to embedded MCP apps in mcp-app-theme.ts). */
+  --openclaw-corner-radius-scale: 1;
+
   /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
      = panel radius 10. Shared knobs keep transient menus from drifting again. */
   --menu-radius: var(--radius-md);
@@ -268,6 +288,162 @@
 @media (pointer: coarse) {
   :root {
     --menu-item-height: 44px;
+  }
+}
+
+/* Continuous corner curvature. Where the engine can draw a superellipse the
+   corner keeps curving into the edge instead of stopping on a tangent, which
+   reads as a shorter arc than a circular corner of the same radius — the 1.25
+   scale gives that back. Border, shadow, outline and overflow clipping all
+   follow the drawn shape, so this stays a paint-level refinement.
+   The whole thing is gated: engines without corner-shape keep today's radii
+   and today's arcs, unchanged.
+   The shape is opt-in per surface rather than universal because a superellipse
+   flattens the ends of anything fully rounded, and pills, circles, avatars and
+   status dots are a third of this app's corners. Add new shared surfaces to
+   the list below; leaving one out only keeps its current corner.
+   --openclaw-corner-radius-scale flips to 1.25 at :root — that part is a
+   harmless capability signal, not a radius: nothing in the canonical
+   --radius-* chain reads it, so it cannot widen an unrelated consumer.
+   Every rule below sets border-radius directly instead of redeclaring a
+   --radius-* custom property on the matched selector. Custom properties
+   inherit: a redeclared --radius-md on .settings-group would also reach
+   .settings-segmented nested inside it, even though that selector never
+   opted in and draws no corner-shape — an inflated `round` corner, not a
+   refinement. border-radius itself is not inherited, so a direct value
+   stops at the matched element; every nested non-opted descendant keeps
+   reading the untouched canonical token from :root.
+   base.css loads before every other stylesheet (see ui/src/styles.css), so
+   a same-specificity override here would lose to the selector's own
+   border-radius declaration in its home file, which always loads later.
+   Each selector below is doubled (`.card.card`) to outrank that one bare
+   declaration by specificity regardless of load order — deliberately not
+   !important, so a genuinely more specific state override elsewhere (e.g.
+   `.chat:has(> .agent-chat__search-bar)`, `.chat-task-detail__transcript >
+   .chat-thread`, both already in the app) keeps winning as it did before
+   this block existed, instead of every such rule needing a matching
+   !important of its own. */
+@supports (corner-shape: superellipse(1.5)) {
+  :root {
+    --openclaw-corner-radius-scale: 1.25;
+  }
+
+  .exec-approval-card.exec-approval-card,
+  .exec-approval-list.exec-approval-list,
+  .cmd-palette.cmd-palette,
+  .login-gate__card.login-gate__card,
+  .card.card,
+  .settings-group.settings-group,
+  .option-card__choice.option-card__choice {
+    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  .agent-tool-card.agent-tool-card,
+  .chat-thread.chat-thread,
+  .chat-bubble.chat-bubble,
+  .agent-chat__input.agent-chat__input,
+  .chat-pr.chat-pr,
+  .nav-item.nav-item,
+  .list-item.list-item,
+  .sidebar-recent-session.sidebar-recent-session,
+  .settings-sidebar__item.settings-sidebar__item,
+  .btn.btn,
+  .settings-input.settings-input,
+  .field.field :is(input, textarea, select) {
+    border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  .code-block-wrapper.code-block-wrapper {
+    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  .option-card.option-card {
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  /* The transcript search bar's bottom corners round with its .card ancestor
+     so the two edges stay optically parallel; only two corners are rounded,
+     and .chat:has(> .agent-chat__search-bar) zeroes .card's own radius while
+     the search bar is present (see chat/layout.css). corner-shape still
+     needs to be set here even though the top two corners are 0 (a 0-radius
+     corner draws no curve either way): the bottom two are standing in for
+     .card's own squircle corner at the seam, so they need the same shape,
+     not just the same radius, to actually match it. */
+  .agent-chat__search-bar.agent-chat__search-bar {
+    border-radius: 0 0 calc(14px * var(--openclaw-corner-radius-scale))
+      calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  /* These two add a fixed cosmetic offset on top of the --radius-xl step in
+     their home rule (components.css); only the --radius-xl portion scales,
+     matching that intent. */
+  .md-preview-dialog__panel.md-preview-dialog__panel {
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale) + 6px);
+    corner-shape: superellipse(1.5);
+  }
+
+  .md-preview-dialog__reader.md-preview-dialog__reader {
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale) + 2px);
+    corner-shape: superellipse(1.5);
+  }
+
+  /* Menu panels and items get the same direct-property treatment: item
+     radius is computed inline as panel-minus-padding rather than read from
+     --menu-item-radius, so nothing here is inheritable either. */
+  .slash-menu.slash-menu,
+  .chat-reply-context-menu.chat-reply-context-menu,
+  .chat-selection-popup.chat-selection-popup {
+    border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  /* Items pick up corner-shape too, not just the scaled radius: corner-shape
+     doesn't inherit, and a bigger round radius sitting inside a squircle
+     panel with no shape of its own reads as an unrelated smaller circle
+     poking out of a superellipse, not a coherent nested row. */
+  .slash-menu-item.slash-menu-item,
+  .chat-reply-context-menu.chat-reply-context-menu button,
+  .chat-selection-popup.chat-selection-popup button {
+    border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
+    corner-shape: superellipse(1.5);
+  }
+
+  /* wa-dropdown/wa-popover/wa-select: the panel gets the same direct
+     border-radius as the part below, so nothing it contains inherits a
+     token from it. Their items are light-DOM children slotted into that
+     part with feature-specific classes (not a single enumerable selector,
+     and occasionally a plain <button> rather than <wa-dropdown-item>), so
+     --menu-radius/--menu-item-radius stay redeclared on the host purely to
+     reach those items by inheritance — the one remaining inheritable-token
+     exception in this block. It is bounded to these three purpose-built
+     menu/select components, whose entire subtree is menu chrome by
+     construction, unlike the arbitrary-content containers above. */
+  wa-dropdown,
+  wa-popover,
+  wa-select {
+    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+  }
+
+  /* Unlike the doubled classes above, this generic tag selector must outrank
+     dozens of concrete per-feature panels (.cron-job-menu::part(menu),
+     .usage-export-menu::part(menu), and so on app-wide) that each declare
+     their own border-radius from --menu-radius. A bare type selector can
+     never out-specificity a class selector no matter how it's repeated, so
+     !important is the only way for one generic rule to cover every
+     wa-dropdown/wa-popover/wa-select panel by design, matching this PR's
+     "any wa-dropdown, wa-popover or wa-select gets the treatment" intent. */
+  wa-dropdown::part(menu),
+  wa-popover::part(body),
+  wa-select::part(listbox),
+  wa-select::part(combobox) {
+    border-radius: calc(10px * var(--openclaw-corner-radius-scale)) !important;
+    corner-shape: superellipse(1.5);
   }
 }
 
@@ -380,6 +556,8 @@
   --hljs-type: #953800;
   --hljs-attribute: #116329;
   --hljs-meta: #57606a;
+  --hljs-deletion: #a40e26;
+  --hljs-addition: #116329;
 
   /* Light shadows - Subtle, warm-tinted */
   --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
@@ -391,17 +569,6 @@
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: light;
-}
-
-/* Scrollbar - visible on light backgrounds */
-:root[data-theme-mode="light"]::-webkit-scrollbar-thumb,
-:root[data-theme-mode="light"] ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-}
-
-:root[data-theme-mode="light"]::-webkit-scrollbar-thumb:hover,
-:root[data-theme-mode="light"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
 }
 
 /* Theme families override accent tokens while keeping shared surfaces/layout. */
@@ -690,6 +857,9 @@
 
 * {
   box-sizing: border-box;
+  /* scrollbar-width doesn't inherit (unlike scrollbar-color above), so every
+     element needs its own declaration to stay off the wider UA default. */
+  scrollbar-width: thin;
 }
 
 .sr-only {
@@ -944,24 +1114,50 @@ textarea,
   color: var(--selection-fg);
 }
 
-/* Main/document surfaces keep a normal scrollbar hit target. Dense sidebars
-   override this inherited size locally so their row actions retain room. */
-::-webkit-scrollbar {
-  width: var(--scrollbar-size, 12px);
-  height: var(--scrollbar-size, 12px);
+/* Canonical scrollbar for every scroll surface. scrollbar-color (:root above)
+   inherits, including into shadow roots; scrollbar-width (* above) does not.
+   Web Awesome shadow-DOM menus/listboxes are reachable via ::part(); no document
+   rule crosses that boundary on its own, so every rule below repeats the same
+   generic host group used for the shared corner treatment above. Enumerating
+   feature classes instead would leave every unlisted dropdown, listbox, and
+   popover on the raw platform scrollbar the moment one is added. */
+::-webkit-scrollbar,
+wa-dropdown::part(menu)::-webkit-scrollbar,
+wa-select::part(listbox)::-webkit-scrollbar,
+wa-popover::part(body)::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner,
+wa-dropdown::part(menu)::-webkit-scrollbar-track,
+wa-select::part(listbox)::-webkit-scrollbar-track,
+wa-popover::part(body)::-webkit-scrollbar-track {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+::-webkit-scrollbar-thumb,
+wa-dropdown::part(menu)::-webkit-scrollbar-thumb,
+wa-select::part(listbox)::-webkit-scrollbar-thumb,
+wa-popover::part(body)::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+  border: var(--scrollbar-thumb-inset) solid transparent;
   border-radius: var(--radius-full);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
+/* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
+   body set overflow: clip above, so the document itself never scrolls and the
+   always-true html:hover/body:hover can't hover a document scrollbar. ::part()
+   surfaces get thumb-only hover; container hover can't chain through shadow. */
+::-webkit-scrollbar-thumb:hover,
+:hover::-webkit-scrollbar-thumb,
+wa-dropdown::part(menu)::-webkit-scrollbar-thumb:hover,
+wa-select::part(listbox)::-webkit-scrollbar-thumb:hover,
+wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
 }
 
 /* Animations - Polished with spring feel */

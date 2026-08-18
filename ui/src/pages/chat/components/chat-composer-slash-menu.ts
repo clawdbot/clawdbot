@@ -9,7 +9,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { exportChatMarkdown } from "../export.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -201,10 +201,6 @@ function slashOptionIdSegment(value: string): string {
   );
 }
 
-export function paneDomId(paneId: string, suffix: string): string {
-  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
-}
-
 function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
   return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
 }
@@ -259,38 +255,8 @@ export function getActiveSlashMenuOptionLabel(state: ChatComposerState): string 
   return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
-export function scrollActiveSlashMenuOptionIntoView(
-  state: ChatComposerState,
-  paneId: string,
-): void {
-  const activeId = getActiveSlashMenuOptionId(state, paneId);
-  if (!activeId) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const activeOption = document.getElementById(activeId);
-    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    // scrollIntoView also moves the short-landscape composer and page. Keep
-    // keyboard navigation owned by the menu so textarea focus stays stable.
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
-    }
-  });
-}
-
 function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
-}
-
-export function exportMarkdown(props: Pick<ChatComposerProps, "messages" | "assistantName">): void {
-  exportChatMarkdown(props.messages, props.assistantName);
 }
 
 export function renderSlashMenu(

@@ -7,6 +7,8 @@ import {
   parseShortSessionRef,
 } from "./grammar.js";
 
+export { normalizeControlUiBasePath };
+
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";
 
@@ -16,6 +18,7 @@ type BuildControlUiSessionPathParams = {
   fallbackAgentId?: string;
   basePath?: string;
   displayName?: string;
+  exactKey?: boolean;
   mainKey?: string;
   shortIdLength?: number;
 };
@@ -94,6 +97,17 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   ) {
     return `${namespace}/${encodedAgentId}`;
   }
+  const segments = rest.split(":");
+  if (segments.some((segment) => !segment)) {
+    return null;
+  }
+  if (params.exactKey) {
+    const segment = segments[0] ?? "";
+    return segments.length === 1 &&
+      (isReservedSessionRest(segment, params.mainKey) || parseShortSessionRef(segment))
+      ? `${namespace}/${encodedAgentId}/~key/${encodePathSegment(segment)}`
+      : `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
+  }
   const matchedUuid = parsed?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
   const uuid = matchedUuid?.toLowerCase().replaceAll("-", "") ?? null;
   if (uuid) {
@@ -108,10 +122,6 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
     return isReservedSessionRest(sessionRef, params.mainKey)
       ? null
       : `${namespace}/${encodedAgentId}/${sessionRef}`;
-  }
-  const segments = rest.split(":");
-  if (segments.some((segment) => !segment)) {
-    return null;
   }
   if (segments.length === 1) {
     const segment = segments[0] ?? "";

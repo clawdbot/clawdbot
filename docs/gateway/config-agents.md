@@ -382,7 +382,6 @@ date context. Falls back to the host timezone.
       elevatedDefault: "on",
       timeoutSeconds: 600,
       mediaMaxMb: 5,
-      contextTokens: 200000,
       maxConcurrent: 4,
     },
   },
@@ -394,7 +393,7 @@ date context. Falls back to the host timezone.
   - Object form sets primary plus ordered failover models.
 - `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, Discord auto-thread titles, and [progress-draft narration](/concepts/progress-drafts#status-headline). When unset, OpenClaw derives the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`); title tasks otherwise use the agent's primary model, and narration stays off. If a distinct utility model cannot prepare or complete a generated title, OpenClaw retries that title once with the primary model. For dashboard titles, automatic utility derivation and the regular fallback use the effective session provider and auth profile; an explicit utility model keeps its configured provider/auth. Set `utilityModel: ""` to skip the alternate utility route; dashboard title generation still proceeds directly to the regular session model. `agents.entries.*.utilityModel` overrides the default, and an operation-specific model override wins over both. Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message; narration sends the inbound request plus compact redacted tool summaries. Choose a provider that matches your cost and data-handling requirements.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
-  - Used by the `image` tool path as its vision-model config when the active model cannot accept images. Native-vision models receive loaded image bytes directly instead.
+  - Used by the `view_image` tool path as its vision-model config when the active model cannot accept images. Native-vision models receive loaded image bytes directly instead.
   - Also used as fallback routing when the selected/default model cannot accept image input.
   - Prefer explicit `provider/model` refs. Bare IDs are accepted for compatibility; if a bare ID uniquely matches a configured image-capable entry in `models.providers.*.models`, OpenClaw qualifies it to that provider. Ambiguous configured matches require an explicit provider prefix.
 - `mediaModels.image`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -424,7 +423,7 @@ date context. Falls back to the host timezone.
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.entries.*.reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.6-sol` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
-- `contextTokens`: optional agent-wide cap. It can lower the effective budget of a larger model but cannot raise a model above its configured or discovered `contextTokens`. To opt one direct OpenAI model into its larger native window, set `models.providers.openai.models[].contextWindow` and `contextTokens` for that model; see [OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
+- To cap active input for one model, set `models.providers.<provider>.models[].contextTokens`; use `contextWindow` on the same entry for its native window. See [OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `anthropicServerCompaction`, `anthropicCompactThreshold`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
@@ -577,7 +576,7 @@ Periodic heartbeat runs.
 
 ### `agents.defaults.systemAgent`
 
-Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults:
+Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults. It is also the fallback owner when `models.list`, `models.authStatus`, `skills.status`, or `doctor.memory.status` omits `agentId`:
 
 ```json5
 {
@@ -589,7 +588,7 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, a sole configured agent resolves implicitly; ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins. Other agent-scoped methods do not use this setting as a general default. Delegated consults with a requesting agent keep that requester as their owner. When `systemAgent.agentId` is absent, a sole configured agent resolves implicitly; the four reads above and ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
 
 ### `agents.defaults.compaction`
 
@@ -1081,6 +1080,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 - `match.accountId` (optional; `*` = any account; omitted = default account)
 - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
 - `match.guildId` / `match.teamId` (optional; channel-specific)
+- `session` (optional; route bindings only): `{ dmScope, groupScope }` overrides session routing for matched peers
 - `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
 **Deterministic match order:**
@@ -1199,6 +1199,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   session: {
     scope: "per-sender",
     dmScope: "main", // main | per-peer | per-channel-peer | per-account-channel-peer
+    groupScope: "per-group", // main | per-group
     identityLinks: {
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
@@ -1220,7 +1221,9 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     maintenance: {
       mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
+      archiveDashboardAfter: "7d", // false or 0 disables
       maxEntries: 500,
+      preserveRecent: "7d", // optional duration or false
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional hard budget
       highWaterBytes: "400mb", // optional cleanup target
@@ -1235,7 +1238,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       suggest: true,
       drafts: true,
     },
-    mainKey: "main", // legacy (runtime always uses "main")
+    mainKey: "main", // canonical main-session suffix
     sendPolicy: {
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
       default: "allow",
@@ -1254,16 +1257,21 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `per-peer`: isolate by sender id across channels.
   - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
+- **`groupScope`**: how groups, rooms, and channels are grouped.
+  - `per-group` (default): keep each non-direct peer in its channel-scoped session.
+  - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing. Dock commands such as `/dock_discord` use the same map to switch the active session's reply route to another linked channel peer; see [Channel docking](/concepts/channel-docking).
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
-- **`mainKey`**: legacy field. Runtime always uses `"main"` for the main direct-chat bucket.
+- **`mainKey`**: canonical main-session suffix. Keep it stable unless you intentionally need a custom main-session key.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
+  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables automatic archiving.
   - `maxEntries`: maximum total number of live SQLite session entries (default `500`). Every row counts toward the cap, but archived or pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers are never automatic eviction targets. Cleanup removes the oldest unprotected rows; if protection prevents reaching the cap, the store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows. Unarchive, unpin, wait for active work to finish, or explicitly delete protected sessions to reduce the total.
+  - `preserveRecent`: optional inactivity window that protects recently active interactive sessions and all of their SQLite history generations from automatic age, count, and disk-budget history eviction (for example `"7d"`). Unset or `false` disables this protection. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible for bounded cleanup. Protection can temporarily keep the store above configured entry or disk targets and does not archive sessions.
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.

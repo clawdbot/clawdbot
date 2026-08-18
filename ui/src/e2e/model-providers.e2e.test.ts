@@ -712,12 +712,15 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Replace key" }).click();
       await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      // The { after } cursor waits for and returns the save-triggered patch,
+      // so a slow runner can't hand back an earlier config.patch stale.
       const patchCount = (await gateway.getRequests("config.patch")).length;
       await openaiCard.getByRole("button", { name: "Save" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(patchCount + 1);
-      const keyPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const keyPatch = requestRaw(
+        await gateway.waitForRequest("config.patch", {
+          after: patchCount,
+        }),
+      );
       expect(keyPatch).toEqual({
         models: { providers: { openai: providerConfig(openaiInputValue) } },
       });
@@ -755,10 +758,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         })
         .getByRole("button", { name: "Save" })
         .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(defaultPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: defaultPatchCount })),
+      ).toEqual({
         agents: {
           defaults: {
             model: "anthropic/claude-sonnet-4-5",
@@ -822,16 +824,181 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       const addPatchCount = (await gateway.getRequests("config.patch")).length;
       await addSection.getByRole("button", { name: "Save provider" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(addPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: addPatchCount })),
+      ).toEqual({
         models: { providers: { google: providerConfig(googleInputValue) } },
       });
       await page.locator('[data-provider-id="google"]').waitFor();
 
       if (recordVisuals) {
         await page.screenshot({ path: path.join(artifactDir, "02-probed.png"), fullPage: true });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reloads the selected agent and clears a failed model draft after reconnect", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const initialConfig = {
+      agents: { defaults: { model: "openai/initial-model" } },
+    };
+    const gateway = await installMockGateway(page, {
+      defaultAgentId: "main",
+      featureMethods: ["chat.metadata", "chat.startup", "config.patch"],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "writer", name: "Writer" },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "config.get": {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          hash: "model-providers-reconnect-1",
+          issues: [],
+          raw: JSON.stringify(initialConfig),
+          valid: true,
+        },
+        "models.list": {
+          models: [
+            { id: "initial-model", name: "Initial Model", provider: "openai", available: true },
+            { id: "saved-model", name: "Saved Model", provider: "openai", available: true },
+            { id: "failed-draft", name: "Failed Draft", provider: "openai", available: true },
+          ],
+        },
+        "models.authStatus": {
+          ts: NOW,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [{ profileId: "openai:writer", type: "oauth", status: "ok" }],
+            },
+          ],
+        },
+        "usage.status": { updatedAt: NOW, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentPicker.locator(".agent-select__trigger").click();
+      await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
+      await expect
+        .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
+        .toBe("Writer");
+      await expect
+        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
+        .toBe("openai/initial-model");
+
+      const primary = page.locator(".model-providers__defaults wa-select").first();
+      const savedConfig = {
+        agents: { defaults: { model: "openai/saved-model" } },
+      };
+      await gateway.setMethodResponse("config.get", {
+        config: savedConfig,
+        sourceConfig: savedConfig,
+        hash: "model-providers-reconnect-saved",
+        issues: [],
+        raw: JSON.stringify(savedConfig),
+        valid: true,
+      });
+      await selectModelPicker(primary, "openai/saved-model");
+      await page
+        .locator(".settings-section", {
+          has: page.getByRole("heading", { name: "Default models" }),
+        })
+        .getByRole("button", { name: "Save" })
+        .click();
+      await expect
+        .poll(async () =>
+          page.getByRole("status").filter({ hasText: "Default models saved" }).count(),
+        )
+        .toBeGreaterThan(0);
+
+      await selectModelPicker(primary, "openai/failed-draft");
+      await gateway.deferNext("config.patch");
+      await page
+        .locator(".settings-section", {
+          has: page.getByRole("heading", { name: "Default models" }),
+        })
+        .getByRole("button", { name: "Save" })
+        .click();
+      await gateway.waitForRequest("config.patch");
+      await gateway.rejectDeferred("config.patch", {
+        code: "INVALID_REQUEST",
+        message: "synthetic model save rejected",
+      });
+      await page.getByRole("alert").filter({ hasText: "synthetic model save rejected" }).waitFor();
+      if (recordVisuals) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "05-reconnect-save-error.png"),
+        });
+      }
+
+      const reconnectedConfig = {
+        agents: { defaults: { model: "openai/reconnected-model" } },
+      };
+      await gateway.setMethodResponse("config.get", {
+        config: reconnectedConfig,
+        sourceConfig: reconnectedConfig,
+        hash: "model-providers-reconnect-2",
+        issues: [],
+        raw: JSON.stringify(reconnectedConfig),
+        valid: true,
+      });
+      await gateway.setMethodResponse("models.list", {
+        models: [
+          {
+            id: "reconnected-model",
+            name: "Reconnected Model",
+            provider: "openai",
+            available: true,
+          },
+        ],
+      });
+      const authRequestCount = (await gateway.getRequests("models.authStatus")).length;
+      await gateway.closeLatest(1012, "model provider reconnect proof");
+      await expect
+        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
+        .toBeGreaterThan(authRequestCount);
+      await expect
+        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
+        .toBe("openai/reconnected-model");
+      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+      await expect
+        .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
+        .toBe("Writer");
+      for (const request of (await gateway.getRequests("models.authStatus")).slice(
+        authRequestCount,
+      )) {
+        expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
+      }
+      if (recordVisuals) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "06-reconnected-model.png"),
+        });
       }
     } finally {
       await context.close();

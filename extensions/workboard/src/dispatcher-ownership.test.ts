@@ -111,13 +111,20 @@ describe("Workboard dispatcher ownership", () => {
       cards[0]?.id,
       cards[1]?.id,
     ]);
-    await expect(Promise.all(cards.map((card) => store.get(card.id)))).resolves.toMatchObject([
+    const persisted = await Promise.all(cards.map((card) => store.get(card.id)));
+    expect(persisted).toMatchObject([
       { status: "blocked" },
       { status: "blocked" },
       { status: "ready" },
       { status: "ready" },
       { status: "ready" },
     ]);
+    for (const rejected of persisted.slice(0, 2)) {
+      expect(rejected).not.toHaveProperty("metadata.claim");
+      expect(rejected).not.toHaveProperty("sessionKey");
+      expect(rejected).not.toHaveProperty("runId");
+      expect(rejected).not.toHaveProperty("execution");
+    }
   });
 
   it("does not spend worker attempts on cards that fail workspace preflight", async () => {
@@ -551,50 +558,234 @@ describe("Workboard dispatcher ownership", () => {
     expect(persisted.filter((card) => card.status === "ready")).toHaveLength(24);
   });
 
-  it("preserves an accepted worker claim when execution persistence fails", async () => {
+  it.each(["scheduled dispatch", "dashboard exact-card start"] as const)(
+    "persists launch association before %s and keeps accepted runs visible",
+    async (origin) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Worker with unavailable execution persistence",
+        status: "ready",
+        workspaceAccess: { unrestricted: true },
+      });
+      vi.spyOn(store, "enrichExecutionAssociation").mockRejectedValue(
+        new Error("execution enrichment unavailable"),
+      );
+      let provisionalRunId = "";
+      const canonicalSessionKey = `agent:worker:subagent:workboard-default-${card.id}`;
+      const run = vi.fn().mockImplementation(async (input) => {
+        provisionalRunId = input.idempotencyKey;
+        const persisted = await store.get(card.id);
+        expect(persisted).toMatchObject({
+          status: "running",
+          sessionKey: input.sessionKey,
+          runId: provisionalRunId,
+          execution: {
+            status: "running",
+            sessionKey: input.sessionKey,
+            runId: provisionalRunId,
+          },
+        });
+        return { sessionKey: canonicalSessionKey, runId: "accepted-run" };
+      });
+
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: {
+          maxStarts: 1,
+          ...(origin === "dashboard exact-card start" ? { cardId: card.id } : {}),
+        },
+      });
+
+      expect(run).toHaveBeenCalledOnce();
+      expect(result.started).toEqual([
+        expect.objectContaining({
+          cardId: card.id,
+          sessionKey: canonicalSessionKey,
+          runId: "accepted-run",
+          ...(origin === "dashboard exact-card start"
+            ? {
+                card: expect.objectContaining({
+                  sessionKey: canonicalSessionKey,
+                  runId: "accepted-run",
+                }),
+              }
+            : {}),
+        }),
+      ]);
+      expect(result.startFailures).toEqual([]);
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        status: "running",
+        runId: provisionalRunId,
+        execution: { status: "running", runId: provisionalRunId },
+        metadata: {
+          claim: { ownerId: "workboard-dispatcher" },
+          workerLogs: [expect.objectContaining({ runId: "accepted-run" })],
+        },
+      });
+      await expect(
+        store.heartbeat(card.id, { ownerId: "workboard-dispatcher" }),
+      ).resolves.toMatchObject({
+        status: "running",
+        metadata: { claim: { ownerId: "workboard-dispatcher" } },
+      });
+
+      const retry = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { maxStarts: 1 },
+      });
+
+      expect(retry.started).toEqual([]);
+      expect(retry.startFailures).toEqual([]);
+      expect(run).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["backlog", "todo", "ready"] as const)(
+    "starts an exact dashboard card from %s",
+    async (status) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: `Exact ${status}`,
+        status,
+        agentId: `worker-${status}`,
+        workspaceAccess: { unrestricted: true },
+      });
+      const run = vi.fn().mockResolvedValue({ runId: `run-${status}` });
+
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { cardId: card.id, maxStarts: 1 },
+      });
+
+      expect(result.started).toEqual([expect.objectContaining({ cardId: card.id })]);
+      expect(result.startFailures).toEqual([]);
+      expect((await store.get(card.id))?.status).toBe("running");
+    },
+  );
+
+  it.each(["review", "blocked", "done"] as const)(
+    "rejects an exact dashboard card in %s",
+    async (status) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: `Invalid exact ${status}`,
+        status,
+        agentId: `worker-${status}`,
+        workspaceAccess: { unrestricted: true },
+      });
+      const run = vi.fn();
+
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { cardId: card.id, maxStarts: 1 },
+      });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(result.started).toEqual([]);
+      expect(result.startFailures).toEqual([
+        expect.objectContaining({
+          cardId: card.id,
+          error: expect.stringContaining(status),
+        }),
+      ]);
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        status,
+        metadata: expect.not.objectContaining({ claim: expect.anything() }),
+      });
+    },
+  );
+
+  it.each([
+    { label: "due", offsetMs: -1_000, starts: true },
+    { label: "future", offsetMs: 60_000, starts: false },
+  ])("handles a $label scheduled exact dashboard card", async ({ offsetMs, starts }) => {
     const store = new WorkboardStore(createMemoryStore());
+    const now = Date.now();
     const card = await store.create({
-      title: "Worker with unavailable execution persistence",
-      status: "ready",
+      title: "Scheduled exact",
+      status: "scheduled",
+      scheduledAt: now + offsetMs,
+      agentId: "scheduled-worker",
       workspaceAccess: { unrestricted: true },
     });
-    const run = vi.fn().mockResolvedValue({ runId: "run-awaiting-persistence" });
-    vi.spyOn(store, "update").mockRejectedValueOnce(new Error("execution persistence unavailable"));
+    const run = vi.fn().mockResolvedValue({ runId: "scheduled-run" });
 
     const result = await dispatchAndStartWorkboardCards({
       store,
       subagent: { run },
-      options: { maxStarts: 1 },
+      options: { cardId: card.id, maxStarts: 1, now },
     });
 
-    expect(run).toHaveBeenCalledOnce();
-    expect(result.started).toEqual([]);
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "execution persistence unavailable",
-      }),
-    ]);
+    expect(run).toHaveBeenCalledTimes(starts ? 1 : 0);
+    expect(result.started).toHaveLength(starts ? 1 : 0);
+    expect(result.startFailures).toHaveLength(starts ? 0 : 1);
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "running",
-      metadata: { claim: { ownerId: "workboard-dispatcher" } },
+      status: starts ? "running" : "scheduled",
     });
-    await expect(
-      store.heartbeat(card.id, { ownerId: "workboard-dispatcher" }),
-    ).resolves.toMatchObject({
-      status: "running",
-      metadata: { claim: { ownerId: "workboard-dispatcher" } },
-    });
+  });
 
-    const retry = await dispatchAndStartWorkboardCards({
+  it("keeps global owner capacity for exact dashboard starts across boards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const active = await store.create({
+      title: "Active owner",
+      status: "ready",
+      boardId: "ops",
+      agentId: "shared-owner",
+      workspaceAccess: { unrestricted: true },
+    });
+    await store.claim(active.id, { ownerId: "shared-owner" });
+    const target = await store.create({
+      title: "Blocked exact owner",
+      status: "todo",
+      boardId: "product",
+      agentId: "shared-owner",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
       store,
       subagent: { run },
-      options: { maxStarts: 1 },
+      options: { cardId: target.id, maxStarts: 1 },
     });
 
-    expect(retry.started).toEqual([]);
-    expect(retry.startFailures).toEqual([]);
-    expect(run).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({ error: expect.stringContaining("shared-owner") }),
+    ]);
+    await expect(store.get(target.id)).resolves.toMatchObject({ status: "todo" });
+  });
+
+  it("starts the exact lower-priority card without selecting a sibling", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const urgent = await store.create({
+      title: "Urgent sibling",
+      status: "ready",
+      priority: "urgent",
+      agentId: "urgent-owner",
+      workspaceAccess: { unrestricted: true },
+    });
+    const target = await store.create({
+      title: "Exact low priority",
+      status: "todo",
+      priority: "low",
+      agentId: "target-owner",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "target-run" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { cardId: target.id, maxStarts: 1 },
+    });
+
+    expect(result.started).toEqual([expect.objectContaining({ cardId: target.id })]);
+    await expect(store.get(urgent.id)).resolves.toMatchObject({ status: "ready" });
   });
 
   it("keeps an accepted worker running when its worker log cannot be recorded", async () => {

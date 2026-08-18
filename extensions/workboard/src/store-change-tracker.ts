@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkboardChange } from "@openclaw/workboard-contract";
-import type { WorkboardKeyedStore } from "./persistence-types.js";
+import type { WorkboardCardStore, WorkboardKeyedStore } from "./persistence-types.js";
 
 export class WorkboardChangeTracker {
   private readonly epoch = randomUUID();
@@ -28,6 +28,40 @@ export class WorkboardChangeTracker {
         return deleted;
       },
       entries: async () => await store.entries(),
+    };
+  }
+
+  trackCardStore(store: WorkboardCardStore): WorkboardCardStore {
+    return {
+      ...this.track(store),
+      registerIfAbsent: async (key, value) => {
+        const inserted = await store.registerIfAbsent(key, value);
+        if (inserted) {
+          this.mutationRevision += 1;
+        }
+        return inserted;
+      },
+      registerIfUpdatedAt: async (key, value, expectedUpdatedAt) => {
+        const updated = await store.registerIfUpdatedAt(key, value, expectedUpdatedAt);
+        if (updated) {
+          this.mutationRevision += 1;
+        }
+        return updated;
+      },
+      claimIfOwnerAvailable: async (key, value, expectedUpdatedAt, ownerId, now) => {
+        const result = await store.claimIfOwnerAvailable(
+          key,
+          value,
+          expectedUpdatedAt,
+          ownerId,
+          now,
+        );
+        if (result === "updated") {
+          this.mutationRevision += 1;
+        }
+        return result;
+      },
+      listBoardAggregates: async () => await store.listBoardAggregates(),
     };
   }
 

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   formatTrajectoryCommandExportSummary: vi.fn(),
   getRuntimeConfig: vi.fn(),
   loadSessionEntryReadOnly: vi.fn(),
+  resolveExplicitStorePath: vi.fn(),
   resolveStorePath: vi.fn(),
 }));
 
@@ -36,6 +37,10 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./session-store-targets.js", () => ({
+  resolveExplicitSessionStorePathOrExit: mocks.resolveExplicitStorePath,
+}));
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -49,6 +54,9 @@ describe("exportTrajectoryCommand", () => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
+    mocks.resolveExplicitStorePath.mockImplementation(
+      (params: { storePath: string }) => params.storePath,
+    );
     mocks.loadSessionEntryReadOnly.mockReturnValue(undefined);
     mocks.exportTrajectoryForCommand.mockResolvedValue({
       outputDir: "/tmp/workspace/.openclaw/trajectory-exports/export",
@@ -158,6 +166,13 @@ describe("exportTrajectoryCommand", () => {
 
       expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
       expect(mocks.resolveStorePath).toHaveBeenCalledWith(store, { agentId: "work" });
+      expect(mocks.resolveExplicitStorePath).toHaveBeenCalledWith({
+        storePath: resolvedStore,
+        inputStorePath: store,
+        agentId: "work",
+        runtime,
+        json: undefined,
+      });
       expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
         agentId: "work",
         sessionKey: "agent:work:telegram:direct:123",

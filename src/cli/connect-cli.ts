@@ -1,11 +1,27 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
-import type { Command } from "commander";
+import fs from "node:fs/promises";
+import { Option, type Command } from "commander";
+import {
+  buildCloudflareAccessHeaders,
+  CF_ACCESS_CLIENT_ID_HEADER,
+  CF_ACCESS_CLIENT_SECRET_HEADER,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
+import {
+  nodeHostCloudflareAccessConfigFromEnv,
+  nodeHostGatewayMatchesUrl,
+  nodeHostGatewaysShareOrigin,
+  resolveNodeHostCloudflareAccess,
+  type NodeHostCloudflareAccessConfig,
+} from "../node-host/gateway-cloudflare-access.js";
 import { runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
@@ -16,6 +32,8 @@ import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 
 type ConnectCommandOptions = {
   service?: boolean;
+  ephemeral?: boolean;
+  targetFile?: string;
   displayName?: string;
 };
 
@@ -51,7 +69,10 @@ function parseJoinTarget(target: string): URL | null {
   return parsed;
 }
 
-async function fetchJoinPayload(target: URL): Promise<PairingSetupPayload> {
+async function fetchJoinPayload(
+  target: URL,
+  cloudflareAccess?: CloudflareAccessCredentials,
+): Promise<PairingSetupPayload> {
   const expectedHost = normalizeHostname(target.hostname);
   let release: () => Promise<void> = async () => {};
   try {
@@ -61,6 +82,17 @@ async function fetchJoinPayload(target: URL): Promise<PairingSetupPayload> {
       maxRedirects: 0,
       requireHttps: target.protocol === "https:",
       timeoutMs: JOIN_FETCH_TIMEOUT_MS,
+      ...(cloudflareAccess
+        ? {
+            init: { headers: buildCloudflareAccessHeaders(cloudflareAccess) },
+            capture: {
+              sensitiveRequestHeaderNames: [
+                CF_ACCESS_CLIENT_ID_HEADER,
+                CF_ACCESS_CLIENT_SECRET_HEADER,
+              ],
+            },
+          }
+        : {}),
       policy: {
         allowPrivateNetwork: true,
         allowedHostnames: [expectedHost],
@@ -91,22 +123,100 @@ async function fetchJoinPayload(target: URL): Promise<PairingSetupPayload> {
   }
 }
 
-async function resolveConnectPayload(target: string): Promise<PairingSetupPayload> {
-  const joinTarget = parseJoinTarget(target);
-  return joinTarget ? await fetchJoinPayload(joinTarget) : decodePairingSetupCode(target);
+function selectCloudflareAccessConfig(params: {
+  savedGateway?: NodeHostGatewayConfig;
+  target: URL;
+  env: NodeJS.ProcessEnv;
+}): NodeHostCloudflareAccessConfig | undefined {
+  const saved = params.savedGateway;
+  return (
+    (saved && nodeHostGatewayMatchesUrl(saved, params.target)
+      ? saved.cloudflareAccess
+      : undefined) ?? nodeHostCloudflareAccessConfigFromEnv(params.env)
+  );
 }
 
-async function runConnectCommand(target: string, opts: ConnectCommandOptions): Promise<void> {
-  const pair = resolveNodePairGatewayPayload(await resolveConnectPayload(target));
+async function resolveConnectTarget(
+  target: string | undefined,
+  targetFile: string | undefined,
+): Promise<string> {
+  if (target && targetFile) {
+    throw new Error("Provide the connect target or --target-file, not both.");
+  }
+  if (target) {
+    return target;
+  }
+  const path = targetFile?.trim();
+  if (!path) {
+    throw new Error("Connect target is required.");
+  }
+  try {
+    const value = (await fs.readFile(path, "utf8")).trim();
+    if (!value) {
+      throw new Error("Connect target file is empty.");
+    }
+    return value;
+  } finally {
+    await fs.rm(path, { force: true });
+  }
+}
+
+async function runConnectCommand(
+  target: string | undefined,
+  opts: ConnectCommandOptions,
+): Promise<void> {
+  if (opts.ephemeral && opts.service) {
+    throw new Error("--ephemeral cannot be combined with --service.");
+  }
+  const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
+  const joinTarget = parseJoinTarget(resolvedTarget);
+  const saved = await loadNodeHostConfig();
+  const initialCloudflareAccess = joinTarget
+    ? selectCloudflareAccessConfig({
+        savedGateway: saved?.gateway,
+        target: joinTarget,
+        env: process.env,
+      })
+    : undefined;
+  if (initialCloudflareAccess && joinTarget?.protocol !== "https:") {
+    throw new Error("Cloudflare Access credentials require an HTTPS join URL.");
+  }
+  const joinCredentials = await resolveNodeHostCloudflareAccess({
+    value: initialCloudflareAccess,
+    config: getRuntimeConfig(),
+    env: process.env,
+  });
+  const payload = joinTarget
+    ? await fetchJoinPayload(joinTarget, joinCredentials)
+    : decodePairingSetupCode(resolvedTarget);
+  const pair = resolveNodePairGatewayPayload(payload);
+  const cloudflareAccess =
+    initialCloudflareAccess ??
+    (saved?.gateway && nodeHostGatewaysShareOrigin(saved.gateway, pair.candidates[0]!)
+      ? saved.gateway.cloudflareAccess
+      : undefined) ??
+    nodeHostCloudflareAccessConfigFromEnv(process.env);
+  const gatewayCandidates = pair.candidates.map((candidate, index) => {
+    const boundToAccessOrigin = joinTarget
+      ? nodeHostGatewayMatchesUrl(candidate, joinTarget)
+      : index === 0;
+    return boundToAccessOrigin && cloudflareAccess ? { ...candidate, cloudflareAccess } : candidate;
+  });
   const nodeRunOptions = {
     gatewayHost: pair.host,
     gatewayPort: pair.port,
     gatewayTls: pair.tls,
     gatewayTlsFingerprint: pair.tlsFingerprint,
     gatewayContextPath: pair.contextPath,
-    gatewayCandidates: pair.candidates,
+    ...(gatewayCandidates[0]?.cloudflareAccess
+      ? { gatewayCloudflareAccess: gatewayCandidates[0].cloudflareAccess }
+      : {}),
+    gatewayCandidates,
     gatewayBootstrapToken: pair.bootstrapToken,
-    preferGatewayBootstrapToken: true,
+    // Environment-managed nodes reuse their persisted device token when a provider
+    // replays setup after the one-shot bootstrap credential has been consumed.
+    preferGatewayBootstrapToken: opts.ephemeral !== true,
+    ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
     displayName: opts.displayName,
   };
 
@@ -125,8 +235,10 @@ export function registerConnectCli(program: Command): void {
   program
     .command("connect")
     .description("Connect this machine to an OpenClaw Gateway as a node")
-    .argument("<target>", "oc-pair URL, setup code, or HTTPS Gateway join URL")
+    .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
+    .option("--ephemeral", "Run as an environment-managed disposable session host", false)
+    .addOption(new Option("--target-file <path>").hideHelp())
     .option("--display-name <name>", "Override the node display name")
     .addHelpText(
       "after",
@@ -139,7 +251,7 @@ export function registerConnectCli(program: Command): void {
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
     )
-    .action(async (target: string, opts: ConnectCommandOptions) => {
+    .action(async (target: string | undefined, opts: ConnectCommandOptions) => {
       try {
         await runConnectCommand(target, opts);
       } catch (error) {

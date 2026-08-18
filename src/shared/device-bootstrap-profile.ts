@@ -6,7 +6,8 @@ export type DeviceBootstrapPurpose =
   | "control-ui"
   | "control-ui-owner"
   | "mobile-full"
-  | "voice-node";
+  | "voice-node"
+  | "cloud-worker";
 
 /** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
@@ -88,6 +89,13 @@ export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [],
 };
 
+/** Environment-owned node profile removed when its cloud lease is released. */
+export const CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["node"],
+  scopes: [],
+  purpose: "cloud-worker",
+};
+
 /** Room/embedded voice profile: node capabilities plus least-privilege Talk RPCs. */
 export const VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node", "operator"],
@@ -137,7 +145,10 @@ function isPairingSetupBootstrapProfile(input: DeviceBootstrapProfileInput | und
 export function isNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+  return (
+    matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    matchesBootstrapProfile(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+  );
 }
 
 export function resolvePairingSetupAccess(
@@ -146,7 +157,10 @@ export function resolvePairingSetupAccess(
   if (deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
     return "full";
   }
-  if (deviceBootstrapProfilesEqual(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+  if (
+    deviceBootstrapProfilesEqual(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    deviceBootstrapProfilesEqual(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+  ) {
     return "node";
   }
   return "limited";
@@ -245,7 +259,8 @@ export function normalizeDeviceBootstrapProfile(
     input?.purpose === "control-ui" ||
     input?.purpose === "control-ui-owner" ||
     input?.purpose === "mobile-full" ||
-    input?.purpose === "voice-node"
+    input?.purpose === "voice-node" ||
+    input?.purpose === "cloud-worker"
       ? input.purpose
       : undefined;
   return {

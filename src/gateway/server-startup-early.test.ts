@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   primeRemoteSkillsCache: vi.fn(),
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
+  closeSkillsWatchers: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
   ensureTaskRuntimeStateReady: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("../skills/runtime/remote.js", () => ({
 
 vi.mock("../skills/runtime/refresh.js", () => ({
   registerSkillsChangeListener: mocks.registerSkillsChangeListener,
+  closeSkillsWatchers: mocks.closeSkillsWatchers,
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -98,6 +100,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.primeRemoteSkillsCache.mockReset();
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
     mocks.registerSkillsChangeListener.mockReset();
+    mocks.closeSkillsWatchers.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockReset();
@@ -142,8 +145,9 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
     expect(earlyRuntime.getActiveTaskCount()).toBe(1);
 
-    earlyRuntime.skillsChangeUnsub();
+    await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
+    expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
   });
 
   it("broadcasts remote-node skill invalidations to operator clients", async () => {

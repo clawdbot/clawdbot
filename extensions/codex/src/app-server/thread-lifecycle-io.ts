@@ -182,6 +182,7 @@ export async function resumeExistingCodexThread(
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
         threadId: resumeBinding.threadId,
+        cwd: params.cwd,
         authProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
@@ -196,6 +197,8 @@ export async function resumeExistingCodexThread(
         webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
+        shellEnvironment: params.shellEnvironment,
+        disableLoginShell: params.disableLoginShell,
       }),
     );
     const requestModelProvider =
@@ -477,6 +480,8 @@ export async function startFreshCodexThread(
       modelProvider: startModelProvider,
       hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: params.shellEnvironment,
+      disableLoginShell: params.disableLoginShell,
     }),
   );
   const requestModelProvider =
@@ -582,6 +587,7 @@ export async function startFreshCodexThread(
       cwd: params.cwd,
       ...(rolloutPath ? { rolloutPath } : {}),
       authProfileId: params.params.authProfileId,
+      agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
       model: response.model ?? startParams.model ?? params.params.modelId,
       modelProvider: bindingModelProvider,
       dynamicToolsFingerprint,
@@ -673,6 +679,7 @@ export async function startFreshCodexThread(
     cwd: params.cwd,
     ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
+    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider:
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,

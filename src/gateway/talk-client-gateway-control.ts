@@ -5,8 +5,11 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
-import { parseRealtimeVoiceAgentConsultArgs } from "../talk/agent-consult-tool.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  parseRealtimeVoiceAgentConsultArgs,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+} from "../talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
@@ -32,6 +35,7 @@ import {
 } from "../talk/realtime-session-harness.js";
 import type { TalkEvent } from "../talk/talk-events.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { formatError } from "./server-utils.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
@@ -52,6 +56,25 @@ const owners = new Map<string, GatewayControlOwner>();
 
 const REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const REALTIME_CONTROL_MAX_PENDING = 8;
+
+export type TalkAgentConsultAuthority = {
+  senderIsOwner: boolean;
+  toolsAllow?: string[];
+};
+
+export function resolveTalkAgentConsultAuthority(
+  scopes: readonly string[] | undefined,
+): TalkAgentConsultAuthority {
+  const senderIsOwner = scopes?.includes(ADMIN_SCOPE) === true;
+  if (senderIsOwner || scopes?.includes(WRITE_SCOPE) === true) {
+    return { senderIsOwner };
+  }
+  return {
+    senderIsOwner: false,
+    toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
+  };
+}
+
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
   const [embeddedAgent, admission] = await Promise.all([
     import("../agents/embedded-agent.js"),
@@ -211,12 +234,14 @@ export function createTalkClientAgentConsultRunner(params: {
   agentId: string;
   sessionKey: string;
   ownerConnId?: string;
+  authority?: TalkAgentConsultAuthority;
   getVoiceSessionId: () => string | undefined;
   initialItems: Array<{ role: "user" | "assistant"; text: string }>;
   runIdPrefix?: string;
   surface?: string;
   registerRun?: (params: { runId: string }) => void;
 }) {
+  const authority = params.authority ?? resolveTalkAgentConsultAuthority(undefined);
   let agentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
   const runArgs = async (args: unknown, signal?: AbortSignal) => {
     const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
@@ -253,6 +278,7 @@ export function createTalkClientAgentConsultRunner(params: {
       questionSourceLabel: "user",
       thinkLevel: talkConfig?.consultThinkingLevel,
       fastMode: talkConfig?.consultFastMode,
+      ...authority,
       abortSignal: signal,
       onRunStarted: ({ runId, sessionId, timeoutMs }) => {
         if (params.registerRun) {

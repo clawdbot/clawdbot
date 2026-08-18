@@ -11,7 +11,6 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
-import { setCurrentPluginMetadataSnapshot } from "../current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
@@ -252,16 +251,6 @@ export function resolvePluginRuntimeLoadContext(
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
-  if (metadataSnapshot && metadataSnapshot.pluginIds === undefined) {
-    // Scoped graphs are request-local; publishing one would hide other installed
-    // providers from process-wide model normalization and later runtime loads.
-    setCurrentPluginMetadataSnapshot(metadataSnapshot, {
-      config: rawConfig,
-      compatibleConfigs: [config, activationSourceConfig],
-      env,
-      workspaceDir,
-    });
-  }
   return {
     rawConfig,
     config,

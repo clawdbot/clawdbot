@@ -121,6 +121,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);
+        requestExitAfterOneShotOutput(
+          defaultRuntime,
+          typeof process.exitCode === "number" ? process.exitCode : 0,
+        );
       });
     });
 

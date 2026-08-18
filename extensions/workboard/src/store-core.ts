@@ -1,18 +1,22 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkboardBoardMetadata,
   WorkboardChange,
   WorkboardCard,
+  WorkboardEvent,
   WorkboardLink,
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isWorkboardCardStore } from "./persistence-types.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardBoardCardAggregate,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -20,6 +24,7 @@ import {
   assertCanMutateClaimedCard,
   cardBoardId,
   cardParentIds,
+  cardSessionKey,
   compareCards,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
@@ -67,10 +72,23 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 
+type WorkboardUpdateCardOptions = {
+  allowMetadataDependencyLinks?: boolean;
+  enforceStatusHolds?: boolean;
+  event?: Omit<WorkboardEvent, "id" | "at">;
+  eventAt?: number;
+  expectedUpdatedAt?: number;
+  ownerSlot?: { ownerId: string; now: number };
+  preserveProofId?: string;
+};
+
+const WORKBOARD_CAS_ATTEMPTS = 3;
+
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private lastNotificationSequence = 0;
   private readonly changes: WorkboardChangeTracker;
+  private readonly cardStore?: WorkboardCardStore;
   protected readonly store: WorkboardKeyedStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
@@ -86,7 +104,12 @@ export class WorkboardCoreStore {
     } = {},
   ) {
     this.changes = new WorkboardChangeTracker(stores.dataVersion);
-    this.store = this.changes.track(store);
+    if (isWorkboardCardStore(store)) {
+      this.cardStore = this.changes.trackCardStore(store);
+      this.store = this.cardStore;
+    } else {
+      this.store = this.changes.track(store);
+    }
     this.boardStore = this.changes.track(
       stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
     );
@@ -119,17 +142,49 @@ export class WorkboardCoreStore {
     return await result;
   }
 
+  protected async updateLatestCard(
+    id: string,
+    buildPatch: (current: WorkboardCard) => WorkboardCardPatch | undefined,
+    options: Omit<WorkboardUpdateCardOptions, "expectedUpdatedAt"> = {},
+  ): Promise<{ card: WorkboardCard; updated: boolean }> {
+    for (let attempt = 0; ; attempt += 1) {
+      const current = await this.get(id);
+      if (!current) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const patch = buildPatch(current);
+      if (!patch) {
+        return { card: current, updated: false };
+      }
+      try {
+        const card = await this.updateCard(id, patch, {
+          ...options,
+          expectedUpdatedAt: current.updatedAt,
+        });
+        return { card, updated: card.updatedAt !== current.updatedAt };
+      } catch (error) {
+        if (
+          !(error instanceof WorkboardCardConflictError) ||
+          attempt === WORKBOARD_CAS_ATTEMPTS - 1
+        ) {
+          throw error;
+        }
+      }
+    }
+  }
+
   protected async updateMetadata(
     id: string,
     mutate: (existing: WorkboardCard) => WorkboardMetadata,
     options: { preserveProofId?: string } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
-      return await this.updateCard(id, { metadata: mutate(existing) }, options);
+      const result = await this.updateLatestCard(
+        id,
+        (current) => ({ metadata: mutate(current) }),
+        options,
+      );
+      return result.card;
     });
   }
 
@@ -177,6 +232,7 @@ export class WorkboardCoreStore {
         ...(board.description ? { description: board.description } : {}),
         ...(board.icon ? { icon: board.icon } : {}),
         ...(board.color ? { color: board.color } : {}),
+        ...(board.automationJobId ? { automationJobId: board.automationJobId } : {}),
         ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
         ...(board.orchestration ? { orchestration: board.orchestration } : {}),
         total: 0,
@@ -196,8 +252,17 @@ export class WorkboardCoreStore {
         byStatus: {},
       });
     }
-    for (const card of await this.list()) {
-      const boardId = cardBoardId(card);
+    const cardAggregates: WorkboardBoardCardAggregate[] = this.cardStore
+      ? await this.cardStore.listBoardAggregates()
+      : (await this.list()).map((card) => ({
+          boardId: cardBoardId(card),
+          status: card.status,
+          total: 1,
+          archived: card.metadata?.archivedAt ? 1 : 0,
+          updatedAt: card.updatedAt,
+        }));
+    for (const aggregate of cardAggregates) {
+      const boardId = aggregate.boardId;
       const summary =
         boards.get(boardId) ??
         ({
@@ -207,14 +272,12 @@ export class WorkboardCoreStore {
           archived: 0,
           byStatus: {},
         } satisfies WorkboardBoardSummary);
-      summary.total += 1;
-      if (card.metadata?.archivedAt) {
-        summary.archived += 1;
-      } else {
-        summary.active += 1;
-      }
-      summary.byStatus[card.status] = (summary.byStatus[card.status] ?? 0) + 1;
-      summary.updatedAt = Math.max(summary.updatedAt ?? 0, card.updatedAt);
+      summary.total += aggregate.total;
+      summary.archived += aggregate.archived;
+      summary.active += aggregate.total - aggregate.archived;
+      summary.byStatus[aggregate.status] =
+        (summary.byStatus[aggregate.status] ?? 0) + aggregate.total;
+      summary.updatedAt = Math.max(summary.updatedAt ?? 0, aggregate.updatedAt);
       boards.set(boardId, summary);
     }
     return {
@@ -317,6 +380,7 @@ export class WorkboardCoreStore {
   protected async createDirect(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    options: { cardId?: string; insertIfAbsent?: boolean } = {},
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const requestedStatus = normalizeStatus(input.status, "todo");
@@ -404,7 +468,7 @@ export class WorkboardCoreStore {
             .map((card) => card.position),
         ) + POSITION_STEP;
     let card: WorkboardCard = {
-      id: randomUUID(),
+      id: options.cardId ?? randomUUID(),
       title: normalizeTitle(input.title),
       status,
       priority: normalizePriority(input.priority, "normal"),
@@ -433,7 +497,18 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
-    await this.store.register(card.id, { version: 1, card });
+    if (options.insertIfAbsent && this.cardStore) {
+      const inserted = await this.cardStore.registerIfAbsent(card.id, { version: 1, card });
+      if (!inserted) {
+        const winner = await this.get(card.id);
+        if (!winner) {
+          throw new Error("captured session card disappeared during creation.");
+        }
+        return winner;
+      }
+    } else {
+      await this.store.register(card.id, { version: 1, card });
+    }
     try {
       for (const parent of parentCards) {
         card = await this.linkCardsDirect(parent.id, card.id, now, {
@@ -449,12 +524,65 @@ export class WorkboardCoreStore {
     return card;
   }
 
-  async update(id: string, patch: WorkboardCardPatch): Promise<WorkboardCard> {
+  async captureSession(input: WorkboardLinkedCreateInput): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const sessionKey = normalizeOptionalString(input.sessionKey);
+      if (!sessionKey) {
+        throw new Error("sessionKey is required.");
+      }
+      const boardId = normalizeBoardId(input.boardId) ?? "default";
+      const matches = (await this.list())
+        .filter((card) => cardSessionKey(card) === sessionKey)
+        .toSorted((left, right) => right.updatedAt - left.updatedAt);
+      const existing =
+        matches.find((card) => !card.metadata?.archivedAt) ??
+        matches.find((card) => Boolean(card.metadata?.archivedAt));
+      if (existing) {
+        if (!existing.metadata?.archivedAt) {
+          return existing;
+        }
+        const restored = await this.updateLatestCard(existing.id, (current) => {
+          if (cardSessionKey(current) !== sessionKey) {
+            throw new Error("captured session identity collision.");
+          }
+          return current.metadata?.archivedAt
+            ? { metadata: { ...current.metadata, archivedAt: 0 } }
+            : undefined;
+        });
+        return restored.card;
+      }
+      const digest = createHash("sha256")
+        .update("openclaw.workboard.session-capture.v1\0")
+        .update(sessionKey)
+        .digest();
+      // RFC 9562 version 8 keeps the documented UUID-shaped card id while the
+      // existing primary key becomes the cross-process session identity.
+      digest.writeUInt8((digest.readUInt8(6) & 0x0f) | 0x80, 6);
+      digest.writeUInt8((digest.readUInt8(8) & 0x3f) | 0x80, 8);
+      const hex = digest.toString("hex", 0, 16);
+      const cardId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      const winner = await this.createDirect({ ...input, boardId, parents: undefined }, undefined, {
+        cardId,
+        insertIfAbsent: true,
+      });
+      if (cardSessionKey(winner) !== sessionKey) {
+        throw new Error("captured session identity collision.");
+      }
+      return winner;
+    });
+  }
+
+  async update(
+    id: string,
+    patch: WorkboardCardPatch,
+    options: { expectedUpdatedAt?: number } = {},
+  ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
       async () =>
         await this.updateCard(id, patch, {
           allowMetadataDependencyLinks: false,
           enforceStatusHolds: true,
+          expectedUpdatedAt: options.expectedUpdatedAt,
         }),
     );
   }
@@ -462,15 +590,17 @@ export class WorkboardCoreStore {
   protected async updateCard(
     id: string,
     patch: WorkboardCardPatch,
-    options: {
-      allowMetadataDependencyLinks?: boolean;
-      enforceStatusHolds?: boolean;
-      preserveProofId?: string;
-    } = {},
+    options: WorkboardUpdateCardOptions = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
     if (!existing) {
       throw new Error(`card not found: ${id}`);
+    }
+    if (
+      options.expectedUpdatedAt !== undefined &&
+      existing.updatedAt !== options.expectedUpdatedAt
+    ) {
+      throw new WorkboardCardConflictError(existing);
     }
     const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
     const existingLifecycleStatusSourceUpdatedAt =
@@ -499,7 +629,7 @@ export class WorkboardCoreStore {
       }
     }
     const status = normalizeStatus(effectivePatch.status, existing.status);
-    const now = Date.now();
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
     const startedAt =
       effectivePatch.startedAt === undefined
         ? status === "running"
@@ -606,7 +736,11 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
-    next.events = appendEvent(next, updateEvent(existing, next), now);
+    next.events = appendEvent(
+      next,
+      options.event ?? updateEvent(existing, next),
+      options.eventAt ?? now,
+    );
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
     }
@@ -621,6 +755,39 @@ export class WorkboardCoreStore {
     }
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
+    }
+    if (this.cardStore) {
+      const expectedUpdatedAt = options.expectedUpdatedAt ?? existing.updatedAt;
+      if (options.ownerSlot) {
+        const result = await this.cardStore.claimIfOwnerAvailable(
+          next.id,
+          { version: 1, card: next },
+          expectedUpdatedAt,
+          options.ownerSlot.ownerId,
+          options.ownerSlot.now,
+        );
+        if (result === "owner_busy") {
+          throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);
+        }
+        if (result === "updated") {
+          await this.deleteDetachedAttachments(existing, next);
+          return next;
+        }
+      } else if (
+        await this.cardStore.registerIfUpdatedAt(
+          next.id,
+          { version: 1, card: next },
+          expectedUpdatedAt,
+        )
+      ) {
+        await this.deleteDetachedAttachments(existing, next);
+        return next;
+      }
+      const current = await this.get(next.id);
+      if (!current) {
+        throw new Error(`card not found: ${id}`);
+      }
+      throw new WorkboardCardConflictError(current);
     }
     await this.store.register(next.id, { version: 1, card: next });
     await this.deleteDetachedAttachments(existing, next);
@@ -857,59 +1024,47 @@ export class WorkboardCoreStore {
   }
 
   protected async recordDispatch(card: WorkboardCard, now: number): Promise<WorkboardCard> {
-    const metadata = trimMetadataToBudget(
-      normalizeMetadata(
-        {
-          ...card.metadata,
-          automation: normalizeAutomation(
-            {
-              ...card.metadata?.automation,
-              dispatchCount: (card.metadata?.automation?.dispatchCount ?? 0) + 1,
-              lastDispatchAt: now,
-            },
-            card.metadata?.automation,
-          ),
-        },
-        card.metadata,
-      ),
-    );
-    const next = removeUndefinedCardFields({
-      ...card,
-      ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
-      events: appendEvent(card, { kind: "dispatch" }, now),
-    });
-    await this.store.register(card.id, { version: 1, card: next });
-    return next;
+    const result = await this.updateLatestCard(card.id, (current) => ({
+      metadata: {
+        ...current.metadata,
+        automation: normalizeAutomation(
+          {
+            ...current.metadata?.automation,
+            dispatchCount: (current.metadata?.automation?.dispatchCount ?? 0) + 1,
+            lastDispatchAt: now,
+          },
+          current.metadata?.automation,
+        ),
+      },
+    }));
+    return result.card;
   }
 
   protected async recordOrchestrationCandidate(
     card: WorkboardCard,
     now: number,
   ): Promise<WorkboardCard> {
-    const metadata = trimMetadataToBudget({
-      ...card.metadata,
-      workerLogs: [
-        ...(card.metadata?.workerLogs ?? []),
-        {
-          id: randomUUID(),
-          level: "info" as const,
-          message: "Auto orchestration marked this triage card for specification or decomposition.",
-          createdAt: now,
+    const result = await this.updateLatestCard(card.id, (current) => ({
+      metadata: {
+        ...current.metadata,
+        workerLogs: [
+          ...(current.metadata?.workerLogs ?? []),
+          {
+            id: randomUUID(),
+            level: "info" as const,
+            message:
+              "Auto orchestration marked this triage card for specification or decomposition.",
+            createdAt: now,
+          },
+        ].slice(-MAX_CARD_WORKER_LOGS),
+        workerProtocol: {
+          state: "idle" as const,
+          updatedAt: now,
+          detail: "Awaiting workboard_specify or workboard_decompose.",
         },
-      ].slice(-MAX_CARD_WORKER_LOGS),
-      workerProtocol: {
-        state: "idle" as const,
-        updatedAt: now,
-        detail: "Awaiting workboard_specify or workboard_decompose.",
       },
-    });
-    const next = removeUndefinedCardFields({
-      ...card,
-      ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
-      events: appendEvent(card, { kind: "orchestration" }, now),
-    });
-    await this.store.register(card.id, { version: 1, card: next });
-    return next;
+    }));
+    return result.card;
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
@@ -925,6 +1080,13 @@ export class WorkboardCoreStore {
       return card;
     }
     return await this.updateCard(card.id, { status: target });
+  }
+}
+
+export class WorkboardCardConflictError extends Error {
+  constructor(readonly current: WorkboardCard) {
+    super("Card changed while you were editing. Review the latest values and retry.");
+    this.name = "WorkboardCardConflictError";
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

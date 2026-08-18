@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+import type {
+  WorkerPlacementDispatchRequest,
+  WorkerPlacementMoveRequest,
+} from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;
 
@@ -14,9 +17,18 @@ const REQUEST: WorkerPlacementDispatchRequest = {
   executionMode: "worker-turn",
 };
 
+const MOVE_REQUEST: WorkerPlacementMoveRequest = {
+  sessionId: REQUEST.sessionId,
+  sessionKey: REQUEST.sessionKey,
+  agentId: REQUEST.agentId,
+  source: { generation: 4, environmentId: "worker-source", ownerEpoch: 7 },
+  target: { kind: "gateway" },
+};
+
 describe("worker placement dispatch coordinator", () => {
-  it("forwards the optional internal transition observer", async () => {
+  it("forwards in-process transition and authorization hooks outside request equality", async () => {
     const observer = vi.fn();
+    const authorize = vi.fn();
     const dispatch = vi.fn().mockResolvedValue({ state: "active" });
     const service = {
       dispatch,
@@ -26,9 +38,9 @@ describe("worker placement dispatch coordinator", () => {
       reconcileActive: vi.fn(),
     } as unknown as DispatchService;
 
-    await coordinateWorkerPlacementDispatch(service).dispatch(REQUEST, observer);
+    await coordinateWorkerPlacementDispatch(service).dispatch(REQUEST, observer, authorize);
 
-    expect(dispatch).toHaveBeenCalledWith(REQUEST, observer);
+    expect(dispatch).toHaveBeenCalledWith(REQUEST, observer, authorize);
   });
 
   it("coalesces an identical dispatch and rejects a conflicting in-flight request", async () => {
@@ -54,6 +66,9 @@ describe("worker placement dispatch coordinator", () => {
     await expect(
       coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    await expect(coordinated.dispatch({ ...REQUEST, machineClass: "beast" })).rejects.toThrow(
+      `Session ${REQUEST.sessionKey} is already dispatching another request`,
+    );
     await expect(
       coordinated.dispatch({
         ...REQUEST,
@@ -116,6 +131,75 @@ describe("worker placement dispatch coordinator", () => {
       dispatchError,
     );
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes a move against new dispatches", async () => {
+    const moveStarted = createDeferredCore();
+    const releaseMove = createDeferredCore();
+    const dispatch = vi.fn().mockResolvedValue({ state: "active" });
+    const move = vi.fn(async () => {
+      moveStarted.resolve();
+      await releaseMove.promise;
+      return { state: "local" };
+    });
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      move,
+      reclaim: vi.fn(),
+      reconcile: vi.fn(),
+      reconcileActive: vi.fn(),
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service);
+
+    const moving = coordinated.move(MOVE_REQUEST);
+    await moveStarted.promise;
+    const retry = coordinated.move(MOVE_REQUEST);
+    await expect(
+      coordinated.move({ ...MOVE_REQUEST, target: { kind: "profile", profileId: "other" } }),
+    ).rejects.toThrow(`Session ${MOVE_REQUEST.sessionKey} is already moving to another target`);
+    const dispatching = coordinated.dispatch(REQUEST);
+    expect(dispatch).not.toHaveBeenCalled();
+    releaseMove.resolve();
+
+    const [moveResult, retryResult] = await Promise.all([moving, retry]);
+    expect(retryResult).toBe(moveResult);
+    await dispatching;
+    expect(move).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("serializes reclaim behind an in-flight dispatch", async () => {
+    const dispatchStarted = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
+    const dispatch = vi.fn(async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      return { state: "active" };
+    });
+    const reclaim = vi.fn().mockResolvedValue({ state: "reclaimed" });
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      reclaim,
+      reconcile: vi.fn(),
+      reconcileActive: vi.fn(),
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service);
+
+    const dispatching = coordinated.dispatch(REQUEST);
+    await dispatchStarted.promise;
+    const reclaiming = coordinated.reclaim({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    });
+
+    expect(reclaim).not.toHaveBeenCalled();
+    releaseDispatch.resolve();
+    await dispatching;
+    await reclaiming;
+    expect(reclaim).toHaveBeenCalledOnce();
   });
 
   it("coalesces full sweeps but runs a fresh targeted pass with its environment id", async () => {

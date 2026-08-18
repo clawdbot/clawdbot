@@ -1,7 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export type RoleContentMessage = {
@@ -129,9 +128,7 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
         : [];
   return (
     texts.length > 0 &&
-    texts.every((text) =>
-      isSuppressedControlReplyText(stripInlineDirectiveTagsForDisplay(text).text),
-    ) &&
+    texts.every((text) => isSuppressedControlReplyText(text)) &&
     hasAssistantDisplayableNonTextContent(message)
   );
 }

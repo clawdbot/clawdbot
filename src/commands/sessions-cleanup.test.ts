@@ -92,6 +92,7 @@ describe("sessionsCleanupCommand", () => {
     mocks.resolveMaintenanceConfig.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
+      archiveDashboardAfterMs: 7 * 24 * 60 * 60 * 1000,
       modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
       maxEntries: 500,
       resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,
@@ -126,7 +127,6 @@ describe("sessionsCleanupCommand", () => {
         missingKeys: Set<string>;
         staleKeys: Set<string>;
         cappedKeys: Set<string>;
-        budgetEvictedKeys: Set<string>;
         dmScopeRetiredKeys: Set<string>;
         modelRunPrunedKeys?: Set<string>;
       }) => {
@@ -141,9 +141,6 @@ describe("sessionsCleanupCommand", () => {
         }
         if (params.cappedKeys.has(params.key)) {
           return "cap-overflow";
-        }
-        if (params.budgetEvictedKeys.has(params.key)) {
-          return "evict-budget";
         }
         return "keep";
       },
@@ -376,7 +373,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -447,7 +443,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set(["missing"]),
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -517,7 +512,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -617,7 +611,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
           cappedKeys: new Set(["directCapped"]),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
         },
       ],
@@ -687,7 +680,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
         },
       ],
@@ -743,7 +735,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },
@@ -767,7 +758,6 @@ describe("sessionsCleanupCommand", () => {
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
-          budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
           modelRunPrunedKeys: new Set<string>(),
         },

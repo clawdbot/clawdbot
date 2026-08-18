@@ -201,7 +201,7 @@ enum CLIInstaller {
                 expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
                 preferredPaths: preferredPaths)
             if status.isReady {
-                self.rememberValidated(status)
+                self.rememberValidated(status, defaults: AppDefaults.standard)
                 return status
             }
             fallbackStatus = fallbackStatus ?? status
@@ -225,7 +225,7 @@ enum CLIInstaller {
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
         if status.isReady {
-            self.rememberValidated(status)
+            self.rememberValidated(status, defaults: AppDefaults.standard)
         }
         return status
     }
@@ -316,10 +316,14 @@ enum CLIInstaller {
         return environment
     }
 
-    private static func rememberValidated(_ status: Status) {
+    static func rememberValidated(_ status: Status, defaults: UserDefaults) {
         guard case let .ready(location, version) = status else { return }
-        AppDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
-        AppDefaults.standard.set(version, forKey: cliValidatedVersionKey)
+        if defaults.string(forKey: cliValidatedExecutableKey) != location {
+            defaults.set(location, forKey: cliValidatedExecutableKey)
+        }
+        if defaults.string(forKey: cliValidatedVersionKey) != version {
+            defaults.set(version, forKey: cliValidatedVersionKey)
+        }
     }
 
     @discardableResult

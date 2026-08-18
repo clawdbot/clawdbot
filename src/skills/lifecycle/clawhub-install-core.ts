@@ -37,6 +37,7 @@ import {
   installExtractedSkillRoot,
   resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
+import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import {
   formatClawHubSkillRef,
   normalizeGitHubCommitSegment,
@@ -683,6 +684,9 @@ export async function performClawHubSkillInstall(
       await archive.cleanup().catch(() => undefined);
     }
   } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
+    return {
+      ok: false,
+      error: formatClawHubSkillRequestError(err, { slug: params.slug, operation: "install" }),
+    };
   }
 }

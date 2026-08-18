@@ -1,15 +1,25 @@
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { parseSessionActivityFilters, type SessionActivityFilters } from "./session-activity.ts";
 
 export type RunInspectorSelector = { kind: "run" | "execution"; id: string };
 
 export type ActivityRouteData =
+  | { mode: "sessions"; filters: SessionActivityFilters; selector: null }
   | { mode: "live"; selector: null }
   | { mode: "run"; selector: RunInspectorSelector | null };
 
+export function activityRunInspectorHref(runId: string, basePath: string): string {
+  return `${pathForRoute("activity", basePath)}?view=run&run=${encodeURIComponent(runId)}`;
+}
+
 export function resolveActivityRouteData(search: string): ActivityRouteData {
   const params = new URLSearchParams(search);
-  if (params.get("view") !== "run") {
+  if (params.get("view") === "live") {
     return { mode: "live", selector: null };
+  }
+  if (params.get("view") !== "run") {
+    return { mode: "sessions", filters: parseSessionActivityFilters(search), selector: null };
   }
   const executionId = params.get("execution");
   if (executionId?.trim()) {

@@ -139,6 +139,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           cdpUrl: profile.cdpUrl,
           ssrfPolicy,
           timeoutMs,
+          ...(capabilities.requiresCompleteTargetEnumeration
+            ? { requireCompleteTargetList: true }
+            : {}),
         });
         return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
           targetId: p.targetId,

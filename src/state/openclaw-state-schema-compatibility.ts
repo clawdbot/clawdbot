@@ -25,6 +25,9 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINIT
 const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
   ({ columnName, tableName }) => `${tableName}.${columnName}`,
 );
+const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
+);
 const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
     ({ columnName, tableName }) => `${tableName}.${columnName}`,
@@ -106,6 +109,8 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     "worker_environments.desktop_json": ["desktop_json TEXT"],
     "worker_environments.bootstrap_install_kind": ["bootstrap_install_kind TEXT"],
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
+    "worker_environments.node_setup_id": ["node_setup_id TEXT"],
+    "worker_environments.node_device_id": ["node_device_id TEXT"],
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
   },
@@ -129,5 +134,13 @@ export function isOpenClawStateStartupRepairableSchemaIssue(issue: SqliteSchemaI
   return (
     issue.code === "missing-or-drifted-index" &&
     getOpenClawStateCanonicalNamedIndexSet().has(issue.objectName)
+  );
+}
+
+/** Identify compatible schema differences repaired only by their feature owner. */
+export function isOpenClawStateFirstUseSchemaIssue(issue: SqliteSchemaIssue): boolean {
+  return (
+    issue.code === "missing-column" &&
+    CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName)
   );
 }

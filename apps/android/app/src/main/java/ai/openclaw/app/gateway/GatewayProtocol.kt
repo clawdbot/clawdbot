@@ -406,8 +406,10 @@ enum class GatewayMethod(
   SessionsDelete("sessions.delete"),
   SessionsCompact("sessions.compact"),
   SessionsGroupsList("sessions.groups.list"),
+  SessionsGroupsDefaults("sessions.groups.defaults"),
   SessionsGroupsPut("sessions.groups.put"),
   SessionsGroupsRename("sessions.groups.rename"),
+  SessionsGroupsUpdate("sessions.groups.update"),
   SessionsGroupsDelete("sessions.groups.delete"),
   LastHeartbeat("last-heartbeat"),
   SetHeartbeats("set-heartbeats"),
@@ -511,6 +513,7 @@ enum class GatewayMethod(
   PluginsUninstall("plugins.uninstall"),
   PluginsRefresh("plugins.refresh"),
   ControlUiSessionPullRequestsSubscribe("controlUi.sessionPullRequests.subscribe"),
+  ControlUiSessionPreview("controlUi.sessionPreview"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
   GatewaySuspendResume("gateway.suspend.resume"),
@@ -582,6 +585,15 @@ enum class GatewayMethod(
   PortalList("portal.list"),
   PortalOpen("portal.open"),
   PortalClose("portal.close"),
+  SessionsMove("sessions.move"),
+  SessionsAssignOwner("sessions.assignOwner"),
+  ProgressCardGet("progressCard.get"),
+  ProgressCardPut("progressCard.put"),
+  ToolsGithubStatus("tools.github.status"),
+  ToolsGithubConfigure("tools.github.configure"),
+  DiagnosticsLanes("diagnostics.lanes"),
+  UsersSetGitHubIdentity("users.setGitHubIdentity"),
+  UsersClearGitHubIdentity("users.clearGitHubIdentity"),
 }
 
 enum class GatewayEvent(
@@ -637,4 +649,5 @@ enum class GatewayEvent(
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),
   PortalChanged("portal.changed"),
+  ProgressCardChanged("progressCard.changed"),
 }

@@ -274,6 +274,42 @@ describe("settings sidebar search", () => {
     expect(result?.textContent?.trim()).toBe("Agent Defaults");
   });
 
+  it("excludes admin-only pages and config blocks from non-admin search", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        canAdmin: false,
+        searchQuery: "security",
+        searchBlockMatches: [
+          {
+            routeId: "security",
+            label: "Security policy",
+            hash: "#config-section-security",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('a[href="/settings/security"]')).toBeNull();
+    expect(container.querySelector('a[href$="#config-section-security"]')).toBeNull();
+    expect(container.querySelector('a[href="/settings/approvals"]')).not.toBeNull();
+  });
+
   it("keeps Memory search results on the canonical Settings tab path", () => {
     const onNavigate = vi.fn();
     render(
@@ -378,7 +414,14 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
+    expect(labels()).toEqual([
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud workers",
+    ]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);

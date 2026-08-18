@@ -78,7 +78,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[crabbox](/plugins/reference/crabbox)** (`@openclaw/crabbox-provider`) - included in OpenClaw. Cloud worker provider backed by the Crabbox CLI.
 
-- **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver SDK computer control for Windows and Linux node hosts.
+- **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support.
 
@@ -338,7 +338,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[volcengine](/plugins/reference/volcengine)** (`@openclaw/volcengine-provider`) - npm; ClawHub: `clawhub:@openclaw/volcengine-provider`. Adds Volcengine, Volcengine Plan model provider support to OpenClaw.
 
-- **[voyage](/plugins/reference/voyage)** (`@openclaw/voyage-provider`) - npm; ClawHub: `clawhub:@openclaw/voyage-provider`. Adds memory embedding provider support.
+- **[voyage](/plugins/reference/voyage)** (`@openclaw/voyage-provider`) - npm; ClawHub: `clawhub:@openclaw/voyage-provider`. Adds embedding provider support, including memory search.
 
 - **[vydra](/plugins/reference/vydra)** (`@openclaw/vydra-provider`) - npm; ClawHub: `clawhub:@openclaw/vydra-provider`. Adds Vydra model provider support to OpenClaw.
 

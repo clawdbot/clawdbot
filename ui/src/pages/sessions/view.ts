@@ -131,6 +131,7 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      icon?: string | null;
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
@@ -225,6 +226,7 @@ function buildSessionLevelOptions(
 }
 
 const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
   running: "sessionsView.statusRunning",
   done: "sessionsView.statusDone",
   failed: "sessionsView.statusFailed",
@@ -239,14 +241,24 @@ function formatSessionRunStatus(status: SessionRunStatus): string {
 function renderSessionStatusBadge(row: GatewaySessionRow) {
   const active = isSessionRunActive(row);
   const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label = active
-    ? t("sessionsView.statusLive")
-    : idle
-      ? t("sessionsView.statusIdle")
-      : row.status
-        ? formatSessionRunStatus(row.status)
-        : t("sessionsView.statusUnknown");
-  const kind = active || row.status === "done" ? "ok" : idle || !row.status ? "muted" : "danger";
+  const label =
+    row.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : active
+        ? t("sessionsView.statusLive")
+        : idle
+          ? t("sessionsView.statusIdle")
+          : row.status
+            ? formatSessionRunStatus(row.status)
+            : t("sessionsView.statusUnknown");
+  const kind =
+    row.status === "queued"
+      ? "warn"
+      : active || row.status === "done"
+        ? "ok"
+        : idle || !row.status
+          ? "muted"
+          : "danger";
   const title = `${t("sessionsView.status")}: ${label}`;
   return html`
     <openclaw-tooltip .content=${title}>
@@ -980,16 +992,16 @@ export function renderSessions(props: SessionsProps) {
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
-  // Grouping shows all rows in their sections; pagination would split groups confusingly.
-  const groupingActive = props.groupBy !== "none";
-  const groups = groupingActive
-    ? groupSessionRows({
-        rows: sorted,
-        mode: props.groupBy,
-        knownCategories: props.knownCategories,
-      })
-    : null;
-  const paginated = groupingActive ? sorted : paginateRows(sorted, page, props.pageSize);
+  const groups =
+    props.groupBy !== "none"
+      ? groupSessionRows({
+          rows: sorted,
+          mode: props.groupBy,
+          knownCategories: props.knownCategories,
+        })
+      : null;
+  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
+  const paginated = paginateRows(displayRows, page, props.pageSize);
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
@@ -1076,7 +1088,6 @@ export function renderSessions(props: SessionsProps) {
       renderSessionsTable(props, {
         paginated,
         groups,
-        groupingActive,
         emptyBecauseFiltered,
         emptyMessage,
         totalRows,
@@ -1092,7 +1103,6 @@ export function renderSessions(props: SessionsProps) {
 type SessionsTableContext = {
   paginated: GatewaySessionRow[];
   groups: SessionRowGroup[] | null;
-  groupingActive: boolean;
   emptyBecauseFiltered: boolean;
   emptyMessage: string;
   totalRows: number;
@@ -1106,16 +1116,8 @@ type SessionsTableContext = {
 };
 
 function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const {
-    paginated,
-    groups,
-    groupingActive,
-    emptyBecauseFiltered,
-    emptyMessage,
-    totalRows,
-    totalPages,
-    page,
-  } = ctx;
+  const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
+    ctx;
   const sortHeader = ctx.sortHeader;
   const emptyStateMessage = emptyBecauseFiltered
     ? t("sessionsView.noSessionsMatchFilters")
@@ -1141,6 +1143,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
     key: keyof Parameters<SessionsProps["onFiltersChange"]>[0],
     value: string | boolean,
   ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
+  const paginatedKeys = groups ? new Set(paginated.map((row) => row.key)) : null;
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
@@ -1313,7 +1316,11 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                 `
               : groups
                 ? groups.flatMap((group) => {
-                    const section = group.rows.flatMap((row) => renderRows(row, props));
+                    const visibleRows = group.rows.filter((row) => paginatedKeys?.has(row.key));
+                    if (visibleRows.length === 0 && group.rows.length > 0) {
+                      return [];
+                    }
+                    const section = visibleRows.flatMap((row) => renderRows(row, props));
                     section.unshift(renderGroupHeaderRow(group, props));
                     return section;
                   })
@@ -1322,7 +1329,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
       </table>
     </div>
 
-    ${totalRows > 0 && !groupingActive
+    ${totalRows > 0
       ? html`
           <div class="data-table-pagination">
             <div class="data-table-pagination__info">
@@ -1455,7 +1462,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         props.onToggleDetails(row.key);
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (openMenuFromEvent(e)) {
+        openMenuFromEvent(e);
+        if (e.defaultPrevented) {
           return;
         }
         if (isRowControlTarget(e.target)) {

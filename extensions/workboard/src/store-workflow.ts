@@ -11,7 +11,6 @@ import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  appendEvent,
   assertCanMutateClaimedCard,
   capText,
   cardBoardId,
@@ -134,25 +133,29 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const claimable =
-        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
-          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
-          : guarded;
-      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
-      const card = await this.updateCard(id, {
-        metadata: {
-          ...metadata,
-          claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const card = await this.updateCard(
+        id,
+        {
+          status:
+            guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+              ? "running"
+              : guarded.status,
+          agentId: guarded.agentId ?? ownerId,
+          ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+            ? { workspaceAccess: options.adoptWorkspaceAccess }
+            : {}),
+          metadata: {
+            ...metadata,
+            claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+          },
         },
-      });
-      const next = await this.updateCard(card.id, {
-        status:
-          card.status === "backlog" || card.status === "todo" || card.status === "ready"
-            ? "running"
-            : card.status,
-        agentId: card.agentId ?? ownerId,
-      });
-      return { card: next, token };
+        {
+          expectedUpdatedAt: guarded.updatedAt,
+          ownerSlot: { ownerId, now },
+        },
+      );
+      return { card, token };
     });
   }
 
@@ -331,6 +334,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     id: string,
     input: WorkboardBlockInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
+    options: { clearExecutionAssociation?: boolean } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.get(id);
@@ -358,7 +362,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           : existing.execution;
       return await this.updateCard(id, {
         status: "blocked",
-        ...(execution ? { execution } : {}),
+        ...(options.clearExecutionAssociation
+          ? { sessionKey: null, runId: null, execution: null }
+          : execution
+            ? { execution }
+            : {}),
         metadata: {
           ...metadata,
           claim: undefined,
@@ -516,21 +524,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ),
       };
       const { summary: _summary, status: _status, ...cardPatch } = input;
-      const updated = await this.updateCard(
+      return await this.updateCard(
         id,
         {
           ...cardPatch,
           status: "todo",
           metadata,
         },
-        { enforceStatusHolds: true },
+        { enforceStatusHolds: true, event: { kind: "specified" }, eventAt: now },
       );
-      const specified = {
-        ...updated,
-        events: appendEvent(updated, { kind: "specified" }, now),
-      };
-      await this.store.register(specified.id, { version: 1, card: specified });
-      return specified;
     });
   }
 
@@ -621,11 +623,14 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { enforceStatusHolds: true },
               );
             })();
-        const decomposedParent = {
-          ...updatedParent,
-          events: appendEvent(updatedParent, { kind: "decomposed" }),
-        };
-        await this.store.register(decomposedParent.id, { version: 1, card: decomposedParent });
+        const decomposedParent = await this.updateCard(
+          updatedParent.id,
+          {},
+          {
+            event: { kind: "decomposed" },
+            expectedUpdatedAt: updatedParent.updatedAt,
+          },
+        );
         return { parent: decomposedParent, children };
       } catch (error) {
         for (const child of children.toReversed()) {

@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
@@ -9,17 +9,21 @@ import {
   type GatewayEventFrame,
 } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { projectPresencePayload, type PresenceViewer } from "../../lib/presence-users.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -32,6 +36,12 @@ import {
   type RunInspectorState,
 } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.ts";
+import { renderSessionActivityView } from "./session-activity-view.ts";
+import {
+  resolveActivityIdentity,
+  sessionActivitySearch,
+  type SessionActivityFilters,
+} from "./session-activity.ts";
 import {
   parseActivityEvent,
   updateToolActivity,
@@ -51,7 +61,11 @@ class ActivityPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeSearch = "";
-  private routeData: ActivityRouteData = { mode: "live", selector: null };
+  private routeData: ActivityRouteData = {
+    mode: "sessions",
+    filters: { personId: null, query: "", time: "7d" },
+    selector: null,
+  };
 
   @state() private entries: ActivityEntry[] = [];
   @state() private filterText = "";
@@ -62,34 +76,43 @@ class ActivityPage extends OpenClawLightDomElement {
   };
   @state() private toolFilter = "";
   @state() private expandedIds = new Set<string>();
+  @state() private expandedAutomationDays = new Set<string>();
   @state() private autoFollow = true;
   @state() private runInspector: RunInspectorState = { status: "empty" };
+  @state() private presencePayload: PresencePayload | undefined;
 
   private sessionKey = "";
   private inspectorAbort: AbortController | null = null;
   private inspectorClient: GatewayBrowserClient | null = null;
   private inspectorEpoch = 0;
   private inspectorSelectorKey: string | null = null;
+  private presenceClient: GatewayBrowserClient | null = null;
+  private readonly retainedIdentities = new Map<string, PresenceViewer>();
   private readonly streamFollow = new StreamAutoFollowController(this, {
     selector: ".activity-stream",
     isEnabled: () => this.autoFollow,
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.gateway,
-    (gateway) => {
-      this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
-      const stopEvents = gateway.subscribeEvents((event) => {
-        this.applyGatewayEvent(gateway, event, Date.now());
-      });
-      const stopGateway = gateway.subscribe((snapshot) =>
-        this.applyGatewaySnapshot(gateway, snapshot, false),
-      );
-      return () => {
-        stopGateway();
-        stopEvents();
-      };
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+        const stopEvents = gateway.subscribeEvents((event) => {
+          this.applyGatewayEvent(gateway, event, Date.now());
+        });
+        const stopGateway = gateway.subscribe((snapshot) =>
+          this.applyGatewaySnapshot(gateway, snapshot, false),
+        );
+        return () => {
+          stopGateway();
+          stopEvents();
+        };
+      },
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    );
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeSearch")) {
@@ -125,6 +148,14 @@ class ActivityPage extends OpenClawLightDomElement {
     this.sessionKey = resolveSessionKey(loadSettings().sessionKey, snapshot.hello);
     if (sourceChanged || this.sessionKey !== previousSessionKey) {
       this.rebuildEntries(gateway, snapshot);
+    }
+    if (sourceChanged || snapshot.client !== this.presenceClient) {
+      this.presenceClient = snapshot.client;
+      const presence =
+        snapshot.phase === "connected" ? readPresenceEntries(snapshot.hello?.snapshot) : undefined;
+      this.presencePayload = presence ? { presence } : undefined;
+    } else if (snapshot.phase !== "connected" && this.presencePayload) {
+      this.presencePayload = undefined;
     }
     this.syncRunInspector(gateway, snapshot, sourceChanged);
   }
@@ -309,16 +340,14 @@ class ActivityPage extends OpenClawLightDomElement {
     );
   }
 
-  private selectMode(mode: "live" | "run") {
-    if (mode === "live") {
+  private selectMode(mode: "sessions" | "live") {
+    if (mode === "sessions") {
       this.context.navigate("activity", { search: "" });
       return;
     }
-    const search = new URLSearchParams({ view: "run" });
-    if (this.routeData?.mode === "run" && this.routeData.selector) {
-      search.set(this.routeData.selector.kind, this.routeData.selector.id);
+    if (mode === "live") {
+      this.context.navigate("activity", { search: "?view=live" });
     }
-    this.context.navigate("activity", { search: `?${search.toString()}` });
   }
 
   private rebuildEntries(
@@ -347,6 +376,11 @@ class ActivityPage extends OpenClawLightDomElement {
     receivedAt: number,
   ) {
     if (this.context.gateway !== gateway) {
+      return;
+    }
+    if (event.event === "presence") {
+      const presence = readPresenceEntries(event.payload);
+      this.presencePayload = presence ? { presence } : undefined;
       return;
     }
     const nextEntries = this.reduceGatewayEvent(
@@ -400,6 +434,7 @@ class ActivityPage extends OpenClawLightDomElement {
 
   override render() {
     const liveActivity = renderActivity({
+      basePath: this.context.basePath,
       entries: this.entries,
       filterText: this.filterText,
       statusFilters: this.statusFilters,
@@ -436,36 +471,97 @@ class ActivityPage extends OpenClawLightDomElement {
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     const mode = this.routeData?.mode ?? "live";
+    const sessionRows = this.context.sessions.state.result?.sessions ?? [];
+    const filters =
+      this.routeData.mode === "sessions"
+        ? this.routeData.filters
+        : ({ personId: null, query: "", time: "7d" } satisfies SessionActivityFilters);
+    const presenceViewers = projectPresencePayload(this.presencePayload).users;
+    const currentIdentity = filters.personId
+      ? resolveActivityIdentity(filters.personId, this.presencePayload, sessionRows)
+      : null;
+    const previousIdentity = filters.personId
+      ? this.retainedIdentities.get(filters.personId)
+      : undefined;
+    const retainedIdentity = currentIdentity
+      ? {
+          ...previousIdentity,
+          ...currentIdentity,
+          email: currentIdentity.email ?? previousIdentity?.email,
+          entries: currentIdentity.entries,
+        }
+      : previousIdentity
+        ? { ...previousIdentity, entries: undefined, watchedSessions: [] }
+        : null;
+    if (retainedIdentity) {
+      this.retainedIdentities.set(retainedIdentity.id, retainedIdentity);
+    }
     const body = html`
-      ${renderHubTabs({
-        id: "activity-mode",
-        active: mode,
-        tabs: [
-          { value: "live", label: t("activity.runInspector.liveMode") },
-          { value: "run", label: t("activity.runInspector.mode") },
-        ],
-        ariaLabel: t("activity.runInspector.activityView"),
-        panelId: "activity-mode-panel",
-        className: "activity-mode-tabs",
-        variant: "sub",
-        onSelect: (selected) => this.selectMode(selected),
-      })}
-      <div id="activity-mode-panel" role="tabpanel" aria-labelledby=${`activity-mode-tab-${mode}`}>
-        ${mode === "run"
-          ? renderRunInspector({
-              basePath: this.context.basePath,
-              state: this.runInspector,
-              onLoadMoreExecutions: () => this.loadMoreExecutions(),
-              onRetry: () =>
-                this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
+      ${mode === "run"
+        ? nothing
+        : renderHubTabs({
+            id: "activity-mode",
+            active: mode,
+            tabs: [
+              { value: "sessions", label: t("activityFeed.sessionsMode") },
+              { value: "live", label: t("activity.runInspector.liveMode") },
+            ],
+            ariaLabel: t("activity.runInspector.activityView"),
+            panelId: "activity-mode-panel",
+            className: "activity-mode-tabs",
+            variant: "sub",
+            onSelect: (selected) => this.selectMode(selected),
+          })}
+      <div
+        id="activity-mode-panel"
+        role=${mode === "run" ? nothing : "tabpanel"}
+        aria-labelledby=${mode === "run" ? nothing : `activity-mode-tab-${mode}`}
+      >
+        ${mode === "sessions"
+          ? renderSessionActivityView({
+              context: this.context,
+              expandedAutomationDays: this.expandedAutomationDays,
+              filters,
+              presenceViewers,
+              retainedIdentity,
+              rows: sessionRows,
+              onAutomationDayToggle: (dayKey) => {
+                const next = new Set(this.expandedAutomationDays);
+                if (next.has(dayKey)) {
+                  next.delete(dayKey);
+                } else {
+                  next.add(dayKey);
+                }
+                this.expandedAutomationDays = next;
+              },
+              onFiltersChange: (next) =>
+                this.context.navigate("activity", { search: sessionActivitySearch(next) }),
             })
-          : html`<div id="activity-live-panel">${liveActivity}</div>`}
+          : mode === "run"
+            ? html`<a
+                  class="activity-run-inspector-back"
+                  href=${pathForRoute("activity", this.context.basePath)}
+                  >${icons.arrowLeft}${t("activityFeed.backToSessions")}</a
+                >
+                ${renderRunInspector({
+                  basePath: this.context.basePath,
+                  state: this.runInspector,
+                  onLoadMoreExecutions: () => this.loadMoreExecutions(),
+                  onRetry: () =>
+                    this.syncRunInspector(
+                      this.context.gateway,
+                      this.context.gateway.snapshot,
+                      true,
+                    ),
+                })}`
+            : html`<div id="activity-live-panel">${liveActivity}</div>`}
       </div>
     `;
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
+          <div class="page-sub">${t("subtitles.activity")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body, { fillHeight: true })}

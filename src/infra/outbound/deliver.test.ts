@@ -96,6 +96,7 @@ const queueMocks = vi.hoisted(() => ({
 }));
 const completionMocks = vi.hoisted(() => ({
   completeDurableDelivery: vi.fn(),
+  failDurableDelivery: vi.fn(),
   markDurableDeliveryQueued: vi.fn(async () => ({ state: "queued" as const })),
   rejectDurableDelivery: vi.fn(),
   suppressDurableDelivery: vi.fn(),
@@ -196,6 +197,16 @@ vi.mock("./delivery-completion.js", () => ({
   markDurableDeliveryQueued: completionMocks.markDurableDeliveryQueued,
   rejectDurableDelivery: completionMocks.rejectDurableDelivery,
   suppressDurableDelivery: completionMocks.suppressDurableDelivery,
+  settleDurableDelivery: (
+    completion: unknown,
+    evidence: { result: unknown } | { platformSendStarted: boolean },
+    stateDir?: string,
+  ) =>
+    "result" in evidence
+      ? completionMocks.completeDurableDelivery(completion, evidence.result, stateDir)
+      : evidence.platformSendStarted
+        ? completionMocks.failDurableDelivery(completion, stateDir)
+        : completionMocks.suppressDurableDelivery(completion, stateDir),
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -508,6 +519,7 @@ describe("deliverOutboundPayloads", () => {
       },
     );
     completionMocks.completeDurableDelivery.mockClear();
+    completionMocks.failDurableDelivery.mockClear();
     completionMocks.markDurableDeliveryQueued.mockClear();
     completionMocks.rejectDurableDelivery.mockClear();
     completionMocks.suppressDurableDelivery.mockClear();
@@ -1758,6 +1770,42 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("m1");
 
     expect(sendMatrix).toHaveBeenCalled();
+    // The lost write-ahead durability must leave a recorded reason: a crash
+    // mid-send now loses the message with no queue row to recover.
+    const warnLines = logMocks.warn.mock.calls.map((call) => String(call[0]));
+    const queueWarn = warnLines.find((line) => line.includes("outbound queue write failed"));
+    expect(queueWarn).toBeDefined();
+    expect(queueWarn).toContain("channel=matrix");
+    expect(queueWarn).toContain("queue offline");
+  });
+
+  it("emits one message_sent failure per payload when batch preparation fails", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sent" || hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockRejectedValueOnce(new Error("modifier exploded"));
+    const sendMatrix = vi.fn();
+
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "first payload" }, { text: "second payload" }],
+        deps: { matrix: sendMatrix },
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+      }),
+    ).rejects.toThrow("modifier exploded");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+    // Preparation aborts the whole batch: hooks must see every logical
+    // payload fail, matching the per-payload audit terminals.
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
+    const contents = hookMocks.runner.runMessageSent.mock.calls.map(
+      (call) => (call[0] as { content?: string }).content,
+    );
+    expect(contents).toEqual(["first payload", "second payload"]);
   });
 
   it("runs afterCommit hooks after best-effort queue fallback direct sends", async () => {
@@ -2416,7 +2464,7 @@ describe("deliverOutboundPayloads", () => {
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     const sendMatrix = vi.fn().mockResolvedValue({
       messageId: "platform-message-1",
-      roomId: "!room:example",
+      target: { kind: "room", id: "!room:example" },
     });
 
     try {
@@ -2442,8 +2490,8 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual(["queued", "platform_started", "sent"]);
+    expect(events[2]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       kind: "message",
       action: "message.outbound.finished",
@@ -2465,7 +2513,7 @@ describe("deliverOutboundPayloads", () => {
       conversationId: "!room:example",
       messageId: "platform-message-1",
     });
-    expect(typeof events[0]?.durationMs).toBe("number");
+    expect(typeof events[2]?.durationMs).toBe("number");
     expect(JSON.stringify(events)).not.toContain("secret delivery body");
     expect(JSON.stringify(events)).not.toContain("secret-session-key");
   });
@@ -2488,9 +2536,14 @@ describe("deliverOutboundPayloads", () => {
     }
 
     expect(sendMatrix).toHaveBeenCalledTimes(1);
-    expect(events).toHaveLength(2);
-    expect(events.map((event) => event.outcome)).toEqual(["suppressed", "sent"]);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual([
+      "queued",
+      "queued",
+      "platform_started",
+      "suppressed",
+      "sent",
+    ]);
+    expect(events[3]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       status: "blocked",
       actorType: "system",
@@ -2499,8 +2552,8 @@ describe("deliverOutboundPayloads", () => {
       reasonCode: "no_visible_payload",
       resultCount: 0,
     });
-    expect(events[0]).not.toHaveProperty("deliveryKind");
-    expect(events[1]).toMatchObject({
+    expect(events[3]).not.toHaveProperty("deliveryKind");
+    expect(events[4]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:1",
       status: "succeeded",
       outcome: "sent",
@@ -4463,8 +4516,8 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ content: "secret body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map((event) => event.outcome)).toEqual(["queued", "platform_started", "failed"]);
+    expect(events[2]).toMatchObject({
       sourceId: "message:outbound:queue:mock-queue-id:payload:0",
       outcome: "failed",
       failureStage: "platform_send",

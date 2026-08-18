@@ -7,6 +7,7 @@ import {
 import { normalizeUsage } from "../../usage.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
+import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 describe("recoverEmbeddedRunAttempt", () => {
@@ -95,5 +96,103 @@ describe("recoverEmbeddedRunAttempt", () => {
         },
       },
     });
+  });
+
+  it("bypasses prompt failover for an operation-scoped compaction failure", async () => {
+    const promptFailover = vi.fn(async () => {
+      throw new Error("prompt failover must not run");
+    });
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-read", name: "read", arguments: {} }],
+    });
+    const messagesSnapshot = [
+      assistant,
+      { role: "toolResult", toolCallId: "tool-read", toolName: "read", isError: false },
+    ] as never;
+    const failoverRetryController = {
+      resolveAuthProfileFailureReason: vi.fn(),
+      advanceAuthProfile: vi.fn(),
+      advanceRateLimitAuthProfile: vi.fn(),
+      maybeMarkAuthProfileFailure: vi.fn(),
+      maybeBackoffBeforeOverloadFailover: vi.fn(),
+    };
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: {
+        kind: "failed",
+        source: "compaction",
+        error: new Error("unexpected status 404"),
+      },
+      messagesSnapshot,
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      settledTurnFinalizationContext: {
+        source: "openclaw-transcript",
+        messages: messagesSnapshot,
+      },
+      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    });
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+
+    const recovery = await recoverEmbeddedRunAttempt({
+      runInput: {
+        runParams: {
+          config: {},
+          agentId: "main",
+          sessionId: "session:compaction-failure",
+          runId: "run:compaction-failure",
+        },
+        resolvedSessionKey: "agent:main:compaction-failure",
+        startedAtMs: Date.now(),
+      },
+      preparedRuntime: {
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        model: { id: "gpt-5.6-luna" },
+        genericCompactionRecoveryAllowed: false,
+        maybeRefreshRuntimeAuthForAuthError: promptFailover,
+        snapshot: () => ({
+          thinkLevel: "off",
+          agentHarness: { id: "codex" },
+          outerContextTokenMeta: {},
+          lastProfileId: "profile-1",
+          pluginHarnessOwnsTransport: false,
+        }),
+      },
+      normalizedAttempt: {
+        attempt,
+        sessionIdUsed: attempt.sessionIdUsed,
+        attemptAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: undefined,
+        terminalState,
+        setTerminalLifecycleMeta: vi.fn(),
+        attemptCompactionCount: 0,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        resolveReplayInvalidForAttempt: () => false,
+        canRestartForLiveSwitch: false,
+      },
+      runtimePlan: { auth: {} },
+      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
+      failoverRetryController,
+      compactionRuntime: {},
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: undefined,
+      runtimeAuthRetry: false,
+      codexAppServerRecoveryRetryAvailable: false,
+      codexAppServerRecoveryRetries: 0,
+      lastRetryFailoverReason: null,
+      traceAttempts: [],
+      sessionAgentId: "main",
+    } as never);
+
+    expect(recovery).toEqual({ action: "proceed", shouldSurfaceCodexCompletionTimeout: false });
+    expect(promptFailover).not.toHaveBeenCalled();
+    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 });

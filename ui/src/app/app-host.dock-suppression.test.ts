@@ -99,6 +99,7 @@ describe("OpenClaw shell dock suppression", () => {
           updateAvailable: null,
           updateRunning: false,
           updateStatusBanner: null,
+          recordedUpdateAttempt: null,
           controlUiRefreshRequired: false,
           approvalQueue: [],
           approvalBusy: false,
@@ -107,7 +108,6 @@ describe("OpenClaw shell dock suppression", () => {
           devicePairSetupOpen: false,
           devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,
-          deviceAuthMigration: { error: null },
         },
         runUpdate: vi.fn(),
       },
@@ -120,10 +120,12 @@ describe("OpenClaw shell dock suppression", () => {
     const container = document.createElement("div");
     const desktopAvailable = () =>
       (
-        container.querySelector("openclaw-desktop-panel") as HTMLElement & {
-          available: boolean;
-        }
-      ).available;
+        container.querySelector("openclaw-desktop-panel") as
+          | (HTMLElement & {
+              available: boolean;
+            })
+          | null
+      )?.available ?? false;
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
@@ -164,11 +166,12 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
+          sessionKey: string | null;
         }
-      ).suppressed,
-    ).toBe(false);
-    expect(desktopAvailable()).toBe(true);
+      ).sessionKey,
+    ).toBe("agent:main:main");
+    expect(container.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 
     shell.routeState = {
       routeId: "new-session",
@@ -216,5 +219,15 @@ describe("OpenClaw shell dock suppression", () => {
     context.sessions.state.result = null;
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
+
+    // Collapsed-nav fallback: the Ask OpenClaw toggle joins the chrome strip
+    // only while the sidebar (its footer home) is hidden, and stays admin-gated.
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    context.navigation.snapshot.navCollapsed = true;
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).not.toBeNull();
+    context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   });
 });

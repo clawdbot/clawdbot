@@ -121,11 +121,29 @@ content kind:
 - `html` — agent-authored via `show_widget`, bytes in board storage.
 - `mcp-app` — a third-party MCP app view (`ui://` resource from a configured
   server) hosted inside the widget cell.
+- Registered plugin kinds — plugin-validated source rendered through the same
+  sandboxed document frame. The Canvas plugin registers `a2ui`; core discovers
+  the active registry and never hardcodes plugin kind names.
 
 MCP apps do not define the widget model; widgets gained the ability to host
 them. Identity, placement, pinning, grants, and the author-facing API stay
 OpenClaw's — so `show_widget` code stays as short as it is today and never
 needs to know the MCP Apps spec exists.
+
+Registered kinds use a small runtime Plugin SDK seam. A registration owns the
+agent-facing kind name, source validation, capability-scoped renderer
+resources, and document-body composition. The Gateway validates source again
+at `board.widget.put`, stores it in the existing generic `plugin` descriptor
+envelope, and composes the framed document only after a ticketed board read.
+This keeps stored source out of board snapshots and avoids a database CHECK or
+schema-version change. Disabled plugins are absent from the registry, so new
+puts fail with an enable-and-retry error and existing cells render as disabled.
+
+The A2UI implementation composes a small document that references the renderer
+bundle on the capability-scoped Gateway asset route. Core then adds the same
+CSP, theme bridge, size reporter, and private-port host bridge used by HTML
+widgets. v0.8 and v0.9 use separate renderer bundles because their Lit custom
+elements share tag names but their processors and action contracts differ.
 
 Shared infrastructure underneath (this is where the simplification lands):
 
@@ -320,8 +338,9 @@ Widget bytes are served over the authenticated HTTP surface, not the socket.
 Three tools total (core, always registered; rendering gated on the
 `inline-widgets` client cap as today):
 
-- `show_widget { title, widget_code, name?, pin?, size?, tab?, after?,
-capabilities? }` — create/update by name; `pin` places it on the board.
+- `show_widget { title, widget_code, kind?, name?, pin?, size?, tab?, after?,
+capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
+  includes active registered kinds; `pin` places it on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
   `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,

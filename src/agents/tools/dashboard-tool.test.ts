@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BoardCommand, BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
@@ -178,5 +179,36 @@ describe("dashboard tool", () => {
     expect(harness.calls).toEqual([]);
     expect(harness.commands).toEqual([{ sessionKey: "agent:main:main", command }]);
     expect(result.details).toEqual({ ok: true, delivered: 2 });
+  });
+
+  it.each([
+    ["focus_tab", { tabId: "notes" }],
+    ["set_chat_dock", { dock: "left" }],
+  ])("reports %s as unavailable when no Control UI is connected", async (action, args) => {
+    const broadcastToConnIds = vi.fn();
+    const context = {
+      broadcastToConnIds,
+      getClientConnIds: () => new Set(),
+    } as never;
+    await withPluginRuntimeGatewayRequestScope(
+      { context, isWebchatConnect: () => false },
+      async () => {
+        const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
+        const result = await tool.execute("command", { action, ...args });
+        expect(result.details).toEqual({
+          status: "unavailable",
+          code: "UNAVAILABLE",
+          message: "Connect Control UI and retry.",
+        });
+        expect(result.content[0]).toMatchObject({
+          text: expect.stringMatching(/Control UI.*retry/i),
+        });
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "board.command",
+          expect.any(Object),
+          new Set(),
+        );
+      },
+    );
   });
 });

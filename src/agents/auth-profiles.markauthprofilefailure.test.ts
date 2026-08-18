@@ -434,6 +434,33 @@ describe("markAuthProfileFailure", () => {
       }
     });
   });
+
+  it("does not break inline failure recording when the hook throws", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const throwingHook = vi.fn(() => {
+        throw new Error("boom");
+      });
+      setAuthProfileFailureHook(throwingHook);
+      try {
+        await expect(
+          markInlineProviderApiKeyFailure({
+            store,
+            provider: "anthropic",
+            reason: "billing",
+            agentDir,
+          }),
+        ).resolves.toBeUndefined();
+        expect(throwingHook).toHaveBeenCalledTimes(1);
+        const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
+        expect(store.usageStats?.[usageId]?.disabledReason).toBe("billing");
+        expect(ensureAuthProfileStore(agentDir).usageStats?.[usageId]?.disabledReason).toBe(
+          "billing",
+        );
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
+    });
+  });
 });
 
 describe("calculateAuthProfileCooldownMs", () => {

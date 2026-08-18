@@ -142,7 +142,6 @@ export async function collectActiveToolSchemaProjectionWarnings(params: {
           modelCompat: runtimeModelContext.modelCompat,
           modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
           allowGatewaySubagentBinding: true,
-          toolPolicyAuditLogLevel: "debug",
         });
       } catch (error) {
         agentWarnings.push(

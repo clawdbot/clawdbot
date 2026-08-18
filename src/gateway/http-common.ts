@@ -2,12 +2,14 @@
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { closeRequestAfterResponse } from "../infra/http-body.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
+import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
 
 /**
  * Apply baseline security headers that are safe for all response types (API JSON,
@@ -86,6 +88,16 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
     sendRateLimited(res, authResult.retryAfterMs);
     return;
   }
+  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    sendJson(res, 403, {
+      error: {
+        message:
+          "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    return;
+  }
   sendUnauthorized(res);
 }
 
@@ -139,12 +151,14 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
+      closeRequestAfterResponse(req, res);
       sendJson(res, 413, {
         error: { message: "Payload too large", type: "invalid_request_error" },
       });
       return undefined;
     }
     if (body.error === "request body timeout") {
+      closeRequestAfterResponse(req, res);
       sendJson(res, 408, {
         error: { message: "Request body timeout", type: "invalid_request_error" },
       });

@@ -90,6 +90,17 @@ function createFixture() {
     yieldDetected: false,
     yieldMessage: null as string | null,
   };
+  const activeSession = {
+    messages: [],
+    agent: {
+      state: { messages: [] },
+      streamFn: vi.fn(),
+    },
+  };
+  const sessionManager = {
+    appendCustomEntry: vi.fn(),
+    getEntries: vi.fn(() => []),
+  };
   let prePromptMessageCount = 1;
 
   const setPrePromptMessageCount = vi.fn((count: number) => {
@@ -169,18 +180,6 @@ function createFixture() {
     submissionInput.onSteeringAcknowledged();
   });
   mocks.handlePromptError.mockResolvedValue({});
-
-  const activeSession = {
-    messages: [],
-    agent: {
-      state: { messages: [] },
-      streamFn: vi.fn(),
-    },
-  };
-  const sessionManager = {
-    appendCustomEntry: vi.fn(),
-    getEntries: vi.fn(() => []),
-  };
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },
@@ -213,6 +212,7 @@ function createFixture() {
       toolResultPromptProjectionState: {},
     },
     execution: {
+      mediaOwnerAgentId: "main",
       effectiveFsWorkspaceOnly: false,
       effectiveWorkspace: "/tmp/workspace",
       sandbox: null,
@@ -412,6 +412,14 @@ describe("runEmbeddedAttemptPromptPhase", () => {
   it("releases steering when preflight skips provider submission", async () => {
     const fixture = createFixture();
     const promptError = new Error("preflight rejected");
+    mocks.preparePromptExecution.mockResolvedValueOnce({
+      images: [],
+      imageFactIndexes: [],
+      detectedRefs: [],
+      failedMediaCount: 1,
+      loadedCount: 0,
+      skippedCount: 1,
+    });
     mocks.observePrompt.mockImplementationOnce(() => {
       fixture.order.push("observe");
       return { skipPromptSubmission: true };

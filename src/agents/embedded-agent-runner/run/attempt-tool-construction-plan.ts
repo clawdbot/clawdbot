@@ -12,6 +12,7 @@ import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
+  expandShippedCoreToolPolicyNames,
   expandToolGroups,
   normalizeToolList,
   normalizeToolPolicyName,
@@ -81,7 +82,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
       : undefined;
     const policy = pluginGroups
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
-      : { allow: restriction };
+      : { allow: expandShippedCoreToolPolicyNames(restriction) };
     return currentTools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
   }, tools);
 }
@@ -131,7 +132,7 @@ function resolveCodingToolConstructionPlanForAllowlist(
   if (hasWildcardToolAllowlist(toolsAllow)) {
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  const expanded = expandToolGroups(toolsAllow);
+  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(toolsAllow));
   const normalized = normalizeToolList(expanded);
   const coreFamilies = new Set<CoreToolFactoryFamily>();
   let includePluginTools = false;

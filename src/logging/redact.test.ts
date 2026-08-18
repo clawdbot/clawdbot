@@ -1975,9 +1975,11 @@ describe("redactSensitiveLines", () => {
     expect(result[1]).toBe("normal log line");
   });
 
-  it("returns lines unmodified when mode is off", () => {
+  it("returns lines unmodified when redaction is off", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
-    const lines = ["TOKEN=abcdef1234567890ghij"];
+    const secret = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(secret);
+    const lines = [`TOKEN=abcdef1234567890ghij ${secret}`];
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
@@ -2008,12 +2010,15 @@ describe("redactSensitiveLines", () => {
     ).toEqual(["Authorization: Digest", " ***; status=401"]);
   });
 
-  it("returns lines unmodified when resolved patterns is empty — does not fall back to defaults", () => {
+  it("applies exact registered secrets without falling back from empty resolved patterns", () => {
     // Simulates the case where all user-configured patterns fail to compile.
     // The pre-resolved empty array must be honored, not silently replaced with defaults.
     const resolved = { mode: "tools" as const, patterns: [], redactFormBodies: false };
-    const lines = ["TOKEN=abcdef1234567890ghij"];
-    expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
+    const secret = "opaque-registry-value-1234567890";
+    registerSecretValueForRedaction(secret);
+    expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([
+      "TOKEN=abcdef1234567890ghij opaque…7890",
+    ]);
   });
 
   it("returns empty array unchanged — does not produce a synthetic blank line", () => {

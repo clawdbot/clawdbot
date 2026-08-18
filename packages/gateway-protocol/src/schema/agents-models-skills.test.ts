@@ -93,6 +93,18 @@ describe("AgentsDeleteResultSchema", () => {
       removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
       failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
     });
+    expectAccepted(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: true,
+    });
+    expectRejected(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: false,
+    });
   });
 });
 
@@ -136,6 +148,9 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           kind: "agent",
+          createdVia: "agent",
+          creatorAgentId: "main",
+          createdAt: 42,
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },

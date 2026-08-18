@@ -1,5 +1,5 @@
 // Write Cli Startup Metadata script supports OpenClaw repository automation.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, {
   existsSync,
@@ -9,7 +9,7 @@ import fs, {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { availableParallelism, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -17,7 +17,7 @@ import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -42,10 +42,9 @@ const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
-// Each help render is an isolated CLI boot; concurrency only bounds process
-// fan-out, not output content, so scale with the host instead of serializing
-// eight boots two at a time.
-const COMMAND_HELP_RENDER_CONCURRENCY = Math.min(8, Math.max(2, availableParallelism()));
+// Cold CLI boots compete for the same module graph, so CPU count is not a safe
+// proxy for module-loading throughput on a disk-contended host.
+const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
   "doctor",
   "gateway",
@@ -105,16 +104,6 @@ type SourceHelpRenderer<T = string> = (
   renderContext: RootHelpRenderContext,
   taskContext?: RenderTaskContext,
 ) => Awaitable<T>;
-type KillableChild = {
-  kill(signal: NodeJS.Signals): boolean;
-  pid?: number;
-};
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: unknown; status?: number | null } | undefined;
-
 class CliStartupMetadataRenderSupervisor {
   readonly #abortController = new AbortController();
   readonly #parentSignalHandlers: Array<{ handler: () => void; signal: NodeJS.Signals }> = [];
@@ -213,65 +202,6 @@ class CliStartupMetadataRenderSupervisor {
     }
     throw failure;
   }
-}
-
-function signalWindowsProcessTree(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  const args = ["/PID", String(pid), "/T"];
-  if (signal === "SIGKILL") {
-    args.push("/F");
-  }
-  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
-  return !result?.error && result?.status === 0;
-}
-
-function signalWindowsProcessTreeOrForce(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
-    return true;
-  }
-  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
-}
-
-function signalCliStartupMetadataProcessTree(
-  child: KillableChild,
-  signal: NodeJS.Signals,
-  {
-    appendDiagnostic = () => {},
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    appendDiagnostic?: (message: string) => void;
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-): void {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        appendDiagnostic(
-          `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
-      return;
-    }
-  }
-  child.kill(signal);
 }
 
 function updateHashFromFiles(
@@ -581,9 +511,9 @@ async function spawnText(
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const signalChild = (signal: NodeJS.Signals) => {
-      signalCliStartupMetadataProcessTree(child, signal, {
-        appendDiagnostic: (message) => {
-          stderr += message;
+      terminateManagedChild(child, signal, {
+        onProcessGroupSignalError: (error) => {
+          stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
         },
         useProcessGroup,
       });
@@ -1085,6 +1015,11 @@ async function writeCliStartupMetadata(options?: {
               taskContext,
             ),
       );
+  // Root help traverses the plugin metadata graph too; finish it before command
+  // fan-out so sibling cold boots cannot starve its bounded render.
+  const afterRootHelp = <T>(render: () => Awaitable<T>) => rootHelpTextPromise.then(render);
+  const runSourceRenderer = <T>(render: SourceHelpRenderer<T>) =>
+    afterRootHelp(() => supervisor.run((taskContext) => render(renderContext, taskContext)));
   const hasCustomCommandRenderer =
     options?.renderSourceBrowserHelpText ||
     options?.renderSourceSecretsHelpText ||
@@ -1106,37 +1041,24 @@ async function writeCliStartupMetadata(options?: {
   const commandHelpTextPromise =
     hasCustomCommandRenderer || sourceCommandsToRender.length === 0
       ? null
-      : renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor);
+      : afterRootHelp(() =>
+          renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor),
+        );
   const browserHelpTextPromise = reusableBrowserHelpText
     ? Promise.resolve(reusableBrowserHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+      : runSourceRenderer(options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText);
   const secretsHelpTextPromise = reusableSecretsHelpText
     ? Promise.resolve(reusableSecretsHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+      : runSourceRenderer(options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText);
   const nodesHelpTextPromise = reusableNodesHelpText
     ? Promise.resolve(reusableNodesHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+      : runSourceRenderer(options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText);
   const subcommandHelpTextPromise = reusableSubcommandHelpText
     ? Promise.resolve(reusableSubcommandHelpText)
     : commandHelpTextPromise
@@ -1150,10 +1072,8 @@ async function writeCliStartupMetadata(options?: {
             ) as PrecomputedSubcommandHelpText,
         )
       : options?.renderSourceSubcommandHelpTextRecord
-        ? supervisor.run((taskContext) =>
-            options.renderSourceSubcommandHelpTextRecord!(renderContext, taskContext),
-          )
-        : renderSourceSubcommandHelpTextRecord(renderContext, supervisor);
+        ? runSourceRenderer(options.renderSourceSubcommandHelpTextRecord)
+        : afterRootHelp(() => renderSourceSubcommandHelpTextRecord(renderContext, supervisor));
   const [rootHelpText, browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] =
     await settleRootHelpRenderPromises(
       [
@@ -1206,7 +1126,6 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 
 export const testing = {
   renderSourceRootHelpText,
-  signalCliStartupMetadataProcessTree,
   spawnText,
   writeCliStartupMetadata,
 };

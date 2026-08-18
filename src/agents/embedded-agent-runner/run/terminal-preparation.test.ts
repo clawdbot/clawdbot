@@ -320,6 +320,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     config?: unknown;
     provider?: string;
     model?: string;
+    outerContextTokenMeta?: { contextTokens?: number };
     responseModel?: string;
     usage?: Partial<
       Pick<
@@ -366,7 +367,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       activeErrorContext: { provider, model },
       authProfileStore: { version: 1, profiles: {} },
       sessionIdUsed: "session-1",
-      outerContextTokenMeta: {},
+      outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
       usageAccumulator,
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
       resolvedToolResultFormat: "markdown",
@@ -399,6 +400,34 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
   ])("stamps codeModeEngaged when $name", async ({ codeModeEngaged, expected }) => {
     const prepared = await prepareStats({ attempt: { codeModeEngaged } });
     expect(prepared.agentMeta.codeModeEngaged).toBe(expected);
+  });
+
+  it("records whether the context window came from the harness or prepared resolution", async () => {
+    const observed = await prepareStats({
+      attempt: { contextTokens: 1_000_000, contextTokensSource: "runtime" },
+      outerContextTokenMeta: { contextTokens: 272_000 },
+    });
+    expect(observed.agentMeta).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "runtime",
+    });
+
+    const configured = await prepareStats({
+      attempt: { contextTokens: 272_000, contextTokensSource: "runtime-configured" },
+      outerContextTokenMeta: { contextTokens: 1_000_000 },
+    });
+    expect(configured.agentMeta).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "runtime-configured",
+    });
+
+    const resolved = await prepareStats({
+      outerContextTokenMeta: { contextTokens: 272_000 },
+    });
+    expect(resolved.agentMeta).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "resolved",
+    });
   });
 
   it("stamps assistantTurns from the run accumulator and omits zero", async () => {

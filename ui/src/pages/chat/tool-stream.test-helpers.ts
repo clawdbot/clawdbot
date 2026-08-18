@@ -1,10 +1,5 @@
 import { vi } from "vitest";
-import {
-  handleAgentEvent,
-  type FallbackStatus,
-  type PlanStatus,
-  type ToolStreamEntry,
-} from "./tool-stream.ts";
+import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
@@ -17,7 +12,6 @@ type MutableHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
-  planStatus?: PlanStatus | null;
   requestUpdate?: () => void;
 };
 
@@ -35,6 +29,7 @@ export function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [],
     chatToolMessages: [],
+    guardianNotices: [],
     toolStreamSyncTimer: null,
     sessions: {
       state: { modelOverrides },
@@ -50,7 +45,6 @@ export function createHost(overrides?: Partial<MutableHost>): MutableHost {
     compactionClearTimer: null,
     fallbackStatus: null,
     fallbackClearTimer: null,
-    planStatus: null,
     ...overrides,
   };
 }

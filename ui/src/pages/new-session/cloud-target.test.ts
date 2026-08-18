@@ -33,11 +33,32 @@ describe("cloud session startup", () => {
       status: "dispatch-rejected",
       error: "allocation failed",
     });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenCalledWith("sessions.dispatch", {
       key: params.key,
       agentId: params.agentId,
       profileId: params.profileId,
+    });
+    expect(request).toHaveBeenCalledWith("sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
+    });
+  });
+
+  it("passes a non-default machine class to dispatch", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "worker-fast" } })
+      .mockResolvedValueOnce({ runId: "run-fast" });
+
+    await expect(
+      startCloudInitialTurn(clientWith(request), { ...params, machineClass: "fast" }, () => true),
+    ).resolves.toMatchObject({ status: "started" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.dispatch", {
+      key: params.key,
+      agentId: params.agentId,
+      profileId: params.profileId,
+      machineClass: "fast",
     });
   });
 
@@ -58,7 +79,7 @@ describe("cloud session startup", () => {
     expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
   });
 
-  it("destroys an allocated worker when provisioning becomes failed", async () => {
+  it("reclaims an allocated worker when provisioning becomes failed", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -67,14 +88,15 @@ describe("cloud session startup", () => {
       .mockResolvedValueOnce({
         session: { placement: { state: "failed", environmentId: "environment-failed" } },
       })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
       status: "dispatch-rejected",
       error: "cloud worker placement became failed",
     });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-failed",
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
@@ -231,14 +253,14 @@ describe("cloud session startup", () => {
 
     await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
       status: "cleanup-rejected",
-      error: "cloud worker placement could not be verified",
+      error: "cloud worker placement could not be verified; cleanup failed: authentication expired",
     });
-    expect(request).toHaveBeenCalledTimes(5);
+    expect(request).toHaveBeenCalledTimes(6);
   });
 
   it.each([
     {
-      name: "destroys the last known worker",
+      name: "reclaims the session placement",
       cleanupError: undefined,
       expectedError: "cloud worker placement could not be verified",
     },
@@ -271,8 +293,9 @@ describe("cloud session startup", () => {
 
       await expect(outcome).resolves.toEqual({ status: "cleanup-rejected", error: expectedError });
       expect(request).toHaveBeenCalledTimes(6);
-      expect(request).toHaveBeenNthCalledWith(6, "environments.destroy", {
-        environmentId: "environment-unavailable",
+      expect(request).toHaveBeenNthCalledWith(6, "sessions.reclaim", {
+        key: params.key,
+        agentId: params.agentId,
       });
       expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
     } finally {
@@ -294,13 +317,13 @@ describe("cloud session startup", () => {
         status: "cleanup-rejected",
         error: "cloud worker placement reconciliation timed out",
       });
-      expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps a cancelled placement recoverable when destruction fails", async () => {
+  it("keeps a cancelled placement recoverable when reclaim fails", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-1" } })
@@ -310,8 +333,9 @@ describe("cloud session startup", () => {
       status: "cleanup-rejected",
       error: "cleanup unavailable",
     });
-    expect(request).toHaveBeenNthCalledWith(2, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
@@ -323,18 +347,19 @@ describe("cloud session startup", () => {
       .mockResolvedValueOnce({
         session: { placement: { state: "provisioning", environmentId: "environment-1" } },
       })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(startCloudInitialTurn(clientWith(request), params, () => false)).resolves.toEqual({
       status: "cancelled",
     });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
 
-  it("destroys the last known worker when cancellation coincides with a lookup failure", async () => {
+  it("reclaims by session when cancellation coincides with a lookup failure", async () => {
     let current = true;
     const request = vi
       .fn()
@@ -345,17 +370,18 @@ describe("cloud session startup", () => {
         current = false;
         throw new Error("reconnecting");
       })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(
       startCloudInitialTurn(clientWith(request), params, () => current),
     ).resolves.toEqual({ status: "cancelled" });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
   });
 
-  it("preserves the last known worker identity when a later placement omits it", async () => {
+  it("reclaims without carrying an environment identity", async () => {
     let current = true;
     const request = vi
       .fn()
@@ -366,17 +392,18 @@ describe("cloud session startup", () => {
         current = false;
         return { session: { placement: { state: "provisioning" } } };
       })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(
       startCloudInitialTurn(clientWith(request), params, () => current),
     ).resolves.toEqual({ status: "cancelled" });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
   });
 
-  it("aborts and destroys when cancellation lands while the first turn is in flight", async () => {
+  it("aborts and reclaims when cancellation lands while the first turn is in flight", async () => {
     let current = true;
     const request = vi
       .fn()
@@ -388,7 +415,7 @@ describe("cloud session startup", () => {
         return { runId: "run-1" };
       })
       .mockResolvedValueOnce({ ok: true, status: "aborted" })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(
       startCloudInitialTurn(clientWith(request), params, () => current),
@@ -399,8 +426,9 @@ describe("cloud session startup", () => {
       key: params.key,
       agentId: params.agentId,
     });
-    expect(request).toHaveBeenNthCalledWith(4, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
   });
 
@@ -427,7 +455,7 @@ describe("cloud session startup", () => {
     });
   });
 
-  it("destroys the worker after a definitive first-turn rejection", async () => {
+  it("reclaims the worker after a definitive first-turn rejection", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -440,15 +468,16 @@ describe("cloud session startup", () => {
           retryable: false,
         }),
       )
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
       status: "send-definitive-rejected",
       error: "message rejected",
       messageId: expect.any(String),
     });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
   });
 
@@ -456,6 +485,7 @@ describe("cloud session startup", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         placement: { state: "active", environmentId: "environment-2" },
       })
@@ -473,19 +503,19 @@ describe("cloud session startup", () => {
         () => true,
       ),
     ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.dispatch", {
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.dispatch", {
       key: params.key,
       agentId: params.agentId,
       profileId: params.profileId,
     });
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "sessions.send",
       expect.objectContaining({ idempotencyKey: "message-recovered" }),
     );
   });
 
-  it("destroys the worker without sending when recovery cannot enter the sending phase", async () => {
+  it("reclaims the worker without sending when recovery cannot enter the sending phase", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -504,50 +534,130 @@ describe("cloud session startup", () => {
       status: "send-not-started",
       error: "cloud recovery storage is unavailable",
     });
-    expect(request).toHaveBeenNthCalledWith(2, "environments.destroy", {
-      environmentId: "environment-1",
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
 
-  it("reports lost worker identity instead of claiming cancellation succeeded", async () => {
-    const request = vi.fn().mockResolvedValueOnce({ placement: { state: "active" } });
+  it("reclaims a cancelled placement without an environment identity", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ placement: { state: "active" } })
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(startCloudInitialTurn(clientWith(request), params, () => false)).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "cloud worker cleanup lost its environment identity",
+      status: "cancelled",
     });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.reclaim", {
+      key: params.key,
+      agentId: params.agentId,
+    });
   });
 
-  it("deletes a cancelled local draft session", async () => {
-    const request = vi.fn().mockResolvedValue({ ok: true, deleted: true });
+  it("archives and deletes a cancelled local draft session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ session: { sessionId: "session-draft" } })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, deleted: true });
 
     await expect(
       deleteCloudDraftSession(clientWith(request), params.key, params.agentId),
     ).resolves.toBeUndefined();
 
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key: params.key,
-      agentId: params.agentId,
-      deleteTranscript: true,
-    });
+    expect(request.mock.calls).toEqual([
+      ["sessions.describe", { key: params.key }],
+      [
+        "sessions.patch",
+        {
+          key: params.key,
+          agentId: params.agentId,
+          archived: true,
+          expectedSessionId: "session-draft",
+        },
+      ],
+      [
+        "sessions.delete",
+        {
+          key: params.key,
+          agentId: params.agentId,
+          deleteTranscript: true,
+          expectedSessionId: "session-draft",
+          archivedOnly: true,
+        },
+      ],
+    ]);
   });
 
-  it("reports a rejected local draft cleanup", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("delete unavailable"));
+  it.each([
+    {
+      name: "delete no-op",
+      deleteResult: { ok: true, deleted: false },
+      expectedError: "cloud draft session was not deleted",
+    },
+    {
+      name: "delete rejection",
+      deleteResult: new Error("delete unavailable"),
+      expectedError: "delete unavailable",
+    },
+  ])("unarchives a local draft after $name", async ({ deleteResult, expectedError }) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return { session: { sessionId: "session-draft" } };
+      }
+      if (method === "sessions.delete") {
+        if (deleteResult instanceof Error) {
+          throw deleteResult;
+        }
+        return deleteResult;
+      }
+      return { ok: true };
+    });
 
     await expect(
       deleteCloudDraftSession(clientWith(request), params.key, params.agentId),
-    ).resolves.toBe("delete unavailable");
+    ).resolves.toBe(expectedError);
+    expect(request).toHaveBeenLastCalledWith("sessions.patch", {
+      key: params.key,
+      agentId: params.agentId,
+      archived: false,
+      expectedSessionId: "session-draft",
+    });
   });
 
-  it("destroys a recovered worker before deleting its draft session", async () => {
+  it("reports both delete and restore failures during local draft cleanup", async () => {
+    let patchCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return { session: { sessionId: "session-draft" } };
+      }
+      if (method === "sessions.delete") {
+        throw new Error("delete unavailable");
+      }
+      patchCalls += 1;
+      if (patchCalls === 2) {
+        throw new Error("restore unavailable");
+      }
+      return { ok: true };
+    });
+
+    await expect(
+      deleteCloudDraftSession(clientWith(request), params.key, params.agentId),
+    ).resolves.toBe("delete unavailable; restoring the cloud draft failed: restore unavailable");
+  });
+
+  it("reclaims a recovered worker before archiving and deleting its draft session", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-recovered" } },
+        session: {
+          sessionId: "session-recovered",
+          placement: { state: "active", environmentId: "environment-recovered" },
+        },
       })
+      .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: true, deleted: true });
 
@@ -556,8 +666,26 @@ describe("cloud session startup", () => {
     ).resolves.toBeUndefined();
     expect(request.mock.calls).toEqual([
       ["sessions.describe", { key: params.key }],
-      ["environments.destroy", { environmentId: "environment-recovered" }],
-      ["sessions.delete", { key: params.key, agentId: params.agentId, deleteTranscript: true }],
+      ["sessions.reclaim", { key: params.key, agentId: params.agentId }],
+      [
+        "sessions.patch",
+        {
+          key: params.key,
+          agentId: params.agentId,
+          archived: true,
+          expectedSessionId: "session-recovered",
+        },
+      ],
+      [
+        "sessions.delete",
+        {
+          key: params.key,
+          agentId: params.agentId,
+          deleteTranscript: true,
+          expectedSessionId: "session-recovered",
+          archivedOnly: true,
+        },
+      ],
     ]);
   });
 

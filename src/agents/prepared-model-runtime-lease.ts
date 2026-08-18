@@ -1,6 +1,4 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
-import fsp from "node:fs/promises";
-import path from "node:path";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -14,7 +12,6 @@ import {
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeOwnerRetention,
-  type PreparedModelRuntimePublicationOptions,
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
@@ -23,56 +20,13 @@ import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.t
 type PreparedModelRuntimeLeaseContext = {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
-  workspacePluginRootPresenceResolutions: Map<string, Promise<boolean | undefined>>;
   retainedDirectRunOwners: PreparedModelRuntimeOwnerRetention;
   retainedGatewayRunOwners: PreparedModelRuntimeOwnerRetention;
   getBuildTimeoutMs(): number;
   getGatewayLifecycleActive(): boolean;
   getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
   prepareSnapshot(input: PreparedModelRuntimeInput): Promise<PreparedModelRuntimeSnapshot>;
-  publishSnapshot(
-    input: PreparedModelRuntimeInput,
-    options: PreparedModelRuntimePublicationOptions,
-  ): Promise<PreparedModelRuntimeSnapshot>;
 };
-
-async function resolveCoalescedWorkspacePluginRootPresence(
-  input: PreparedModelRuntimeInput,
-  context: PreparedModelRuntimeLeaseContext,
-): Promise<boolean | undefined> {
-  const key = ownerKey(input);
-  const existing = context.workspacePluginRootPresenceResolutions.get(key);
-  if (existing) {
-    return await existing;
-  }
-  const pending = resolveWorkspacePluginRootPresence(input);
-  context.workspacePluginRootPresenceResolutions.set(key, pending);
-  try {
-    return await pending;
-  } finally {
-    if (context.workspacePluginRootPresenceResolutions.get(key) === pending) {
-      context.workspacePluginRootPresenceResolutions.delete(key);
-    }
-  }
-}
-
-export async function resolveWorkspacePluginRootPresence(
-  input: PreparedModelRuntimeInput,
-): Promise<boolean | undefined> {
-  if (input.workspacePluginRootPresent !== undefined || !input.workspaceDir) {
-    return input.workspacePluginRootPresent;
-  }
-  return await fsp
-    .stat(path.join(input.workspaceDir, ".openclaw", "extensions"))
-    .then(() => true)
-    .catch((error: unknown) => {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        return false;
-      }
-      throw error;
-    });
-}
 
 export async function acquirePreparedModelRuntimeLeaseFromOwners(
   rawInput: PreparedModelRuntimeInput,
@@ -81,6 +35,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   options: {
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
+    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   let normalizedInput = normalizePreparedModelRuntimeInput({
@@ -91,6 +46,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   if (
     provenance === "run" &&
     context.getGatewayLifecycleActive() &&
+    !options.pluginGeneration &&
     !context.getPendingReplacement()
   ) {
     try {
@@ -101,18 +57,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }
     }
   }
-  const retainedWorkspacePluginRootPresent = context.owners.get(ownerKey(normalizedInput))?.input
-    .workspacePluginRootPresent;
-  const workspacePluginRootPresent =
-    rawInput.workspacePluginRootPresent ??
-    retainedWorkspacePluginRootPresent ??
-    (provenance === "run"
-      ? await resolveCoalescedWorkspacePluginRootPresence(normalizedInput, context)
-      : undefined);
-  let input = normalizePreparedModelRuntimeInput({
-    ...normalizedInput,
-    ...(workspacePluginRootPresent === undefined ? {} : { workspacePluginRootPresent }),
-  });
+  let input = normalizedInput;
   let key = ownerKey(input);
   let owner: PreparedModelRuntimeOwner;
   let snapshot: PreparedModelRuntimeSnapshot;
@@ -125,7 +70,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (context.getPendingReplacement()) {
         continue;
       }
-      if (provenance === "run") {
+      if (provenance === "run" && !options.pluginGeneration) {
         input = rebindInputToCommittedConfiguredOwner(context.owners, input);
         key = ownerKey(input);
       }
@@ -139,6 +84,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
+      !options.pluginGeneration &&
       (!existing || staleDynamicOwner)
     ) {
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
@@ -166,9 +112,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }
     }
     try {
-      if (staleDynamicOwner) {
-        // Existing leases retain their immutable snapshot. Publish a distinct owner so their release
-        // cannot delete the replacement generation admitted for new work at the same dynamic key.
+      if (existing && !staleDynamicOwner) {
+        snapshot = await context.prepareSnapshot(input);
+      } else {
+        // Fresh keys publish a first generation; stale dynamic owners publish a distinct
+        // replacement owner because existing leases retain their immutable snapshot, so
+        // their release cannot delete the generation admitted for new work at this key.
         snapshot = await publishModelRuntimeSnapshot(
           input,
           context.owners,
@@ -177,14 +126,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           undefined,
           provenance,
           options.catalogMode,
+          options.pluginGeneration,
         );
-      } else if (existing) {
-        snapshot = await context.prepareSnapshot(input);
-      } else {
-        snapshot = await context.publishSnapshot(input, {
-          provenance,
-          catalogMode: options.catalogMode,
-        });
       }
     } catch (error) {
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {

@@ -1494,6 +1494,10 @@ export async function prepareSlackMessage(params: {
       })
     : undefined;
   const senderName = await resolveSenderName();
+  const conversationAvatar =
+    isDirectMessage && message.user
+      ? ctx.resolveUserAvatar(message.user, opts.eventScope)
+      : undefined;
   const preview = truncateUtf16Safe(bodyForAgent.replace(/\s+/g, " "), 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -1691,6 +1695,7 @@ export async function prepareSlackMessage(params: {
       spaceId: opts.eventScope?.teamId || ctx.teamId || undefined,
       threadId: boundMessageThreadId,
       nativeChannelId: message.channel,
+      avatar: conversationAvatar,
     },
     route: {
       agentId: route.agentId,

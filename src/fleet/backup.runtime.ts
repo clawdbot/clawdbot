@@ -15,6 +15,7 @@ import {
 import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   cellAuthSecretDir,
   cellNetworkName,
@@ -120,14 +121,6 @@ async function canonicalizeForContainment(targetPath: string): Promise<string> {
   }
 }
 
-function isWithin(candidate: string, root: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 function remapArchivePath(
   entryPath: string,
   manifestPath: string,
@@ -138,11 +131,11 @@ function remapArchivePath(
   if (resolved === manifestPath) {
     return "manifest.json";
   }
-  if (isWithin(resolved, dataTarget)) {
+  if (isPathInside(dataTarget, resolved)) {
     const relative = path.relative(dataTarget, resolved).split(path.sep).join(path.posix.sep);
     return relative ? path.posix.join("data", relative) : "data";
   }
-  if (isWithin(resolved, authTarget)) {
+  if (isPathInside(authTarget, resolved)) {
     const relative = path.relative(authTarget, resolved).split(path.sep).join(path.posix.sep);
     return relative ? path.posix.join("auth", relative) : "auth";
   }
@@ -206,7 +199,7 @@ export async function backupFleetCell(params: {
   );
   const canonicalOutput = await canonicalizeForContainment(archivePath);
   const roots = [dataTarget, authTarget];
-  if (roots.some((root) => isWithin(canonicalOutput, root))) {
+  if (roots.some((root) => isPathInside(root, canonicalOutput))) {
     throw new Error(
       "Fleet backup output must not be written inside the cell data or auth directory.",
     );
@@ -475,7 +468,7 @@ export async function restoreFleetCell(params: {
     canonicalizeForContainment(params.record.dataDir),
     canonicalizeForContainment(cellAuthSecretDir(params.stateDir, params.record.tenantId)),
   ]);
-  if (restoreRoots.some((root) => isWithin(canonicalArchive, root))) {
+  if (restoreRoots.some((root) => isPathInside(root, canonicalArchive))) {
     throw new Error(
       "Fleet restore archive must not be stored inside the cell data or auth directory.",
     );

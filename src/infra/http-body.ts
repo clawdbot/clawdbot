@@ -86,16 +86,18 @@ function parseContentLengthHeader(req: IncomingMessage): number | null {
     return null;
   }
   const parsed = parseStrictNonNegativeInteger(raw);
-  if (parsed === undefined) {
-    return null;
+  if (parsed !== undefined) {
+    return parsed;
   }
-  return parsed;
+  return /^\d+$/.test(raw.trim()) ? Number.MAX_SAFE_INTEGER : null;
 }
 
 export type ReadRequestBodyOptions = {
   maxBytes: number;
   timeoutMs?: number;
   encoding?: BufferEncoding;
+  /** Pause instead of destroying on size/timeout failures so a caller can flush a response first. */
+  destroyOnLimit?: boolean;
 };
 
 type RequestBodyLimitValues = {
@@ -138,6 +140,35 @@ function advanceRequestBodyChunk(
     totalBytes: nextTotalBytes,
     exceeded: nextTotalBytes > maxBytes,
   };
+}
+
+function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean): void {
+  if (req.destroyed) {
+    return;
+  }
+  if (destroyOnLimit) {
+    // Limit violations are expected user input; destroying with an Error causes
+    // an async 'error' event which can crash the process if no listener remains.
+    req.destroy();
+    return;
+  }
+  req.pause();
+}
+
+/** Close a limited request only after its response transport has closed. */
+export function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
+  if (!res.headersSent) {
+    res.setHeader("Connection", "close");
+  }
+  const once = Reflect.get(res, "once");
+  if (typeof once !== "function") {
+    return;
+  }
+  once.call(res, "close", () => {
+    if (!req.destroyed) {
+      req.destroy();
+    }
+  });
 }
 
 type ReadResponsePrefixResult = {
@@ -344,15 +375,12 @@ export async function readRequestBodyWithLimit(
 ): Promise<string> {
   const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const encoding = options.encoding ?? "utf-8";
+  const destroyOnLimit = options.destroyOnLimit !== false;
 
   const declaredLength = parseContentLengthHeader(req);
   if (declaredLength !== null && declaredLength > maxBytes) {
     const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
-    if (!req.destroyed) {
-      // Limit violations are expected user input; destroying with an Error causes
-      // an async 'error' event which can crash the process if no listener remains.
-      req.destroy();
-    }
+    stopRequestBodyAfterLimit(req, destroyOnLimit);
     throw error;
   }
 
@@ -385,9 +413,7 @@ export async function readRequestBodyWithLimit(
 
     const timer = setNodeTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
-      if (!req.destroyed) {
-        req.destroy();
-      }
+      stopRequestBodyAfterLimit(req, destroyOnLimit);
       fail(error);
     }, timeoutMs);
 
@@ -399,9 +425,7 @@ export async function readRequestBodyWithLimit(
       totalBytes = progress.totalBytes;
       if (progress.exceeded) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
-        if (!req.destroyed) {
-          req.destroy();
-        }
+        stopRequestBodyAfterLimit(req, destroyOnLimit);
         fail(error);
         return;
       }
@@ -470,8 +494,8 @@ export async function readJsonBodyWithLimit(
     }
     return {
       ok: false,
-      code: "INVALID_JSON",
-      error: formatErrorMessage(error),
+      code: "CONNECTION_CLOSED",
+      error: requestBodyErrorToText("CONNECTION_CLOSED"),
     };
   }
 }
@@ -521,6 +545,7 @@ export function installRequestBodyLimitGuard(
   };
 
   const respond = (error: RequestBodyLimitError) => {
+    closeRequestAfterResponse(req, res);
     const text = customText[error.code] ?? requestBodyErrorToText(error.code);
     if (!res.headersSent) {
       res.statusCode = error.statusCode;
@@ -542,11 +567,6 @@ export function installRequestBodyLimitGuard(
     reason = error.code;
     finish();
     respond(error);
-    if (!req.destroyed) {
-      // Limit violations are expected user input; destroying with an Error causes
-      // an async 'error' event which can crash the process if no listener remains.
-      req.destroy();
-    }
   };
 
   const onData = (chunk: Buffer | string) => {

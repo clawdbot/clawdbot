@@ -1,4 +1,6 @@
+import fsSync from "node:fs";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -61,15 +63,38 @@ export function parseLockOwnerPid(raw: string): number | null {
 export function isProcessLikelyAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ESRCH") {
       return false;
     }
-    // EPERM and unknown errors are treated as alive to avoid stealing active locks.
+    // EPERM and unknown errors remain potentially alive unless procfs proves a zombie.
+  }
+  if (process.platform !== "linux") {
     return true;
   }
+  try {
+    const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
+    const state = status.match(/^State:\s+(\S)/m)?.[1];
+    return state !== "Z" && state !== "X";
+  } catch {
+    // An unreadable proc entry is not enough evidence to steal an active lock.
+    return true;
+  }
+}
+
+export async function deleteShortTermLockEntryIfCurrent(
+  lockStore: PluginStateKeyedStore<ShortTermLockEntry>,
+  lockKey: string,
+  expected: ShortTermLockEntry,
+): Promise<boolean> {
+  if (!lockStore.deleteIf) {
+    throw new Error("memory-core short-term lock store requires conditional deletion");
+  }
+  return await lockStore.deleteIf(
+    lockKey,
+    (current) => current.owner === expected.owner && current.acquiredAt === expected.acquiredAt,
+  );
 }
 
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
@@ -90,19 +115,16 @@ export async function withShortTermLock<T>(
     const startedAt = Date.now();
 
     while (true) {
-      const owner = `${process.pid}:${Date.now()}`;
-      const acquired = await lockStore.registerIfAbsent(lockKey, {
-        owner,
+      const lockEntry: ShortTermLockEntry = {
+        owner: `${process.pid}:${Date.now()}`,
         acquiredAt: Date.now(),
-      });
+      };
+      const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry);
       if (acquired) {
         try {
           return await task();
         } finally {
-          const current = await lockStore.lookup(lockKey).catch(() => undefined);
-          if (current?.owner === owner) {
-            await lockStore.delete(lockKey).catch(() => false);
-          }
+          await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry).catch(() => false);
         }
       }
 
@@ -110,8 +132,9 @@ export async function withShortTermLock<T>(
       if (existing && Date.now() - existing.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
         const ownerPid = parseLockOwnerPid(existing.owner);
         if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-          await lockStore.delete(lockKey);
-          continue;
+          if (await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, existing)) {
+            continue;
+          }
         }
       }
 

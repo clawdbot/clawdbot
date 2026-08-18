@@ -23,14 +23,15 @@ function createFakeGh() {
 set -euo pipefail
 printf '%s\\t%s\\n' "$(basename "$0")" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
 case "$1 $2" in
-  "run list")
+  "auth token") printf 'forwarded-test-token\\n' ;;
+  "api --method")
     if [ "\${OPENCLAW_TEST_GH_MODE:-}" = "pending-head-change" ]; then
-      printf '[]\\n'
+      printf '{"workflow_runs":[]}\\n'
     elif [ -e "$OPENCLAW_TEST_GH_SEEN_RUN_LIST" ]; then
-      printf '[{"databaseId":99,"url":"https://github.com/openclaw/openclaw/actions/runs/99","headSha":"%s","createdAt":"2026-01-01T00:00:00Z","status":"queued"}]\\n' "$OPENCLAW_TEST_HEAD_SHA"
+      printf '{"workflow_runs":[{"id":99,"html_url":"https://github.com/openclaw/openclaw/actions/runs/99","head_sha":"%s","created_at":"2026-01-01T00:00:00Z","status":"queued"}]}\\n' "$OPENCLAW_TEST_HEAD_SHA"
     else
       : > "$OPENCLAW_TEST_GH_SEEN_RUN_LIST"
-      printf '[]\\n'
+      printf '{"workflow_runs":[]}\\n'
     fi
     ;;
   "pr view")
@@ -40,7 +41,13 @@ case "$1 $2" in
       printf '%s\\n' "$OPENCLAW_TEST_HEAD_SHA"
     fi
     ;;
-  "workflow run") : > "$OPENCLAW_TEST_GH_DISPATCHED" ;;
+  "workflow run")
+    if [ "\${GH_TOKEN-}" != "forwarded-test-token" ]; then
+      echo "missing forwarded credentials" >&2
+      exit 3
+    fi
+    : > "$OPENCLAW_TEST_GH_DISPATCHED"
+    ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 2 ;;
 esac
 `;
@@ -65,24 +72,33 @@ function runDispatch(
     writeFileSync(preload, "global.setTimeout = (callback) => { callback(); return 0; };\n");
     nodeOptions = `${nodeOptions} --require ${preload}`.trim();
   }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_OPTIONS: nodeOptions,
+    OPENCLAW_GH_BIN: fakeGh.realGh,
+    OPENCLAW_TEST_CHANGED_HEAD_SHA: changedSha,
+    OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
+    OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
+    OPENCLAW_TEST_GH_MODE: options.mode ?? "",
+    OPENCLAW_TEST_GH_SEEN_RUN_LIST: fakeGh.seenRunList,
+    OPENCLAW_TEST_HEAD_SHA: sha,
+    PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
+  };
+  for (const name of [
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+  ]) {
+    delete env[name];
+  }
   return spawnSync(
     process.execPath,
     [dispatchScript, "12345", "contributor/fix-hosted-gates", sha, "false"],
     {
       cwd: options.cwd,
       encoding: "utf8",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: nodeOptions,
-        OPENCLAW_GH_BIN: fakeGh.realGh,
-        OPENCLAW_TEST_CHANGED_HEAD_SHA: changedSha,
-        OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
-        OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
-        OPENCLAW_TEST_GH_MODE: options.mode ?? "",
-        OPENCLAW_TEST_GH_SEEN_RUN_LIST: fakeGh.seenRunList,
-        OPENCLAW_TEST_HEAD_SHA: sha,
-        PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
-      },
+      env,
     },
   );
 }
@@ -128,9 +144,12 @@ describePosix("scripts/pr ci-dispatch", () => {
     expect(callLines).toContain(
       `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${sha} -f release_gate=true -f pull_request_number=12345`,
     );
-    expect(callLines.some((call) => call.startsWith(`gh\trun list --commit ${sha}`))).toBe(true);
+    expect(callLines).toContain("gh\tauth token");
+    expect(callLines).toContain(
+      `gh\tapi --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=workflow_dispatch -f head_sha=${sha} -f per_page=20`,
+    );
     expect(callLines.some((call) => call.startsWith("gh\tpr view 12345"))).toBe(true);
-    expect(callLines.some((call) => /^real-gh\t(?:run list|pr view)/u.test(call))).toBe(false);
+    expect(callLines.some((call) => /^real-gh\t(?:api|pr view)/u.test(call))).toBe(false);
   });
 
   it("refuses a fork-local branch name before invoking GitHub", () => {

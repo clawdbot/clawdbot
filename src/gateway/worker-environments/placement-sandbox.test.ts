@@ -35,6 +35,8 @@ describe("remote-exec placement sandbox", () => {
       profileId: "development",
       profileSnapshot: { settings: { region: "test" } },
       provisionOperationId: "provision-1",
+      nodeSetupId: null,
+      nodeDeviceId: null,
       sharedHost: false,
       desktop: null,
       bootstrapReceipt: null,

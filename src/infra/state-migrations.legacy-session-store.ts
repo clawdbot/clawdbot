@@ -16,6 +16,7 @@ import {
 import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
@@ -274,16 +275,22 @@ export function loadLegacySessionStore(
         storePath,
         store: sessionStore,
       });
+      archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+      });
       if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
         pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
         });
       }
       if (Object.keys(sessionStore).length > maintenance.maxEntries) {
         pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
         });
         if (
           shouldRunSessionEntryMaintenance({
@@ -294,6 +301,7 @@ export function loadLegacySessionStore(
           capEntryCount(sessionStore, maintenance.maxEntries, {
             log: false,
             preserveKeys: preserveSessionKeys,
+            preserveRecentMs: maintenance.preserveRecentMs,
           });
         }
       }

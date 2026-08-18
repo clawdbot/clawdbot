@@ -93,6 +93,20 @@ function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command
   );
 }
 
+function validateRiskClassification(
+  value: NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]>,
+): NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]> | null {
+  const family = normalizeOptionalString(value?.family);
+  if (
+    (value?.level !== "ordinary" && value?.level !== "high") ||
+    !family ||
+    !/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(family)
+  ) {
+    return null;
+  }
+  return { level: value.level, family };
+}
+
 function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -155,7 +169,7 @@ function createApprovalRuntime(params: {
       // routing. The RPC storage-unavailable respond path does not apply to
       // this runtime-internal caller.
       const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = buildRequestedApprovalEvent(record);
+      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
       const forwardRequest = params.context.forwardPluginApprovalRequest;
       const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
         params.context.pluginApprovalIosPushDelivery,
@@ -250,6 +264,27 @@ export async function applyPluginNodeInvokePolicy(params: {
       };
     }
     return null;
+  }
+
+  let risk: OpenClawPluginNodeInvokePolicyContext["risk"];
+  if (entry.policy.classifyRisk) {
+    try {
+      risk =
+        validateRiskClassification(
+          entry.policy.classifyRisk({ command: params.command, params: params.params }),
+        ) ?? undefined;
+    } catch {
+      // Argument classifiers run before the policy handler and transport. Do
+      // not expose rejected arguments or plugin exception text to the caller.
+    }
+    if (!risk) {
+      return {
+        ok: false,
+        code: "PLUGIN_POLICY_RISK_CLASSIFICATION_FAILED",
+        message: `node.invoke ${params.command} arguments could not be classified by plugin ${entry.pluginId}`,
+        details: { nodeCommandDispatched: false },
+      };
+    }
   }
 
   let nodeCommandDispatched = false;
@@ -406,6 +441,7 @@ export async function applyPluginNodeInvokePolicy(params: {
           scopes: parseScopes(params.client),
         }
       : null,
+    ...(risk ? { risk } : {}),
     approvals: createApprovalRuntime({
       context: params.context,
       client: params.client,

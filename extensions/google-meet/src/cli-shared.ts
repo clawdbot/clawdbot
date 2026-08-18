@@ -2,8 +2,11 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  callGatewayFromCli,
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
@@ -11,11 +14,7 @@ import {
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import prettyMilliseconds from "pretty-ms";
 import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetModeInput,
-  type GoogleMeetTransport,
-} from "./config.js";
+import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -34,13 +33,6 @@ export type OAuthLoginOptions = {
   manual?: boolean;
   json?: boolean;
   timeoutSec?: string;
-};
-
-export const testing = {
-  parsePositiveNumber,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  resolveGoogleMeetGatewayTimeoutMs,
-  resolveGoogleMeetOAuthCallbackTimeoutMs,
 };
 
 export type ResolveSpaceOptions = {
@@ -221,15 +213,14 @@ function isGatewayUnavailableForLocalFallback(
   err: unknown,
   method: GoogleMeetGatewayMethod,
 ): boolean {
-  const message = formatErrorMessage(err);
-  return (
-    message.includes("ECONNREFUSED") ||
-    message.includes("ECONNRESET") ||
-    message.includes("EHOSTUNREACH") ||
-    message.includes("ENOTFOUND") ||
-    message.includes("gateway not connected") ||
-    message.includes(`unknown method: ${method}`)
-  );
+  if (isGatewayTransportError(err)) {
+    // Fall back only when nothing serves the gateway URL (connect-time socket
+    // failures: kind "closed" with no WS close code). A coded close (e.g. 1006
+    // during restart) means a live gateway may still own Meet sessions — surface it.
+    return err.kind === "closed" && err.code === undefined;
+  }
+  // Gateway alive but the Meet methods are not registered there: run locally.
+  return isGatewayClientRequestError(err) && err.message.includes(`unknown method: ${method}`);
 }
 
 export function writeStdoutLine(...values: unknown[]): void {

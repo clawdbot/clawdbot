@@ -28,7 +28,10 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --c
 pnpm test:ui:e2e
 ```
 
-If dependencies are missing in a Codex worktree, install once with `pnpm install`; for broad GUI proof or dependency-heavy checks, use Testbox/Crabbox instead of running a wide local pnpm lane.
+Do not install dependencies into a linked/sparse worktree. For broad GUI proof
+or dependency-heavy checks, use a prepared normal checkout on the current
+dedicated Linux worker when it has browser support; otherwise use
+Testbox/Crabbox instead of running a wide lane on a workstation.
 
 ## Visual Proof Default
 

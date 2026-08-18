@@ -6,6 +6,7 @@ import {
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
@@ -78,6 +79,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
 export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
+  clearRuntimeConfigSnapshot();
   closeOpenClawStateDatabaseForTest();
   resetAgentEventsForTest();
   await testState.cleanup();
@@ -94,7 +96,7 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 }
 
 type DefaultedWorkerTurnLauncherOption =
-  | "recoverPendingWorkspaceResult"
+  | "reconcileActivePlacement"
   | "redispatchReclaimed"
   | "resolveWorkspacePath"
   | "workspaceOperations";
@@ -104,8 +106,8 @@ export function createWorkerSessionTurnPlacementProvider(
     Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
   return createRawWorkerSessionTurnPlacementProvider({
-    recoverPendingWorkspaceResult: async () => {
-      throw new Error("unexpected pending workspace recovery");
+    reconcileActivePlacement: async () => {
+      throw new Error("unexpected active placement reconciliation");
     },
     redispatchReclaimed: async () => {
       throw new Error("unexpected reclaimed placement redispatch");
@@ -199,6 +201,8 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     profileId: "development",
     profileSnapshot: { settings: { region: "test" } },
     provisionOperationId: "provision-worker-turn",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
@@ -321,6 +325,8 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     sessionFile,
     sessionTarget,
     workspaceDir: root,
+    permissionMode: "workspace" as const,
+    sessionRoot: root,
     prompt: "Inspect this workspace",
     timeoutMs: 5_000,
     runId,

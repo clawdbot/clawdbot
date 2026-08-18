@@ -452,6 +452,13 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
+  return buildSecretTargetRegistryFromPlugins(plugins);
+}
+
+/** Builds secret targets from one exact manifest-registry plugin set. */
+export function buildSecretTargetRegistryFromPlugins(
+  plugins: readonly PluginManifestRecord[],
+): SecretTargetRegistryEntry[] {
   const channelPlugins = plugins.filter(
     (record) =>
       record.channels.length > 0 ||

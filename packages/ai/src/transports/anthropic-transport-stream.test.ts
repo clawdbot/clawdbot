@@ -340,7 +340,6 @@ describe("anthropic transport stream", () => {
       ...coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
       redactSecrets: redactTestSecrets,
-      resolveProviderEndpointClass: resolveTestEndpointClass,
       resolveProviderRequestCapabilities: (input) => {
         const endpointClass = resolveTestEndpointClass(input.baseUrl);
         return {
@@ -777,7 +776,6 @@ describe("anthropic transport stream", () => {
     // Despite stop_reason=end_turn, the turn carries a toolCall, so the narration
     // text must be tagged commentary (phase:commentary) and route to 💬.
     const textBlock = findRecord(result.content, (record) => record.type === "text");
-    expect(textBlock.textSignature).toBeDefined();
     expect(String(textBlock.textSignature)).toContain('"phase":"commentary"');
     expect(result.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
       true,

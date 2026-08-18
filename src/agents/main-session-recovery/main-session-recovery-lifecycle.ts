@@ -195,6 +195,15 @@ export function projectMainSessionRecoveryLifecycle(params: {
       lifecycleGeneration,
       params.currentLifecycleGeneration,
     );
+    if (
+      params.entry?.abortedLastRun === true &&
+      !foreground.claimId &&
+      !foreground.hasCurrentOwner
+    ) {
+      // The restart marker won the session transaction before this normal terminal.
+      // Retire the old fence, but only a fresh owner may settle the handoff itself.
+      return apply({ restartRecoveryRuns: remaining?.length ? remaining : undefined });
+    }
     if (foreground.hasCurrentOwner) {
       // A terminal event may consume its own claim. Another owner still keeps
       // the aggregate live until that owner's terminal event or release.
@@ -212,9 +221,6 @@ export function projectMainSessionRecoveryLifecycle(params: {
       // active. Its terminal snapshot is authoritative and consumes the cycle.
       Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
       return apply(patch);
-    }
-    if (params.entry?.abortedLastRun === true && (remaining?.length ?? 0) > 0) {
-      return apply({ restartRecoveryRuns: remaining });
     }
     const recoveryDeliveryRunId =
       typeof params.entry?.restartRecoveryDeliveryRunId === "string"

@@ -3,7 +3,7 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { asRecord as asMessageRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
   extractCanvasShortcodes,
@@ -15,7 +15,6 @@ import {
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
-import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
@@ -26,6 +25,116 @@ import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
 const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+const optionalMessageStringSchema = z.string().optional().catch(undefined);
+const optionalMessageNumberSchema = z.number().optional().catch(undefined);
+const rawMcpAppSchema = z
+  .looseObject({
+    viewId: optionalMessageStringSchema,
+    serverName: optionalMessageStringSchema,
+    toolName: optionalMessageStringSchema,
+    uiResourceUri: optionalMessageStringSchema,
+    toolCallId: optionalMessageStringSchema,
+    originSessionKey: optionalMessageStringSchema,
+  })
+  .optional()
+  .catch(undefined);
+const rawCanvasPreviewSchema = z
+  .looseObject({
+    title: optionalMessageStringSchema,
+    preferredHeight: optionalMessageNumberSchema,
+    url: optionalMessageStringSchema,
+    viewId: optionalMessageStringSchema,
+    className: optionalMessageStringSchema,
+    style: optionalMessageStringSchema,
+    mcpApp: rawMcpAppSchema,
+  })
+  .optional()
+  .catch(undefined);
+const rawAttachmentSchema = z
+  .looseObject({
+    url: optionalMessageStringSchema,
+    label: optionalMessageStringSchema,
+    mimeType: optionalMessageStringSchema,
+    artifactId: optionalMessageStringSchema,
+    sizeBytes: optionalMessageNumberSchema,
+    durationMs: optionalMessageNumberSchema,
+    width: optionalMessageNumberSchema,
+    height: optionalMessageNumberSchema,
+  })
+  .optional()
+  .catch(undefined);
+const rawAudioSourceSchema = z
+  .looseObject({
+    media_type: optionalMessageStringSchema,
+    data: optionalMessageStringSchema,
+    url: optionalMessageStringSchema,
+  })
+  .optional()
+  .catch(undefined);
+const rawContentBlockSchema = z.looseObject({
+  text: optionalMessageStringSchema,
+  source: rawAudioSourceSchema,
+  attachment: rawAttachmentSchema,
+  preview: rawCanvasPreviewSchema,
+  rawText: optionalMessageStringSchema,
+  label: optionalMessageStringSchema,
+  fileName: optionalMessageStringSchema,
+  mimeType: optionalMessageStringSchema,
+  artifactId: optionalMessageStringSchema,
+  url: optionalMessageStringSchema,
+  sizeBytes: optionalMessageNumberSchema,
+  durationMs: optionalMessageNumberSchema,
+  width: optionalMessageNumberSchema,
+  height: optionalMessageNumberSchema,
+});
+const rawContentBlocksSchema = z
+  .array(z.union([rawContentBlockSchema, z.unknown().transform(() => null)]))
+  .transform((items) =>
+    items.filter((item): item is z.infer<typeof rawContentBlockSchema> => item !== null),
+  );
+const rawOpenClawMetadataSchema = z
+  .looseObject({
+    replyToId: optionalMessageStringSchema,
+    replyToPreview: z
+      .object({
+        text: optionalMessageStringSchema,
+        senderLabel: optionalMessageStringSchema,
+      })
+      .optional()
+      .catch(undefined),
+  })
+  .optional()
+  .catch(undefined);
+const rawOpenClawDeliverySchema = z
+  .object({
+    audioAsVoice: z.literal(true).optional(),
+    replyToCurrent: z.literal(true).optional(),
+    replyToId: optionalMessageStringSchema,
+  })
+  .optional()
+  .catch(undefined);
+const rawMessageSchema = z
+  .looseObject({
+    role: optionalMessageStringSchema,
+    content: z.union([z.string(), rawContentBlocksSchema]).optional().catch(undefined),
+    text: optionalMessageStringSchema,
+    timestamp: optionalMessageNumberSchema,
+    id: optionalMessageStringSchema,
+    senderLabel: optionalMessageStringSchema,
+    toolCallId: optionalMessageStringSchema,
+    tool_call_id: optionalMessageStringSchema,
+    toolUseId: optionalMessageStringSchema,
+    tool_use_id: optionalMessageStringSchema,
+    toolName: optionalMessageStringSchema,
+    tool_name: optionalMessageStringSchema,
+    __openclaw: rawOpenClawMetadataSchema,
+    openclawDelivery: rawOpenClawDeliverySchema,
+  })
+  .catch({});
+
+type RawContentBlock = z.infer<typeof rawContentBlockSchema>;
+type RawCanvasPreview = z.infer<typeof rawCanvasPreviewSchema>;
 
 function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
   // A nameless legacy sender labels as the bare UUID; keep it as the
@@ -64,33 +173,31 @@ export function normalizeRoleForGrouping(role: string): string {
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  // Malformed transcript entries coerce to an empty record so property reads
-  // degrade to role "unknown" instead of crashing the event handler.
-  const m = asMessageRecord(message);
-  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  const m = rawMessageSchema.parse(message);
+  const role = m.role?.toLowerCase() ?? "";
   return role === "toolresult" || role === "tool_result";
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
-  const m = asMessageRecord(message);
-  const role = typeof m.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
+  const m = rawMessageSchema.parse(message);
+  const role = m.role ? normalizeRoleForGrouping(m.role) : "unknown";
   return (
     role === "tool" ||
-    typeof m.toolCallId === "string" ||
-    typeof m.tool_call_id === "string" ||
-    typeof m.toolUseId === "string" ||
-    typeof m.tool_use_id === "string" ||
-    typeof m.toolName === "string" ||
-    typeof m.tool_name === "string"
+    m.toolCallId !== undefined ||
+    m.tool_call_id !== undefined ||
+    m.toolUseId !== undefined ||
+    m.tool_use_id !== undefined ||
+    m.toolName !== undefined ||
+    m.tool_name !== undefined
   );
 }
 
 function isTextContentBlock(
-  item: Record<string, unknown>,
+  item: RawContentBlock,
   role: string,
-): item is Record<string, unknown> & { text: string } {
+): item is RawContentBlock & { text: string } {
   return (
-    typeof item.text === "string" &&
+    item.text !== undefined &&
     (item.type === "text" ||
       (role === "user" && item.type === "input_text") ||
       (role === "assistant" && (item.type === "input_text" || item.type === "output_text")))
@@ -98,14 +205,13 @@ function isTextContentBlock(
 }
 
 function coerceCanvasPreview(
-  value: unknown,
+  preview: RawCanvasPreview,
 ):
   | Extract<NonNullable<NormalizedMessage["content"][number]>, { type: "canvas" }>["preview"]
   | null {
-  if (!isRecord(value)) {
+  if (!preview) {
     return null;
   }
-  const preview = value;
   if (preview.kind !== "canvas" || preview.surface === "tool_card") {
     return null;
   }
@@ -113,7 +219,7 @@ function coerceCanvasPreview(
   if (!render) {
     return null;
   }
-  const mcpApp = isRecord(preview.mcpApp) ? preview.mcpApp : undefined;
+  const mcpApp = preview.mcpApp;
   const boardWidgetName = isCanvasBoardWidgetName(preview.boardWidgetName)
     ? preview.boardWidgetName
     : undefined;
@@ -121,29 +227,25 @@ function coerceCanvasPreview(
     kind: "canvas",
     surface: "assistant_message",
     render,
-    ...(typeof preview.title === "string" ? { title: preview.title } : {}),
-    ...(typeof preview.preferredHeight === "number"
-      ? { preferredHeight: preview.preferredHeight }
-      : {}),
-    ...(typeof preview.url === "string" ? { url: preview.url } : {}),
-    ...(typeof preview.viewId === "string" ? { viewId: preview.viewId } : {}),
-    ...(typeof preview.className === "string" ? { className: preview.className } : {}),
-    ...(typeof preview.style === "string" ? { style: preview.style } : {}),
+    ...(preview.title !== undefined ? { title: preview.title } : {}),
+    ...(preview.preferredHeight !== undefined ? { preferredHeight: preview.preferredHeight } : {}),
+    ...(preview.url !== undefined ? { url: preview.url } : {}),
+    ...(preview.viewId !== undefined ? { viewId: preview.viewId } : {}),
+    ...(preview.className !== undefined ? { className: preview.className } : {}),
+    ...(preview.style !== undefined ? { style: preview.style } : {}),
     ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
       ? { sandbox: preview.sandbox }
       : {}),
     ...(boardWidgetName ? { boardWidgetName } : {}),
-    ...(typeof mcpApp?.viewId === "string" && mcpApp.viewId.trim()
+    ...(mcpApp?.viewId?.trim()
       ? {
           mcpApp: {
             viewId: mcpApp.viewId,
-            ...(typeof mcpApp.serverName === "string" ? { serverName: mcpApp.serverName } : {}),
-            ...(typeof mcpApp.toolName === "string" ? { toolName: mcpApp.toolName } : {}),
-            ...(typeof mcpApp.uiResourceUri === "string"
-              ? { uiResourceUri: mcpApp.uiResourceUri }
-              : {}),
-            ...(typeof mcpApp.toolCallId === "string" ? { toolCallId: mcpApp.toolCallId } : {}),
-            ...(typeof mcpApp.originSessionKey === "string"
+            ...(mcpApp.serverName !== undefined ? { serverName: mcpApp.serverName } : {}),
+            ...(mcpApp.toolName !== undefined ? { toolName: mcpApp.toolName } : {}),
+            ...(mcpApp.uiResourceUri !== undefined ? { uiResourceUri: mcpApp.uiResourceUri } : {}),
+            ...(mcpApp.toolCallId !== undefined ? { toolCallId: mcpApp.toolCallId } : {}),
+            ...(mcpApp.originSessionKey !== undefined
               ? { originSessionKey: mcpApp.originSessionKey }
               : {}),
           },
@@ -239,23 +341,20 @@ function inferAttachmentKind(url: string): {
 }
 
 function coerceAudioContentBlock(
-  item: Record<string, unknown>,
+  item: RawContentBlock,
 ): Extract<MessageContentItem, { type: "attachment" }> | null {
   if (item.type !== "audio") {
     return null;
   }
   const source = item.source;
-  if (!isRecord(source)) {
+  if (!source) {
     return null;
   }
-  const sourceRecord = source;
-  const mediaType =
-    typeof sourceRecord.media_type === "string" &&
-    sourceRecord.media_type.trim().toLowerCase().startsWith("audio/")
-      ? sourceRecord.media_type.trim()
-      : "audio/mpeg";
-  if (sourceRecord.type === "base64" && typeof sourceRecord.data === "string") {
-    const data = sourceRecord.data.trim();
+  const mediaType = source.media_type?.trim().toLowerCase().startsWith("audio/")
+    ? source.media_type.trim()
+    : "audio/mpeg";
+  if (source.type === "base64" && source.data !== undefined) {
+    const data = source.data.trim();
     if (!data) {
       return null;
     }
@@ -265,14 +364,14 @@ function coerceAudioContentBlock(
       attachment: {
         url,
         kind: "audio",
-        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : "Audio",
+        label: item.label?.trim() || "Audio",
         mimeType: mediaType,
         ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
       },
     };
   }
-  if (sourceRecord.type === "url" && typeof sourceRecord.url === "string") {
-    const url = sourceRecord.url.trim();
+  if (source.type === "url" && source.url !== undefined) {
+    const url = source.url.trim();
     if (!url) {
       return null;
     }
@@ -281,7 +380,7 @@ function coerceAudioContentBlock(
       attachment: {
         url,
         kind: "audio",
-        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : "Audio",
+        label: item.label?.trim() || "Audio",
         mimeType: mediaType,
         ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
       },
@@ -291,9 +390,9 @@ function coerceAudioContentBlock(
 }
 
 function coerceManagedMediaContentBlock(
-  item: Record<string, unknown>,
+  item: RawContentBlock,
 ): Extract<MessageContentItem, { type: "attachment" }> | null {
-  if ((item.type !== "audio" && item.type !== "video") || typeof item.url !== "string") {
+  if ((item.type !== "audio" && item.type !== "video") || item.url === undefined) {
     return null;
   }
   const url = item.url.trim();
@@ -302,34 +401,27 @@ function coerceManagedMediaContentBlock(
   }
   const kind = item.type;
   const fallbackLabel = kind === "audio" ? "Audio" : "Video";
-  const label =
-    typeof item.fileName === "string" && item.fileName.trim()
-      ? item.fileName.trim()
-      : typeof item.label === "string" && item.label.trim()
-        ? item.label.trim()
-        : fallbackLabel;
+  const label = item.fileName?.trim() || item.label?.trim() || fallbackLabel;
   return {
     type: "attachment",
     attachment: {
       url,
       kind,
       label,
-      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}),
-      ...(typeof item.artifactId === "string" ? { artifactId: item.artifactId } : {}),
+      ...(item.mimeType !== undefined ? { mimeType: item.mimeType } : {}),
+      ...(item.artifactId !== undefined ? { artifactId: item.artifactId } : {}),
       ...(kind === "audio" && item.isVoiceNote === true ? { isVoiceNote: true } : {}),
       ...(item.playback === "native" || item.playback === "transcode"
         ? { playback: item.playback }
         : {}),
-      ...(typeof item.sizeBytes === "number" && item.sizeBytes >= 0
-        ? { sizeBytes: item.sizeBytes }
-        : {}),
-      ...(typeof item.durationMs === "number" && item.durationMs >= 0
+      ...(item.sizeBytes !== undefined && item.sizeBytes >= 0 ? { sizeBytes: item.sizeBytes } : {}),
+      ...(item.durationMs !== undefined && item.durationMs >= 0
         ? { durationMs: item.durationMs }
         : {}),
-      ...(kind === "video" && typeof item.width === "number" && item.width > 0
+      ...(kind === "video" && item.width !== undefined && item.width > 0
         ? { width: item.width }
         : {}),
-      ...(kind === "video" && typeof item.height === "number" && item.height > 0
+      ...(kind === "video" && item.height !== undefined && item.height > 0
         ? { height: item.height }
         : {}),
     },
@@ -364,16 +456,24 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-function expandTextContent(text: string): {
+function expandTextContent(
+  text: string,
+  delivery: z.infer<typeof rawOpenClawDeliverySchema>,
+): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
   replyTarget: NormalizedMessage["replyTarget"];
 } {
   const extracted = extractCanvasShortcodes(text);
-  const parsed = splitMediaFromOutput(extracted.text);
+  const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
   const parts: MessageContentItem[] = [];
-  let audioAsVoice = parsed.audioAsVoice === true;
-  let replyTarget: NormalizedMessage["replyTarget"] = null;
+  const audioAsVoice = delivery?.audioAsVoice === true;
+  const replyToId = delivery?.replyToId?.trim();
+  const replyTarget: NormalizedMessage["replyTarget"] = replyToId
+    ? { kind: "id", id: replyToId }
+    : delivery?.replyToCurrent === true
+      ? { kind: "current" }
+      : null;
   const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
   for (const segment of segments) {
@@ -397,23 +497,19 @@ function expandTextContent(text: string): {
       continue;
     }
 
-    const directives = parseInlineDirectives(segment.text, {
-      stripAudioTag: true,
-      stripReplyTags: true,
-    });
-    audioAsVoice = audioAsVoice || directives.audioAsVoice;
-    if (directives.replyToExplicitId) {
-      replyTarget = { kind: "id", id: directives.replyToExplicitId };
-    } else if (directives.replyToCurrent && replyTarget === null) {
-      replyTarget = { kind: "current" };
-    }
-    if (directives.text) {
-      const normalizedText = directives.text + (segment.text.endsWith("\n") ? "\n" : "");
-      parts.push({ type: "text", text: normalizedText });
+    if (segment.text) {
+      parts.push({ type: "text", text: segment.text });
     }
   }
   for (const preview of extracted.previews) {
-    parts.push({ type: "canvas", preview, rawText: null });
+    if (preview.surface !== "assistant_message") {
+      continue;
+    }
+    parts.push({
+      type: "canvas",
+      preview: { ...preview, surface: "assistant_message" },
+      rawText: null,
+    });
   }
 
   const content = mergeAdjacentTextItems(
@@ -445,30 +541,31 @@ function expandTextContent(text: string): {
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = asMessageRecord(message);
-  let role = typeof m.role === "string" ? m.role : "unknown";
+  const m = rawMessageSchema.parse(message);
+  let role = m.role ?? "unknown";
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
   const hasToolId =
-    typeof m.toolCallId === "string" ||
-    typeof m.tool_call_id === "string" ||
-    typeof m.toolUseId === "string" ||
-    typeof m.tool_use_id === "string";
+    m.toolCallId !== undefined ||
+    m.tool_call_id !== undefined ||
+    m.toolUseId !== undefined ||
+    m.tool_use_id !== undefined;
 
   const contentRaw = m.content;
-  const contentItems = Array.isArray(contentRaw) ? contentRaw.filter(isRecord) : null;
+  const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
   const hasToolContent =
     contentItems?.some(
       (item) => isToolResultContentType(item.type) || isToolCallContentType(item.type),
     ) ?? false;
 
-  const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
+  const hasToolName = m.toolName !== undefined || m.tool_name !== undefined;
 
   if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";
   }
   const isAssistantMessage = role === "assistant";
+  const delivery = isAssistantMessage ? m.openclawDelivery : undefined;
 
   // Extract content
   let content: MessageContentItem[] = [];
@@ -477,7 +574,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   if (typeof m.content === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content);
+      const expanded = expandTextContent(m.content, delivery);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -498,27 +595,15 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       } else if (item.type === "audio") {
         return [];
       }
-      if (item.type === "attachment" && isRecord(item.attachment)) {
-        const attachment = item.attachment as {
-          url?: unknown;
-          kind?: unknown;
-          label?: unknown;
-          mimeType?: unknown;
-          isVoiceNote?: unknown;
-          artifactId?: unknown;
-          playback?: unknown;
-          sizeBytes?: unknown;
-          durationMs?: unknown;
-          width?: unknown;
-          height?: unknown;
-        };
+      if (item.type === "attachment" && item.attachment) {
+        const attachment = item.attachment;
         if (
-          typeof attachment.url !== "string" ||
+          attachment.url === undefined ||
           (attachment.kind !== "image" &&
             attachment.kind !== "audio" &&
             attachment.kind !== "video" &&
             attachment.kind !== "document") ||
-          typeof attachment.label !== "string"
+          attachment.label === undefined
         ) {
           return [];
         }
@@ -529,31 +614,29 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               url: attachment.url,
               kind: attachment.kind,
               label: attachment.label,
-              ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
+              ...(attachment.mimeType !== undefined ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
-              ...(typeof attachment.artifactId === "string"
-                ? { artifactId: attachment.artifactId }
-                : {}),
+              ...(attachment.artifactId !== undefined ? { artifactId: attachment.artifactId } : {}),
               ...(attachment.playback === "native" || attachment.playback === "transcode"
                 ? { playback: attachment.playback }
                 : {}),
-              ...(typeof attachment.sizeBytes === "number" && attachment.sizeBytes >= 0
+              ...(attachment.sizeBytes !== undefined && attachment.sizeBytes >= 0
                 ? { sizeBytes: attachment.sizeBytes }
                 : {}),
-              ...(typeof attachment.durationMs === "number" && attachment.durationMs >= 0
+              ...(attachment.durationMs !== undefined && attachment.durationMs >= 0
                 ? { durationMs: attachment.durationMs }
                 : {}),
-              ...(typeof attachment.width === "number" && attachment.width > 0
+              ...(attachment.width !== undefined && attachment.width > 0
                 ? { width: attachment.width }
                 : {}),
-              ...(typeof attachment.height === "number" && attachment.height > 0
+              ...(attachment.height !== undefined && attachment.height > 0
                 ? { height: attachment.height }
                 : {}),
             },
           },
         ];
       }
-      if (item.type === "canvas" && isRecord(item.preview)) {
+      if (item.type === "canvas" && item.preview) {
         const preview = coerceCanvasPreview(item.preview);
         if (!preview) {
           return [];
@@ -562,13 +645,13 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           {
             type: "canvas" as const,
             preview,
-            rawText: typeof item.rawText === "string" ? item.rawText : null,
+            rawText: item.rawText ?? null,
           },
         ];
       }
       if (isTextContentBlock(item, role)) {
         if (isAssistantMessage) {
-          const expanded = expandTextContent(item.text);
+          const expanded = expandTextContent(item.text, delivery);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
           if (expanded.replyTarget?.kind === "id") {
             replyTarget = expanded.replyTarget;
@@ -599,9 +682,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         },
       ];
     });
-  } else if (typeof m.text === "string") {
+  } else if (m.text !== undefined) {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text);
+      const expanded = expandTextContent(m.text, delivery);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -610,30 +693,23 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
   }
 
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
-  const id = typeof m.id === "string" ? m.id : undefined;
-  const rawOpenClawMeta = m["__openclaw"];
-  const openClawMeta = isRecord(rawOpenClawMeta) ? rawOpenClawMeta : undefined;
-  const structuredReplyToId =
-    typeof openClawMeta?.replyToId === "string" ? openClawMeta.replyToId.trim() : "";
+  const timestamp = m.timestamp ?? Date.now();
+  const id = m.id;
+  const openClawMeta = m["__openclaw"];
+  const structuredReplyToId = openClawMeta?.replyToId?.trim() ?? "";
   if (structuredReplyToId) {
     replyTarget = { kind: "id", id: structuredReplyToId };
   }
-  const rawReplyPreview = openClawMeta?.replyToPreview;
-  const replyPreviewRecord = isRecord(rawReplyPreview) ? rawReplyPreview : undefined;
-  const replyPreviewText =
-    typeof replyPreviewRecord?.text === "string" ? replyPreviewRecord.text.trim() : "";
-  const replyPreviewSender =
-    typeof replyPreviewRecord?.senderLabel === "string"
-      ? replyPreviewRecord.senderLabel.trim()
-      : "";
+  const replyPreviewRecord = openClawMeta?.replyToPreview;
+  const replyPreviewText = replyPreviewRecord?.text?.trim() ?? "";
+  const replyPreviewSender = replyPreviewRecord?.senderLabel?.trim() ?? "";
   const metaSender = normalizeSenderIdentity({
     id: openClawMeta?.senderId,
     name: openClawMeta?.senderName,
     username: openClawMeta?.senderUsername,
     profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
   });
-  const rawLabel = typeof m.senderLabel === "string" ? m.senderLabel.trim() : "";
+  const rawLabel = m.senderLabel?.trim() ?? "";
   const legacyLabelIdentity = rawLabel ? splitOpaqueIdLabel(rawLabel) : null;
   const senderLabel = rawLabel
     ? (legacyLabelIdentity?.display ?? rawLabel)

@@ -40,7 +40,7 @@ type RunManagedCommandOptions = ManagedCommandOptions & {
 type ManagedChild = {
   child: ChildProcess;
   forceKillTimer: ReturnType<typeof setTimeout> | null;
-  receivedSignal: NodeJS.Signals | null;
+  receivedSignal?: NodeJS.Signals;
 };
 
 const managedChildren = new Set<ManagedChild>();
@@ -60,35 +60,59 @@ export function signalExitCode(signal: NodeJS.Signals) {
 /**
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
- * @param {{ platform?: NodeJS.Platform; runTaskkill?: typeof spawnSync }} [options]
+ * @param {{
+ *   onProcessGroupSignalError?: (error: unknown) => void;
+ *   platform?: NodeJS.Platform;
+ *   runTaskkill?: typeof spawnSync;
+ *   useProcessGroup?: boolean;
+ * }} [options]
  * @returns {{ processTreeState: "indeterminate" | "signaled" | "terminated" } | undefined}
  */
 export function terminateManagedChild(
-  child: Pick<ChildProcess, "kill" | "pid">,
+  child: { kill(signal?: NodeJS.Signals): unknown; pid?: number },
   signal: NodeJS.Signals = "SIGTERM",
   {
+    onProcessGroupSignalError,
     platform = process.platform,
     runTaskkill = spawnSync,
-  }: { platform?: NodeJS.Platform; runTaskkill?: TaskkillRunner } = {},
+    useProcessGroup = platform !== "win32",
+  }: {
+    onProcessGroupSignalError?: (error: unknown) => void;
+    platform?: NodeJS.Platform;
+    runTaskkill?: TaskkillRunner;
+    useProcessGroup?: boolean;
+  } = {},
 ): ManagedChildTermination | undefined {
   if (!child.pid) {
+    try {
+      const delivered = child.kill(signal);
+      if (platform !== "win32") {
+        return { processTreeState: delivered === false ? "terminated" : "signaled" };
+      }
+    } catch {
+      // A child that never acquired a PID may already have failed to spawn.
+    }
     return platform === "win32" ? { processTreeState: "indeterminate" } : undefined;
   }
 
   try {
-    if (platform !== "win32") {
+    if (platform !== "win32" && useProcessGroup) {
       process.kill(-child.pid, signal);
       return { processTreeState: "signaled" };
     }
   } catch (error) {
     if (!isMissingProcessError(error)) {
-      try {
-        child.kill(signal);
-      } catch {
-        // The process may have already exited between the group kill and fallback kill.
-      }
+      onProcessGroupSignalError?.(error);
     }
-    return isMissingProcessError(error) ? { processTreeState: "terminated" } : undefined;
+  }
+
+  if (platform !== "win32") {
+    try {
+      const delivered = child.kill(signal);
+      return { processTreeState: delivered === false ? "terminated" : "signaled" };
+    } catch (error) {
+      return isMissingProcessError(error) ? { processTreeState: "terminated" } : undefined;
+    }
   }
 
   if (platform === "win32") {
@@ -172,10 +196,10 @@ export async function runManagedCommand({
     comSpec,
   });
   const child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
-  const managedChild = {
+  const managedChild: ManagedChild = {
     child,
     forceKillTimer: null,
-    receivedSignal: null,
+    receivedSignal: undefined,
   };
   addManagedChild(managedChild);
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;

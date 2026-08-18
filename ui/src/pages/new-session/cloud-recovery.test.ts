@@ -8,6 +8,7 @@ import {
   clearCloudSessionRecovery,
   listCloudSessionRecoveries,
   migrateCloudSessionRecoveryScope,
+  parseCloudSessionCreateParams,
   readCloudSessionRecovery,
   writeCloudSessionRecovery,
   writeCloudSessionRecoveryIfAvailable,
@@ -393,7 +394,10 @@ describe("cloud session recovery", () => {
         key: recovery.sessionKey,
         agentId: "cloud",
         message: "" as const,
+        category: "Client work",
+        projectId: "openclaw",
         thinkingLevel: "high",
+        visibility: "draft" as const,
         worktree: true as const,
       },
     };
@@ -408,6 +412,32 @@ describe("cloud session recovery", () => {
     );
     expect(
       readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey),
+    ).toBeNull();
+  });
+
+  it.each([
+    { name: "an empty project id", value: { projectId: "" } },
+    { name: "a non-string project id", value: { projectId: 42 } },
+    { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
+    {
+      name: "a project id with an exec node",
+      value: { projectId: "openclaw", execNode: "macbook" },
+    },
+    { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "an unknown field", value: { unknown: true } },
+  ])("rejects $name in creating parameters", ({ value }) => {
+    expect(
+      parseCloudSessionCreateParams(
+        {
+          key: recovery.sessionKey,
+          agentId: "cloud",
+          message: "",
+          worktree: true,
+          ...value,
+        },
+        recovery.sessionKey,
+        "cloud",
+      ),
     ).toBeNull();
   });
 

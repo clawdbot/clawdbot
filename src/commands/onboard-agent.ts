@@ -8,8 +8,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { readConfigFileSnapshot, resolveConfigSnapshotHash } from "../config/config.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";

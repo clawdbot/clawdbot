@@ -98,6 +98,7 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
+  "src/styles/corner-shape.browser.test.ts",
   "src/styles/cursor-policy.browser.test.ts",
   "src/styles/chat-file-link-presentation.browser.test.ts",
   "src/styles/chat-github-link-presentation.browser.test.ts",

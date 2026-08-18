@@ -94,7 +94,7 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)     |
 | Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                              |
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                       |
-| Media                   | Analyze, generate, or speak media                                                            | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                | [Media overview](/tools/media-overview)                                                                                |
+| Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                |
 | Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                       |
 
 <Note>
@@ -130,6 +130,17 @@ Tool policy is enforced before the model call. If policy removes a tool, the
 model does not receive that tool's schema for the turn. A run can lose tools
 because of global config, per-agent config, channel policy, provider
 restrictions, sandbox rules, channel/runtime policy, or plugin availability.
+
+OpenClaw exposes one semantic image inspection capability named `view_image`.
+When the active harness supplies its own loader, OpenClaw suppresses its
+duplicate. Otherwise, the OpenClaw-provided implementation accepts `path` for
+one local image path or permitted URL, or `paths` for several; `maxImages`
+limits the combined list and defaults to 20. Codex's native implementation
+accepts one local filesystem `path`. Callers must follow the active tool schema.
+
+Existing policy entries named `image` must be migrated to `view_image`; run
+`openclaw doctor --fix` to update supported config policy surfaces and persisted
+automation `toolsAllow` lists.
 
 - [Tools and custom providers](/gateway/config-tools) documents tool profiles,
   allow/deny lists, provider-specific restrictions, loop detection, and

@@ -21,6 +21,8 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   sessionId: string;
   runId?: string;
   sessionKey?: string;
@@ -71,6 +73,8 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
   workspaceDir: string;
+  /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
+  bootstrapWorkspaceDir?: string;
   /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
   agentDir?: string;

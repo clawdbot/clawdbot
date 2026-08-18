@@ -18,6 +18,7 @@ export function createOpenAIRealtimeMockState() {
 
     readonly listeners = new Map<string, Listener[]>();
     readyState = 0;
+    bufferedAmount = 0;
     sent: string[] = [];
     closed = false;
     terminated = false;
@@ -105,6 +106,7 @@ type InternalRealtimeVoiceProviderApi = {
   resolveBrowserSessionCapabilities: (ctx: {
     cfg?: object;
     providerConfig: Record<string, unknown>;
+    agentId?: string;
     model?: string;
   }) => {
     handlesAgentConsult?: boolean;

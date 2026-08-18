@@ -273,6 +273,7 @@ export type WorkboardBoardMetadata = {
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
@@ -286,6 +287,7 @@ export type WorkboardBoardSummary = {
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   total: number;

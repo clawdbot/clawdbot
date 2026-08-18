@@ -117,7 +117,7 @@ function hasAnnounceErrorMatch(
   return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
 }
 
-export function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
+function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
 }
 

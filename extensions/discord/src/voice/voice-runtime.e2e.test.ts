@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -22,6 +25,7 @@ defineDiscordVoiceTests(
     textToSpeechStreamMock,
     textToSpeechMock,
     logVerboseMock,
+    loggerWarnMock,
     controlRealtimeVoiceAgentRunMock,
     realtimeSessionMock,
     decodeOpusStreamMock,
@@ -36,6 +40,7 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     createFollowManager,
     getSessionEntry,
+    getVoiceReceive,
     beginSpeakerTurn,
     lastAgentCommandArgs,
     lastAgentCommandToolNames,
@@ -212,6 +217,7 @@ defineDiscordVoiceTests(
       ).speakerContext;
 
       await segmentModule.processDiscordVoiceSegment({
+        accountId: "default",
         entry: {
           guildId: "g1",
           channelId: "1001",
@@ -220,8 +226,10 @@ defineDiscordVoiceTests(
           route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
           connection: createConnectionMock(),
           player: createAudioPlayerMock(),
+          sessionLifecycle: { status: "active" },
           playbackQueue: Promise.resolve(),
           processingQueue: Promise.resolve(),
+          ttsStreamFallbackWarned: false,
           capture: createVoiceCaptureState(),
           receiveRecovery: createVoiceReceiveRecoveryState(),
           isStopped: () => false,
@@ -282,6 +290,10 @@ defineDiscordVoiceTests(
     });
 
     it("runs voice replies under Discord voice output policy", async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-voice-"));
+      const audioPath = path.join(tempDir, "reply.mp3");
+      await fs.writeFile(audioPath, "voice");
+      textToSpeechMock.mockResolvedValueOnce({ success: true, audioPath });
       agentCommandMock.mockResolvedValueOnce({
         payloads: [{ text: "hello back" }],
       } as never);
@@ -292,7 +304,18 @@ defineDiscordVoiceTests(
         client,
         {},
       );
-      await processVoiceSegment(manager, "u-guest");
+      try {
+        await processVoiceSegment(manager, "u-guest");
+        await vi.waitFor(async () => {
+          const exists = await fs.access(audioPath).then(
+            () => true,
+            () => false,
+          );
+          expect(exists).toBe(false);
+        });
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
 
       const commandArgs = lastAgentCommandArgs() as
         | { message?: string; messageChannel?: string; messageProvider?: string }
@@ -366,6 +389,124 @@ defineDiscordVoiceTests(
         throw new Error("expected Discord audio resource input");
       }
       await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    });
+
+    it("logs a failed streaming provider once per session when using file fallback", async () => {
+      const replyText = "file fallback reply";
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: replyText }] } as never);
+      const client = createClientWithMember("u-guest", "Guest", "4321");
+      const manager = createManager(
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
+        client,
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager);
+      const receive = getVoiceReceive(manager);
+
+      for (let index = 0; index < 2; index += 1) {
+        await receive.processSegment({
+          entry,
+          wavPath: "/tmp/test.wav",
+          userId: "u-guest",
+          durationSeconds: 1.2,
+        });
+      }
+      await entry.playbackQueue;
+
+      const fallbackWarnings = loggerWarnMock.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes("using file fallback"));
+      expect(fallbackWarnings).toEqual([
+        "discord voice: streaming TTS failed provider=elevenlabs reasonCode=provider_error; using file fallback",
+      ]);
+      expect(fallbackWarnings[0]).not.toContain(replyText);
+    });
+
+    it("does not warn when an unsupported streaming provider uses file fallback", async () => {
+      textToSpeechStreamMock.mockResolvedValueOnce({
+        success: false,
+        error: "TTS conversion failed: buffered does not support streaming TTS",
+        attemptedProviders: ["buffered"],
+        attempts: [
+          {
+            provider: "buffered",
+            outcome: "skipped",
+            reasonCode: "unsupported_for_streaming",
+            error: "buffered does not support streaming TTS",
+          },
+        ],
+      });
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "buffered provider reply" }],
+      } as never);
+      const client = createClientWithMember("u-guest", "Guest", "4321");
+      const manager = createManager(
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
+        client,
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager);
+
+      await getVoiceReceive(manager).processSegment({
+        entry,
+        wavPath: "/tmp/test.wav",
+        userId: "u-guest",
+        durationSeconds: 1.2,
+      });
+      await entry.playbackQueue;
+
+      expect(textToSpeechMock).toHaveBeenCalledOnce();
+      expect(entry.player.play).toHaveBeenCalledOnce();
+      expect(
+        loggerWarnMock.mock.calls
+          .map(([message]) => String(message))
+          .filter((message) => message.includes("streaming TTS failed")),
+      ).toEqual([]);
+    });
+
+    it("releases late TTS without playback after the voice session leaves", async () => {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      decodeOpusStreamMock.mockResolvedValueOnce(Buffer.alloc(96_000));
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "late voice reply" }] });
+      const release = vi.fn(async () => undefined);
+      let resolveStream!: (value: unknown) => void;
+      textToSpeechStreamMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveStream = resolve;
+        }),
+      );
+      connection.receiver.subscribe.mockReturnValueOnce({
+        on: vi.fn(),
+        off: vi.fn(),
+        destroy: vi.fn(),
+        destroyed: false,
+        async *[Symbol.asyncIterator]() {},
+      });
+      const manager = createManager(
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager);
+
+      const speaking = handleSpeakingStart(manager, entry, "u-speaker");
+      await vi.waitFor(() => expect(textToSpeechStreamMock).toHaveBeenCalledOnce());
+      await manager.leave({ guildId: "g1" });
+      resolveStream({
+        success: true,
+        audioStream: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        release,
+      });
+      await speaking;
+      await entry.processingQueue;
+      await entry.playbackQueue;
+
+      expect(entry.player.play).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
     });
 
     it("passes per-channel system prompt context to voice agent runs", async () => {

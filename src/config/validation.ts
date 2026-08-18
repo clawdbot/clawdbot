@@ -12,6 +12,8 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
+import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.js";
+import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import {
@@ -19,6 +21,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
   inheritLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
@@ -27,6 +30,7 @@ import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
+import { resolveSecretInputRef } from "./types.secrets.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
@@ -35,6 +39,7 @@ import {
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
+import { withConfigIssuePath } from "./validation-issues.js";
 import {
   collectExplicitPluginReferences,
   resolveExplicitPluginReferencePath,
@@ -50,7 +55,9 @@ type ValidateConfigWithPluginsResult =
 
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
+  /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
+  semanticValidation?: "runtime" | "strict";
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -67,6 +74,43 @@ type RegistryInfo = {
   channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
   channelSchemas?: Map<string, { schema?: Record<string, unknown>; pluginId?: string }>;
 };
+
+function collectSecretRefProviderSourceIssues(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
+}): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const target of discoverConfigSecretTargets(params.config, {
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+  })) {
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: params.config.secrets?.defaults,
+    });
+    if (!ref) {
+      continue;
+    }
+    const configuredSource = resolveSecretRefProviderSourceMismatch(params.config, ref);
+    if (!configuredSource) {
+      continue;
+    }
+    const path = target.refPath ?? target.path;
+    const pathSegments = target.refPathSegments ?? target.pathSegments;
+    issues.push(
+      withConfigIssuePath(
+        {
+          path,
+          message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
+        },
+        pathSegments,
+      ),
+    );
+  }
+  return issues;
+}
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
@@ -87,12 +131,14 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config as OpenClawConfig;
+  const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
+  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig).config as OpenClawConfig;
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validateConfigObjectWithPluginsBase(migrated, {
     applyDefaults,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
+    semanticValidation: params?.semanticValidation ?? "runtime",
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
@@ -165,7 +211,7 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
-  if (opts.applyDefaults && !registryInfo) {
+  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
       registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
@@ -173,10 +219,12 @@ function validateConfigObjectWithPluginsBase(
   }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, "snapshot", {
-        manifestRegistry: registryInfo?.registry,
+        manifestRegistry:
+          registryInfo?.registry ??
+          (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       })
     : parsedConfig;
-  if (opts.pluginValidation === "skip") {
+  if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
     return { ok: true, config, warnings: [] };
   }
 
@@ -662,28 +710,36 @@ function validateConfigObjectWithPluginsBase(
   validateWebSearchProvider();
   validateConfiguredModelRefs();
 
-  if (!hasExplicitPluginsConfig) {
-    return issues.length > 0
-      ? { ok: false, issues, warnings }
-      : { ok: true, config: mutatedConfig, warnings };
+  if (hasExplicitPluginsConfig) {
+    const { registry } = ensureRegistry();
+    validateExplicitPluginConfig({
+      raw,
+      config,
+      effectiveConfig: ensureCompatConfig(),
+      env: opts.env,
+      applyDefaults: opts.applyDefaults,
+      registry,
+      knownIds: ensureKnownIds(),
+      normalizedPlugins: ensureNormalizedPlugins(),
+      ensureCompatPluginIds,
+      ensureOverriddenPluginIds,
+      replacePluginEntryConfig,
+      issues,
+      warnings,
+    });
   }
-
-  const { registry } = ensureRegistry();
-  validateExplicitPluginConfig({
-    raw,
-    config,
-    effectiveConfig: ensureCompatConfig(),
-    env: opts.env,
-    applyDefaults: opts.applyDefaults,
-    registry,
-    knownIds: ensureKnownIds(),
-    normalizedPlugins: ensureNormalizedPlugins(),
-    ensureCompatPluginIds,
-    ensureOverriddenPluginIds,
-    replacePluginEntryConfig,
-    issues,
-    warnings,
-  });
+  if (
+    opts.semanticValidation === "strict" &&
+    Object.keys(mutatedConfig.secrets?.providers ?? {}).length > 0
+  ) {
+    issues.push(
+      ...collectSecretRefProviderSourceIssues({
+        config: mutatedConfig,
+        env: opts.env,
+        manifestRegistry: ensureLoadedRegistryInfo().registry,
+      }),
+    );
+  }
 
   return issues.length > 0
     ? { ok: false, issues, warnings }
