@@ -154,7 +154,13 @@ export type ChannelOwnershipPolicy = {
   ) => readonly string[];
 };
 
-const DEFAULT_CHANNEL_OWNERSHIP_POLICY: ChannelOwnershipPolicy = {
+/**
+ * Ownership from manifests alone, for callers with no operator config to consult: every claimant
+ * counts as active and nothing is explicitly selected, so registry and origin order decide. Docs
+ * generation is the intended user. Anything holding a config must build the configured policy
+ * instead, or it will describe an owner the runtime does not activate.
+ */
+export const MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY: ChannelOwnershipPolicy = {
   isPluginActive: () => true,
   isPluginExplicitlySelected: () => false,
   resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
@@ -308,7 +314,7 @@ export function collectPluginSchemaMetadataCore(
  */
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
-  policy: ChannelOwnershipPolicy = DEFAULT_CHANNEL_OWNERSHIP_POLICY,
+  policy: ChannelOwnershipPolicy = MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
   const displacedOwners = collectDisplacedChannelOwners(registry, policy);
@@ -413,7 +419,7 @@ export function collectChannelSchemaMetadataWithOwnership(
 /** Collects public per-channel config UI metadata without internal schema ownership. */
 export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
-  policy?: ChannelOwnershipPolicy,
+  policy: ChannelOwnershipPolicy,
 ): ChannelUiMetadata[] {
   return collectChannelSchemaMetadataWithOwnership(registry, policy).map(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
