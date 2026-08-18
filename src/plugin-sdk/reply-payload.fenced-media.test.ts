@@ -48,7 +48,7 @@ describe("deliverTextOrMediaReply fenced MEDIA diagnostic (#41966)", () => {
 
     await expect(
       deliverTextOrMediaReply({
-        payload: { text: fenced, extractMediaDirectives: false },
+        payload: { text: fenced, extractMediaDirectives: false } as never,
         text: fenced,
         sendText,
         sendMedia,
@@ -239,7 +239,7 @@ describe("createDirectAcceptedFencedMediaWarnLatch extractMediaDirectives mode (
     warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
     const fenced = "```\nMEDIA:/tmp/demo.png\n```";
     const latch = createDirectAcceptedFencedMediaWarnLatch({
-      payload: { text: fenced, extractMediaDirectives: false },
+      payload: { text: fenced, extractMediaDirectives: false } as never,
     });
     latch.afterAcceptedVisibleText(fenced);
     expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();

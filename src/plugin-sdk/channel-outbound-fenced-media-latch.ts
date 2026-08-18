@@ -23,10 +23,15 @@ export function createDirectAcceptedFencedMediaWarnLatch(params: { payload: obje
     };
   }
   // Plan builder only consumes extractMarkdownImages / extractMediaDirectives from context.
-  // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
-  const planEntry = createOutboundPayloadPlan([params.payload as never], {
-    extractMediaDirectives: payload.extractMediaDirectives,
-  })[0];
+  const planEntry = createOutboundPayloadPlan(
+    [
+      // SAFETY: channel deliver path feeds already-normalized ReplyPayload-shaped objects into the plan builder
+      params.payload as never,
+    ],
+    {
+      extractMediaDirectives: payload.extractMediaDirectives,
+    },
+  )[0];
   if (!planEntry?.mediaTokenSkippedInFence) {
     return {
       afterAcceptedVisibleText(_chunk: string) {},
