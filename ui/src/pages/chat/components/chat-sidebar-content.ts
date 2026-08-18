@@ -32,8 +32,8 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import "./session-diff-panel.ts";
 
 type DetailUnavailableReason = NonNullable<

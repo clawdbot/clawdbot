@@ -7,6 +7,7 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import {
   buildRawContent,
   handleSidebarClick,
@@ -22,7 +23,6 @@ import {
   setFileDraft,
   type FileCopyAction,
 } from "./chat-sidebar-file-view.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;

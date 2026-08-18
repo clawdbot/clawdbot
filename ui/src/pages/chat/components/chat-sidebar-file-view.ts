@@ -4,8 +4,8 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
