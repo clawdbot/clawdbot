@@ -10,6 +10,8 @@ export const recorderSessionSchema = z.object({
   desktopSessionId: z.string().min(1),
   keepBox: z.boolean(),
   leaseId: z.string().min(1),
+  /** False when `--lease-id` borrowed an existing box: the recorder never stops it. */
+  leaseOwned: z.boolean(),
   provider: z.enum(["aws", "hetzner"]),
   recordFps: z.number().int().positive(),
   remotePaths: z.object({

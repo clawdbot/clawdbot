@@ -37,8 +37,10 @@ Flags:
   -h, --help            Show this help.
 
 Required with --run:
-  CRABBOX_COORDINATOR
-  CRABBOX_COORDINATOR_ADMIN_TOKEN
+  Crabbox coordinator admin: run from a crabbox login listed in the
+  coordinator's CRABBOX_GITHUB_ADMIN_OWNERS, or set CRABBOX_COORDINATOR plus
+  CRABBOX_COORDINATOR_ADMIN_TOKEN for headless use. Image create/promote are
+  admin-only; the script probes for admin before paying for any lease.
 
 Optional coordinator access:
   CRABBOX_ACCESS_CLIENT_ID
@@ -135,16 +137,16 @@ if [[ "$run" != "1" ]]; then
   exit 0
 fi
 
-if [[ -z "${CRABBOX_COORDINATOR:-}" ]]; then
-  printf 'CRABBOX_COORDINATOR is required with --run.\n' >&2
-  exit 2
-fi
-if [[ -z "${CRABBOX_COORDINATOR_ADMIN_TOKEN:-}" ]]; then
-  printf 'CRABBOX_COORDINATOR_ADMIN_TOKEN is required with --run for image create and promote.\n' >&2
-  exit 2
-fi
 if ! crabbox_resolved="$(command -v "$crabbox_bin")"; then
   printf 'Crabbox executable not found: %s\n' "$crabbox_bin" >&2
+  exit 2
+fi
+# Admin probe before any paid lease: image create/promote are admin-only and the
+# CLI rejects non-admin logins with this exact message before contacting the
+# coordinator. A GitHub admin owner passes without any admin token env.
+admin_probe="$("$crabbox_resolved" image fsr-status ami-00000000000000000 --provider aws 2>&1 || true)"
+if [[ "$admin_probe" == *"admin command requires"* ]]; then
+  printf 'Crabbox coordinator admin is required with --run (CRABBOX_GITHUB_ADMIN_OWNERS or CRABBOX_COORDINATOR_ADMIN_TOKEN).\n' >&2
   exit 2
 fi
 if ! command -v jq >/dev/null 2>&1; then

@@ -36,6 +36,7 @@ function testSession(): RecorderSession {
     desktopSessionId: "987654321",
     keepBox: false,
     leaseId: "cbx_test123",
+    leaseOwned: true,
     provider: "aws",
     recordFps: 24,
     remotePaths: {
@@ -264,6 +265,99 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     expect(readRecorderSession(sessionPath)).toEqual(session);
     expect(fs.statSync(sessionPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("never stops a borrowed --lease-id box, on failure or on stop", async () => {
+    const root = makeTempDir();
+    const calls: Array<{ args: string[]; command: string }> = [];
+    const mockedRun: RunCommand = async (params) => {
+      calls.push({ args: params.args, command: params.command });
+      return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+    };
+    const failingOperations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => {
+        throw new Error("borrowed box unreachable");
+      }),
+      runCommand: mockedRun,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          leaseId: "cbx_borrowed",
+          outputDir: "out",
+          provider: "aws",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        failingOperations,
+      ),
+    ).rejects.toThrow("borrowed box unreachable");
+    expect(calls.some((call) => call.args[0] === "warmup")).toBe(false);
+    expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
+
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, {
+      ...testSession(),
+      leaseId: "cbx_borrowed",
+      leaseOwned: false,
+    });
+    const operations = {
+      ...failingOperations,
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+    } satisfies RecorderOperations;
+    await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
+    expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(true);
+    expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
+  });
+
+  it("keeps the Desktop authorization and the box alive with --keep-box", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, testSession());
+    const calls: Array<{ args: string[]; command: string }> = [];
+    const mockedRun: RunCommand = async (params) => {
+      calls.push({ args: params.args, command: params.command });
+      return { stderr: "", stdout: JSON.stringify({ ok: true }) };
+    };
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: mockedRun,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    const stopped = await stopRecorder(
+      root,
+      { command: "stop", keepBox: true, sessionPath },
+      operations,
+    );
+    expect(stopped.keepBox).toBe(true);
+    expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(false);
+    expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
 
   it("still stops Crabbox and reports failure when local session termination fails", async () => {

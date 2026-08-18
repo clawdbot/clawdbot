@@ -225,9 +225,9 @@ available for WebVNC inspection.
 The recorder leases the Crabbox Telegram variant image
 (`--image-sdk telegram-desktop=7.0.9`; the generic desktop image never carries
 the client). OpenClaw bakes and publishes that catalog-only variant with
-`scripts/mantis/bake-telegram-desktop-image.sh` or the **Mantis Telegram Desktop
-Image** workflow. Image creation and promotion require Crabbox coordinator
-admin auth. Rebake after Crabbox promotes a new generic desktop base or after
+`scripts/mantis/bake-telegram-desktop-image.sh --run`, run by a Crabbox
+coordinator admin from their own `crabbox` login (image creation and promotion
+are admin-only). Rebake after Crabbox promotes a new generic desktop base or after
 updating the pinned Telegram Desktop version. The image must provide an
 executable Telegram Desktop at `/opt/Telegram/Telegram`, a readable desktop
 version marker, `wmctrl`, `xdotool`, `scrot`, `ffmpeg`, `zbarimg`, and

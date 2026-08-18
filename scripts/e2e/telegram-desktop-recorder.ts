@@ -288,6 +288,7 @@ export async function startRecorder(
   const outputDir = resolveOutputDir(cwd, opts.outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
   let leaseId = opts.leaseId;
+  const leaseOwned = !opts.leaseId;
   let desktopSessionId: string | undefined;
   try {
     if (!leaseId) {
@@ -361,6 +362,7 @@ export async function startRecorder(
       desktopSessionId,
       keepBox: false,
       leaseId,
+      leaseOwned,
       provider: opts.provider,
       recordFps: opts.recordFps,
       remotePaths,
@@ -381,7 +383,7 @@ export async function startRecorder(
         userDriver: opts.userDriver,
       }).catch((cleanupError: unknown) => cleanupErrors.push(coerceErrorMessage(cleanupError)));
     }
-    if (leaseId) {
+    if (leaseId && leaseOwned) {
       await stopBox({
         crabboxBin,
         cwd,
@@ -577,15 +579,19 @@ export async function stopRecorder(
       artifacts.trimmedVideoCropped = croppedVideoPath;
     });
   }
-  await attempt("terminate Telegram Desktop session", async () => {
-    await terminateDesktopSession({
-      cwd,
-      desktopSessionId: session.desktopSessionId,
-      run: operations.runCommand,
-      userDriver: session.userDriver,
-    });
-  });
+  // --keep-box keeps the whole debugging surface: the Desktop authorization stays
+  // valid for WebVNC until the operator finishes; a later `stop` without it revokes.
   if (!opts.keepBox) {
+    await attempt("terminate Telegram Desktop session", async () => {
+      await terminateDesktopSession({
+        cwd,
+        desktopSessionId: session.desktopSessionId,
+        run: operations.runCommand,
+        userDriver: session.userDriver,
+      });
+    });
+  }
+  if (!opts.keepBox && session.leaseOwned) {
     await attempt("stop Crabbox", async () => {
       await stopBox({
         crabboxBin,
