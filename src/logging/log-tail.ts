@@ -6,6 +6,7 @@ import { clamp } from "../utils.js";
 import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
 import "./logger.js";
 import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
+import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
 // Tail reader for the active log file, with cursor reset and line redaction.
@@ -24,11 +25,13 @@ export type LogTailPayload = {
   reset: boolean;
 };
 
+/** Redacted configured log tail with only parseable structured records. */
+type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
+  lines: ParsedLogLine[];
+};
+
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-export async function resolveLogFile(
-  file: string,
-  options?: { rolling?: boolean },
-): Promise<string> {
+async function resolveLogFile(file: string, options?: { rolling?: boolean }): Promise<string> {
   const stat = await fs.stat(file).catch(() => null);
   if (stat) {
     return file;
@@ -175,5 +178,21 @@ export async function readConfiguredLogTail(params?: {
     file,
     ...result,
     lines: redactSensitiveLines(result.lines, redaction),
+  };
+}
+
+/** Reads the canonical configured tail and parses its already-redacted lines. */
+export async function readConfiguredParsedLogTail(params?: {
+  cursor?: number;
+  limit?: number;
+  maxBytes?: number;
+}): Promise<ParsedLogTailPayload> {
+  const tail = await readConfiguredLogTail(params);
+  return {
+    ...tail,
+    lines: tail.lines.flatMap((line) => {
+      const parsed = parseLogLine(line);
+      return parsed ? [parsed] : [];
+    }),
   };
 }

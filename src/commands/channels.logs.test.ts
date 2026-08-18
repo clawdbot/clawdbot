@@ -26,13 +26,6 @@ vi.mock("../channels/plugins/index.js", () => ({
 import { channelsLogsCommand } from "./channels/logs.js";
 
 const runtime = createTestRuntime();
-type PositionalRead = (
-  buffer: Buffer,
-  offset: number,
-  length: number,
-  position: number | null,
-) => Promise<{ bytesRead: number; buffer: Buffer }>;
-
 function logLine(params: { module: string; message: string }) {
   return JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
@@ -48,7 +41,7 @@ function readJsonPayload() {
   return JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
     file: string;
     channel: string;
-    lines: Array<{ message: string }>;
+    lines: Array<{ message: string; raw: string }>;
   };
 }
 
@@ -93,6 +86,90 @@ describe("channelsLogsCommand", () => {
     const payload = readJsonPayload();
     expect(payload.channel).toBe("external-chat");
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
+  });
+
+  it.each([false, true])(
+    "rejects an unknown explicit channel without widening output (json=%s)",
+    async (json) => {
+      await fs.writeFile(
+        logPath,
+        logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
+      );
+
+      const error = await channelsLogsCommand({ channel: "slakc", json }, runtime).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('Unknown channel "slakc". Valid channels: all,');
+      expect((error as Error).message).toContain("external-chat");
+      expect((error as Error).message).toContain("slack");
+      expect(runtime.log).not.toHaveBeenCalled();
+    },
+  );
+
+  it("redacts credential-bearing channel lines in text output", async () => {
+    const fixtureCredential = "synthetic-channel-log-credential-1234567890";
+    await fs.writeFile(
+      logPath,
+      logLine({
+        module: "gateway/channels/slack/send",
+        message: `X-OpenClaw-Token: ${fixtureCredential}`,
+      }),
+    );
+
+    await channelsLogsCommand({ channel: "slack" }, runtime);
+
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("2026-04-25T12:00:00.000Z info");
+    expect(output).toContain("X-OpenClaw-Token: synthe…7890");
+    expect(output).not.toContain(fixtureCredential);
+  });
+
+  it("redacts credential-bearing channel lines in JSON output", async () => {
+    const fixtureCredential = "synthetic-channel-log-credential-1234567890";
+    await fs.writeFile(
+      logPath,
+      logLine({
+        module: "gateway/channels/slack/send",
+        message: `X-OpenClaw-Token: ${fixtureCredential}`,
+      }),
+    );
+
+    await channelsLogsCommand({ channel: "slack", json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.lines[0]?.message).toBe("X-OpenClaw-Token: synthe…7890");
+    expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
+  });
+
+  it("preserves ordering and line limits for an explicit all filter", async () => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ module: "gateway/channels/slack/send", message: "first" }),
+        logLine({ module: "gateway/channels/external-chat/send", message: "second" }),
+        logLine({ module: "gateway/channels/slack/send", message: "third" }),
+      ].join("\n"),
+    );
+
+    await channelsLogsCommand({ channel: "all", lines: 2, json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.channel).toBe("all");
+    expect(payload.lines.map((line) => line.message)).toEqual(["second", "third"]);
+  });
+
+  it("treats an omitted channel filter as all", async () => {
+    await fs.writeFile(
+      logPath,
+      logLine({ module: "gateway/channels/slack/send", message: "omitted filter" }),
+    );
+
+    await channelsLogsCommand({ json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.channel).toBe("all");
+    expect(payload.lines.map((line) => line.message)).toEqual(["omitted filter"]);
   });
 
   it("falls back to the latest rolling log when the configured rolling file is missing", async () => {
@@ -147,92 +224,6 @@ describe("channelsLogsCommand", () => {
     const payload = readJsonPayload();
     expect(payload.file).toBe(configuredFile);
     expect(payload.lines.map((line) => line.message)).toEqual(["current sent"]);
-  });
-
-  it("fills short positional reads before parsing channel log lines", async () => {
-    const realOpen = fs.open.bind(fs);
-    const readLengths: number[] = [];
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const realRead = handle.read.bind(handle) as PositionalRead;
-      const shortRead = vi.fn<PositionalRead>((buffer, offset, length, position) => {
-        readLengths.push(length);
-        return realRead(buffer, offset, Math.min(length, 4), position);
-      });
-      Object.defineProperty(handle, "read", { configurable: true, value: shortRead });
-      return handle;
-    });
-    await fs.writeFile(
-      logPath,
-      [
-        logLine({ module: "gateway/channels/slack/send", message: "first" }),
-        logLine({ module: "gateway/channels/slack/send", message: "second" }),
-      ].join("\n"),
-    );
-
-    await channelsLogsCommand({ channel: "slack", json: true }, runtime);
-
-    expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["first", "second"]);
-    expect(readLengths.length).toBeGreaterThan(1);
-  });
-
-  it("returns the first line of the tail window when start aligns with a line boundary", async () => {
-    // MAX_BYTES in readTailLines is 1_000_000. We build a file of 2_000_000 bytes
-    // made of 10_000 lines each exactly 200 bytes (199 payload + "\n"), so the
-    // read window starts at byte offset 1_000_000 which is exactly on a line
-    // boundary (byte 999_999 is the trailing "\n" of the previous line).
-    // Without checking the byte before the window, readTailLines drops line 5000 silently.
-    const LINE_SIZE = 200;
-    const TOTAL_LINES = 10_000;
-    const FIRST_INDEX = 5000; // first line of the tail window after alignment
-
-    const buildLine = (message: string) => {
-      const base = logLine({
-        module: "gateway/channels/slack/send",
-        message,
-      });
-      const payloadLen = LINE_SIZE - 1; // reserve 1 byte for newline
-      // Re-emit with a padded message so total byte length is constant.
-      const padNeeded = payloadLen - Buffer.byteLength(base);
-      if (padNeeded < 0) {
-        throw new Error(`base log line too long: ${Buffer.byteLength(base)} > ${payloadLen}`);
-      }
-      const padded = logLine({
-        module: "gateway/channels/slack/send",
-        message: message + " ".repeat(padNeeded),
-      });
-      if (Buffer.byteLength(padded) !== payloadLen) {
-        throw new Error(`padded line wrong size: ${Buffer.byteLength(padded)} vs ${payloadLen}`);
-      }
-      return padded + "\n";
-    };
-
-    const handle = await fs.open(logPath, "w");
-    try {
-      for (let i = 0; i < TOTAL_LINES; i++) {
-        let message: string;
-        if (i === FIRST_INDEX) {
-          message = "first-line-in-window";
-        } else if (i === TOTAL_LINES - 1) {
-          message = "last-line";
-        } else {
-          message = "filler";
-        }
-        await handle.write(buildLine(message));
-      }
-    } finally {
-      await handle.close();
-    }
-
-    await channelsLogsCommand(
-      { channel: "slack", json: true, lines: String(TOTAL_LINES) },
-      runtime,
-    );
-
-    const payload = readJsonPayload();
-    const messages = payload.lines.map((line) => line.message.trimEnd());
-    expect(messages[0]).toBe("first-line-in-window");
-    expect(messages[messages.length - 1]).toBe("last-line");
   });
 
   it("does not fall back to rolling logs for a missing custom log file", async () => {

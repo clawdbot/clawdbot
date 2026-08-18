@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 // Parser for JSON LogTape lines emitted by the OpenClaw logger.
-type ParsedLogLine = {
+export type ParsedLogLine = {
   time?: string;
   level?: string;
   subsystem?: string;
