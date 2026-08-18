@@ -310,7 +310,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -2: retire the uncalled secret-plan target resolver and its result type.
       // +2: conversation-binding inspection result and runtime inspector.
-      4337,
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      4339,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -400,8 +401,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -1: retire the uncalled secret-plan target resolver.
       // +1: read-only authoritative conversation-binding inspector.
-      // +6: restore shipped channel config schemas and setup helpers until stable packages migrate.
-      2584,
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      2580,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
