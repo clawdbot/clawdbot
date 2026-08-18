@@ -270,17 +270,20 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
+    const config = createBaseConfig();
+    config.tunnel.provider = "tailscale-funnel";
+    config.tailscale.port = 8443;
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
-      publicUrl: "https://public.example/voice/webhook",
-      provider: "ngrok",
+      publicUrl: "https://public.example:8443/voice/webhook",
+      provider: "tailscale-funnel",
       stop: tunnelStop,
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
 
     await expect(
       createVoiceCallRuntime({
-        config: createBaseConfig(),
+        config,
         coreConfig: {},
         agentRuntime: {} as never,
       }),
@@ -288,6 +291,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     expect(mocks.startTunnel).toHaveBeenCalledWith(
       expect.objectContaining({
+        provider: "tailscale-funnel",
+        tailscalePort: 8443,
         streamPaths: [
           {
             localPath: "/voice/stream/realtime",

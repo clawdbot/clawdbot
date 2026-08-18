@@ -422,8 +422,13 @@ export function registerVoiceCallCli(params: {
 
         if (mode === "off") {
           for (const exposurePath of [tsPath, ...streamPaths]) {
-            await cleanupTailscaleExposureRoute({ mode: "serve", path: exposurePath });
-            await cleanupTailscaleExposureRoute({ mode: "funnel", path: exposurePath });
+            for (const tailscaleMode of ["serve", "funnel"] as const) {
+              await cleanupTailscaleExposureRoute({
+                mode: tailscaleMode,
+                port: config.tailscale.port,
+                path: exposurePath,
+              });
+            }
           }
           writeCliJson({ ok: true, mode: "off", path: tsPath, streamPaths });
           return;
@@ -431,6 +436,7 @@ export function registerVoiceCallCli(params: {
 
         const publicUrl = await setupTailscaleExposureRoutes({
           mode,
+          port: config.tailscale.port,
           routes: [
             { path: tsPath, localUrl },
             ...streamExposurePaths.map(({ publicPath, localPath }) => ({
