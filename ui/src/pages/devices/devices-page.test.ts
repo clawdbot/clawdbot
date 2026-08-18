@@ -320,6 +320,8 @@ describe("DevicesPage gateway lifecycle", () => {
     await initialLoad;
     expect(state.nodes).toEqual([{ id: "new" }]);
     expect(state.nodesLoading).toBe(false);
+  });
+
   it("does not load pairing or exec approvals without their scopes", async () => {
     const request = vi.fn(async (method: string) => (method === "node.list" ? { nodes: [] } : {}));
     const client = { request } as unknown as GatewayBrowserClient;
