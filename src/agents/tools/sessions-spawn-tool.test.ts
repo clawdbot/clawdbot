@@ -487,6 +487,7 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
     expect(schema.properties?.attachments?.description).toContain("unavailable with visible=true");
     expect(schema.properties?.attachAs?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.category?.description).toContain("Omit to inherit");
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
@@ -525,6 +526,7 @@ describe("sessions_spawn tool", () => {
       const result = await tool.execute("visible", {
         task: "inspect issue",
         label: "Issue review",
+        category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
         cwd: dir,
         context: "fork",
@@ -544,6 +546,7 @@ describe("sessions_spawn tool", () => {
       expect(callGateway).toHaveBeenCalledWith("sessions.create", {
         agentId: "main",
         label: "Issue review",
+        category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
         task: "inspect issue",
         parentSessionKey: "agent:main:main",
@@ -571,6 +574,46 @@ describe("sessions_spawn tool", () => {
         }),
       );
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("inherits the parent category for a visible session", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-category-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const parentSessionKey = "agent:main:main";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: parentSessionKey, storePath },
+        {
+          sessionId: "session-parent",
+          updatedAt: 1,
+          category: "P1 issues from beta feedback",
+        },
+      );
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: parentSessionKey,
+        config: {
+          session: { store: storePath },
+          agents: { list: [{ id: "main" }] },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-category", {
+        task: "inspect issue",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ category: "P1 issues from beta feedback" }),
+      );
     });
   });
 

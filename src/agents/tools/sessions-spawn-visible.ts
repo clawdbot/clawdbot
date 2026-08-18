@@ -9,6 +9,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
@@ -43,6 +44,12 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
     Type.Boolean({
       description:
         "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+    }),
+  ),
+  category: Type.Optional(
+    Type.String({
+      description:
+        "Sidebar category for a visible session. Omit to inherit the parent category; empty string creates an ungrouped session.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -129,8 +136,11 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  const categoryProvided = Object.hasOwn(params.raw, "category");
+  const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
+      ["category", categoryProvided ? requestedCategory : undefined],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -222,6 +232,17 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
+  const category = categoryProvided
+    ? normalizeOptionalString(requestedCategory)
+    : normalizeOptionalString(
+        loadSessionEntry({
+          agentId: requesterAgentId,
+          sessionKey: requesterKey,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: requesterAgentId,
+          }),
+        })?.category,
+      );
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -335,6 +356,7 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
+        ...(category ? { category } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
