@@ -259,7 +259,6 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         senderIsOwner: options?.senderIsOwner,
         conversationReadOrigin: options?.conversationReadOrigin,
       });
-  const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
@@ -400,7 +399,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             presenterContext: widgetPresentation.context,
           }),
         ]),
-    ...collectPresentOpenClawTools([heartbeatTool]),
+    ...(options?.enableHeartbeatTool ? [createHeartbeatResponseTool()] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: resolvedConfig,
