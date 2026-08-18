@@ -1,6 +1,8 @@
 // Doctor disk-space tests cover byte formatting, warning generation, and note rendering.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { exitCodeFromFindings } from "../flows/doctor-lint-flow.js";
+import { healthFindingMeetsSeverity } from "../flows/health-checks.js";
 import { collectDiskSpaceHealthFindings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -98,6 +100,24 @@ describe("collectDiskSpaceHealthFindings thresholds", () => {
       expect.objectContaining({ requirement: "critical-free-space" }),
     ]);
   });
+
+  it.each([
+    ["empty volume", 0, "error", 1],
+    ["critical free space", 50 * 1024 * 1024, "error", 1],
+    ["last critical byte", 100 * 1024 * 1024 - 1, "error", 1],
+    ["critical boundary", 100 * 1024 * 1024, "warning", 0],
+    ["low free space", 300 * 1024 * 1024, "warning", 0],
+  ] as const)(
+    "keeps %s visible to error-only lint exactly when critical",
+    (_label, availableBytes, severity, expectedExitCode) => {
+      const findings = collectFindingsAt(availableBytes);
+      const finding = expectDefined(findings[0], "disk-space finding");
+
+      expect(finding.severity).toBe(severity);
+      expect(healthFindingMeetsSeverity(finding, "error")).toBe(expectedExitCode === 1);
+      expect(exitCodeFromFindings(findings, "error")).toBe(expectedExitCode);
+    },
+  );
 });
 
 describe("noteDiskSpace", () => {
@@ -181,7 +201,7 @@ describe("collectDiskSpaceHealthFindings", () => {
     ]);
   });
 
-  it("returns a critical-space warning finding", () => {
+  it("returns a critical-space error finding", () => {
     const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 50 * 1024 * 1024 }),
@@ -190,7 +210,7 @@ describe("collectDiskSpaceHealthFindings", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/disk-space",
-        severity: "warning",
+        severity: "error",
         message: "CRITICAL: only 50 MB free on the partition containing /home/test/.openclaw.",
         path: "/home/test/.openclaw",
         target: "50 MB",

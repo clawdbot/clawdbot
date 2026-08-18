@@ -115,7 +115,7 @@ export function collectDiskSpaceHealthFindings(
   return [
     {
       checkId: DISK_SPACE_CHECK_ID,
-      severity: "warning",
+      severity: result.availableBytes < CRITICAL_BYTES ? "error" : "warning",
       message: expectDefined(message, "disk-space warning message").replace(/^- /, ""),
       path: result.stateDir,
       target: formatBytes(result.availableBytes),
