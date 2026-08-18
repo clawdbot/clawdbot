@@ -375,6 +375,38 @@ describe("Responses reasoning effort", () => {
     expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
   });
 
+  it("falls back when a compat mapping is not listed as supported", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["high"],
+        reasoningEffortMap: { xhigh: "provider-xhigh" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
+
+    expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
+  });
+
+  it("preserves a supported provider-native max mapping", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["provider-max"],
+        reasoningEffortMap: { max: "provider-max" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "max" });
+
+    expect(params.reasoning).toMatchObject({ effort: "provider-max", summary: "auto" });
+  });
+
   it("omits Responses reasoning when compat explicitly disables it", () => {
     const params = {} as ResponseCreateParamsStreaming;
     const compatModel = {

@@ -45,6 +45,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
   supportsOpenAITemperature,
+  type OpenAIApiReasoningEffort,
 } from "./openai-reasoning-effort.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
@@ -118,7 +119,7 @@ function isResponsesReasoningEffort(
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
-  reasoningEffort?: ResponsesReasoningEffort;
+  reasoningEffort?: OpenAIApiReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
@@ -175,14 +176,19 @@ function isResponsesReasoningEffortDisabled<TApi extends Api>(model: Model<TApi>
   );
 }
 
+function isModelThinkingLevel(value: string): value is ModelThinkingLevel {
+  return value === "off" || isResponsesReasoningEffort(value);
+}
+
 function resolveResponsesApiReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
-  reasoning: ModelThinkingLevel,
-): string | undefined {
+  reasoning: string,
+): OpenAIApiReasoningEffort | undefined {
   if (isResponsesReasoningEffortDisabled(model)) {
     return undefined;
   }
-  if (model.thinkingLevelMap?.[reasoning] === null) {
+  const isCanonicalReasoning = isModelThinkingLevel(reasoning);
+  if (isCanonicalReasoning && model.thinkingLevelMap?.[reasoning] === null) {
     return undefined;
   }
   const compat =
@@ -190,33 +196,52 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
       ? model.compat
       : undefined;
   const compatMapped =
-    compat && "reasoningEffortMap" in compat ? compat.reasoningEffortMap?.[reasoning] : undefined;
-  return compatMapped ?? model.thinkingLevelMap?.[reasoning] ?? reasoning;
+    isCanonicalReasoning && compat && "reasoningEffortMap" in compat
+      ? compat.reasoningEffortMap?.[reasoning]
+      : undefined;
+  if (compatMapped !== undefined) {
+    return resolveOpenAIReasoningEffortForModel({
+      model,
+      effort: reasoning,
+      fallbackMap: compat.reasoningEffortMap,
+    });
+  }
+  return isCanonicalReasoning ? (model.thinkingLevelMap?.[reasoning] ?? reasoning) : reasoning;
 }
 
+export function resolveResponsesReasoningEffort(
+  model: Model<"openai-responses">,
+  reasoning: SimpleStreamOptions["reasoning"] | undefined,
+): OpenAIApiReasoningEffort | undefined;
+export function resolveResponsesReasoningEffort<TApi extends Exclude<Api, "openai-responses">>(
+  model: Model<TApi>,
+  reasoning: SimpleStreamOptions["reasoning"] | undefined,
+): ResponsesReasoningEffort | undefined;
 export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
-): ResponsesReasoningEffort | undefined {
+): OpenAIApiReasoningEffort | undefined {
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
   }
-  if (resolveResponsesApiReasoningEffort(model, clampedReasoning) === undefined) {
+  const resolvedApiReasoning = resolveResponsesApiReasoningEffort(model, clampedReasoning);
+  if (resolvedApiReasoning === undefined) {
     return undefined;
   }
-  if (clampedReasoning === "max") {
+  if (clampedReasoning === "max" && resolvedApiReasoning === "max") {
     return supportsOpenAIReasoningEffort(model, "max") ? "max" : "xhigh";
   }
   if (
     clampedReasoning === "minimal" &&
+    resolvedApiReasoning === "minimal" &&
     model.provider === "openai" &&
     supportsOpenAIReasoningEffort(model, "max")
   ) {
     const effort = resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" });
     return isResponsesReasoningEffort(effort) ? effort : undefined;
   }
-  return clampedReasoning;
+  return resolvedApiReasoning;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(
