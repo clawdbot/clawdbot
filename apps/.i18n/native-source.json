@@ -19798,6 +19798,17 @@
       ]
     },
     {
+      "id": "native.apple.b7a51f5ac6098ec5",
+      "source": "%@ is not currently discoverable on this network.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.23ad69a52fe7c550",
       "source": "%@ min",
       "surface": "apple",
@@ -23607,6 +23618,17 @@
       ]
     },
     {
+      "id": "native.apple.c767224da1135c79",
+      "source": "Change the primary Gateway?",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.68f28e54baab5743",
       "source": "Change the search or readiness filter.",
       "surface": "apple",
@@ -26248,6 +26270,17 @@
       ]
     },
     {
+      "id": "native.apple.23f447855b25395a",
+      "source": "Could Not Change Primary Gateway",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.2e44cb00b99f5c81",
       "source": "Could Not Open Gateway Window",
       "surface": "apple",
@@ -26479,6 +26512,28 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.6c192cb704c2f643",
+      "source": "Could not save the active gateway selection.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.839637d118fd48d8",
+      "source": "Could not save the paired gateway.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -28125,6 +28180,10 @@
           "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift"
         },
         {
+          "kind": "ui-named-argument",
+          "path": "apps/ios/Sources/RootTabs.swift"
+        },
+        {
           "kind": "ui-modifier",
           "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift"
         },
@@ -29326,6 +29385,17 @@
       ]
     },
     {
+      "id": "native.apple.cd811b1e4af50d99",
+      "source": "Failed to build the gateway URL.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.192cb36afc99c87d",
       "source": "Failed: \\(reason)",
       "surface": "apple",
@@ -30139,6 +30209,17 @@
       ]
     },
     {
+      "id": "native.apple.a89c5ab50baafc61",
+      "source": "Gateway Setup Not Supported",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.384fcc93f505c5c1",
       "source": "Gateway URL",
       "surface": "apple",
@@ -30454,6 +30535,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Voice/TalkModeManager.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.a6ec7e8d8d11e84a",
+      "source": "Gateway reconnect failed",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -34325,6 +34417,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/RootSidebar.swift"
+        },
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/ios/Sources/RootTabs.swift"
         }
       ]
     },
@@ -35287,6 +35383,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.67798128e396e0ef",
+      "source": "No paired gateway is available to reconnect.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -43340,6 +43447,17 @@
       ]
     },
     {
+      "id": "native.apple.bb03dba3e7eb1ee8",
+      "source": "Sending test notification…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.19c12c52941ddf52",
       "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
       "surface": "apple",
@@ -46008,6 +46126,17 @@
       ]
     },
     {
+      "id": "native.apple.0edae9804e36af9f",
+      "source": "Test notification queued.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.1a8953b851a377c3",
       "source": "Test remote",
       "surface": "apple",
@@ -47099,6 +47228,17 @@
       ]
     },
     {
+      "id": "native.apple.768fb431d51d4190",
+      "source": "This gateway is unavailable.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.39e226bc9f837cb8",
       "source": "This gateway is using unsupported auth",
       "surface": "apple",
@@ -47150,6 +47290,28 @@
         {
           "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.47e70eedcab1a81c",
+      "source": "This paired gateway has an invalid saved endpoint.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.bb5f5e891aeadb25",
+      "source": "This paired gateway is no longer available.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Gateway/GatewayConnectionController.swift"
         }
       ]
     },
@@ -50729,6 +50891,17 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/CronJobEditor.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.8e781789ba7a7b6a",
+      "source": "an unencrypted private-network connection",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
         }
       ]
     },
