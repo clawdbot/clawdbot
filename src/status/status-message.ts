@@ -791,7 +791,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // Persisted runtime snapshots still take precedence over model metadata so
   // historical fallback sessions keep their last known live limit even if the
   // active model later becomes unresolvable.
-  const contextTokens = runtimeDiffersFromSelected
+  const unlockedContextTokens = runtimeDiffersFromSelected
     ? (() => {
         if (!runtimeSnapshotHasFallbackProvenance) {
           if (typeof selectedContextTokens === "number") {
@@ -842,6 +842,12 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           ? runtimeLimit
           : Math.min(runtimeLimit, resolvedContextTokens);
       })();
+  // A locked native session owns its observed window even when current config
+  // describes a lower route that cannot replace the locked runtime.
+  const contextTokens =
+    entry?.modelSelectionLocked === true && persistedContextTokens !== undefined
+      ? persistedContextTokens
+      : unlockedContextTokens;
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";

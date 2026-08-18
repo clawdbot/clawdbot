@@ -185,13 +185,40 @@ describe("buildStatusMessage context window", () => {
   it("preserves a locked legacy session window", () => {
     const text = buildStatusMessage({
       agent: { model: "openai/gpt-5.6-sol" },
-      runtimeContextTokens: 1_000_000,
+      runtimeContextTokens: 272_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "locked-legacy-window",
         updatedAt: 0,
         modelSelectionLocked: true,
-        contextTokens: 272_000,
+        contextTokens: 1_000_000,
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("caps matching unlocked runtime telemetry to the lower current window", () => {
+    const text = buildStatusMessage({
+      agent: { model: "openai/gpt-5.6-sol" },
+      runtimeContextTokens: 272_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "unlocked-runtime-window",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
         totalTokens: 11,
         totalTokensFresh: true,
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
@@ -203,6 +230,7 @@ describe("buildStatusMessage context window", () => {
     });
 
     expect(text).toContain("Context: 11/272k");
+    expect(text).not.toContain("Context: 11/1.0m");
   });
 
   it("ignores stale runtime context after a manual session model switch", () => {

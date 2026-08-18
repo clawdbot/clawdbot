@@ -467,11 +467,13 @@ export async function getStatusSummary(
           agentHarnessId: runtime.id,
         });
         const contextTokens =
-          trustedSessionContextTokens === undefined
-            ? (resolvedContextTokens ?? null)
-            : resolvedContextTokens === undefined
-              ? trustedSessionContextTokens
-              : Math.min(trustedSessionContextTokens, resolvedContextTokens);
+          entry?.modelSelectionLocked === true && trustedSessionContextTokens !== undefined
+            ? trustedSessionContextTokens
+            : trustedSessionContextTokens === undefined
+              ? (resolvedContextTokens ?? null)
+              : resolvedContextTokens === undefined
+                ? trustedSessionContextTokens
+                : Math.min(trustedSessionContextTokens, resolvedContextTokens);
         const total = resolveSessionTotalTokens(entry);
         const freshTotal = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh = freshTotal !== undefined;

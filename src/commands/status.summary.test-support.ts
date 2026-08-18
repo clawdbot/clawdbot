@@ -107,7 +107,7 @@ export function registerStatusSummarySessionRowCases(params: {
 
     it("preserves the native window owned by a locked legacy session", async () => {
       vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        1_000_000,
+        272_000,
       );
       vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
         id: "codex",
@@ -118,7 +118,32 @@ export function registerStatusSummarySessionRowCases(params: {
           sessionId: "locked-legacy-window",
           updatedAt: Date.now(),
           modelSelectionLocked: true,
-          contextTokens: 272_000,
+          contextTokens: 1_000_000,
+        },
+      });
+
+      const summary = await params.getStatusSummary();
+
+      expect(summary.sessions.recent[0]?.contextTokens).toBe(1_000_000);
+    });
+
+    it("caps matching unlocked runtime telemetry to the lower current window", async () => {
+      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
+        272_000,
+      );
+      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
+        id: "codex",
+        label: "OpenAI Codex",
+      });
+      params.setSessions({
+        "agent:main:main": {
+          sessionId: "unlocked-runtime-window",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          contextTokens: 1_000_000,
+          contextTokensSource: "runtime",
         },
       });
 
