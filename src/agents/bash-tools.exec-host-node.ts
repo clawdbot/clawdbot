@@ -478,27 +478,10 @@ export async function executeNodeHostCommand(
         let nodeInvocationCompleted = false;
 
         void (async () => {
-          let decision: string | null | undefined;
-          try {
-            decision = await execHostShared.resolveApprovalDecisionOrUndefined({
-              approvalId,
-              preResolvedDecision,
-              onFailure: () => void sendApprovalRequestFailedFollowup(),
-            });
-          } catch (error) {
-            // Detached run cancellation has no awaiting tool caller to catch it.
-            if (isExecApprovalRunAbortedError(error)) {
-              return;
-            }
-            await sendApprovalRequestFailedFollowup();
-            return;
-          }
-          if (decision === undefined || params.signal?.aborted) {
-            return;
-          }
-
-          const resolvedDecision = await execHostShared.resolveExecApprovalDecisionState({
-            decision,
+          const approvalOutcome = await execHostShared.resolveExecApprovalWaitOutcome({
+            approvalId,
+            preResolvedDecision,
+            signal: params.signal,
             askFallback,
             resolveTimedOut: async () => {
               const fallback = await resolveCurrentTimeoutFallback();
@@ -512,6 +495,14 @@ export async function executeNodeHostCommand(
               fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
             requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
           });
+          if (approvalOutcome.kind !== "resolved") {
+            if (approvalOutcome.kind === "request-failed") {
+              await sendApprovalRequestFailedFollowup();
+            }
+            return;
+          }
+
+          const { decision, state: resolvedDecision } = approvalOutcome;
           const { approvedByAsk, deniedReason } = resolvedDecision;
           const currentFallback = resolvedDecision.timeoutContext;
           const approvalSource = decision === null ? "ask-fallback" : undefined;

@@ -57,7 +57,6 @@ import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-ap
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
-  isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
@@ -65,8 +64,8 @@ import {
   buildExecApprovalFollowupTarget,
   buildExecApprovalPendingToolResult,
   createAndRegisterDefaultExecApprovalRequest,
-  resolveApprovalDecisionOrUndefined,
   resolveExecApprovalDecisionState,
+  resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
   shouldResolveExecApprovalUnavailableInline,
@@ -1124,17 +1123,25 @@ export async function processGatewayAllowlist(
       params.workdir,
     );
     const resolveApprovalForExecution = async (onFailure: () => void) => {
-      const decision = await resolveApprovalDecisionOrUndefined({
+      const approvalOutcome = await resolveExecApprovalWaitOutcome({
         approvalId,
         preResolvedDecision,
-        onFailure,
-      }).catch((error: unknown) => {
-        if (isExecApprovalRunAbortedError(error)) {
-          return "run-aborted" as const;
-        }
-        throw error;
+        signal: params.signal,
+        askFallback,
+        resolveTimedOut: (state) => {
+          const adjusted = applyTimedOutAllowlistFallback(state);
+          return {
+            approvedByAsk: adjusted.approvedByAsk,
+            deniedReason: adjusted.deniedReason,
+          };
+        },
+        requiresExplicitApproval: requiresInlineEvalApproval,
+        requiresAutoReviewHumanApproval:
+          autoReviewRequiresHumanApproval ||
+          requiresHeredocApproval ||
+          timedOutFallbackRequiresHeredocApproval,
       });
-      if (decision === "run-aborted") {
+      if (approvalOutcome.kind === "run-aborted") {
         return {
           deniedReason: "run-aborted",
           requestFailed: false,
@@ -1143,7 +1150,8 @@ export async function processGatewayAllowlist(
           allowAlwaysDecision: undefined,
         };
       }
-      if (decision === undefined) {
+      if (approvalOutcome.kind === "request-failed") {
+        onFailure();
         emitGatewayExecApprovalSecurityEvent({
           action: "exec.approval.denied",
           outcome: "error",
@@ -1164,22 +1172,7 @@ export async function processGatewayAllowlist(
         };
       }
 
-      const resolvedDecision = await resolveExecApprovalDecisionState({
-        decision,
-        askFallback,
-        resolveTimedOut: (state) => {
-          const adjusted = applyTimedOutAllowlistFallback(state);
-          return {
-            approvedByAsk: adjusted.approvedByAsk,
-            deniedReason: adjusted.deniedReason,
-          };
-        },
-        requiresExplicitApproval: requiresInlineEvalApproval,
-        requiresAutoReviewHumanApproval:
-          autoReviewRequiresHumanApproval ||
-          requiresHeredocApproval ||
-          timedOutFallbackRequiresHeredocApproval,
-      });
+      const { decision, state: resolvedDecision } = approvalOutcome;
       const { approvedByAsk } = resolvedDecision;
       let { deniedReason } = resolvedDecision;
 
