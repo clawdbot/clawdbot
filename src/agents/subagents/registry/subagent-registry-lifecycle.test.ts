@@ -14,7 +14,6 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
-  waitForActiveGatewayRootWork,
 } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
@@ -4147,7 +4146,7 @@ describe("requester settle wake trigger", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
-    await waitForActiveGatewayRootWork(1_000);
+    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
     expect(internalSessionEffectsMocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
@@ -4288,7 +4287,7 @@ describe("requester settle wake trigger", () => {
     });
     runs.set(successor.runId, successor);
     expect(suspension?.release()).toBe(true);
-    await waitForActiveGatewayRootWork(1_000);
+    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
     expect(internalSessionEffectsMocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
@@ -4735,7 +4734,7 @@ describe("requester settle wake trigger", () => {
     });
     runs.set(successor.runId, successor);
     expect(suspension?.release()).toBe(true);
-    await waitForActiveGatewayRootWork(1_000);
+    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
     expect(internalSessionEffectsMocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
@@ -5037,11 +5036,10 @@ describe("requester settle wake trigger", () => {
       // A restart drain arriving between scheduling and the wake's gateway
       // turn must wait for the wake instead of reporting quiescence.
       markGatewayRestartDraining();
-      expect((await waitForActiveGatewayRootWork(25)).drained).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
 
       releaseWake?.();
       await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      expect((await waitForActiveGatewayRootWork(1_000)).drained).toBe(true);
     } finally {
       resetGatewayWorkAdmission();
     }

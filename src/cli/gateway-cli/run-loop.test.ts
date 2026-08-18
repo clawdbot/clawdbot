@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
@@ -61,23 +62,45 @@ const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?
   coalesced: false,
   cooldownMsApplied: 0,
 }));
-const getActiveTaskCount = vi.fn(() => 0);
-const getInspectableActiveTaskRestartBlockers = vi.fn(
-  () =>
-    [] as Array<{
-      taskId: string;
-      status: "queued" | "running";
-      runtime: "subagent" | "acp" | "cli" | "cron";
-      runId?: string;
-      label?: string;
-      title?: string;
-    }>,
+const createActiveWorkSnapshot = (
+  counts: Partial<GatewayActiveWorkSnapshot["counts"]> = {},
+  blockers: GatewayActiveWorkSnapshot["blockers"] = [],
+): GatewayActiveWorkSnapshot => {
+  const resolvedCounts = {
+    queueSize: 0,
+    pendingReplies: 0,
+    embeddedRuns: 0,
+    backgroundExecSessions: 0,
+    cronRuns: 0,
+    activeTasks: 0,
+    rootRequests: 0,
+    sessionAdmissions: 0,
+    sessionMutations: 0,
+    chatRuns: 0,
+    queuedTurns: 0,
+    terminalPersistence: 0,
+    terminalSessions: 0,
+    totalActive: 0,
+    ...counts,
+  };
+  resolvedCounts.totalActive = Object.entries(resolvedCounts).reduce(
+    (total, [key, count]) => total + (key === "totalActive" ? 0 : count),
+    0,
+  );
+  return { idle: resolvedCounts.totalActive === 0, counts: resolvedCounts, blockers };
+};
+const idleActiveWorkSnapshot = createActiveWorkSnapshot();
+const createGatewayActiveWorkSnapshot = vi.fn(() => idleActiveWorkSnapshot);
+const waitForGatewayActiveWork = vi.fn(
+  async (
+    _timeoutMs?: number,
+    options?: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void },
+  ) => {
+    const snapshot = createGatewayActiveWorkSnapshot();
+    options?.onSnapshot?.(snapshot);
+    return { drained: snapshot.idle, snapshot };
+  },
 );
-const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
-const waitForActiveGatewayRootWork = vi.fn(async (_timeoutMs?: number) => ({
-  drained: true,
-  active: 0,
-}));
 const advanceCronActiveJobGeneration = vi.fn();
 const resetCronActiveJobs = vi.fn();
 const abortActiveCronTaskRuns = vi.fn((_reason?: string) => 0);
@@ -116,17 +139,12 @@ const abortPendingChannelReloads = vi.fn();
 const abortEmbeddedAgentRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
-const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const listActiveEmbeddedRunSessionIds = vi.fn(() => [] as string[]);
 const listActiveEmbeddedRunSessionKeys = vi.fn(() => [] as string[]);
 const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
   marked: 1,
   skipped: 0,
 }));
-const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
-const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
-const ACTIVE_RUN_DRAIN_TIMEOUT_LOG =
-  "active embedded run drain timeout reached; aborting active run(s) before restart";
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const loadConfig = vi.fn(() => ({}));
 const gatewayLog = {
@@ -190,18 +208,12 @@ vi.mock("../../infra/restart-handoff.js", () => ({
   writeGatewayRestartHandoffSync: (opts: unknown) => writeGatewayRestartHandoffSync(opts),
 }));
 
-vi.mock("../../process/command-queue.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../process/command-queue.js")>();
-  return {
-    ...actual,
-    getActiveTaskCount: () => getActiveTaskCount(),
-    waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
-  };
-});
-
-vi.mock("../../process/gateway-work-admission.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../process/gateway-work-admission.js")>()),
-  waitForActiveGatewayRootWork: (timeoutMs?: number) => waitForActiveGatewayRootWork(timeoutMs),
+vi.mock("../../infra/gateway-active-work.js", () => ({
+  createGatewayActiveWorkSnapshot: () => createGatewayActiveWorkSnapshot(),
+  waitForGatewayActiveWork: (
+    timeoutMs?: number,
+    options?: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void },
+  ) => waitForGatewayActiveWork(timeoutMs, options),
 }));
 
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -225,19 +237,13 @@ vi.mock("../../config/runtime-snapshot.js", () => ({
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
 }));
 
-vi.mock("../../tasks/task-registry.maintenance.js", () => ({
-  getInspectableActiveTaskRestartBlockers: () => getInspectableActiveTaskRestartBlockers(),
-}));
-
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   abortEmbeddedAgentRun: (
     sessionId?: string,
     opts?: { mode?: "all" | "compacting"; reason?: "restart" },
   ) => abortEmbeddedAgentRun(sessionId, opts),
-  getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   listActiveEmbeddedRunSessionIds: () => listActiveEmbeddedRunSessionIds(),
   listActiveEmbeddedRunSessionKeys: () => listActiveEmbeddedRunSessionKeys(),
-  waitForActiveEmbeddedRuns: (timeoutMs?: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
 vi.mock("../../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
@@ -470,6 +476,14 @@ let gatewayWorkAdmissionActual: typeof import("../../process/gateway-work-admiss
 beforeEach(async () => {
   gatewayWorkAdmissionActual = await vi.importActual("../../process/gateway-work-admission.js");
   gatewayWorkAdmissionActual.resetGatewayWorkAdmission();
+  createGatewayActiveWorkSnapshot.mockReset();
+  createGatewayActiveWorkSnapshot.mockReturnValue(idleActiveWorkSnapshot);
+  waitForGatewayActiveWork.mockReset();
+  waitForGatewayActiveWork.mockImplementation(async (_timeoutMs, options) => {
+    const snapshot = createGatewayActiveWorkSnapshot();
+    options?.onSnapshot?.(snapshot);
+    return { drained: snapshot.idle, snapshot };
+  });
 });
 
 describe("runGatewayLoop", () => {
@@ -688,7 +702,7 @@ describe("runGatewayLoop", () => {
   });
 
   it.each(["SIGTERM", "SIGINT"] as const)(
-    "drains admitted root work before closing on %s",
+    "drains rootless embedded work before closing on direct %s stop",
     async (signal) => {
       vi.clearAllMocks();
 
@@ -698,22 +712,28 @@ describe("runGatewayLoop", () => {
         const pendingDrain = new Promise<void>((resolve) => {
           releaseDrain = resolve;
         });
-        waitForActiveGatewayRootWork.mockImplementationOnce(async () => {
+        const activeSnapshot = createActiveWorkSnapshot({ embeddedRuns: 1 }, [
+          { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+        ]);
+        waitForGatewayActiveWork.mockImplementationOnce(async (_timeoutMs, options) => {
+          options?.onSnapshot?.(activeSnapshot);
           await pendingDrain;
-          return { drained: true, active: 0 };
+          return { drained: true, snapshot: idleActiveWorkSnapshot };
         });
 
         try {
           captureSignal(signal)();
           await waitForLoopCondition(
-            () => waitForActiveGatewayRootWork.mock.calls.length === 1,
-            `expected ${signal} to drain admitted gateway root work`,
+            () => waitForGatewayActiveWork.mock.calls.length === 1,
+            `expected ${signal} to drain canonical active work`,
           );
 
           expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
-          expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(15_000);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(15_000, undefined);
           expect(close).not.toHaveBeenCalled();
           expect(runtime.exit).not.toHaveBeenCalled();
+          expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+          expect(markRestartAbortedMainSessions).not.toHaveBeenCalled();
 
           releaseDrain?.();
 
@@ -725,68 +745,64 @@ describe("runGatewayLoop", () => {
         } finally {
           releaseDrain?.();
           await exited;
-          waitForActiveGatewayRootWork.mockReset();
-          waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
         }
       });
     },
   );
 
-  it("continues direct shutdown when the bounded root-work drain times out", async () => {
+  it("continues direct shutdown when the bounded active-work drain times out", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      waitForActiveGatewayRootWork.mockResolvedValueOnce({ drained: false, active: 2 });
+      const timedOutSnapshot = createActiveWorkSnapshot({ embeddedRuns: 2 }, [
+        { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
+      ]);
+      waitForGatewayActiveWork.mockResolvedValueOnce({
+        drained: false,
+        snapshot: timedOutSnapshot,
+      });
       const { close, runtime, exited } = await createSignaledLoopHarness();
 
-      try {
-        captureSignal("SIGTERM")();
+      captureSignal("SIGTERM")();
 
-        await expect(exited).resolves.toBe(0);
-        expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(15_000);
-        expect(gatewayLog.warn).toHaveBeenCalledWith(
-          "gateway root transaction drain timeout reached with 2 root(s) still active; proceeding with shutdown",
-        );
-        expect(close).toHaveBeenCalledWith({
-          reason: "gateway stopping",
-          restartExpectedMs: null,
-        });
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-      } finally {
-        waitForActiveGatewayRootWork.mockReset();
-        waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
-      }
+      await expect(exited).resolves.toBe(0);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(15_000, undefined);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "gateway active-work drain timeout reached; proceeding with shutdown: 2 active embedded run(s)",
+      );
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(markRestartAbortedMainSessions).not.toHaveBeenCalled();
     });
   });
 
-  it("still closes and exits when the direct-shutdown root-work drain fails", async () => {
+  it("still closes and exits when the direct-shutdown active-work drain fails", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      waitForActiveGatewayRootWork.mockRejectedValueOnce(new Error("root drain unavailable"));
+      waitForGatewayActiveWork.mockRejectedValueOnce(new Error("active-work drain unavailable"));
       const { close, runtime, exited } = await createSignaledLoopHarness();
 
-      try {
-        captureSignal("SIGTERM")();
+      captureSignal("SIGTERM")();
 
-        await expect(exited).resolves.toBe(0);
-        expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(15_000);
-        expect(gatewayLog.warn).toHaveBeenCalledWith(
-          "gateway root transaction drain failed; proceeding with shutdown: root drain unavailable",
-        );
-        expect(close).toHaveBeenCalledWith({
-          reason: "gateway stopping",
-          restartExpectedMs: null,
-        });
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-      } finally {
-        waitForActiveGatewayRootWork.mockReset();
-        waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
-      }
+      await expect(exited).resolves.toBe(0);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(15_000, undefined);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "gateway active-work drain failed; proceeding with shutdown: active-work drain unavailable",
+      );
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
 
-  it("does not start a second root-work drain for repeated shutdown signals", async () => {
+  it("does not start a second active-work drain for repeated shutdown signals", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
@@ -795,9 +811,9 @@ describe("runGatewayLoop", () => {
       const pendingDrain = new Promise<void>((resolve) => {
         releaseDrain = resolve;
       });
-      waitForActiveGatewayRootWork.mockImplementationOnce(async () => {
+      waitForGatewayActiveWork.mockImplementationOnce(async () => {
         await pendingDrain;
-        return { drained: true, active: 0 };
+        return { drained: true, snapshot: idleActiveWorkSnapshot };
       });
 
       try {
@@ -805,13 +821,13 @@ describe("runGatewayLoop", () => {
         const sigint = captureSignal("SIGINT");
         sigterm();
         await waitForLoopCondition(
-          () => waitForActiveGatewayRootWork.mock.calls.length === 1,
-          "expected first shutdown signal to begin the root-work drain",
+          () => waitForGatewayActiveWork.mock.calls.length === 1,
+          "expected first shutdown signal to begin the active-work drain",
         );
 
         sigint();
 
-        expect(waitForActiveGatewayRootWork).toHaveBeenCalledOnce();
+        expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
         expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
         expect(gatewayLog.info).toHaveBeenCalledWith("received SIGINT during shutdown; ignoring");
 
@@ -820,8 +836,6 @@ describe("runGatewayLoop", () => {
       } finally {
         releaseDrain?.();
         await exited;
-        waitForActiveGatewayRootWork.mockReset();
-        waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
       }
     });
   });
@@ -852,7 +866,13 @@ describe("runGatewayLoop", () => {
   it("treats SIGTERM with a restart intent as a draining restart", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
-    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    createGatewayActiveWorkSnapshot
+      .mockReturnValueOnce(
+        createActiveWorkSnapshot({ activeTasks: 1 }, [
+          { kind: "task", count: 1, message: "1 active background task run(s)" },
+        ]),
+      )
+      .mockReturnValue(idleActiveWorkSnapshot);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const closeFirst = createCloseMock();
@@ -889,7 +909,10 @@ describe("runGatewayLoop", () => {
       });
 
       expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
-      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+      expect(waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
+        DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
+      );
       expectRestartCloseCall(closeFirst, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
@@ -909,8 +932,14 @@ describe("runGatewayLoop", () => {
   it("uses restart intent wait overrides for SIGTERM drain", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 2_500 });
-    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    createGatewayActiveWorkSnapshot
+      .mockReturnValueOnce(
+        createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
+          { kind: "task", count: 1, message: "1 active background task run(s)" },
+          { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+        ]),
+      )
+      .mockReturnValue(idleActiveWorkSnapshot);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { start, exited } = await createSignaledLoopHarness();
@@ -925,8 +954,8 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(2_500);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(2_500);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+      expect(waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(2_500);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -962,8 +991,13 @@ describe("runGatewayLoop", () => {
   it("waits indefinitely for active embedded runs on unbounded restarts", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
-    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
+    createGatewayActiveWorkSnapshot
+      .mockReturnValueOnce(
+        createActiveWorkSnapshot({ embeddedRuns: 1 }, [
+          { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+        ]),
+      )
+      .mockReturnValue(idleActiveWorkSnapshot);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, exited } = await createSignaledLoopHarness();
@@ -978,7 +1012,7 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(undefined, expect.any(Object));
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
@@ -998,12 +1032,17 @@ describe("runGatewayLoop", () => {
   it("uses the restart drain timeout for active embedded runs before aborting", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
-    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    const timedOutSnapshot = createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
+      { kind: "task", count: 1, message: "1 active background task run(s)" },
+      { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+    ]);
+    createGatewayActiveWorkSnapshot.mockReturnValue(timedOutSnapshot);
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-embedded-timeout"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:embedded-timeout"]);
-    waitForActiveTasks.mockResolvedValueOnce({ drained: false });
-    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: false });
+    waitForGatewayActiveWork.mockResolvedValueOnce({
+      drained: false,
+      snapshot: timedOutSnapshot,
+    });
     markRestartAbortedMainSessions.mockRejectedValueOnce(new Error("store read-only"));
 
     await withIsolatedSignals(async ({ captureSignal }) => {
@@ -1019,10 +1058,8 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-      expect(waitForActiveGatewayRootWork).toHaveBeenCalledOnce();
-      expect(waitForActiveGatewayRootWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
+      expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+      expect(waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
         DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
       );
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
@@ -1033,8 +1070,9 @@ describe("runGatewayLoop", () => {
         mode: "all",
         reason: "restart",
       });
-      expect(gatewayLog.warn).toHaveBeenCalledWith(ACTIVE_RUN_DRAIN_TIMEOUT_LOG);
-      expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "active-work drain timeout reached; proceeding with restart: 1 active background task run(s); 1 active embedded run(s)",
+      );
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {},
         sessionIds: new Set(["session-embedded-timeout"]),
@@ -1058,8 +1096,12 @@ describe("runGatewayLoop", () => {
       force: true,
       reason: "config reload forced restart",
     });
-    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    createGatewayActiveWorkSnapshot.mockReturnValue(
+      createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
+        { kind: "task", count: 1, message: "1 active background task run(s)" },
+        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+      ]),
+    );
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-deferral-timeout"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:deferral-timeout"]);
     markRestartAbortedMainSessions.mockRejectedValueOnce(new Error("store read-only"));
@@ -1077,9 +1119,7 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).not.toHaveBeenCalled();
-      expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
-      expect(waitForActiveGatewayRootWork).not.toHaveBeenCalled();
+      expect(waitForGatewayActiveWork).not.toHaveBeenCalled();
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
@@ -1116,24 +1156,18 @@ describe("runGatewayLoop", () => {
   it("forces SIGTERM restarts without waiting for active task drain", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ force: true });
-    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    createGatewayActiveWorkSnapshot.mockReturnValue(
+      createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
+        {
+          kind: "task",
+          count: 1,
+          message: "taskId=task-force runId=run-force status=running runtime=cron label=forced",
+        },
+        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+      ]),
+    );
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-forced-task"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:forced-task"]);
-    const forceTaskBlockers = [
-      {
-        taskId: "task-force",
-        runId: "run-force",
-        status: "running" as const,
-        runtime: "cron" as const,
-        label: "forced",
-      },
-    ];
-    getInspectableActiveTaskRestartBlockers
-      .mockReturnValueOnce(forceTaskBlockers)
-      .mockReturnValueOnce(forceTaskBlockers)
-      .mockReturnValueOnce(forceTaskBlockers);
-
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { start, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
@@ -1147,8 +1181,7 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).not.toHaveBeenCalled();
-      expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
+      expect(waitForGatewayActiveWork).not.toHaveBeenCalled();
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "all",
         reason: "restart",
@@ -1160,8 +1193,10 @@ describe("runGatewayLoop", () => {
         reason: "gateway restart drain",
       });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(1);
-      expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "taskId=task-force runId=run-force status=running runtime=cron label=forced",
+        ),
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "forced restart requested; skipping active work drain",
@@ -1183,12 +1218,19 @@ describe("runGatewayLoop", () => {
     markUpdateRestartSentinelFailure.mockClear();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
-      getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValueOnce(0);
+      const timedOutSnapshot = createActiveWorkSnapshot({ activeTasks: 2, embeddedRuns: 1 }, [
+        { kind: "task", count: 2, message: "2 active background task run(s)" },
+        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+      ]);
+      createGatewayActiveWorkSnapshot
+        .mockReturnValueOnce(timedOutSnapshot)
+        .mockReturnValue(idleActiveWorkSnapshot);
       listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-issue-82433"]);
       listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:issue-82433"]);
-      waitForActiveTasks.mockResolvedValueOnce({ drained: false });
-      waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
+      waitForGatewayActiveWork.mockResolvedValueOnce({
+        drained: false,
+        snapshot: timedOutSnapshot,
+      });
 
       type StartServer = () => Promise<{
         close: GatewayCloseFn;
@@ -1267,8 +1309,10 @@ describe("runGatewayLoop", () => {
         mode: "compacting",
         reason: "restart",
       });
-      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+      expect(waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
+        DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
+      );
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "all",
         reason: "restart",
@@ -1279,7 +1323,9 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:issue-82433"]),
         reason: "gateway restart drain",
       });
-      expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "active-work drain timeout reached; proceeding with restart: 2 active background task run(s); 1 active embedded run(s)",
+      );
       expectRestartCloseCall(closeFirst, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
@@ -1812,8 +1858,14 @@ describe("runGatewayLoop", () => {
     });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
-      getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+      createGatewayActiveWorkSnapshot
+        .mockReturnValueOnce(
+          createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
+            { kind: "task", count: 1, message: "1 active background task run(s)" },
+            { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+          ]),
+        )
+        .mockReturnValue(idleActiveWorkSnapshot);
 
       const { start } = await createSignaledLoopHarness();
       const sigusr1 = captureSignal("SIGUSR1");
@@ -1826,8 +1878,10 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+      expect(waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
+        DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
+      );
       expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
       expect(start).toHaveBeenCalledTimes(2);
     });
@@ -1897,7 +1951,11 @@ describe("runGatewayLoop", () => {
       force: true,
       reason: "file-intent restart",
     });
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    createGatewayActiveWorkSnapshot.mockReturnValue(
+      createActiveWorkSnapshot({ embeddedRuns: 1 }, [
+        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+      ]),
+    );
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-file-intent"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:file-intent"]);
 
@@ -1937,7 +1995,11 @@ describe("runGatewayLoop", () => {
       reason: "file-intent restart",
     });
     consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
-    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    createGatewayActiveWorkSnapshot.mockReturnValue(
+      createActiveWorkSnapshot({ embeddedRuns: 1 }, [
+        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+      ]),
+    );
     listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-file-intent"]);
     listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:file-intent"]);
 

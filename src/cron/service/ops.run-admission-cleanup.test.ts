@@ -11,8 +11,8 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
+  getTotalQueueSize,
   setCommandLaneConcurrency,
-  waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -191,7 +191,7 @@ describe("cron service run admission cleanup", () => {
     authorityActive = false;
     releaseBlocker.resolve();
     await blocker;
-    await waitForActiveTasks(5_000);
+    await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0), { timeout: 5_000 });
 
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
