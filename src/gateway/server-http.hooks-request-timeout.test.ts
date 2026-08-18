@@ -66,6 +66,8 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(setHeader).toHaveBeenCalledWith("Connection", "close");
     expect(req.destroy).not.toHaveBeenCalled();
     res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
     expect(req.destroy).toHaveBeenCalledOnce();
     expect(dispatchWakeHook).not.toHaveBeenCalled();
     expect(dispatchAgentHook).not.toHaveBeenCalled();

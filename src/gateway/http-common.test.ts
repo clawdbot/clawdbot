@@ -271,6 +271,8 @@ describe("readJsonBodyOrError", () => {
     expect(event?.reason).toBe("json_body_limit");
     expect(req.destroy).not.toHaveBeenCalled();
     res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
     expect(req.destroy).toHaveBeenCalledOnce();
   });
 
@@ -288,6 +290,8 @@ describe("readJsonBodyOrError", () => {
     );
     expect(req.destroy).not.toHaveBeenCalled();
     res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
     expect(req.destroy).toHaveBeenCalledOnce();
   });
 

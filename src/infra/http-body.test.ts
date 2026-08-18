@@ -332,7 +332,7 @@ describe("http body limits", () => {
     expect(pause).toHaveBeenCalledOnce();
   });
 
-  it("closes a limited request only after its response finishes", () => {
+  it("closes a limited request only after its response transport closes", () => {
     const req = createMockRequest({ emitEnd: false });
     const res = new EventEmitter() as ServerResponse;
     const setHeader = vi.fn();
@@ -343,6 +343,29 @@ describe("http body limits", () => {
     expect(setHeader).toHaveBeenCalledWith("Connection", "close");
     expect(req.destroyed).toBe(false);
     res.emit("finish");
+    expect(req.destroyed).toBe(false);
+    res.emit("close");
+    expect(req.destroyed).toBe(true);
+  });
+
+  it("flushes an installed guard response before destroying the request", async () => {
+    const req = createMockRequest({ chunks: ["oversized"], emitEnd: false });
+    const res = new EventEmitter() as ServerResponse;
+    const setHeader = vi.fn();
+    const end = vi.fn();
+    res.setHeader = setHeader;
+    res.end = end;
+
+    installRequestBodyLimitGuard(req, res, { maxBytes: 1 });
+    await waitForMicrotaskTurn();
+
+    expect(res.statusCode).toBe(413);
+    expect(setHeader).toHaveBeenCalledWith("Connection", "close");
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ error: "Payload too large" }));
+    expect(req.destroyed).toBe(false);
+    res.emit("finish");
+    expect(req.destroyed).toBe(false);
+    res.emit("close");
     expect(req.destroyed).toBe(true);
   });
 
