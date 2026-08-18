@@ -17,24 +17,32 @@ export type CommandLaneSnapshot = {
   blockedBy?: CommandLaneBlockReason;
 };
 
+export type CommandLaneDynamicSummary = {
+  laneCount: number;
+  activeCount: number;
+  queuedCount: number;
+  queuedLaneCount: number;
+};
+
+export type CommandLaneDiagnostics = {
+  lanes: CommandLaneSnapshot[];
+  dynamic: CommandLaneDynamicSummary | null;
+};
+
 type GatewayDiagnosticsSnapshot = {
   status: StatusSummary;
   health: HealthSnapshot;
   models: unknown[];
   heartbeat: unknown;
-  lanes: CommandLaneSnapshot[] | null;
+  lanes: CommandLaneSnapshot[];
+  dynamic: CommandLaneDynamicSummary | null;
 };
 
 export async function loadCommandLaneDiagnostics(
   client: GatewayBrowserClient,
   signal?: AbortSignal,
-): Promise<CommandLaneSnapshot[]> {
-  const payload = await client.request<{ lanes: CommandLaneSnapshot[] }>(
-    "diagnostics.lanes",
-    {},
-    { signal },
-  );
-  return payload.lanes;
+): Promise<CommandLaneDiagnostics> {
+  return client.request<CommandLaneDiagnostics>("diagnostics.lanes", {}, { signal });
 }
 
 export async function loadGatewayDiagnostics(
@@ -45,8 +53,8 @@ export async function loadGatewayDiagnostics(
   const modelsRequest = agentId
     ? client.request("models.list", { agentId, preparedOnly: true }, { signal })
     : Promise.resolve({ models: [] });
-  const lanesRequest = loadCommandLaneDiagnostics(client, signal).catch(() => null);
-  const [status, health, models, heartbeat, lanes] = await Promise.all([
+  const lanesRequest = loadCommandLaneDiagnostics(client, signal);
+  const [status, health, models, heartbeat, laneDiagnostics] = await Promise.all([
     client.request("status", {}, { signal }),
     client.request("health", {}, { signal }),
     modelsRequest,
@@ -59,6 +67,6 @@ export async function loadGatewayDiagnostics(
     health: health as HealthSnapshot,
     models: Array.isArray(modelPayload?.models) ? modelPayload.models : [],
     heartbeat,
-    lanes,
+    ...laneDiagnostics,
   };
 }

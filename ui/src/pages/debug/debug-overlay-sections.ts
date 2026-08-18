@@ -10,7 +10,7 @@ import {
 } from "../../lib/format.ts";
 import {
   loadCommandLaneDiagnostics,
-  type CommandLaneSnapshot,
+  type CommandLaneDiagnostics,
 } from "../../lib/gateway-diagnostics.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
 
@@ -56,7 +56,7 @@ type ActiveSession = {
   sessionId?: string;
 };
 
-function renderLanes(lanes: CommandLaneSnapshot[]): TemplateResult {
+function renderLanes(diagnostics: CommandLaneDiagnostics): TemplateResult {
   return html`
     <div class="debug-overlay__table-wrap">
       <table class="data-table command-lanes-table command-lanes-table--compact">
@@ -69,7 +69,7 @@ function renderLanes(lanes: CommandLaneSnapshot[]): TemplateResult {
           </tr>
         </thead>
         <tbody>
-          ${renderCommandLaneRows(lanes, { compact: true })}
+          ${renderCommandLaneRows(diagnostics, { compact: true })}
         </tbody>
       </table>
     </div>

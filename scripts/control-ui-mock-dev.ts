@@ -2506,6 +2506,12 @@ async function createChatPickerScenario(
             blockedBy: "lane",
           },
         ],
+        dynamic: {
+          laneCount: 23,
+          activeCount: 9,
+          queuedCount: 4,
+          queuedLaneCount: 3,
+        },
       },
       status: {
         eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },

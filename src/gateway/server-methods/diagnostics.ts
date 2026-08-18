@@ -5,13 +5,13 @@ import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
-import { getAllCommandLaneSnapshots } from "../../process/command-queue.js";
+import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /** Gateway handler for payload-free stability diagnostics. */
 export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.lanes": ({ respond }) => {
-    respond(true, { ts: Date.now(), lanes: getAllCommandLaneSnapshots() }, undefined);
+    respond(true, { ts: Date.now(), ...getCommandLaneDiagnostics() }, undefined);
   },
   "diagnostics.stability": async ({ params, respond }) => {
     try {

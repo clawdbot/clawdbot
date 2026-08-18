@@ -12,7 +12,10 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import type { CommandLaneSnapshot } from "../../lib/gateway-diagnostics.ts";
+import type {
+  CommandLaneDynamicSummary,
+  CommandLaneSnapshot,
+} from "../../lib/gateway-diagnostics.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
@@ -23,7 +26,8 @@ type DebugProps = {
   health: Record<string, unknown> | null;
   models: unknown[];
   heartbeat: unknown;
-  lanes: CommandLaneSnapshot[] | null;
+  lanes: CommandLaneSnapshot[];
+  dynamic: CommandLaneDynamicSummary | null;
   diagnosticsError: string | null;
   eventLog: readonly EventLogEntry[];
   methods: string[];
@@ -133,26 +137,24 @@ export function renderDebug(props: DebugProps) {
         </button>
       `,
     },
-    props.lanes === null
-      ? renderSettingsEmpty(t("debug.lanes.unavailable"))
-      : html`
-          <div class="data-table-container command-lanes-table-wrap">
-            <table class="data-table command-lanes-table">
-              <thead>
-                <tr>
-                  <th>${t("debug.lanes.lane")}</th>
-                  <th>${t("debug.lanes.active")}</th>
-                  <th>${t("debug.lanes.queued")}</th>
-                  <th>${t("debug.lanes.group")}</th>
-                  <th>${t("debug.lanes.blocked")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${renderCommandLaneRows(props.lanes)}
-              </tbody>
-            </table>
-          </div>
-        `,
+    html`
+      <div class="data-table-container command-lanes-table-wrap">
+        <table class="data-table command-lanes-table">
+          <thead>
+            <tr>
+              <th>${t("debug.lanes.lane")}</th>
+              <th>${t("debug.lanes.active")}</th>
+              <th>${t("debug.lanes.queued")}</th>
+              <th>${t("debug.lanes.group")}</th>
+              <th>${t("debug.lanes.blocked")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderCommandLaneRows({ lanes: props.lanes, dynamic: props.dynamic })}
+          </tbody>
+        </table>
+      </div>
+    `,
   );
 
   const rpcSection = renderSettingsSection(

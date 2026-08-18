@@ -1344,8 +1344,8 @@ export const en: TranslationMap = {
     lanes: {
       title: "Lanes",
       subtitle: "Live command-lane capacity and queue pressure.",
-      unavailable: "Lane diagnostics are unavailable for this connection.",
       lane: "Lane",
+      sessionLanes: "Session lanes · {count}",
       active: "Active",
       queued: "Queued",
       group: "Group",

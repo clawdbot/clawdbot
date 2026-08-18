@@ -38,7 +38,6 @@ type CoreGatewayMethodSpecRow = readonly [
 const CORE_GATEWAY_METHOD_SPECS = [
   ["health", "health", "operator.read", "<=2026.7"],
   ["diagnostics.stability", "diagnostics", "operator.read", "<=2026.7"],
-  ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   ["doctor.memory.status", "doctor", "operator.read", "<=2026.7"],
   ["doctor.memory.dreamDiary", "doctor", "operator.read", "<=2026.7"],
   ["doctor.memory.backfillDreamDiary", "doctor", "operator.write", "<=2026.7"],
@@ -553,6 +552,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     { controlPlaneWrite: true },
   ],
+  ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
