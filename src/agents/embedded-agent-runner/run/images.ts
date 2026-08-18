@@ -492,7 +492,12 @@ type PromptMediaOptions = {
   sandbox?: { root: string; bridge: SandboxFsBridge };
   provider?: boolean;
   signal?: AbortSignal;
+  onCurrentTurnImageFailure?: (count: number) => void;
 };
+
+export function buildPromptImageFailureNotice(count: number): string {
+  return `System note: ${count} image attachment${count === 1 ? "" : "s"} could not be loaded; their image contents are unavailable. Tell the user and ask them to resend ${count === 1 ? "the image" : "the images"}; do not claim inspection.`;
+}
 
 const VIDEO_OMISSION = {
   unsupported: "(video omitted: provider does not support native video)",
@@ -579,6 +584,7 @@ async function materializePromptMediaMessages(
 ): Promise<AgentMessage[]> {
   let hydrated: AgentMessage[] | undefined;
   const videoBudget = { remaining: MAX_VIDEO_BYTES };
+  const activeUserIndex = messages.findLastIndex((message) => message.role === "user");
   for (const [index, message] of messages.entries()) {
     if (message.role !== "user") {
       continue;
@@ -617,6 +623,17 @@ async function materializePromptMediaMessages(
       options,
       budget: videoBudget,
     });
+    if (
+      (options.provider || options.onCurrentTurnImageFailure) &&
+      index === activeUserIndex &&
+      result.failedMediaCount > 0
+    ) {
+      options.onCurrentTurnImageFailure?.(result.failedMediaCount);
+      projectedContent.push({
+        type: "text",
+        text: buildPromptImageFailureNotice(result.failedMediaCount),
+      });
+    }
     hydrated ??= messages.slice();
     if (options.provider) {
       hydrated[index] = {
@@ -669,6 +686,7 @@ export async function materializeProviderContext(params: {
   workspaceOnly?: boolean;
   localRoots?: readonly string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
+  onCurrentTurnImageFailure?: (count: number) => void;
 }): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
     workspaceDir: params.workspaceDir,
@@ -678,6 +696,7 @@ export async function materializeProviderContext(params: {
     sandbox: params.sandbox,
     provider: true,
     signal: params.signal,
+    onCurrentTurnImageFailure: params.onCurrentTurnImageFailure,
   });
   params.signal?.throwIfAborted();
   return messages === params.context.messages
