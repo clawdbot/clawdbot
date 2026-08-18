@@ -549,11 +549,11 @@ function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
   if (mountRoot.split("/").includes("..")) {
     return null;
   }
-  // Otherwise a namespace-relative record reads "/" while the mount root stays the host
-  // subtree it was mounted from. That namespace root is what this mount exposes at its
-  // mount point, so it resolves rather than failing closed.
+  // A namespace-root record proves nothing about a mount rooted elsewhere: the kernel
+  // contract does not make "/" plus an arbitrary subtree a match, so adopting that pair
+  // could cap the heap from an unrelated cgroup. Fail closed to host sizing instead.
   if (cgroupPath === "/") {
-    return "/";
+    return null;
   }
   if (cgroupPath === mountRoot) {
     return "/";

@@ -477,10 +477,10 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
   });
 
-  it("caps the tsdown heap from a cgroup-namespace-relative record", () => {
-    // Inside a container the record is namespace-relative ("/") while the mount root stays
-    // the host subtree. Failing to resolve that pair skips the limit and falls back to
-    // host memory, which is the opposite of what a constrained container needs.
+  it("ignores an unrelated mounted subtree for a namespace-root record", () => {
+    // A "/" record plus a mount rooted elsewhere is not a kernel-proven match, so the
+    // limit behind that subtree may belong to an unrelated cgroup. Sizing must fall back
+    // to host memory rather than adopt it.
     const cgroupFiles = new Map([
       ["/proc/self/cgroup", "0::/\n"],
       [
@@ -505,8 +505,8 @@ describe("resolveTsdownBuildInvocation", () => {
       },
     });
 
-    // 5 GiB container budget minus the 768 MiB build headroom.
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    // Host MemTotal sizing, not the unrelated 5 GiB limit behind that mount.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
   });
 
   it("caps the tsdown heap when the cgroup mount point is octal-escaped in mountinfo", () => {
