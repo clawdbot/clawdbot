@@ -81,6 +81,7 @@ export function createApplicationOverlays(
     updateSchedule: null,
     heldUpdateCampaignId: null,
     updateRunning: false,
+    updateStatusRefreshing: false,
     updateReconciliationPending: false,
     updateStatusBanner: null,
     recordedUpdateAttempt: null,
@@ -224,7 +225,17 @@ export function createApplicationOverlays(
     getEpoch: () => connectedEpoch,
     canRefresh: () => operatorAccess.canAdmin,
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
+    onRefreshing: (updateStatusRefreshing) => {
+      snapshot = { ...snapshot, updateStatusRefreshing };
+      publish();
+    },
     onStatus: applyUpdateStatusResponse,
+    onError: (error) => {
+      publishUpdateBanner({
+        tone: "danger",
+        text: t("updates.error", { error: formatUiError(error) }),
+      });
+    },
   });
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
@@ -259,7 +270,12 @@ export function createApplicationOverlays(
           ? resolveUnknownUpdateOutcomeBanner()
           : snapshot.updateStatusBanner;
         pendingUpdate = null;
-        snapshot = { ...snapshot, updateRunning: false, updateStatusBanner };
+        snapshot = {
+          ...snapshot,
+          updateRunning: false,
+          updateStatusRefreshing: false,
+          updateStatusBanner,
+        };
       }
     }
     if (accessTransition.pairingChanged) {
@@ -298,6 +314,7 @@ export function createApplicationOverlays(
         updateAvailable: null,
         updateSchedule: null,
         updateRunning: false,
+        updateStatusRefreshing: false,
       };
       updateCampaignPoller.stop();
       if (next.phase === "reload-required") {

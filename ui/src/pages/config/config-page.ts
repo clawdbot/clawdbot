@@ -1052,7 +1052,9 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private isUpdateBusy(): boolean {
     const update = this.context.overlays.snapshot;
-    return update.updateRunning || update.updateReconciliationPending;
+    return (
+      update.updateRunning || update.updateStatusRefreshing || update.updateReconciliationPending
+    );
   }
 
   // The update dialog outlives this page and the connection, so it reads live

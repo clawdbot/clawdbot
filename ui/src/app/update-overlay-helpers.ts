@@ -159,12 +159,14 @@ async function requestUpdateRestartStatus(
   client: Pick<GatewayBrowserClient, "request">,
   timeoutMs: number,
   request: { refreshCheckout?: true } = {},
+  onError?: (error: unknown) => void,
 ): Promise<UpdateRestartStatusResponse | null> {
   try {
     return await client.request<UpdateRestartStatusResponse>("update.status", request, {
       timeoutMs,
     });
-  } catch {
+  } catch (error) {
+    onError?.(error);
     return null;
   }
 }
@@ -174,17 +176,38 @@ export function createUpdateStatusRefresher(params: {
   getEpoch: () => number;
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onRefreshing: (refreshing: boolean) => void;
   onStatus: (response: UpdateRestartStatusResponse) => void;
+  onError: (error: unknown) => void;
 }) {
+  let generation = 0;
   return async () => {
     const client = params.getClient();
     const epoch = params.getEpoch();
     if (!client || !params.canRefresh()) {
       return;
     }
-    const response = await requestUpdateRestartStatus(client, 5_000, { refreshCheckout: true });
-    if (response && params.isCurrent(client, epoch)) {
-      params.onStatus(response);
+    const operationGeneration = ++generation;
+    const isCurrent = () => operationGeneration === generation && params.isCurrent(client, epoch);
+    params.onRefreshing(true);
+    try {
+      const response = await requestUpdateRestartStatus(
+        client,
+        5_000,
+        { refreshCheckout: true },
+        (error) => {
+          if (isCurrent()) {
+            params.onError(error);
+          }
+        },
+      );
+      if (response && isCurrent()) {
+        params.onStatus(response);
+      }
+    } finally {
+      if (isCurrent()) {
+        params.onRefreshing(false);
+      }
     }
   };
 }

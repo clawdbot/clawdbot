@@ -20,7 +20,8 @@ localized guidance or executes an arbitrary command string.
 
 1. Select **Check status** when the Gateway restarted, disconnected, or did not
    report a final result. This reads `update.status`; it does not start another
-   update.
+   update. Recovery controls stay disabled while the check is pending, and a
+   rejected request appears as an error on the page.
 2. Open **View details** and address the recorded failing step. Diagnostic text
    is bounded and redacted for display; use Gateway logs when more context is
    required.
