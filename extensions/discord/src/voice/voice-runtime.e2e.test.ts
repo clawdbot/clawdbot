@@ -25,6 +25,7 @@ defineDiscordVoiceTests(
     textToSpeechStreamMock,
     textToSpeechMock,
     logVerboseMock,
+    loggerWarnMock,
     controlRealtimeVoiceAgentRunMock,
     realtimeSessionMock,
     decodeOpusStreamMock,
@@ -39,6 +40,7 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     createFollowManager,
     getSessionEntry,
+    getVoiceReceive,
     beginSpeakerTurn,
     lastAgentCommandArgs,
     lastAgentCommandToolNames,
@@ -227,6 +229,7 @@ defineDiscordVoiceTests(
           sessionLifecycle: { status: "active" },
           playbackQueue: Promise.resolve(),
           processingQueue: Promise.resolve(),
+          ttsStreamFallbackWarned: false,
           capture: createVoiceCaptureState(),
           receiveRecovery: createVoiceReceiveRecoveryState(),
           isStopped: () => false,
@@ -386,6 +389,37 @@ defineDiscordVoiceTests(
         throw new Error("expected Discord audio resource input");
       }
       await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    });
+
+    it("logs a failed streaming provider once per session when using file fallback", async () => {
+      const replyText = "file fallback reply";
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: replyText }] } as never);
+      const client = createClientWithMember("u-guest", "Guest", "4321");
+      const manager = createManager(
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
+        client,
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager);
+      const receive = getVoiceReceive(manager);
+
+      for (let index = 0; index < 2; index += 1) {
+        await receive.processSegment({
+          entry,
+          wavPath: "/tmp/test.wav",
+          userId: "u-guest",
+          durationSeconds: 1.2,
+        });
+      }
+      await entry.playbackQueue;
+
+      const fallbackWarnings = loggerWarnMock.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes("using file fallback"));
+      expect(fallbackWarnings).toEqual([
+        "discord voice: streaming TTS failed provider=elevenlabs reasonCode=provider_error; using file fallback",
+      ]);
+      expect(fallbackWarnings[0]).not.toContain(replyText);
     });
 
     it("releases late TTS without playback after the voice session leaves", async () => {
