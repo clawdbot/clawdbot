@@ -81,6 +81,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToId: undefined,
       replyToTag: undefined,
       audioAsVoice: false,
+      extractMediaDirectives: false,
     };
 
     expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
@@ -119,6 +120,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: undefined,
       replyToTag: undefined,
       audioAsVoice: true,
+      extractMediaDirectives: false,
     };
 
     expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
@@ -155,6 +157,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToTag: undefined,
       audioAsVoice: false,
       text: undefined,
+      extractMediaDirectives: false,
     });
     expect(directlySentBlockKeys).toEqual(
       new Set([
@@ -197,6 +200,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: undefined,
       replyToTag: undefined,
       audioAsVoice: false,
+      extractMediaDirectives: false,
     };
     expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
     expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
@@ -251,6 +255,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToTag: undefined,
       audioAsVoice: false,
       mediaUrls: undefined,
+      extractMediaDirectives: false,
     });
   });
 
@@ -284,6 +289,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToTag: undefined,
       audioAsVoice: false,
       mediaUrls: undefined,
+      extractMediaDirectives: false,
     });
   });
 
@@ -381,6 +387,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: undefined,
       replyToTag: undefined,
       audioAsVoice: false,
+      extractMediaDirectives: false,
     });
   });
 
@@ -419,6 +426,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: undefined,
       replyToTag: false,
       audioAsVoice: false,
+      extractMediaDirectives: false,
     });
   });
 
@@ -462,6 +470,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToTag: true,
       audioAsVoice: false,
       mediaUrls: undefined,
+      extractMediaDirectives: false,
     });
     expect(getReplyPayloadMetadata(enqueuedPayload)).toEqual({
       assistantMessageIndex: 7,
