@@ -16,6 +16,77 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("reveals an active stream footer after a mobile tap", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      hasTouch: true,
+      isMobile: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 844, width: 390 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill("show stream metadata");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const streamingText = "This response is still streaming.";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: streamingText,
+        message: {
+          content: [{ text: streamingText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+
+      const activeStream = page.locator(".chat-bubble.streaming");
+      await activeStream.waitFor({ state: "visible", timeout: 10_000 });
+      const footer = activeStream
+        .locator(
+          "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')][1]",
+        )
+        .locator(".chat-group-footer");
+      await footer.waitFor({ state: "attached", timeout: 10_000 });
+      const presentation = () =>
+        footer.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { opacity: style.opacity, pointerEvents: style.pointerEvents };
+        });
+      await expect.poll(presentation).toEqual({ opacity: "0", pointerEvents: "none" });
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "active-stream-metadata-resting.png"),
+        });
+      }
+
+      await activeStream.tap();
+      await expect.poll(presentation).toEqual({ opacity: "1", pointerEvents: "auto" });
+
+      if (artifactDir) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "active-stream-metadata-revealed.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps streamed audio and video metadata pinned without overriding manual scroll", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({

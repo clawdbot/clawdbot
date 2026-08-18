@@ -37,6 +37,7 @@ import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
+  resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
@@ -375,6 +376,18 @@ async function updateCommandInternal(
           managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
         packageName: installedPackageName,
       });
+      const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
+      if (npmLifecycleGate.error) {
+        await reportPreMutationUpdateFailure({
+          root,
+          installKind: updateInstallKind,
+          reason: "npm lifecycle policy preflight",
+          message: npmLifecycleGate.error,
+          opts,
+          controlPlaneUpdateSentinelMeta,
+        });
+        return;
+      }
     }
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;

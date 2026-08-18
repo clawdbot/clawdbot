@@ -1570,25 +1570,25 @@ parse_node_version_components_for_binary() {
     fi
     local version major minor patch
     version="$("$node_bin" -v 2>/dev/null || true)"
-    major="${version#v}"
-    major="${major%%.*}"
-    minor="${version#v}"
-    minor="${minor#*.}"
-    minor="${minor%%.*}"
-    patch="${version#v}"
-    patch="${patch#*.}"
-    patch="${patch#*.}"
-    patch="${patch%%.*}"
+    version="${version#"${version%%[![:space:]]*}"}"
+    version="${version%"${version##*[![:space:]]}"}"
 
-    if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+    # This standalone installer runs before OpenClaw exists on disk. Mirror the
+    # release grammar in node-version.mjs; parity cases guard this boundary.
+    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
         return 1
     fi
-    if [[ ! "$minor" =~ ^[0-9]+$ ]]; then
-        return 1
-    fi
-    if [[ ! "$patch" =~ ^[0-9]+$ ]]; then
-        return 1
-    fi
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+
+    local component
+    for component in "$major" "$minor" "$patch"; do
+        if ((${#component} > 16)) ||
+            ((${#component} == 16 && 10#$component > 9007199254740991)); then
+            return 1
+        fi
+    done
     echo "${major} ${minor} ${patch}"
     return 0
 }
@@ -1722,24 +1722,177 @@ persist_shell_path_prepend() {
     fi
 
     local path_expr="${2:-$dir}"
-    local path_line="export PATH=\"${path_expr}:\$PATH\""
-    local wrote_rc=0
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]]; then
-            if [[ "$(sed -n '1p' "$rc")" != "$path_line" ]]; then
-                local tmp_rc="${rc}.openclaw-tmp"
-                {
-                    printf '%s\n' "$path_line"
-                    grep -Fvx "$path_line" "$rc" || true
-                } > "$tmp_rc"
-                mv "$tmp_rc" "$rc"
-            fi
-            wrote_rc=1
+    local shell_name="${SHELL:-}"
+    shell_name="${shell_name##*/}"
+    local bash_login_rc="$HOME/.profile"
+    if [[ -r "$HOME/.bash_profile" ]]; then
+        bash_login_rc="$HOME/.bash_profile"
+    elif [[ -r "$HOME/.bash_login" ]]; then
+        bash_login_rc="$HOME/.bash_login"
+    fi
+
+    local targets=()
+    local fish_rc="$HOME/.config/fish/conf.d/openclaw.fish"
+    case "$shell_name" in
+        bash)
+            targets+=("bash:$HOME/.bashrc" "bash:$bash_login_rc")
+            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
+            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
+            ;;
+        zsh)
+            targets+=("zsh:$HOME/.zshrc" "zsh:$HOME/.zprofile")
+            [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
+            [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
+            [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
+            ;;
+        fish)
+            targets+=("fish:$fish_rc")
+            [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
+            [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
+            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
+            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            ;;
+        *)
+            echo ""
+            ui_warn "Could not identify your shell from SHELL=${SHELL:-unset}; PATH was not persisted"
+            echo "  Add this directory to PATH in your shell startup file: ${dir}"
+            echo "  Bash/zsh: export PATH=\"${path_expr}:\$PATH\""
+            echo "  Fish: fish_add_path -- \"${path_expr}\""
+            return 0
+            ;;
+    esac
+
+    local target contract rc path_line failed=0
+    for target in "${targets[@]}"; do
+        contract="${target%%:*}"
+        rc="${target#*:}"
+        if [[ "$contract" == "fish" ]]; then
+            path_line="fish_add_path -- \"${path_expr}\""
+        else
+            path_line="export PATH=\"${path_expr}:\$PATH\""
+        fi
+        if ! persist_path_line_to_profile "$rc" "$path_line"; then
+            failed=1
         fi
     done
-    if [[ "$wrote_rc" -eq 0 ]]; then
-        printf '%s\n' "$path_line" >> "$HOME/.bashrc"
+    return "$failed"
+}
+
+resolve_safe_profile_target() {
+    local profile="$1" current="$1" link parent resolved hops=0
+    local home_real
+    home_real="$(cd "$HOME" 2>/dev/null && pwd -P)" || return 1
+    while [[ -L "$current" ]]; do
+        ((hops += 1))
+        if (( hops > 40 )); then
+            ui_warn "Refusing to update profile symlink loop: ${profile}" >&2
+            return 1
+        fi
+        link="$(readlink "$current")" || return 1
+        parent="$(dirname "$current")"
+        if [[ "$link" == /* ]]; then
+            current="$link"
+        else
+            current="$parent/$link"
+        fi
+        parent="$(cd "$(dirname "$current")" 2>/dev/null && pwd -P)" || {
+            ui_warn "Refusing profile symlink with missing parent: ${profile}" >&2
+            return 1
+        }
+        current="$parent/$(basename "$current")"
+    done
+    parent="$(cd "$(dirname "$current")" 2>/dev/null && pwd -P)" || return 1
+    resolved="$parent/$(basename "$current")"
+    case "$resolved" in
+        "$home_real"/*) ;;
+        *)
+            ui_warn "Refusing profile symlink outside your home: ${profile}" >&2
+            return 1
+            ;;
+    esac
+    if [[ ! -f "$resolved" || -L "$resolved" ]]; then
+        ui_warn "Refusing non-regular profile target: ${profile}" >&2
+        return 1
     fi
+    local owner current_uid
+    current_uid="$(id -u)"
+    owner="$(stat -c '%u' "$resolved" 2>/dev/null || stat -f '%u' "$resolved" 2>/dev/null || true)"
+    if [[ "$owner" != "$current_uid" ]]; then
+        ui_warn "Refusing profile target not owned by the current user: ${profile}" >&2
+        return 1
+    fi
+    printf '%s\n' "$resolved"
+}
+
+prepare_safe_profile_parent() {
+    local profile="$1" parent ancestor home_real ancestor_real parent_real
+    parent="$(dirname "$profile")"
+    ancestor="$parent"
+    home_real="$(cd "$HOME" 2>/dev/null && pwd -P)" || return 1
+    while [[ ! -d "$ancestor" ]]; do
+        if [[ -e "$ancestor" || -L "$ancestor" ]]; then
+            ui_warn "Refusing non-directory shell profile parent: ${profile}"
+            return 1
+        fi
+        ancestor="$(dirname "$ancestor")"
+    done
+    ancestor_real="$(cd "$ancestor" 2>/dev/null && pwd -P)" || return 1
+    case "$ancestor_real" in
+        "$home_real"|"$home_real"/*) ;;
+        *)
+            ui_warn "Refusing shell profile parent outside your home: ${profile}"
+            return 1
+            ;;
+    esac
+    mkdir -p "$parent" || return 1
+    parent_real="$(cd "$parent" 2>/dev/null && pwd -P)" || return 1
+    case "$parent_real" in
+        "$home_real"|"$home_real"/*) ;;
+        *)
+            ui_warn "Refusing shell profile parent outside your home: ${profile}"
+            return 1
+            ;;
+    esac
+}
+
+persist_path_line_to_profile() {
+    local profile="$1" path_line="$2" rc tmp_rc original_mode
+    rc="$profile"
+    if [[ -L "$profile" ]]; then
+        rc="$(resolve_safe_profile_target "$profile")" || return 1
+    elif [[ -e "$profile" && ! -f "$profile" ]]; then
+        ui_warn "Refusing non-regular shell profile: ${profile}"
+        return 1
+    fi
+
+    prepare_safe_profile_parent "$rc" || return 1
+    if [[ "$(sed -n '1p' "$rc" 2>/dev/null || true)" == "$path_line" ]]; then
+        return 0
+    fi
+    tmp_rc="$(mktemp "${rc}.openclaw-tmp.XXXXXX")"
+    TMPFILES+=("$tmp_rc")
+    if [[ -f "$rc" ]]; then
+        if ! cp -p "$rc" "$tmp_rc"; then
+            ui_warn "Failed to copy shell profile: ${profile}"
+            return 1
+        fi
+        original_mode="$(stat -c '%a' "$rc" 2>/dev/null || stat -f '%Lp' "$rc" 2>/dev/null)" || return 1
+        chmod u+w "$tmp_rc" || return 1
+    fi
+    if ! {
+        printf '%s\n' "$path_line"
+        if [[ -f "$rc" ]]; then
+            grep -Fvx "$path_line" "$rc" || true
+        fi
+    } > "$tmp_rc"; then
+        ui_warn "Failed to write shell profile: ${profile}"
+        return 1
+    fi
+    if [[ -n "${original_mode:-}" ]]; then
+        chmod "$original_mode" "$tmp_rc" || return 1
+    fi
+    mv "$tmp_rc" "$rc" || return 1
 }
 
 promote_supported_node_binary() {
@@ -2169,7 +2322,8 @@ fix_npm_permissions() {
 ensure_openclaw_bin_link() {
     local npm_root=""
     npm_root="$(npm root -g 2>/dev/null || true)"
-    if [[ -z "$npm_root" || ! -d "$npm_root/openclaw" ]]; then
+    local launcher="${npm_root}/openclaw/openclaw.mjs"
+    if [[ -z "$npm_root" || ! -x "$launcher" ]]; then
         return 1
     fi
     local npm_bin=""
@@ -2179,10 +2333,10 @@ ensure_openclaw_bin_link() {
     fi
     mkdir -p "$npm_bin"
     if [[ ! -x "${npm_bin}/openclaw" ]]; then
-        ln -sf "$npm_root/openclaw/dist/entry.js" "${npm_bin}/openclaw"
+        ln -sf "$launcher" "${npm_bin}/openclaw"
         ui_info "Created openclaw bin link at ${npm_bin}/openclaw"
     fi
-    return 0
+    "${npm_bin}/openclaw" --version >/dev/null 2>&1
 }
 
 # Check for existing OpenClaw installation
@@ -2470,14 +2624,8 @@ ensure_user_local_bin_on_path() {
     local target="$HOME/.local/bin"
     mkdir -p "$target"
 
-    export PATH="$target:$PATH"
-
-    local path_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]] && ! grep -q ".local/bin" "$rc"; then
-            echo "$path_line" >> "$rc"
-        fi
-    done
+    prepend_path_dir "$target"
+    persist_shell_path_prepend "$target" "\$HOME/.local/bin" || true
 }
 
 npm_global_bin_dir() {
@@ -2674,12 +2822,16 @@ warn_shell_path_missing_dir() {
     # that case new shells are fine and the user only needs to reload this one.
     # RC lines may spell the home dir as $HOME instead of the expanded path.
     local dir_home_form="\$HOME${dir#"$HOME"}"
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
         if [[ -f "$rc" ]] && { grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc"; }; then
             echo ""
             ui_info "PATH updated in ${rc}: added ${label} (${dir})"
             echo "  New terminals pick this up automatically."
-            echo "  For this shell, run: source ${rc}; hash -r"
+            if [[ "$rc" == *.fish ]]; then
+                echo "  For this shell, run: source ${rc}"
+            else
+                echo "  For this shell, run: source ${rc}; hash -r"
+            fi
             return 0
         fi
     done
@@ -2687,8 +2839,13 @@ warn_shell_path_missing_dir() {
     echo ""
     ui_warn "PATH missing ${label}: ${dir}"
     echo "  This can make openclaw show as \"command not found\" in new terminals."
-    echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
-    echo "    export PATH=\"${dir}:\$PATH\""
+    if [[ "${SHELL:-}" == */fish ]]; then
+        echo "  Fix (Fish: ~/.config/fish/conf.d/openclaw.fish):"
+        echo "    fish_add_path -- \"${dir}\""
+    else
+        echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
+        echo "    export PATH=\"${dir}:\$PATH\""
+    fi
 }
 
 openclaw_command_for_user() {
@@ -3040,21 +3197,14 @@ install_openclaw() {
     local install_spec=""
     install_spec="$(resolve_package_install_spec "${package_name}" "${OPENCLAW_VERSION}")"
 
-    if ! install_openclaw_npm "${install_spec}"; then
-        ui_warn "npm install failed; retrying"
+    if ! install_openclaw_npm "${install_spec}" || ! ensure_openclaw_bin_link; then
+        ui_warn "npm install did not produce a usable OpenClaw package; retrying"
         cleanup_npm_openclaw_paths
-        install_openclaw_npm "${install_spec}"
-    fi
-
-    if [[ "${OPENCLAW_VERSION}" == "latest" && "${package_name}" == "openclaw" ]]; then
-        if ! resolve_openclaw_bin &> /dev/null; then
-            ui_warn "npm install openclaw@latest failed; retrying openclaw@next"
-            cleanup_npm_openclaw_paths
-            install_openclaw_npm "openclaw@next"
+        if ! install_openclaw_npm "${install_spec}" || ! ensure_openclaw_bin_link; then
+            ui_error "npm install did not produce a usable OpenClaw package"
+            return 1
         fi
     fi
-
-    ensure_openclaw_bin_link || true
 
     ui_success "OpenClaw installed"
 }

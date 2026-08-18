@@ -10,8 +10,7 @@ import type { ModelProvidersRouteData } from "./model-providers/model-providers-
 import { page as modelProvidersPage } from "./model-providers/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
 import { page as pluginsPage } from "./plugins/route.ts";
-import { page as sessionsPage } from "./sessions/route.ts";
-import type { SessionsRouteData } from "./sessions/sessions-page.ts";
+import { page as sessionsPage, type SessionsRouteData } from "./sessions/route.ts";
 import { page as skillsPage } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { page as usagePage } from "./usage/route.ts";
@@ -103,39 +102,24 @@ describe("route preload gateway provenance", () => {
     const originalSnapshot = snapshot(client, true);
     const mutable = mutableGateway(originalSnapshot);
     const gateway = mutable.gateway;
-    const list = deferred<null>();
+    const refresh = deferred<void>();
+    const managedSnapshot = { result: null, agentId: null, loading: false, error: null };
     const request = loadRoute<SessionsRouteData>(sessionsPage, {
       gateway,
-      sessions: { list: vi.fn(() => list.promise) },
+      sessions: {
+        listSnapshot: vi.fn(() => managedSnapshot),
+        refreshList: vi.fn(() => refresh.promise),
+      },
       runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
       agentSelection: { state: { selectedId: null, scopeId: null } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
-    list.resolve(null);
+    refresh.resolve();
     const data = await request;
 
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
-  });
-
-  it("preloads a bounded session roster without an implicit recency filter", async () => {
-    const list = vi.fn(async (_options: unknown) => null);
-    await loadRoute<SessionsRouteData>(sessionsPage, {
-      gateway: mutableGateway(snapshot(null, false)).gateway,
-      sessions: { list },
-      runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
-      agentSelection: { state: { selectedId: null, scopeId: null } },
-    } as unknown as ApplicationContext);
-
-    expect(list).toHaveBeenCalledWith({
-      limit: 50,
-      search: undefined,
-      includeGlobal: true,
-      includeUnknown: false,
-      archivedFilter: "active",
-    });
-    expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
   });
 
   it("keeps usage provenance from before its async preload", async () => {

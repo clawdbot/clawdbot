@@ -927,7 +927,7 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("2.0.0");
 
     mockPackageInstallStatus(tempDir);
-    primeNpmChannelTag("latest", "0.0.1");
+    primeNpmChannelTag(isBetaTag(VERSION) ? "beta" : "latest", "0.0.1");
     vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
       mode: "npm",
@@ -1267,6 +1267,9 @@ describe("update-cli", () => {
 
   const mockNpmGlobalRoot = (nodeModules: string) => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -1410,6 +1413,9 @@ describe("update-cli", () => {
       },
     });
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
         if (destination) {
@@ -2209,6 +2215,30 @@ describe("update-cli", () => {
       17,
       { lease: expect.anything() },
     );
+  });
+
+  it("honors a committed post-core result when stopping the child delivers a signal", async () => {
+    // The poll owns the settle: it stops the child only after claiming the result. Stopping
+    // delivers SIGTERM, so an unclaimed exit handler would reject an update the child already
+    // committed and then roll its plugin index back.
+    const { root } = setupUpdatedRootRefresh();
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === root ? "0.0.1" : "2026.5.28",
+    );
+    spawn.mockImplementationOnce((_command: string, _args: string[], options: unknown) => {
+      const child = new EventEmitter() as EventEmitter & { kill: () => void };
+      const resultPath = expectDefined(
+        (options as { env: Record<string, string> }).env["OPENCLAW_UPDATE_POST_CORE_RESULT_PATH"],
+        "post-core result path test invariant",
+      );
+      fsSync.writeFileSync(resultPath, JSON.stringify({ status: "ok" }), "utf8");
+      child.kill = () => {
+        child.emit("exit", null, "SIGTERM");
+      };
+      return child;
+    });
+
+    await expect(updateCommand({ yes: true, restart: false })).resolves.not.toThrow();
   });
 
   it("keeps a child-committed plugin index when the post-core handoff is signaled", async () => {
@@ -3725,6 +3755,9 @@ describe("update-cli", () => {
       },
       assert: () => {
         expect(getLogOutput()).toContain("OpenClaw update status");
+        expect(checkUpdateStatus).toHaveBeenCalledWith(
+          expect.objectContaining({ useDetachedDevUpstream: false }),
+        );
       },
     },
     {
@@ -3759,6 +3792,9 @@ describe("update-cli", () => {
     const channel = parsed.channel as { value?: unknown; config?: unknown };
     expect(channel.value).toBe("dev");
     expect(channel.config).toBe("dev");
+    expect(checkUpdateStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ useDetachedDevUpstream: true }),
+    );
   });
 
   it("parses update status --json as the subcommand option", async () => {
@@ -4386,6 +4422,9 @@ describe("update-cli", () => {
     });
     readPackageVersion.mockResolvedValue("2026.3.23");
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: nodeModules });
       }
@@ -4409,6 +4448,9 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("2026.4.20");
     primeNpmChannelTag("latest", "2026.4.25");
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -4499,6 +4541,9 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -4565,6 +4610,9 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -4607,6 +4655,9 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (!Array.isArray(argv)) {
         return commandResult();
+      }
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
@@ -4651,6 +4702,34 @@ describe("update-cli", () => {
     ).toBe("2026.5.14");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["11.13.0", "11.15.9"])(
+    "refuses npm %s before stopping the managed gateway or cleaning update backups",
+    async (npmVersion) => {
+      const tempDir = await createTrackedTempDir("openclaw-update-npm-policy-");
+      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+      const backupDir = path.join(nodeModules, ".openclaw-interrupted");
+      await fs.mkdir(backupDir, { recursive: true });
+      mockRunningManagedGateway(["node", entryPath, "gateway", "run"]);
+      mockFileBackedPathExists();
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        if (argv[0] === "npm" && argv[1] === "--version") {
+          return commandResult({ stdout: `${npmVersion}\n` });
+        }
+        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+          return commandResult({ stdout: `${nodeModules}\n` });
+        }
+        return commandResult();
+      });
+
+      await updateCommand({ yes: true });
+
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()).toBeUndefined();
+      await expect(fs.access(backupDir)).resolves.toBeUndefined();
+      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
+    },
+  );
 
   it("stops a running managed gateway before package replacement", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -4828,6 +4907,9 @@ describe("update-cli", () => {
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("package replacement failed");
       }
@@ -4866,6 +4948,9 @@ describe("update-cli", () => {
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("package replacement failed");
       }
@@ -5013,6 +5098,9 @@ describe("update-cli", () => {
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("update invariant broke");
       }
@@ -5415,7 +5503,9 @@ describe("update-cli", () => {
     expect(postCoreSpawn?.[1]).toEqual([entryPath, "update", "--no-restart", "--yes"]);
     expect(postCoreSpawn?.[2].stdio).toBe("inherit");
     expect(postCoreSpawn?.[2].env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
-    expect(postCoreSpawn?.[2].env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe("stable");
+    expect(postCoreSpawn?.[2].env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe(
+      isBetaTag(VERSION) ? "beta" : "stable",
+    );
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(getLogOutput()).not.toContain("already-current");
   });
@@ -5432,6 +5522,9 @@ describe("update-cli", () => {
     });
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -5496,6 +5589,9 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (!Array.isArray(argv)) {
         return commandResult();
+      }
+      if (isOwningNpmCommand(argv[0]) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${pathNpmRoot}\n` });
@@ -5711,6 +5807,9 @@ describe("update-cli", () => {
       if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
         return commandResult({ stdout: "v22.18.0\n" });
       }
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       return commandResult();
     });
     nodeVersionSatisfiesEngine.mockReturnValue(false);
@@ -5753,6 +5852,13 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
         return commandResult({ stdout: "v22.22.0\n" });
+      }
+      if (
+        Array.isArray(argv) &&
+        (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
+        argv[1] === "--version"
+      ) {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (
         Array.isArray(argv) &&
@@ -5855,6 +5961,13 @@ describe("update-cli", () => {
       if (
         Array.isArray(argv) &&
         (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
+        argv[1] === "--version"
+      ) {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
+      if (
+        Array.isArray(argv) &&
+        (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
         argv[1] === "root" &&
         argv[2] === "-g"
       ) {
@@ -5920,6 +6033,9 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
         return commandResult({ stdout: "v24.14.0\n" });
+      }
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         // PATH npm returns Node-B's root, NOT the service root.
@@ -6747,6 +6863,33 @@ describe("update-cli", () => {
     expectNoSideEffects(runRestartScript, runDaemonRestart);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["11.13.0", "11.15.9"])(
+    "refuses npm %s package-to-dev updates before checkout or install",
+    async (npmVersion) => {
+      const packageRoot = createCaseDir("openclaw-npm-transition");
+      mockPackageInstallStatus(packageRoot);
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        if (argv[0] === "npm" && argv[1] === "--version") {
+          return commandResult({ stdout: `${npmVersion}\n` });
+        }
+        if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+          return commandResult({ stdout: `${path.dirname(packageRoot)}\n` });
+        }
+        return commandResult();
+      });
+
+      await updateCommand({ channel: "dev", yes: true, restart: false });
+
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(commandCalls().some(([argv]) => argv[0] === "git")).toBe(false);
+      expect(
+        commandCalls().some(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g"),
+      ).toBe(false);
+      expect(getErrorOutput()).toContain(`npm ${npmVersion} cannot safely approve`);
+    },
+  );
+
   it("explains why git updates cannot run with edited files", async () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();

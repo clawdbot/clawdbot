@@ -11,6 +11,53 @@ type FormatCliFailureOptions = {
   includeDoctorHint?: boolean;
 };
 
+type CliFailureDebugOptions = Pick<FormatCliFailureOptions, "argv" | "env">;
+
+export type CliJsonFailure = {
+  ok: false;
+  error: {
+    type: "cli_error";
+    message: string;
+  };
+};
+
+export class CliParseError extends Error {
+  readonly humanOutput: string;
+  readonly humanOutputWritten: boolean;
+  readonly machineOutput: string;
+
+  constructor(params: {
+    message: string;
+    humanOutput: string;
+    humanOutputWritten?: boolean;
+    machineOutput: string;
+  }) {
+    super(params.message);
+    this.name = "CliParseError";
+    this.humanOutput = params.humanOutput;
+    this.humanOutputWritten = params.humanOutputWritten ?? false;
+    this.machineOutput = params.machineOutput;
+  }
+}
+
+/** Canonical machine-readable failure envelope for CLI-owned errors. */
+export function formatCliJsonFailure(
+  error: unknown,
+  options: CliFailureDebugOptions = {},
+): CliJsonFailure {
+  const message =
+    error instanceof CliParseError
+      ? formatErrorMessage(error.machineOutput.trimEnd())
+      : formatCliOperatorError(error, options);
+  return {
+    ok: false,
+    error: {
+      type: "cli_error",
+      message,
+    },
+  };
+}
+
 function hasDebugArg(argv: string[] | undefined): boolean {
   for (const arg of argv ?? []) {
     // Arguments after the terminator belong to the child, not root stack-trace policy.
@@ -24,8 +71,21 @@ function hasDebugArg(argv: string[] | undefined): boolean {
   return false;
 }
 
-function shouldShowStack(argv: string[] | undefined, env: NodeJS.ProcessEnv): boolean {
+function shouldShowDebugDetails(
+  argv: string[] | undefined = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return hasDebugArg(argv) || isTruthyEnvValue(env.OPENCLAW_DEBUG);
+}
+
+export function formatCliOperatorError(
+  error: unknown,
+  options: CliFailureDebugOptions = {},
+): string {
+  const includeCause = shouldShowDebugDetails(options.argv, options.env);
+  const value =
+    !includeCause && error instanceof Error ? error.message || error.name || "Error" : error;
+  return formatErrorMessage(value);
 }
 
 function pushPrefixed(out: string[], value: string): void {
@@ -37,14 +97,22 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
-  // Default output stays terse; stack traces require explicit debug intent.
+  if (options.error instanceof CliParseError) {
+    return options.error.humanOutputWritten ? [] : options.error.humanOutput.trimEnd().split("\n");
+  }
+
+  // Default output stays terse; causes and stack traces require explicit debug intent.
   const env = options.env ?? process.env;
+  const showDebugDetails = shouldShowDebugDetails(options.argv, env);
   const lines = [
     `[openclaw] ${options.title}`,
-    `[openclaw] Reason: ${formatErrorMessage(options.error)}`,
+    `[openclaw] Reason: ${formatCliOperatorError(options.error, {
+      argv: options.argv,
+      env,
+    })}`,
   ];
 
-  if (shouldShowStack(options.argv, env)) {
+  if (showDebugDetails) {
     lines.push("[openclaw] Stack:");
     pushPrefixed(lines, formatUncaughtError(options.error));
   } else {

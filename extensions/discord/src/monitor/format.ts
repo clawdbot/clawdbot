@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 // Discord helper module supports format behavior.
 import type { Guild, User } from "../internal/discord.js";
 
@@ -40,4 +41,3 @@ export function formatDiscordUserTag(user: User) {
 export function resolveTimestampMs(timestamp?: string | null) {
   return parseDateStringTimestampMs(timestamp);
 }
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";

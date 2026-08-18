@@ -4,8 +4,8 @@ import {
   dispatchChannelInboundTurn,
   readAgentRunTerminalOutcome,
   type InboundReplyRecordOptions,
+  hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
@@ -17,8 +17,7 @@ import {
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -523,7 +522,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             }
           : undefined,
         onReasoningEnd: async () => {
-          progress.progressReceipt.closeReasoning();
           await progress.onDraftBoundary?.();
           return false;
         },
@@ -545,7 +543,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             await statusReactions.setTool(payload.name);
           }
           if (payload.phase === "start") {
-            progress.progressReceipt.noteToolCall(payload.name);
+            progress.progressWorkCounter.noteToolCall(payload.name);
           }
           return await progress.progressDraft.pushToolEvent(payload);
         },
@@ -567,9 +565,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   itemId: payload.itemId,
                 },
               );
-              if (accepted) {
-                progress.progressReceipt.noteCommentary(payload.itemId, payload.progressText);
-              }
               return accepted || headlineVisible;
             }
             return headlineVisible;

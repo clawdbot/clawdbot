@@ -6,8 +6,8 @@ import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import type { DraftNode } from "./discovery.ts";
-import { readDraftNodes } from "./discovery.ts";
+import { isDraftNodeSessionEligible, readDraftNodes, type DraftNode } from "./discovery.ts";
+import { DraftCloudMachineState, type PendingCloudPlace } from "./draft-cloud-machine-state.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
@@ -38,6 +38,7 @@ export class DraftPlaceState {
   private nodesValue: DraftNode[] = [];
   private execNodeValue = "";
   private cloudProfileIdValue = "";
+  readonly cloudMachines = new DraftCloudMachineState();
   private restoredFolderValidation: "none" | "checking" | "failed" = "none";
   private gatewayApprovedWorkspaceRoots: string[] = [];
   private agentsHydratedValue = false;
@@ -123,6 +124,10 @@ export class DraftPlaceState {
     return this.cloudProfileIdValue;
   }
 
+  get machineClass(): string {
+    return this.cloudMachines.resolve(this.cloudProfileIdValue);
+  }
+
   get agentsHydrated(): boolean {
     return this.agentsHydratedValue;
   }
@@ -165,7 +170,7 @@ export class DraftPlaceState {
   }
 
   execNodes(): DraftNode[] {
-    return this.executionNodes().filter((node) => node.connected);
+    return this.executionNodes().filter(isDraftNodeSessionEligible);
   }
 
   execNodeReady(): boolean {
@@ -331,6 +336,7 @@ export class DraftPlaceState {
     this.execNodeValue = "";
     this.modelControl.reset();
     this.cloudProfileIdValue = "";
+    this.cloudMachines.clear();
     this.callbacks.requestUpdate();
   }
 
@@ -362,12 +368,14 @@ export class DraftPlaceState {
     this.nodesValue = [];
     this.execNodeValue = "";
     this.cloudProfileIdValue = "";
+    this.cloudMachines.clear();
     this.callbacks.requestUpdate();
   }
 
-  applyPendingCloud(params: { agentId: string; profileId: string; cwd?: string }) {
+  applyPendingCloud(params: PendingCloudPlace) {
     this.agentIdValue = params.agentId;
     this.cloudProfileIdValue = params.profileId;
+    this.cloudMachines.applyPending(params.profileId, params.machineClass);
     this.repositoryState.forceWorktree(true);
     this.folderValue = params.cwd ?? "";
     this.folderGatewayApproved = false;
@@ -498,6 +506,12 @@ export class DraftPlaceState {
   selectExecNode(execNode: string) {
     const snapshot = this.read();
     if (snapshot.submitting || snapshot.pendingCloudSessionKey) {
+      return;
+    }
+    if (
+      execNode &&
+      !this.nodesValue.some((node) => node.nodeId === execNode && isDraftNodeSessionEligible(node))
+    ) {
       return;
     }
     if (execNode === this.execNodeValue && !this.cloudProfileIdValue) {
@@ -726,7 +740,9 @@ export class DraftPlaceState {
       this.nodesHydrated = true;
       if (
         this.execNodeValue &&
-        !nodes.some((node) => node.nodeId === this.execNodeValue && node.canExec)
+        !nodes.some(
+          (node) => node.nodeId === this.execNodeValue && isDraftNodeSessionEligible(node),
+        )
       ) {
         this.execNodeValue = "";
         this.folderValue = this.workspacePath();

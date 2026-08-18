@@ -7,16 +7,12 @@ const sessionAccessorMocks = vi.hoisted(() => ({
     removedEntries: 0,
     removedSessionKeys: [],
     archivedTranscriptDirectories: [],
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount: 0,
   })),
   purgeDeletedAgentSessionEntries: vi.fn(async () => ({
     removedEntries: 0,
     removedSessionKeys: [],
     archivedTranscriptDirectories: [],
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount: 0,
   })),
 }));

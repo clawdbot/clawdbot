@@ -41,13 +41,11 @@ import {
   validateTalkSessionSteerParams,
   validateWakeParams,
   type ValidationError,
-} from "./index.js";
-import type {
-  ConfigSchemaLookupParams,
-  ModelsListParams,
-  SessionsCatalogListParams,
-  SessionsCatalogStartTerminalParams,
-  TalkEvent,
+  type ConfigSchemaLookupParams,
+  type ModelsListParams,
+  type SessionsCatalogListParams,
+  type SessionsCatalogStartTerminalParams,
+  type TalkEvent,
 } from "./index.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";

@@ -1,11 +1,11 @@
 // Shared api.github.com plumbing for Control UI GitHub surfaces (link
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
-export { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
 const GITHUB_JSON_MAX_BYTES = 256 * 1024;

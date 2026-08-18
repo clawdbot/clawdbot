@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectDir } from "./install-paths.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  resolveDefaultPluginNpmDir,
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
+
+const compensationTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -104,19 +110,27 @@ describe("managed plugin install compensation", () => {
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
   });
 
-  it("removes a planner-validated isolated npm project after persistence conflicts", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-npm-conflict-"));
-    const env = { HOME: home };
-    const packageName = "@openclaw/demo";
-    const npmRoot = resolvePluginNpmProjectDir({
-      npmDir: resolveDefaultPluginNpmDir(env),
-      packageName,
-    });
-    const targetDir = path.join(npmRoot, "node_modules", "@openclaw", "demo");
-    const packArchive = path.join(npmRoot, "_openclaw-pack-archives", "demo.tgz");
-    const conflict = new Error("config changed during npm plugin install");
+  it.each([
+    { name: "ordinary", generationKey: undefined },
+    { name: "generation", generationKey: "demo-v2" },
+  ])(
+    "removes a planner-validated $name npm project after persistence conflicts",
+    async (fixture) => {
+      const home = compensationTempDirs.make("openclaw-managed-npm-conflict-");
+      const env = { HOME: home };
+      const packageName = "@openclaw/demo";
+      const npmDir = resolveDefaultPluginNpmDir(env);
+      const npmRoot = fixture.generationKey
+        ? resolvePluginNpmGenerationProjectDir({
+            npmDir,
+            packageName,
+            generationKey: fixture.generationKey,
+          })
+        : resolvePluginNpmProjectDir({ npmDir, packageName });
+      const targetDir = path.join(npmRoot, "node_modules", "@openclaw", "demo");
+      const packArchive = path.join(npmRoot, "_openclaw-pack-archives", "demo.tgz");
+      const conflict = new Error("config changed during npm plugin install");
 
-    try {
       await fs.mkdir(targetDir, { recursive: true });
       await fs.mkdir(path.dirname(packArchive), { recursive: true });
       await fs.writeFile(packArchive, "packed plugin");
@@ -148,13 +162,11 @@ describe("managed plugin install compensation", () => {
 
       expect(mocks.applyUninstall).toHaveBeenCalledWith({
         target: npmRoot,
-        cleanup: { kind: "npm", npmRoot, packageName },
+        cleanup: { kind: "npm", npmRoot, packageName, rootKind: "isolated-project" },
       });
       await expect(fs.access(npmRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("never deletes an operator-owned source when link persistence fails", async () => {
     const env = { HOME: "/tmp/openclaw-managed-link-conflict-home" };

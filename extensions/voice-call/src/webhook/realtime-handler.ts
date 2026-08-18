@@ -256,6 +256,7 @@ export type StreamSession = {
 
 type CallRegistration = {
   callId: string;
+  agentId?: string;
   instructions: string;
   initialGreetingInstructions?: string;
 };
@@ -654,7 +655,7 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const { callId, instructions, initialGreetingInstructions } = registration;
+    const { callId, agentId, instructions, initialGreetingInstructions } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
@@ -792,6 +793,7 @@ export class RealtimeCallHandler {
     const bridgeParams: Parameters<typeof harness.createBridge>[0] = {
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
+      agentId,
       providerConfig: this.providerConfig,
       interruptResponseOnInputAudio,
       instructions,
@@ -1595,6 +1597,7 @@ export class RealtimeCallHandler {
     const instructions = this.resolveInstructions?.(callRecord) ?? this.config.instructions;
     return {
       callId: callRecord.callId,
+      agentId: callRecord.agentId,
       instructions,
       initialGreetingInstructions: buildGreetingInstructions(instructions, initialGreeting),
     };

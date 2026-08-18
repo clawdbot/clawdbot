@@ -1,15 +1,32 @@
 // Settlement liveness: a wedged block-reply flush must not park the turn.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveProviderContext,
+  type ProviderStreamOptions,
+} from "../../../../packages/ai/src/provider-types.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
+import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { SessionManager } from "../../sessions/index.js";
+import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
   prepareEmbeddedAttemptTransport,
   settleEmbeddedAttemptStream,
 } from "./attempt-stream-settle.js";
 
+const registerProviderStreamForModel = vi.hoisted(() => vi.fn());
+
+vi.mock("../../provider-stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../provider-stream.js")>()),
+  registerProviderStreamForModel,
+}));
+
 type SettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
 type PrepareTransportInput = Parameters<typeof prepareEmbeddedAttemptTransport>[0];
+const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
@@ -106,6 +123,10 @@ describe("settleEmbeddedAttemptStream liveness", () => {
 });
 
 describe("prepareEmbeddedAttemptTransport", () => {
+  afterEach(() => {
+    registerProviderStreamForModel.mockReset();
+  });
+
   it("applies the prepared transport to the live agent owner", async () => {
     const streamFn = vi.fn();
     bindStreamLlmRuntime(streamFn, {
@@ -166,5 +187,78 @@ describe("prepareEmbeddedAttemptTransport", () => {
 
     expect(result.effectiveAgentTransport).toBe("sse");
     expect(session.agent.transport).toBe("sse");
+  });
+
+  it("materializes native video from the prepared session agent workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transport-video-"));
+    const videoPath = path.join(workspaceDir, "history.mp4");
+    await fs.writeFile(videoPath, MP4);
+    let providerOptions: ProviderStreamOptions | undefined;
+    const providerStream = vi.fn((_model, _context, options) => {
+      providerOptions = options as ProviderStreamOptions;
+      return {} as never;
+    });
+    bindStreamLlmRuntime(providerStream, {
+      streamSimple: providerStream,
+      registry: { getApiProvider: () => undefined },
+    } as never);
+    const session = {
+      agent: {
+        streamFn: providerStream,
+        transport: "auto",
+      },
+    };
+    const model = {
+      api: "test-api",
+      provider: "test-provider",
+      id: "test-model-video",
+    };
+    registerProviderStreamForModel.mockReturnValue(providerStream);
+
+    try {
+      await prepareEmbeddedAttemptTransport({
+        attempt: {
+          config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
+          model,
+          modelId: model.id,
+          provider: model.provider,
+          runId: "run-native-video",
+          runtimePlan: {
+            auth: { forwardedAuthProfileId: undefined },
+            transport: { resolveExtraParams: () => ({}) },
+          },
+          sessionId: "session-native-video",
+        },
+        session,
+        settingsManager: {
+          getGlobalSettings: () => ({}),
+          getProjectSettings: () => ({}),
+        },
+        sessionAgentId: "marketing",
+        workspaceDir,
+        workspaceOnly: false,
+        agentDir: workspaceDir,
+        abortSignal: new AbortController().signal,
+        getProviderRuntimeHandle: () => ({ provider: model.provider, modelId: model.id }),
+        sandboxSessionKey: "agent:marketing:test",
+        codeModeControlsEnabled: false,
+        providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
+      } as unknown as PrepareTransportInput);
+      const message = attachRuntimePromptMediaFacts(
+        castAgentMessage({ role: "user", content: [{ type: "text", text: "inspect" }] }),
+        [{ kind: "video", path: videoPath, contentType: "video/mp4" }],
+      );
+      const context = { systemPrompt: "system", messages: [message], tools: [] };
+
+      session.agent.streamFn(model as never, context as never, {});
+      const provider = await resolveProviderContext(context as never, providerOptions);
+
+      expect(provider.messages[0]?.content).toEqual([
+        { type: "text", text: "inspect" },
+        { type: "video", data: MP4.toString("base64"), mimeType: "video/mp4" },
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });

@@ -50,8 +50,8 @@ import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
-export { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
+export { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]>;
@@ -69,7 +69,7 @@ type SqliteLifecycleTargetSnapshot = {
   rows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
 
-function parseReadableSqliteSessionEntryRow(
+export function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
   row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at">,
 ): SessionEntry | null {

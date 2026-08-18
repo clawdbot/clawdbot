@@ -4,6 +4,7 @@ import {
   createGlobalInstallEnv,
   globalInstallArgs,
   resolveGlobalInstallTarget,
+  resolveNpmLifecyclePolicyGate,
   resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
@@ -136,6 +137,39 @@ export async function updateGitInstall(params: {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
+  const runCommand = createGlobalCommandRunner();
+  const installTarget = params.switchToGit
+    ? await resolveGlobalInstallTarget({
+        manager: await resolveGlobalManager({
+          root: params.root,
+          installKind: params.installKind,
+          timeoutMs: effectiveTimeout,
+        }),
+        runCommand,
+        timeoutMs: effectiveTimeout,
+        pkgRoot: params.root,
+      })
+    : null;
+  const npmLifecycleGate = installTarget
+    ? resolveNpmLifecyclePolicyGate(installTarget)
+    : { policy: null, error: null };
+
+  // Package-to-Git updates must settle package-manager policy before cloning or
+  // updating the checkout; carry this exact decision into the later install.
+  if (npmLifecycleGate.error) {
+    const result: UpdateRunResult = {
+      status: "error",
+      mode: "git",
+      root: updateRoot,
+      reason: "npm lifecycle policy preflight",
+      steps: [],
+      durationMs: Date.now() - params.startedAt,
+    };
+    params.stop();
+    defaultRuntime.error(npmLifecycleGate.error);
+    defaultRuntime.exit(1);
+    return result;
+  }
 
   const cloneStep = params.switchToGit
     ? await ensureGitCheckout({
@@ -177,25 +211,23 @@ export async function updateGitInstall(params: {
   const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
 
   if (params.switchToGit && updateResult.status === "ok") {
-    const manager = await resolveGlobalManager({
-      root: params.root,
-      installKind: params.installKind,
-      timeoutMs: effectiveTimeout,
-    });
-    const runCommand = createGlobalCommandRunner();
-    const installTarget = await resolveGlobalInstallTarget({
-      manager,
-      runCommand,
-      timeoutMs: effectiveTimeout,
-      pkgRoot: params.root,
-    });
+    if (!installTarget) {
+      throw new Error("global install target missing after package-to-Git preflight");
+    }
     const installLocation =
       installTarget.manager === "pnpm"
         ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
         : null;
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation, updateRoot),
+      argv: globalInstallArgs(
+        installTarget,
+        updateRoot,
+        undefined,
+        installLocation,
+        updateRoot,
+        npmLifecycleGate.policy ?? undefined,
+      ),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,

@@ -13,6 +13,7 @@ import {
   beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
+  createTuiConnectionLineage,
   createTuiSignalHandlers,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -462,6 +463,13 @@ describe("resolveTuiSessionSelection", () => {
 });
 
 describe("resolveGatewayDisconnectState", () => {
+  it("shows startup progress while the gateway keeps retrying", () => {
+    expect(resolveGatewayDisconnectState({ reason: "gateway starting" })).toEqual({
+      connectionStatus: "gateway starting",
+      activityStatus: "starting up",
+    });
+  });
+
   it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState({
       reason: "gateway closed (1008): pairing required",
@@ -725,6 +733,20 @@ describe("resolveTuiCtrlCAction", () => {
       action: "force-exit",
       nextLastCtrlCAt: 1000,
     });
+  });
+});
+
+describe("createTuiConnectionLineage", () => {
+  it("keeps a startup retry before the first hello out of reconnect recovery", () => {
+    const lineage = createTuiConnectionLineage();
+
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(false);
+    expect(lineage.connect()).toBe(false);
+
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(true);
+    expect(lineage.connect()).toBe(true);
   });
 });
 

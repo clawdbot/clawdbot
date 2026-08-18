@@ -71,20 +71,27 @@ describe("models-config", () => {
   });
 
   it("does not override explicit github-copilot provider config", async () => {
-    const plan = await planOpenClawModelsJson({
-      cfg: {
-        models: {
-          providers: {
-            "github-copilot": {
-              baseUrl: "https://copilot.local",
-              api: "openai-responses",
-              models: [],
-            },
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://copilot.local",
+            api: "openai-responses" as const,
+            models: [],
           },
         },
       },
-      agentDir: "/tmp/openclaw-agent",
-      env: {} as NodeJS.ProcessEnv,
+    };
+    const env = {} as NodeJS.ProcessEnv;
+    const plan = await planOpenClawModelsJson({
+      context: {
+        cfg,
+        discoveryAuthConfig: cfg,
+        sourceConfigForSecrets: cfg,
+        agentDir: "/tmp/openclaw-agent",
+        env,
+        envFingerprint: env,
+      },
       existingRaw: "",
       existingParsed: null,
     });

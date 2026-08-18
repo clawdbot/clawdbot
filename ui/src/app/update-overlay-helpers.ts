@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatCountdown } from "../lib/format.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
@@ -98,7 +99,7 @@ function readUpdateFailureCause(
     : undefined;
   const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
   const step = failed?.name?.trim();
-  return step && detail ? { step, detail } : null;
+  return step && detail ? { step, detail: formatUiExternalText(detail) } : null;
 }
 
 export type UpdateRunResponse = {
@@ -116,9 +117,12 @@ export type UpdateRunResponse = {
 async function requestUpdateRestartStatus(
   client: Pick<GatewayBrowserClient, "request">,
   timeoutMs: number,
+  request: { refreshCheckout?: true } = {},
 ): Promise<UpdateRestartStatusResponse | null> {
   try {
-    return await client.request<UpdateRestartStatusResponse>("update.status", {}, { timeoutMs });
+    return await client.request<UpdateRestartStatusResponse>("update.status", request, {
+      timeoutMs,
+    });
   } catch {
     return null;
   }
@@ -137,7 +141,7 @@ export function createUpdateStatusRefresher(params: {
     if (!client || !params.canRefresh()) {
       return;
     }
-    const response = await requestUpdateRestartStatus(client, 5_000);
+    const response = await requestUpdateRestartStatus(client, 5_000, { refreshCheckout: true });
     if (response && params.isCurrent(client, epoch)) {
       params.onStatus(response);
     }

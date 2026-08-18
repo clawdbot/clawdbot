@@ -159,7 +159,9 @@ describe("sessions tool", () => {
         label: { type: "string", description: expect.stringContaining("Empty string clears") },
         icon: {
           type: "string",
-          description: expect.stringContaining("Distinct from attention"),
+          description: expect.stringContaining(
+            "named icon: braces, book, monitor, bot, kanban, coins",
+          ),
         },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
@@ -1004,10 +1006,10 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("denies patch targets outside the caller session tree", async () => {
+  it("denies patch targets outside a non-main caller's session tree", async () => {
     const callGateway = vi.fn(async () => ({ sessions: [] }));
     const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:main:dashboard:caller",
       callGateway: callGateway as never,
     });
 
@@ -1015,6 +1017,7 @@ describe("sessions tool", () => {
       tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
+        expectedSessionId: "other-session",
         archived: true,
       }),
     ).rejects.toThrow("Session status visibility is restricted");

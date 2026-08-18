@@ -261,9 +261,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.agentRuns.claude.enabled":
     "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
   "nodeHost.workerRuns":
-    "Opt in to full OpenClaw worker session hosting from this headless node's local installation. Disabled by default.",
+    "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
   "nodeHost.workerRuns.enabled":
-    "Advertise this paired node as a session host and pin its local OpenClaw build identity (default: false). The node version must exactly match the gateway.",
+    "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -292,6 +292,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
   "bindings[].session.dmScope":
     'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+  "bindings[].session.groupScope":
+    'Optional group/channel session scope override for this route binding. Use "main" to merge only selected rooms into the agent main session while other rooms keep the global "per-group" default.',
   "bindings[].match":
     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
   "bindings[].match.channel":

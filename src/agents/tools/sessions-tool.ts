@@ -2,7 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import {
+  SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -15,10 +18,7 @@ import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  getCurrentSessionWorkAdmissionRelease,
-  getSessionWorkAdmissionRelease,
-} from "../../sessions/session-lifecycle-admission.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -56,6 +56,7 @@ const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
+const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
@@ -105,8 +106,7 @@ const SessionsToolSchema = Type.Object(
     ),
     icon: Type.Optional(
       Type.String({
-        description:
-          "Persistent sidebar icon: a single emoji. Empty string clears it. Distinct from attention, which is temporary.",
+        description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
       }),
     ),
     statusNote: Type.Optional(
@@ -273,8 +273,8 @@ async function resolvePatchTarget(
         : resolved.key;
     const access = await resolveSessionToolAccess({
       action: "status",
-      defaultAgentId: requesterAgentId,
       requesterSessionKey: context.effectiveRequesterKey,
+      mainSessionKey: context.mainSessionKey,
       authorizationTargetSessionKey: authorizationKey,
       requesterAgentId,
       targetAgentId: agentId,
@@ -465,7 +465,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
           const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-          const released = getCurrentSessionWorkAdmissionRelease({
+          const released = getSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
           });

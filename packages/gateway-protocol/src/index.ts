@@ -1,11 +1,4 @@
-export * from "./clawhub-trust-error-details.js";
-export * from "./install-policy-warning-error-details.js";
-export * from "./system-agent-error-details.js";
-export {
-  isMcpAppViewExpiredError,
-  readMissingScopeError,
-  readMissingScopeErrorDetails,
-} from "./gateway-error-details.js";
+export * from "./error-details.js";
 export * from "./session-agent-status.js";
 export * from "./terminal-validators.js";
 export {
@@ -18,15 +11,6 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type {
-  GatewayErrorDetails,
-  McpAppViewExpiredErrorDetails,
-  MissingScopeErrorDetails,
-  UserPrefsLimitExceededErrorDetails,
-  ProjectCloneErrorDetails,
-  ProjectCloneFailureCause,
-  WizardNotFoundErrorDetails,
-} from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
@@ -76,11 +60,6 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
-  GatewayErrorDetailsSchema,
-  MissingScopeErrorDetailsSchema,
-  UserPrefsLimitExceededErrorDetailsSchema,
-  ProjectCloneErrorDetailsSchema,
-  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -108,6 +87,7 @@ export {
   WorkerTranscriptCommitResponseFrameSchema,
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
+  WORKER_BUNDLE_PREWARM_VERSION,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -305,7 +285,18 @@ export {
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
   SessionsReclaimParamsSchema,
+  SessionsReclaimResultPlacementSchema,
   SessionsReclaimResultSchema,
+  SessionMoveExpectedSourceSchema,
+  SessionMoveGatewayTargetSchema,
+  SessionMoveProfileTargetSchema,
+  SessionMoveDeviceTargetSchema,
+  SessionMoveTargetSchema,
+  SessionPlacementMoveSchema,
+  SessionsMoveParamsSchema,
+  SessionMovePlacementStateSchema,
+  SessionMovePlacementSchema,
+  SessionsMoveResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -684,11 +675,6 @@ export {
   FsDirEntrySchema,
   FsListDirParamsSchema,
   FsListDirResultSchema,
-  ErrorCodes,
-  buildMissingScopeErrorDetails,
-  GatewayErrorDetailCodes,
-  errorShape,
-  missingScopeErrorShape,
 } from "./schema-modules.js";
 export {
   MIN_CLIENT_PROTOCOL_VERSION,

@@ -67,7 +67,21 @@ suite.define(() => {
         },
         "environments.list": {
           environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                {
+                  id: "standard",
+                  label: "Standard",
+                  description: "Balanced capacity",
+                  default: true,
+                },
+                { id: "fast", label: "Fast", description: "More compute" },
+              ],
+            },
+          ],
         },
         "fs.listDir": {
           path: WORKSPACE,
@@ -130,6 +144,12 @@ suite.define(() => {
       await place.getByRole("button", { name: "Cloud · aws" }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await trigger.click();
+      await place.getByText("Machine", { exact: true }).waitFor();
+      await place.getByRole("button", { name: /Fast/ }).click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await page.keyboard.press("Escape");
       const detailTrigger = page.locator("#new-session-detail-trigger");
       await detailTrigger.click();
       const detail = page.locator("wa-popover.new-session-page__detail-popover");
@@ -220,7 +240,13 @@ suite.define(() => {
       await expect.poll(() => runtimeRequested).toBe(true);
       const startupStatus = await expectPendingCloudStartupBeforeRuntime(page, gateway, sessionKey);
       runtimeLoad.resolve();
-      await gateway.waitForRequest("sessions.dispatch");
+      const dispatch = await gateway.waitForRequest("sessions.dispatch");
+      expect(dispatch.params).toMatchObject({
+        key: sessionKey,
+        agentId: "cloud",
+        profileId: "aws",
+        machineClass: "fast",
+      });
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
         .length;
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));

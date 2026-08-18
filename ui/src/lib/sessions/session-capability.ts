@@ -70,21 +70,19 @@ export type SessionRefreshOptions = SessionListOptions & {
   backgroundHydrate?: boolean;
 };
 
-export type SessionListScope = Pick<SessionListOptions, "agentId" | "archivedFilter">;
+export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
 export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
 
 export type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
+  expectedSessionId?: string;
   archivedOnly?: boolean;
 };
 
-export type SessionDeleteTarget = {
+export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
-  agentId?: string;
-  deleteTranscript?: boolean;
-  archivedOnly?: boolean;
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */

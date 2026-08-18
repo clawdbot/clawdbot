@@ -23,8 +23,11 @@ import {
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
 import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
-import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  CLI_DEFAULT_OPERATOR_SCOPES,
+  authorizeOperatorScopesForMethod,
+} from "./method-scopes.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 

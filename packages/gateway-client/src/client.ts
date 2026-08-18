@@ -267,6 +267,7 @@ export type GatewayClientOptions = {
   caps?: string[];
   commands?: string[];
   computerUse?: ConnectParams["computerUse"];
+  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
   workerRuns?: ConnectParams["workerRuns"];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
@@ -280,6 +281,8 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+  /** Report retryable startup closes for clients that present connection progress. */
+  notifyOnStartupRetry?: boolean;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -465,6 +468,7 @@ export class GatewayClient {
     caps: string[];
     commands: string[];
     computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
     workerRuns?: ConnectParams["workerRuns"];
   }): void {
     this.opts = {
@@ -1058,7 +1062,7 @@ export class GatewayClient {
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,
-        notify: false,
+        notify: this.opts.notifyOnStartupRetry === true,
         reconnectDelayMs: context.connectFailure.reconnectDelayMs,
       };
     }

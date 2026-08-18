@@ -1,5 +1,4 @@
 // Route-first machine-readable Gateway health command.
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
@@ -14,7 +13,7 @@ type GatewayHealthJsonRouteArgs = {
 
 type GatewayHealthRouteDependencies = {
   callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport;
-  readBestEffortConfig?: () => Promise<OpenClawConfig>;
+  readBestEffortHealthConfig?: typeof import("../../commands/health.js").readBestEffortHealthConfig;
   emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
   formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;
   formatGatewayClientRequestErrorJson?: typeof import("../../gateway/call.js").formatGatewayClientRequestErrorJson;
@@ -28,10 +27,10 @@ async function resolveRouteRpcOptions(
   if (args.localPortOverride === undefined) {
     return args.rpc;
   }
-  const readBestEffortConfig =
-    deps.readBestEffortConfig ??
-    (await import("../../config/read-best-effort-config.runtime.js")).readBestEffortConfig;
-  const config = await readBestEffortConfig();
+  const readBestEffortHealthConfig =
+    deps.readBestEffortHealthConfig ??
+    (await import("../../commands/health.js")).readBestEffortHealthConfig;
+  const config = await readBestEffortHealthConfig();
   return {
     ...args.rpc,
     localPortOverride: args.localPortOverride,
@@ -59,7 +58,10 @@ export async function runGatewayHealthJsonRoute(
       deps.callGateway ?? (await import("../gateway-rpc.js")).callGatewayFromCliWithTransport;
     writeRuntimeJson(
       runtime,
-      await callGateway("health", rpc, undefined, { defaultTimeoutMs: 10_000 }),
+      await callGateway("health", rpc, undefined, {
+        defaultTimeoutMs: 10_000,
+        sharedStateMode: "read-only",
+      }),
     );
   } catch (error) {
     if (!rpc) {
@@ -67,11 +69,10 @@ export async function runGatewayHealthJsonRoute(
       runtime.exit(1);
       return;
     }
-    const [healthModule, configModule, callModule] = await Promise.all([
-      deps.emitReachableGatewayAuthDiagnostic ? undefined : import("../../commands/health.js"),
-      deps.readBestEffortConfig
+    const [healthModule, callModule] = await Promise.all([
+      deps.emitReachableGatewayAuthDiagnostic && deps.readBestEffortHealthConfig
         ? undefined
-        : import("../../config/read-best-effort-config.runtime.js"),
+        : import("../../commands/health.js"),
       deps.formatGatewayAuthErrorJson &&
       deps.formatGatewayClientRequestErrorJson &&
       deps.formatGatewayTransportErrorJson
@@ -80,13 +81,14 @@ export async function runGatewayHealthJsonRoute(
     ]);
     const emitReachableGatewayAuthDiagnostic =
       deps.emitReachableGatewayAuthDiagnostic ?? healthModule?.emitReachableGatewayAuthDiagnostic;
-    const readBestEffortConfig = deps.readBestEffortConfig ?? configModule?.readBestEffortConfig;
-    if (!emitReachableGatewayAuthDiagnostic || !readBestEffortConfig) {
+    const readBestEffortHealthConfig =
+      deps.readBestEffortHealthConfig ?? healthModule?.readBestEffortHealthConfig;
+    if (!emitReachableGatewayAuthDiagnostic || !readBestEffortHealthConfig) {
       throw error;
     }
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
-      config: rpc.config ?? (await readBestEffortConfig()),
+      config: rpc.config ?? (await readBestEffortHealthConfig()),
       runtime,
       timeoutMs: Number(rpc.timeout ?? "10000"),
       token: rpc.token,

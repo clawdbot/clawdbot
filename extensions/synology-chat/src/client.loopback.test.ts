@@ -297,7 +297,7 @@ describe("Synology Chat client loopback", () => {
       expect(result).toMatchObject({
         channel: "synology-chat",
         messageId: "",
-        chatId: "42",
+        target: { kind: "chat", id: "42" },
         receipt: {
           platformMessageIds: [],
           parts: [],

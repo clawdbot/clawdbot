@@ -27,7 +27,6 @@ import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
   buildDraftSessionCreateParams as assembleDraftSessionCreateParams,
   canStartSessionAsDraft,
-  isWorktreeNameValid,
   type NewSessionVisibility,
 } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -37,11 +36,17 @@ import type {
   DraftSubmissionSnapshot,
 } from "./draft-submission-contract.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
+import {
+  PAGE_RENDERED_GATES,
+  resolveNewSessionSubmitBlock,
+  type NewSessionSubmitBlock,
+} from "./submit-gates.ts";
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
   private messageValue = "";
   private submittingValue = false;
+  private blockedSubmitGate: string | null = null;
   private submissionOutcomeUnknownValue: SubmissionOutcomeReason | null = null;
   private errorValue: string | null = null;
   private submitRequestToken = 0;
@@ -113,6 +118,26 @@ export class DraftSubmissionFlow {
     this.pendingCloud.retryAllowed = false;
     this.submissionOutcomeUnknownValue = outcome;
     this.callbacks.requestUpdate();
+  }
+
+  /** A submit was attempted (Enter or Start click) while a gate blocked it. */
+  noteBlockedSubmitAttempt(kind: "session" | "terminal" = "session") {
+    this.blockedSubmitGate = this.submitBlock(kind)?.gate ?? null;
+    this.callbacks.requestUpdate();
+  }
+
+  /**
+   * Reason to surface near the composer after a blocked submit attempt. Bound
+   * to the gate captured at attempt time, so it disappears on its own once a
+   * transient gate (preference restore, reconnect) lifts and never shows for
+   * gates the user did not trip.
+   */
+  blockedSubmitNotice(): string | undefined {
+    const block = this.blockedSubmitGate ? this.submitBlock() : undefined;
+    if (!block?.reason || block.gate !== this.blockedSubmitGate) {
+      return undefined;
+    }
+    return PAGE_RENDERED_GATES.has(block.gate) ? undefined : block.reason;
   }
 
   canStartAsDraft(): boolean {
@@ -194,19 +219,11 @@ export class DraftSubmissionFlow {
   }
 
   submitDisabledReason(): string | undefined {
-    if (catalog.isRoutePending(this.read().data, this.read().context?.sessions)) {
-      return t("newSession.catalogUnavailable");
-    }
-    if (this.place.modelControl.isModelUnavailable(this.place.selectedAgent())) {
-      return `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`;
-    }
-    const access = this.submissionAccess();
-    return access.allowed ? undefined : access.reason;
+    return this.submitBlock()?.reason;
   }
 
   terminalStartDisabledReason(): string | undefined {
-    const access = this.terminalStartAccess();
-    return access.allowed ? undefined : access.reason;
+    return this.submitBlock("terminal")?.reason;
   }
 
   incognitoDisabledReason(): string | undefined {
@@ -218,80 +235,35 @@ export class DraftSubmissionFlow {
   }
 
   canSubmit(kind: "session" | "terminal" = "session"): boolean {
-    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
-    const cloudProfileId = this.cloudProfileForSubmission();
-    const message = pendingCloud ? this.pendingCloud.message : this.messageValue.trim();
-    const hasAttachments = pendingCloud
-      ? Boolean(this.pendingCloud.attachments?.length)
-      : this.attachmentDraft.attachments.length > 0;
-    const gateway = this.read().context?.gateway;
-    if (
-      this.submittingValue ||
-      this.gateway.preferenceLoading ||
-      this.requiresModelSetup() ||
-      catalog.isRoutePending(this.read().data, this.read().context?.sessions) ||
-      this.place.modelControl.isModelUnavailable(this.place.selectedAgent()) ||
-      this.attachmentDraft.pendingReads > 0 ||
-      (!pendingCloud && this.submissionOutcomeUnknownValue) ||
-      (kind === "session" && !message && !hasAttachments) ||
-      gateway?.snapshot.phase !== "connected" ||
-      !gateway.snapshot.client
-    ) {
-      return false;
-    }
-    const access = kind === "terminal" ? this.terminalStartAccess() : this.submissionAccess();
-    if (!access.allowed || this.place.folderSubmissionBlocked()) {
-      return false;
-    }
-    if (this.place.modelControl.isRestoringPreference() || !this.place.worktreePreferenceReady) {
-      return false;
-    }
-    if (pendingCloud) {
-      return Boolean(
-        this.pendingCloud.retryAllowed &&
-        gateway.snapshot.client.recoveryScopeReady &&
-        cloudProfileId &&
-        this.pendingCloud.agentId &&
-        this.pendingCloud.gatewayUrl === gateway.connection.gatewayUrl &&
-        this.pendingCloud.recoveryScope === gateway.snapshot.client?.recoveryScope &&
-        this.place.isAdmin(),
-      );
-    }
-    if (this.place.agents().length === 0) {
-      return false;
-    }
-    if (!catalog.allowsSelectedAgent(this.read().data, this.place.selectedAgent())) {
-      return false;
-    }
-    if (!this.place.execNodeReady()) {
-      return false;
-    }
-    if (
-      cloudProfileId &&
-      (!this.place.isAdmin() ||
-        !gateway.snapshot.client.recoveryScope ||
-        !gateway.snapshot.client.recoveryScopeReady ||
-        !this.gateway.cloudProfilesReady ||
-        this.gateway.cloudProfilesPending ||
-        !this.place.worktree ||
-        !this.gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
-        Boolean(this.cloudRuntimeUnsupportedReason()))
-    ) {
-      return false;
-    }
-    if (this.place.execNode && this.place.worktree) {
-      return false;
-    }
-    if (this.place.worktree && !this.place.worktreeAvailable()) {
-      return false;
-    }
-    if (this.place.worktree && !isWorktreeNameValid(this.place.worktreeName)) {
-      return false;
-    }
-    if (kind === "terminal" && !(this.place.folder.trim() || this.place.workspacePath())) {
-      return false;
-    }
-    return true;
+    return this.submitBlock(kind) === undefined;
+  }
+
+  /**
+   * The single owner of every submit gate (`submit-gates.ts`). `canSubmit`,
+   * the disabled-reason tooltips, and blocked Enter notices all derive from
+   * that one walk, so a gate cannot block without a user-visible reason.
+   */
+  submitBlock(kind: "session" | "terminal" = "session"): NewSessionSubmitBlock | undefined {
+    return resolveNewSessionSubmitBlock(
+      {
+        gatewayState: this.gateway,
+        placeState: this.place,
+        pendingCloud: this.pendingCloud,
+        submitting: this.submittingValue,
+        message: this.messageValue,
+        submissionOutcomeUnknown: this.submissionOutcomeUnknownValue,
+        pendingAttachmentReads: this.attachmentDraft.pendingReads,
+        hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
+        submissionSnapshot: () => this.read(),
+        requiresModelSetup: () => this.requiresModelSetup(),
+        submissionAccess: () => this.submissionAccess(),
+        terminalStartAccess: () => this.terminalStartAccess(),
+        cloudProfileForSubmission: () => this.cloudProfileForSubmission(),
+        cloudDisabledReason: () => this.cloudDisabledReason(),
+        cloudRuntimeUnsupportedReason: () => this.cloudRuntimeUnsupportedReason(),
+      },
+      kind,
+    );
   }
 
   requiresModelSetup(): boolean {
@@ -333,6 +305,7 @@ export class DraftSubmissionFlow {
 
   resetDraft() {
     const preservePendingCloud = Boolean(this.pendingCloud.sessionKey);
+    this.blockedSubmitGate = null;
     this.invalidate();
     this.submissionOutcomeUnknownValue = preservePendingCloud
       ? (this.submissionOutcomeUnknownValue ?? "cloud-interrupted")
@@ -396,8 +369,10 @@ export class DraftSubmissionFlow {
   async submit() {
     const context = this.read().context;
     if (!context || !this.canSubmit()) {
+      this.noteBlockedSubmitAttempt();
       return;
     }
+    this.blockedSubmitGate = null;
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
     const message = pendingCloud ? this.pendingCloud.message : this.messageValue.trim();
     const attachments = this.attachmentDraft.attachments;
@@ -450,6 +425,7 @@ export class DraftSubmissionFlow {
           : this.pendingCloud.stageCreate({
               agentId: submissionAgentId,
               profileId: cloudProfileId,
+              machineClass: this.place.machineClass,
               message,
               attachments: apiAttachments,
               gatewayUrl: submissionGatewayUrl,
@@ -641,8 +617,10 @@ export class DraftSubmissionFlow {
     const catalogId = data?.catalogId.trim() ?? "";
     const agentId = normalizeAgentId(this.place.agentId);
     if (!context || !client || !catalogId || !agentId || !this.canSubmit("terminal")) {
+      this.noteBlockedSubmitAttempt("terminal");
       return;
     }
+    this.blockedSubmitGate = null;
     const requestId = ++this.submitRequestToken;
     const initialMessage = this.messageValue.trim();
     this.submittingValue = true;
@@ -728,6 +706,7 @@ export class DraftSubmissionFlow {
     this.place.applyPendingCloud({
       agentId: recovery.agentId,
       profileId: recovery.profileId,
+      machineClass: recovery.machineClass,
       cwd: recovery.createParams?.cwd,
     });
     this.visibilityValue = recovery.createParams?.incognito === true ? "incognito" : "normal";

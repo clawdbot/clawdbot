@@ -9,11 +9,11 @@ import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
-import "../../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { extractRawText } from "../../../lib/chat/message-extract.ts";
+import "../../../components/tooltip.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -21,6 +21,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -1127,7 +1128,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         if (version === this.fileOperationVersion) {
           this.fileSaveNotice = {
             kind: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: formatUiError(error),
           };
         }
       })
@@ -1177,7 +1178,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         if (version === this.fileOperationVersion) {
           this.fileSaveNotice = {
             kind: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: formatUiError(error),
           };
         }
       })
@@ -1220,7 +1221,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         if (version === this.fileOperationVersion) {
           this.fileSaveNotice = {
             kind: "error",
-            message: error instanceof Error ? error.message : String(error),
+            message: formatUiError(error),
           };
         }
       })
@@ -1276,7 +1277,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         return;
       }
       this.error = t("chat.detailPanel.fullContentLoadFailed", {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatUiError(error),
       });
     }
   }

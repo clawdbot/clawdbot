@@ -162,7 +162,7 @@ export function buildSidebarSessionNavigationState(input: {
   highlightCurrentSession: boolean;
   runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>;
   loadingChildSessionKeys: ReadonlySet<string>;
-  outboxCountForSessionKey: (sessionKey: string) => number;
+  outboxAttentionCountForSessionKey: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   resolveAttention: (row: GatewaySessionRow) => SidebarRecentSession["attention"];
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
@@ -207,6 +207,7 @@ export function buildSidebarSessionNavigationState(input: {
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      userLabel: row.label,
       subtitle: resolveSessionWorkSubtitle(row),
       href: sessionNavigationTarget({
         face: resolveSessionPreferredFace(row),
@@ -252,7 +253,7 @@ export function buildSidebarSessionNavigationState(input: {
       cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
-      outboxCount: input.outboxCountForSessionKey(row.key),
+      outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
       hasComposerDraft: input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),

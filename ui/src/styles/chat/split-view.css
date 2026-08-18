@@ -545,7 +545,7 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   flex: 0 0 auto;
   /* With the title text-hugging, this claims the leftover width so the
      action cluster stays pinned to the right edge (and doubles as the
@@ -570,6 +570,40 @@ openclaw-chat-pane {
   display: contents;
 }
 
+.chat-pane__actions .chat-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.chat-pane__actions .chat-icon-btn > svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6px;
+}
+
+.chat-pane__actions .chat-tasks-toggle {
+  position: relative;
+}
+
+.chat-tasks-toggle__badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
+}
+
 .chat-pane__sharing-menu {
   flex: 0 0 auto;
 }
@@ -580,7 +614,6 @@ openclaw-chat-pane {
   max-width: min(260px, calc(100vw - 24px));
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-pane__sharing-menu--capped::part(menu) {
@@ -629,17 +662,6 @@ openclaw-chat-pane {
   justify-content: center;
 }
 
-.chat-pane__sharing-channel-icon {
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-  color: var(--muted);
-}
-
-.chat-pane__sharing-channel-icon svg {
-  width: 13px;
-  height: 13px;
-}
-
 .chat-pane__sharing-member-label {
   display: block;
   overflow: hidden;
@@ -661,12 +683,11 @@ openclaw-chat-pane {
    shed through 800px of container content; restoration then has 8px+ slack.
    The close action survives at the 320px pane floor. */
 @container (max-width: 800px) {
-  .chat-pane__split-down,
-  .chat-pane__split-right,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-session-diff-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-tasks-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-workspace-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-session-discussion-toggle,
+  /* Scoped to the actions row so this hide outranks the 0,2,0 icon-button
+     styling rule above; a bare class here silently loses that cascade. */
+  .chat-pane__actions .chat-pane__split-down,
+  .chat-pane__actions .chat-pane__split-right,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__dock-caret,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,

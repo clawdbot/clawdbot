@@ -383,6 +383,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
       : {}),
     ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
+    ...(replyAdmission?.status === "accepted" ? { deferredToActiveRun: replyAdmission.mode } : {}),
     // Eligibility keys off settled visible delivery: a suppressed or cancelled
     // final (including the core fallback itself) leaves channel-level recovery
     // eligible, while any settled visible delivery clears it. An aborted or

@@ -1,9 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  type AgentWaitParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
@@ -13,6 +9,7 @@ import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
@@ -21,7 +18,6 @@ import { handleChatAbortRequest } from "../server-methods/chat-abort-handler.js"
 import { resolveAgentRunSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
-import { formatForLog } from "../ws-log.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -132,7 +128,6 @@ export function createAgentTurnService({
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const idem = runId;
     let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
     let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
@@ -229,6 +224,7 @@ export function createAgentTurnService({
         images,
         imageOrder,
         media,
+        offloadedRefs,
         replyTo,
         recipientChannel,
         recipientAccountId,
@@ -413,7 +409,7 @@ export function createAgentTurnService({
           io.emitAcceptance([
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)),
+            errorShapeFromError(ErrorCodes.INVALID_REQUEST, err),
           ]);
           return;
         }
@@ -515,6 +511,7 @@ export function createAgentTurnService({
         cfgForAgent,
         sessionEntry,
         resolvedSessionKey,
+        requestedSessionKeyRaw,
         requestedSessionKey,
         preAcceptedReservedSessionKey,
         activeSessionAgentId,
@@ -533,6 +530,13 @@ export function createAgentTurnService({
         inputProvenance,
         isOneShotModelRun,
         isRestartRecoveryResumeRun,
+        canUseInternalRuntimeHandoff,
+        execApprovalFollowupApprovalId,
+        message,
+        effectiveTranscriptInputText,
+        images,
+        offloadedRefs,
+        requestedPromptPersistenceSuppression,
         runId,
         agentDedupeKeys,
         context,
@@ -565,7 +569,6 @@ export function createAgentTurnService({
         sessionEntry,
         resolvedSessionKey,
         requestedSessionKey,
-        requestedSessionKeyRaw,
         resolvedSessionId,
         agentId,
         activeSessionAgentId,
@@ -575,14 +578,11 @@ export function createAgentTurnService({
         isOneShotModelRun,
         isRestartRecoveryResumeRun,
         suppressVisibleSessionEffects,
-        message,
         images,
         imageOrder,
         media,
-        effectiveTranscriptInputText,
         inputProvenance,
         runId,
-        idempotencyKey: idem,
         agentDedupeKeys,
         spawnedBy: spawnedByValue,
         groupId: resolvedGroupId,
@@ -591,13 +591,11 @@ export function createAgentTurnService({
         bestEffortDeliver,
         lifecycleGeneration,
         effectiveBootstrapContextRunKind,
-        requestedPromptPersistenceSuppression,
         preserveUserFacingSessionModelState,
         sessionEffects,
         skipAgentInitialSessionTouch,
         restoredCronContinuation,
         canUseInternalRuntimeHandoff,
-        execApprovalFollowupApprovalId,
         client: principal,
         context,
         io,

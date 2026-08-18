@@ -5,13 +5,12 @@ const hoisted = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
   getActivePluginRegistry: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
-  promoteMatchingRuntimeContextEngineRegistrations: vi.fn(),
+  adoptRuntimeContextEngineRegistrations: vi.fn((target: unknown) => target),
   resolveAgentRuntimePluginLoadPlan: vi.fn(),
 }));
 
 vi.mock("../context-engine/registry.js", () => ({
-  promoteMatchingRuntimeContextEngineRegistrations:
-    hoisted.promoteMatchingRuntimeContextEngineRegistrations,
+  adoptRuntimeContextEngineRegistrations: hoisted.adoptRuntimeContextEngineRegistrations,
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -44,21 +43,25 @@ describe("agent runtime plugin registries", () => {
     hoisted.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
     hoisted.getActivePluginRegistry.mockReset().mockReturnValue(undefined);
     hoisted.loadPluginRegistryHandle.mockReset().mockReturnValue({ handle: true });
-    hoisted.promoteMatchingRuntimeContextEngineRegistrations.mockReset();
+    hoisted.adoptRuntimeContextEngineRegistrations
+      .mockReset()
+      .mockImplementation((target) => target);
     hoisted.resolveAgentRuntimePluginLoadPlan.mockReset().mockImplementation(({ config }) => ({
       config,
       pluginIds: ["codex", "memory-core"],
     }));
   });
 
-  it("promotes matching active context engines into the prepared registry", () => {
+  it("adopts runtime context engines from the active composition-root registry", () => {
     const activeRegistry = { active: true };
+    const adopted = { handle: "adopted" };
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(adopted);
 
     expect(
       loadAgentRuntimePluginRegistryHandle({ config: {} as never, workspaceDir: "/tmp/workspace" }),
-    ).toEqual({ handle: true });
-    expect(hoisted.promoteMatchingRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
+    ).toBe(adopted);
+    expect(hoisted.adoptRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
       { handle: true },
       activeRegistry,
     );

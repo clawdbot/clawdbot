@@ -86,6 +86,16 @@ Approval note:
 - For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local file operand and denies the run if that file changes before execution.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command, approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing, separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
+### Gateway deployments that cannot host nodes
+
+A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
+
+- **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
+- **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
+- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, allow `/j/*` and `/__openclaw__/worker` through without edge identity auth. Keep WebSocket upgrade enabled for `/__openclaw__/worker`; both routes enforce their own short-lived credentials. The node's main Gateway WebSocket must also reach an auth path it can satisfy. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
+
+Cloudflare Access service tokens (`CF-Access-Client-Id` and `CF-Access-Client-Secret`) are the intended alternative for Access-fronted machine clients, but node hosts cannot send those headers yet. Follow [node-host service-token header support](https://github.com/openclaw/openclaw/issues/125112) for that capability.
+
 ### Start a node host (foreground)
 
 On the node machine:
@@ -204,6 +214,12 @@ node host is updated. Adding, removing, or filtering servers after that does not
 require re-pairing because the approved command family is unchanged. Restart
 `openclaw node run` or `openclaw node restart` to apply node MCP config changes;
 the node host does not watch this config.
+
+Server-advertised tool-list changes apply live and replace the published node
+catalog. If an MCP transport closes or a stateful Streamable HTTP session
+expires, the node withdraws that server's stale tools and reconnects with
+bounded backoff. The failed call that detects an expired session is not replayed;
+a later call can use the replacement connection after its tools are republished.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with
@@ -420,8 +436,7 @@ node does not advertise this command yet, so its rows remain view-only.
 
 ### Host OpenClaw sessions
 
-A headless node host can separately opt into full OpenClaw session hosting from
-its local installation:
+A headless node host can separately opt into full OpenClaw session hosting:
 
 ```json5
 {
@@ -431,13 +446,26 @@ its local installation:
 }
 ```
 
-Restart the node host after enabling this setting. At startup it freezes the
-exact OpenClaw version, worker-bundle hash, and worker protocol features of its
-own installation in the connection handshake, then repeats that build in its
-live runner inventory. The Gateway reports prepared session-host eligibility
-only while those declarations match, and provisioning requires the node and
-Gateway versions to match exactly. If they differ, update the node before
-retrying.
+Restart the node host after enabling this setting. On the first session dispatch
+for a Gateway build, the node downloads one sealed worker artifact from that
+paired Gateway, verifies its exact content hash, and publishes it atomically
+under the Gateway-namespaced node-host bundle root. The artifact already
+contains its complete JavaScript dependency closure; the node does not install
+packages or execute lifecycle scripts. Later turns reuse the immutable artifact
+while its receipt still matches the Gateway's current build.
+
+The Devices page shows the validated Gateway-owned worker version in the node's
+metadata. If the retained artifact is missing or fails validation, Devices shows
+a **worker missing** warning; start a new session on that device to reinstall the
+current bundle. This status is observational and reconnect-scoped: launch still
+requires the exact durable receipt and current node authority.
+
+Node hosts must support the current private worker-supervisor dialect before
+they can host sessions. An older connected host remains visible but disabled in
+the session picker. Update OpenClaw on that device and reconnect it; for a
+headless node, run `openclaw update` followed by `openclaw node restart`. The
+Gateway does not fall back to the node's local OpenClaw package or an older
+supervisor dialect.
 
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. Each node runs at

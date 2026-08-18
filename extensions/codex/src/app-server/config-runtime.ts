@@ -107,6 +107,11 @@ export function resolveCodexAppServerRuntimeOptions(
   const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
   const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
+  if (transport !== "stdio" && pluginConfig.sessionCatalog?.homes?.length) {
+    throw new Error(
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    );
+  }
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";

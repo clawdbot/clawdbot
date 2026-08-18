@@ -75,6 +75,22 @@ describe("command-startup-policy", () => {
     }
   });
 
+  it("keeps gateway-owned mutations on non-observing config validation", () => {
+    for (const commandPath of [
+      ["nodes", "approve"],
+      ["nodes", "remove"],
+      ["devices", "approve"],
+      ["devices", "remove"],
+      ["gateway", "suspend"],
+      ["gateway", "resume"],
+    ]) {
+      expect(resolvePolicy({ commandPath })).toMatchObject({
+        skipConfigGuard: false,
+        validateConfigOnly: true,
+      });
+    }
+  });
+
   it("skips operator-state startup for local Claw authoring commands only", () => {
     for (const subcommand of ["create", "validate", "build", "dev"]) {
       const commandPath = ["claws", subcommand];

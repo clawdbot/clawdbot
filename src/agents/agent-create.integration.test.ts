@@ -9,6 +9,7 @@ import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/s
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -49,6 +50,38 @@ it("keeps a fresh named workspace pending through the first run setup", async ()
     expect(
       await fs.readFile(path.join(workspace, DEFAULT_IDENTITY_FILENAME), "utf8"),
     ).not.toContain("Researcher");
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await state.cleanup();
+  }
+});
+
+it("records operator and agent creation provenance after roster commits", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    scenario: "empty",
+    label: "agent-creation-provenance",
+  });
+  try {
+    await createAgent({ name: "Operator Child", workspace: state.path("operator-child") });
+    await createAgent({
+      name: "Agent Child",
+      workspace: state.path("agent-child"),
+      provenance: { createdVia: "agent", creatorAgentId: "main" },
+    });
+
+    expect(readAgentProvenance("operator-child", { env: state.env })).toMatchObject({
+      agentId: "operator-child",
+      createdVia: "operator",
+      creatorAgentId: null,
+      createdAtMs: expect.any(Number),
+    });
+    expect(readAgentProvenance("agent-child", { env: state.env })).toMatchObject({
+      agentId: "agent-child",
+      createdVia: "agent",
+      creatorAgentId: "main",
+      createdAtMs: expect.any(Number),
+    });
   } finally {
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();

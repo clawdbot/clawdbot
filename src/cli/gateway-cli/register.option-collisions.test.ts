@@ -85,6 +85,7 @@ vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  readBestEffortHealthConfig: async () => ({}),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -329,7 +330,7 @@ describe("gateway register option collisions", () => {
 
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      "Gateway call failed: Error: Use either --url or --port, not both.",
+      "Gateway call failed: Use either --url or --port, not both.",
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });

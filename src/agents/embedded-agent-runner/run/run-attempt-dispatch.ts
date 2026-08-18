@@ -34,6 +34,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 };
 
 type AttemptRuntime = {
+  contextEngineAgentId?: string;
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
@@ -44,6 +45,7 @@ type AttemptRuntime = {
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
+  authoredContextTokenCap?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
   prompt: string;
   provider: string;
@@ -203,6 +205,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         });
         return await prepareEmbeddedAttemptPromptExecution({
           attempt: { ...params, model: runtime.model },
+          mediaOwnerAgentId: workspace.sessionAgentId,
           effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
           effectiveWorkspace: workspace.effectiveWorkspace,
           prompt: "",
@@ -241,6 +244,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   }
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -296,10 +300,15 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextEngine
       ? {
           contextEngine: runtime.contextEngine,
-          contextTokenBudget: runtime.contextTokenBudget,
           contextWindowInfo: runtime.contextWindowInfo,
         }
       : {}),
+    ...(runtime.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(runtime.authoredContextTokenCap === undefined
+      ? {}
+      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
     skillsSnapshot: params.skillsSnapshot,
     prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
     transcriptPrompt:
@@ -480,6 +489,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     sessionKey: runtime.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceLocal:
+      !params.messageChannel &&
+      !params.messageProvider &&
+      params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
+        ? true
+        : undefined,
     turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
     turnSourceAccountId: params.agentAccountId,
     turnSourceThreadId: params.currentThreadTs,

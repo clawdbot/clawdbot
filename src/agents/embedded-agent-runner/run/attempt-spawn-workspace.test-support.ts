@@ -28,7 +28,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -936,7 +936,7 @@ type MutableSession = {
   agent: {
     convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
-    streamFn?: (...args: unknown[]) => Promise<unknown>;
+    streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
     subscribe?: (
       listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
@@ -1149,7 +1149,14 @@ export function createDefaultEmbeddedSession(params?: {
             preflightResult?: (submitted: boolean) => void;
           },
         };
-        await session.agent.streamFn?.();
+        await session.agent.streamFn?.(
+          testModel,
+          {
+            systemPrompt: session.agent.state.systemPrompt ?? "",
+            messages: session.messages as Parameters<StreamFn>[1]["messages"],
+          },
+          {},
+        );
       },
       streamFn: async () => {
         if (params?.prompt && pendingPrompt) {

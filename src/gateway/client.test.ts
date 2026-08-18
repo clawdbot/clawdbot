@@ -35,7 +35,9 @@ const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unkno
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const clearOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const loadDeviceAuthTokenReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
+const loadOriginDeviceTokenReadOnlyMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
@@ -191,7 +193,10 @@ vi.mock("../infra/device-auth-store.js", async () => {
   return {
     ...actual,
     loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
+    loadDeviceAuthTokenReadOnly: (...args: unknown[]) => loadDeviceAuthTokenReadOnlyMock(...args),
     loadOriginDeviceToken: (...args: unknown[]) => loadOriginDeviceTokenMock(...args),
+    loadOriginDeviceTokenReadOnly: (...args: unknown[]) =>
+      loadOriginDeviceTokenReadOnlyMock(...args),
     storeDeviceAuthToken: (...args: unknown[]) => storeDeviceAuthTokenMock(...args),
     storeOriginDeviceToken: (...args: unknown[]) => storeOriginDeviceTokenMock(...args),
     clearDeviceAuthToken: (...args: unknown[]) => clearDeviceAuthTokenMock(...args),
@@ -1167,7 +1172,9 @@ describe("GatewayClient connect auth payload", () => {
     clearDeviceAuthTokenMock.mockReset();
     clearOriginDeviceTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
+    loadDeviceAuthTokenReadOnlyMock.mockReset();
     loadOriginDeviceTokenMock.mockReset();
+    loadOriginDeviceTokenReadOnlyMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
     storeOriginDeviceTokenMock.mockReset();
     readLoggingConfigMock.mockReset();
@@ -1956,6 +1963,46 @@ describe("GatewayClient connect auth payload", () => {
     expect(connectFrameFrom(secondWs).deviceToken).toBeUndefined();
     expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
     second.stop();
+  });
+
+  it("keeps read-only origin auth loads and hello tokens off writable host callbacks", async () => {
+    loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
+      token: "stored-origin-token",
+      scopes: ["operator.read"],
+    });
+    const client = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://one.example/rpc",
+      sharedStateMode: "read-only",
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-origin-token",
+      deviceToken: "stored-origin-token",
+    });
+    expect(loadOriginDeviceTokenReadOnlyMock).toHaveBeenCalledOnce();
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: {
+            role: "operator",
+            scopes: ["operator.admin"],
+            deviceToken: "issued-origin-token",
+          },
+        },
+      }),
+    );
+
+    await waitForFast(() => expect(ws.lastClose).toBeNull());
+    expect(storeOriginDeviceTokenMock).not.toHaveBeenCalled();
+    expect(clearOriginDeviceTokenMock).not.toHaveBeenCalled();
+    client.stop();
   });
 
   it("keeps explicit shared auth ahead of origin-scoped auth across reconnects", async () => {

@@ -34,6 +34,7 @@ import {
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,
+  normalizeAgentIdStrict,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -475,7 +476,7 @@ export function createSessionsSendTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
-      const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { cfg, mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
       let requesterAgentId: string;
       try {
@@ -500,30 +501,38 @@ export function createSessionsSendTool(opts?: {
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = normalizeOptionalString(readToolStringParam(params, "label"));
-      const labelAgentIdParam = normalizeOptionalString(readToolStringParam(params, "agentId"));
+      const labelAgentIdInput = readToolStringParam(params, "agentId");
+      const normalizedLabelAgentId =
+        labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
+      if (normalizedLabelAgentId && !normalizedLabelAgentId.ok) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
+        });
+      }
+      const explicitTargetAgentId = normalizedLabelAgentId?.value;
 
       let sessionKey = sessionKeyParam;
       let resolvedTargetAgentId: string | undefined;
       let resolvedLabelKey: string | undefined;
-      if (!sessionKey && !labelParam && labelAgentIdParam) {
+      if (!sessionKey && !labelParam && explicitTargetAgentId) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
-          agentId: labelAgentIdParam,
+          agentId: explicitTargetAgentId,
           mainKey,
         });
         if (!agentMainKey) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "error",
-            error: `agent not found: ${labelAgentIdParam}`,
+            error: `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
           });
         }
         sessionKey = agentMainKey;
       }
       if (!sessionKey && labelParam) {
-        const requestedAgentId = labelAgentIdParam
-          ? normalizeAgentId(labelAgentIdParam)
-          : undefined;
+        const requestedAgentId = explicitTargetAgentId;
 
         if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
           return jsonResult({
@@ -647,6 +656,7 @@ export function createSessionsSendTool(opts?: {
           resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility: sessionVisibility,
         a2aPolicy,
       }).check({ key: resolvedSession.key });
@@ -700,7 +710,7 @@ export function createSessionsSendTool(opts?: {
       const resolvedTargetOwner =
         visibleSession.agentId ??
         resolvedTargetAgentId ??
-        (labelParam && labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined);
+        (labelParam ? explicitTargetAgentId : undefined);
       if (
         persistedTargetOwner.kind === "configured" &&
         resolvedTargetOwner &&
@@ -862,9 +872,9 @@ export function createSessionsSendTool(opts?: {
           : resolvedKey;
       const access = await resolveSessionToolAccess({
         action: "send",
-        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         targetAgentId,
         targetSessionKey: resolvedKey,
         authorizationTargetSessionKey: authorizationTargetKey,

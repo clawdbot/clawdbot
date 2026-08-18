@@ -60,7 +60,7 @@ function buildTranscriptMutationParams(
   };
 }
 
-function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
+export function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
   const params: Record<string, unknown> = { ...SESSION_LIST_PARAMS };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
@@ -125,10 +125,14 @@ export async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>(
-    "sessions.list",
-    buildSessionListParams(options),
-  );
+  return requestSessionListParams(client, buildSessionListParams(options));
+}
+
+export async function requestSessionListParams(
+  client: SessionRequestClient,
+  params: Readonly<Record<string, unknown>>,
+): Promise<SessionsListResult | null> {
+  const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
   return result ?? null;
 }
 
@@ -157,6 +161,7 @@ export function requestSessionDelete(
   return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
+    ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
     ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
   });
 }

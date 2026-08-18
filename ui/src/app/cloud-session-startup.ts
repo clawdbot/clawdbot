@@ -1,3 +1,4 @@
+import { formatUiError } from "../lib/format-error.ts";
 import type { CloudSessionRecovery } from "../lib/sessions/cloud-recovery.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -77,7 +78,7 @@ export function createApplicationCloudStartup(
       },
       (error: unknown) => {
         runtimeLoad = undefined;
-        runtimeError = error instanceof Error ? error.message : String(error);
+        runtimeError = formatUiError(error);
         publish();
       },
     ));

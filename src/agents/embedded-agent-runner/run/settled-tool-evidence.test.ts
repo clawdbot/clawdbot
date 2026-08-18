@@ -120,6 +120,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         hasAssistantVisibleText: true,
         lastAssistant: { stopReason: "length" },
       }),
+    ).toBe(false);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: false,
+        lastAssistant: { stopReason: "length" },
+      }),
     ).toBe(true);
     expect(
       isIncompleteTerminalAssistantTurn({

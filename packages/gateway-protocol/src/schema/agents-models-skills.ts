@@ -64,10 +64,19 @@ export const ModelChoiceSchema = closedObject({
 /** Semantic owner of an agent roster entry. */
 export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
 
+const AgentCreatedViaSchema = Type.Union([
+  Type.Literal("operator"),
+  Type.Literal("agent"),
+  Type.Literal("claw"),
+]);
+
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
   kind: Type.Optional(AgentKindSchema),
+  createdVia: Type.Optional(AgentCreatedViaSchema),
+  creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -378,6 +387,9 @@ export const SkillsUploadCommitParamsSchema = closedObject({
 const CLAWHUB_SKILL_REF_DESCRIPTION =
   "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
 
+/** Wire copy of the core trust state; this package intentionally depends on typebox only. */
+const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
+
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -442,11 +454,21 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
-      installRef: Type.Optional(
-        Type.String({
-          minLength: 1,
+      installRef: Type.String({
+        minLength: 1,
+        description:
+          "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
+      }),
+      installOnly: Type.Optional(
+        Type.Literal(true, {
           description:
-            "Publisher-qualified reference for this result. Send it as `slug` to skills.detail and skills.install; several publishers can share one slug.",
+            "Present when ClawHub serves this result install-only: offer install directly with `installRef`, because skills.detail cannot answer for it. Absence means the ordinary review-then-install flow, so results from servers that predate this field keep their existing behavior.",
+        }),
+      ),
+      trustState: Type.Optional(
+        Type.Literal(CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE, {
+          description:
+            "Present when ClawHub resolves this result from a source it has not scanned.",
         }),
       ),
       displayName: NonEmptyString,

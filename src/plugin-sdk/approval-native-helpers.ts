@@ -9,6 +9,7 @@ import type {
 } from "../config/types.approvals.js";
 import { doesApprovalRequestSelectChannelAccount } from "../infra/approval-request-account-binding.js";
 import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
+import { resolveApprovalRequestKind } from "../infra/approval-types.js";
 import {
   getExecApprovalReplyMetadata,
   type ExecApprovalReplyMetadata,
@@ -443,7 +444,7 @@ export function resolveApprovalKind(
   if (approvalKind) {
     return approvalKind;
   }
-  return "command" in request.request ? "exec" : "plugin";
+  return resolveApprovalRequestKind(request);
 }
 
 function resolveApprovalForwardingConfig(params: {

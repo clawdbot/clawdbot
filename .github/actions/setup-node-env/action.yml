@@ -81,14 +81,63 @@ runs:
           ln -s /__t /opt/hostedtoolcache
         fi
 
+    # Blacksmith's image tracks an older runner-images snapshot whose toolcache
+    # Node patches sit just under this repo's engines floor (measured 2026-08-16:
+    # 20.20.0/22.22.0/24.13.0 against >=22.22.3 and >=24.15.0), so every job
+    # falls through to a nodejs.org download. That is ~2.6s normally but tail-
+    # spikes past 110s when the mirror throttles our ~46 simultaneous fetches,
+    # and it lands on every job at once. Keep the payload in the Actions cache,
+    # which Blacksmith serves from its colocated backend. A stale or corrupt
+    # entry is self-healing: ensure-node probes each candidate's version and
+    # falls back to the download when none satisfies the floor.
+    # Restore by prefix, never by exact key: cache entries are immutable and an
+    # exact hit suppresses the post-job save, so a floating `24.x` key would pin
+    # the first Node it ever saw. Once the floor advances past it every job would
+    # restore the rejected payload and re-download forever. The save below is
+    # keyed on the version actually installed, so a newer resolve publishes a new
+    # entry and later prefix restores pick it up.
+    # GitHub-hosted images carry a Node that already clears the floor, so they
+    # resolve from /opt/hostedtoolcache and would only ever miss here, then warn
+    # on a save whose path was never created. Scope both steps to self-hosted.
+    - name: Restore Node toolchain cache
+      if: runner.os != 'Windows' && runner.environment != 'github-hosted'
+      id: node-toolchain-restore
+      continue-on-error: true
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: ${{ runner.temp }}/openclaw-node-toolchain/node
+        key: openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
+        restore-keys: |
+          openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
+
     - name: Setup Node.js
+      id: setup-node
       shell: bash
       env:
         REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+        OPENCLAW_NODE_TOOLCHAIN_ROOT: ${{ runner.os != 'Windows' && format('{0}/openclaw-node-toolchain/node', runner.temp) || '' }}
       run: |
         set -euo pipefail
         source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
         openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+        echo "resolved-version=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
+        # Only a download populates the cached root. An image whose toolcache
+        # already clears the floor leaves it absent, and saving a missing path
+        # warns without producing an entry.
+        if [ -n "${OPENCLAW_NODE_TOOLCHAIN_ROOT:-}" ] && [ -d "${OPENCLAW_NODE_TOOLCHAIN_ROOT}" ]; then
+          echo "toolchain-populated=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Skipped when the restore already matched this exact resolved version, so a
+    # warm run uploads nothing. On a version change the 46-way fanout races here;
+    # the losers log a benign "cache already exists" and continue.
+    - name: Save Node toolchain cache
+      if: ${{ runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node.outputs.toolchain-populated == 'true' && steps.node-toolchain-restore.outputs.cache-matched-key != format('openclaw-node-toolchain-v1-{0}-{1}-{2}-{3}', runner.os, runner.arch, inputs.node-version, steps.setup-node.outputs.resolved-version) }}
+      continue-on-error: true
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: ${{ runner.temp }}/openclaw-node-toolchain/node
+        key: openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-node.outputs.resolved-version }}
 
     - name: Configure dependency cache store
       if: inputs.dependency-cache == 'true'

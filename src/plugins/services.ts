@@ -14,6 +14,7 @@ import {
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
@@ -188,6 +189,7 @@ export async function startPluginServices(params: {
   workspaceDir?: string;
   startupTrace?: PluginServiceStartupTrace;
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
+  onHandle?: (handle: PluginServicesHandle) => void;
 }): Promise<PluginServicesHandle> {
   const running: Array<{
     id: string;
@@ -207,57 +209,16 @@ export async function startPluginServices(params: {
       entry.revokeGatewayEvents();
     }
   };
-  let failedCount = 0;
-  for (const entry of params.registry.services) {
-    const service = entry.service;
-    const traceName = createPluginServiceTraceName(entry);
-    const scopedGatewayEvents = createScopedGatewayEvents({
-      pluginId: entry.pluginId,
-      broadcast: params.broadcastPluginEvent,
-    });
-    const serviceContext = createServiceContext({
-      config: params.config,
-      startupTrace: params.startupTrace,
-      workspaceDir: params.workspaceDir,
-      service: entry,
-      gatewayEvents: scopedGatewayEvents.gatewayEvents,
-    });
-    const runningService = {
-      id: service.id,
-      diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
-      stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
-      revokeGatewayEvents: scopedGatewayEvents.revoke,
-    };
-    try {
-      const startService = () =>
-        withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext));
-      if (params.startupTrace) {
-        await params.startupTrace.measure(traceName, startService);
-      } else {
-        await startService();
-      }
-      running.push(runningService);
-    } catch (err) {
-      failedCount += 1;
-      const error = err as Error;
-      log.error(
-        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
-      );
-      // A failed start can already own resources; revoke events only after its cleanup runs.
-      await stopService(runningService);
-    }
-  }
-  params.startupTrace?.detail?.("sidecars.plugin-services.summary", [
-    ["serviceCount", params.registry.services.length],
-    ["startedCount", running.length],
-    ["failedCount", failedCount],
-  ]);
-
+  const startupSettled = createDeferredCore();
+  void startupSettled.promise.catch(() => {});
+  let stopRequested = false;
   let stopPromise: Promise<void> | undefined;
-  return {
-    stop: () =>
+  const handle: PluginServicesHandle = {
+    stop: () => {
+      stopRequested = true;
       // Store the shared promise before plugin cleanup runs so shutdown cannot start twice.
-      (stopPromise ??= Promise.resolve().then(async () => {
+      return (stopPromise ??= Promise.resolve().then(async () => {
+        await startupSettled.promise.catch(() => {});
         const reversed = running.toReversed();
         const diagnosticsExporters = reversed.filter((entry) => entry.diagnosticsExporter);
         const exporterFailures: unknown[] = [];
@@ -283,6 +244,64 @@ export async function startPluginServices(params: {
             "multiple diagnostics exporters failed to stop",
           );
         }
-      })),
+      }));
+    },
   };
+  params.onHandle?.(handle);
+
+  try {
+    let failedCount = 0;
+    for (const entry of params.registry.services) {
+      if (stopRequested) {
+        break;
+      }
+      const service = entry.service;
+      const traceName = createPluginServiceTraceName(entry);
+      const scopedGatewayEvents = createScopedGatewayEvents({
+        pluginId: entry.pluginId,
+        broadcast: params.broadcastPluginEvent,
+      });
+      const serviceContext = createServiceContext({
+        config: params.config,
+        startupTrace: params.startupTrace,
+        workspaceDir: params.workspaceDir,
+        service: entry,
+        gatewayEvents: scopedGatewayEvents.gatewayEvents,
+      });
+      const runningService = {
+        id: service.id,
+        diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
+        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
+        revokeGatewayEvents: scopedGatewayEvents.revoke,
+      };
+      try {
+        const startService = () =>
+          withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext));
+        if (params.startupTrace) {
+          await params.startupTrace.measure(traceName, startService);
+        } else {
+          await startService();
+        }
+        running.push(runningService);
+      } catch (err) {
+        failedCount += 1;
+        const error = err as Error;
+        log.error(
+          `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
+        );
+        // A failed start can already own resources; revoke events only after its cleanup runs.
+        await stopService(runningService);
+      }
+    }
+    params.startupTrace?.detail?.("sidecars.plugin-services.summary", [
+      ["serviceCount", params.registry.services.length],
+      ["startedCount", running.length],
+      ["failedCount", failedCount],
+    ]);
+    startupSettled.resolve();
+    return handle;
+  } catch (error) {
+    startupSettled.reject(error);
+    throw error;
+  }
 }

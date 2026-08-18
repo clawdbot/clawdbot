@@ -1,3 +1,4 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
@@ -150,7 +151,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         }
         void state.handleSendChat().catch((error: unknown) => {
           if (this.state === state && state.sessionKey === sessionKey) {
-            setChatError(state, error instanceof Error ? error.message : String(error));
+            setChatError(state, formatUiError(error));
             state.requestUpdate?.();
           }
         });

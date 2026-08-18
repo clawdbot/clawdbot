@@ -81,7 +81,7 @@ describe("gateway worker environment startup", () => {
               bundleHash: "a".repeat(64),
               openclawVersion: "2026.8.14",
               protocolFeatures: ["worker-heartbeat-v1"],
-              installKind: "local",
+              installKind: "bundle",
             },
             credential: {
               credentialHash: hashWorkerCredential("device-credential"),

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { OPENCLAW_PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import {
   type WorkerAdmissionHandshake,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -15,6 +16,10 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../../shared/worker-bundle-hash.js";
 import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
@@ -42,6 +47,10 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const WORKER_BUNDLE_ARTIFACT_PATHS = [
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+] as const;
 
 // Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
 // The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
@@ -68,10 +77,8 @@ export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationAr
   return nonTransferTimeoutMs + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
 }
 
-// Keep these boundaries aligned with package.json engines.node and infra/runtime-guard.ts.
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
-const node = parse(process.versions.node); if (!node) process.exit(1);
-const nodeSafe = (node[0] === 22 && atLeast(node, [22, 22, 3])) || (node[0] === 24 && atLeast(node, [24, 15, 0])) || (node[0] === 25 && atLeast(node, [25, 9, 0])) || node[0] >= 26;
+const nodeSafe = ${OPENCLAW_PROCESS_NODE_VERSION_CHECK};
 if (!nodeSafe) process.exit(1);
 try { const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");
   const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));
@@ -140,6 +147,7 @@ const path = require("node:path");
 const root = process.argv[1];
 const expected = process.argv[2];
 const install = process.argv[3];
+const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
 const entries = [];
 function fail(message) {
   throw new Error(message);
@@ -170,7 +178,7 @@ function addFile(relative) {
     fail("unsafe worker file: " + relative);
   }
   const contents = fs.readFileSync(absolute);
-  const mode = relative === "openclaw.mjs" || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
+  const mode = artifactPaths.includes(relative) || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
   fs.chmodSync(absolute, mode);
   entries.push({
     path: relative,
@@ -179,72 +187,18 @@ function addFile(relative) {
     sha256: crypto.createHash("sha256").update(contents).digest("hex"),
   });
 }
-function walk(relativeDirectory) {
-  assertDirectory(relativeDirectory);
-  const absoluteDirectory = path.join(root, ...relativeDirectory.split("/"));
-  for (const name of fs.readdirSync(absoluteDirectory).sort()) {
-    const relative = relativeDirectory + "/" + name;
-    const stats = fs.lstatSync(path.join(root, ...relative.split("/")));
-    if (stats.isSymbolicLink()) {
-      fail("unsafe worker path: " + relative);
-    }
-    if (stats.isDirectory()) {
-      walk(relative);
-    } else {
-      addFile(relative);
-    }
-  }
-}
-function readNpmInventory() {
-  assertDirectory("dist");
-  const inventoryPath = path.join(root, "dist", "postinstall-inventory.json");
-  const inventoryStats = fs.lstatSync(inventoryPath);
-  if (inventoryStats.isSymbolicLink() || !inventoryStats.isFile()) {
-    fail("unsafe worker dist inventory");
-  }
-  const value = JSON.parse(fs.readFileSync(inventoryPath, "utf8"));
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    fail("invalid worker dist inventory");
-  }
-  const unique = new Set(value);
-  if (unique.size !== value.length) {
-    fail("duplicate worker dist inventory entry");
-  }
-  for (const relative of value) {
-    if (
-      !relative.startsWith("dist/") ||
-      relative.includes("\\") ||
-      path.posix.normalize(relative) !== relative ||
-      relative === "dist/postinstall-inventory.json"
-    ) {
-      fail("unsafe worker dist inventory entry: " + relative);
-    }
-    addFile(relative);
-  }
-}
 try {
   assertRoot();
-  addFile("openclaw.mjs");
-  addFile("package.json");
-  if (install === "npm") {
-    readNpmInventory();
-  } else if (install === "bundle") {
-    walk("dist");
-    // Vendored workspace packages ship inside the bundle and are part of its hash;
-    // node_modules is installed after verification and never walked here.
-    const vendorPath = path.join(root, "vendor");
-    const vendorStats = fs.existsSync(vendorPath) ? fs.lstatSync(vendorPath) : undefined;
-    if (vendorStats) {
-      if (vendorStats.isSymbolicLink() || !vendorStats.isDirectory()) {
-        fail("unsafe worker vendor directory");
+  if (install === "npm" || install === "bundle") {
+    const allowedPaths = new Set([...artifactPaths, "bootstrap-receipt.json"]);
+    for (const name of fs.readdirSync(root)) {
+      if (!allowedPaths.has(name)) {
+        fail("unexpected worker bundle path: " + name);
       }
-      walk("vendor");
     }
+    for (const artifactPath of artifactPaths) addFile(artifactPath);
   } else {
     fail("invalid worker install channel");
-  }
-  if (entries.length < 3) {
-    fail("worker dist is empty");
   }
   entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const separator = String.fromCharCode(0);
@@ -495,7 +449,6 @@ case "$install" in
       printf '%s\n' '${NPM_MISSING_MARKER}' >&2
       exit ${NPM_MISSING_EXIT_CODE}
     fi
-    npm_prefix=$staging/.npm-prefix
     npm_pack_json=$staging/npm-pack.json
     npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
     package_archive=$(node -e '${READ_NPM_PACK_FILENAME_JS}' "$npm_pack_json")
@@ -504,15 +457,9 @@ case "$install" in
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
-    npm install --global --prefix "$npm_prefix" --ignore-scripts --omit=dev --no-audit --no-fund "$package_archive"
-    package_dir=$npm_prefix/lib/node_modules/openclaw
-    if [ ! -f "$package_dir/openclaw.mjs" ]; then
-      printf '%s\n' 'npm did not install the OpenClaw package root' >&2
-      exit 2
-    fi
-    # Match bundle layout so the worker entry always lives under the versioned root.
-    cp -R "$package_dir/." "$staging/"
-    rm -rf "$npm_prefix"
+    tar -xzf "$package_archive" -C "$staging" --strip-components=3 \
+      package/dist/worker/${WORKER_BUNDLE_ENTRY_PATH} \
+      package/dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}
     rm -f "$npm_pack_json" "$package_archive"
     ;;
   *)
@@ -524,15 +471,6 @@ esac
 if ! node -e '${VERIFY_INSTALL_JS}' "$staging" "$hash" "$install"; then
   printf '%s\n' 'worker install content does not match the expected bundle hash' >&2
   exit 2
-fi
-# Materialize production dependencies only after the pristine bundle passed its
-# integrity check; npm install writes node_modules the hash intentionally excludes.
-if [ "$install" = bundle ]; then
-  if ! command -v npm >/dev/null 2>&1; then
-    printf '%s\n' '${NPM_MISSING_MARKER}' >&2
-    exit ${NPM_MISSING_EXIT_CODE}
-  fi
-  npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
 fi
 printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"

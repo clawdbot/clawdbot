@@ -238,6 +238,7 @@ export async function runEmbeddedAttemptSettledPhase(
         toolResultPromptProjectionState,
       },
       execution: {
+        mediaOwnerAgentId: input.setup.sessionAgentId,
         effectiveFsWorkspaceOnly: input.setup.effectiveFsWorkspaceOnly,
         effectiveWorkspace: input.setup.effectiveWorkspace,
         sandbox: input.setup.sandbox,

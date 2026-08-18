@@ -609,11 +609,20 @@ Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
+- `discord-progress-draft-lifecycle` - runs a deterministic tool turn, verifies
+  the final answer has no synthesized activity receipt, and confirms the
+  working draft is deleted after the final lands.
 - `discord-voice-autojoin` - opt-in voice scenario. Runs by itself, enables
   `channels.discord.voice.autoJoin`, and verifies the SUT bot's current
   Discord voice state is the target voice/stage channel. Convex Discord
   credentials may include optional `voiceChannelId`; otherwise the runner
   adapter discovers the first visible voice/stage channel in the guild.
+- `discord-transcripts-voice-authorization` - opt-in live-model scenario. A
+  real driver-bot message first proves a sender excluded from the target voice
+  channel receives a visible transcript-tool denial without a join. The same
+  sender is then allowlisted and must start, stop, and leave live capture. The
+  scenario writes redacted JSON evidence and deletes its known Discord
+  messages during cleanup.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by
   itself because it switches the SUT to always-on, tool-only guild replies
   with `messages.statusReactions.enabled=true`, then captures a REST
@@ -629,6 +638,16 @@ Run the Discord voice auto-join scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-voice-autojoin \
   --provider-mode mock-openai
+```
+
+Run the transcript authorization scenario with a Convex lease:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-transcripts-voice-authorization \
+  --provider-mode live-frontier \
+  --credential-source convex \
+  --credential-role maintainer
 ```
 
 Run the Mantis status-reaction scenario explicitly:
@@ -1077,7 +1096,8 @@ sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
   for loopback relays; `roomId` must be a channel UUID, and the identities must
   be distinct.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string,
-driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
+driverBotToken: string, sutBotToken: string, sutApplicationId: string,
+voiceChannelId?: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,
 sutToken: string }` - `groupId` must be a numeric chat-id string.
 - Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken:

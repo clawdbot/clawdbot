@@ -44,7 +44,6 @@ const runtime = vi.hoisted(() => ({
     messages,
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
-  enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
   loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},

@@ -496,9 +496,6 @@ function providerUsesRuntimeModelAugment(params: {
   if (!provider) {
     return false;
   }
-  if (bundledStaticCatalogProviderUsesRuntimeAugment({ provider })) {
-    return true;
-  }
   const config = params.cfg ?? {};
   const preparedSnapshot =
     params.metadataSnapshot &&
@@ -518,6 +515,16 @@ function providerUsesRuntimeModelAugment(params: {
       env: process.env,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
+  if (
+    bundledStaticCatalogProviderUsesRuntimeAugment({
+      provider,
+      cfg: params.cfg,
+      ...(snapshot ? { metadataSnapshot: snapshot } : {}),
+      workspaceDir: params.workspaceDir,
+    })
+  ) {
+    return true;
+  }
   if (!snapshot) {
     return false;
   }
@@ -896,13 +903,13 @@ export function createImageTool(options?: {
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   const description = modelHasVision
-    ? "Load image(s) for direct visual inspection: image one path/URL, images max 20. Prompt images already visible; use only for images not provided."
+    ? "Load image(s) into private model context for inspection: image one path/URL, images max 20. Does not display, attach, or send files to the user. Prompt images are already visible."
     : explicitImageModelConfig
-      ? "Analyze image(s) with configured model: image one path/URL, images max 20; prompt says inspection."
-      : "Analyze image(s) with available vision: image one path/URL, images max 20; prompt says inspection.";
+      ? "Inspect image(s) in private model context with the configured model: image one path/URL, images max 20. Does not display, attach, or send files to the user."
+      : "Inspect image(s) in private model context with available vision: image one path/URL, images max 20. Does not display, attach, or send files to the user.";
 
   return {
-    label: modelHasVision ? "View Image" : "Image",
+    label: "Inspect Image",
     name: "image",
     description,
     ...(modelHasVision ? { catalogMode: "direct-only" as const } : {}),

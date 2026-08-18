@@ -16,6 +16,7 @@ import {
   formatTrajectoryCommandExportSummary,
   type TrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
+import { resolveExplicitSessionStorePathOrExit } from "./session-store-targets.js";
 
 type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
@@ -114,9 +115,22 @@ export async function exportTrajectoryCommand(
     return;
   }
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolvedOpts.store
+  let storePath = resolvedOpts.store
     ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
     : resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+  if (resolvedOpts.store) {
+    const explicitStorePath = resolveExplicitSessionStorePathOrExit({
+      storePath,
+      inputStorePath: resolvedOpts.store,
+      agentId: targetAgentId ?? "main",
+      runtime,
+      json: resolvedOpts.json,
+    });
+    if (!explicitStorePath) {
+      return;
+    }
+    storePath = explicitStorePath;
+  }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
   const entry = loadSessionEntryReadOnly({
     agentId: targetAgentId,

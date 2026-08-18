@@ -12,6 +12,20 @@ import {
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
 
+const outboundWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "discord/outbound" ? { ...logger, warn: outboundWarnSpy } : logger;
+    },
+  };
+});
+
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
 
@@ -91,6 +105,7 @@ describe("normalizeDiscordOutboundTarget", () => {
 describe("discordOutbound", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+    outboundWarnSpy.mockClear();
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
@@ -217,7 +232,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-webhook-1",
-      channelId: "thread-1",
+      target: { kind: "channel", id: "thread-1" },
     });
   });
 
@@ -281,6 +296,11 @@ describe("discordOutbound", () => {
       text: "fallback",
       result,
     });
+    // The fallback is intended, but the persona failure must stay visible.
+    expect(outboundWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("webhook persona send failed"),
+      { error: expect.objectContaining({ message: "rate limited" }) },
+    );
   });
 
   it("routes poll sends to thread target when threadId is provided", async () => {
@@ -388,7 +408,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
-      channelId: "ch-1",
+      target: { kind: "channel", id: "ch-1" },
     });
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
       "voice-1",
@@ -498,7 +518,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
-      channelId: "ch-1",
+      target: { kind: "channel", id: "ch-1" },
     });
   });
 
@@ -527,7 +547,7 @@ describe("discordOutbound", () => {
     expect(result).toMatchObject({
       channel: "discord",
       messageId: "",
-      channelId: "channel:123456",
+      target: { kind: "channel", id: "channel:123456" },
       receipt: {
         platformMessageIds: [],
         parts: [],
@@ -719,7 +739,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "video-1",
-      channelId: "channel-1",
+      target: { kind: "channel", id: "channel-1" },
       receipt: mediaReceipt,
     });
   });
@@ -779,7 +799,7 @@ describe("discordOutbound", () => {
     expect(result).toMatchObject({
       channel: "discord",
       messageId: "starter-1",
-      channelId: "thread-1",
+      target: { kind: "channel", id: "thread-1" },
       receipt: {
         primaryPlatformMessageId: "starter-1",
         threadId: "thread-1",
@@ -960,7 +980,7 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-2",
-      channelId: "ch-1",
+      target: { kind: "channel", id: "ch-1" },
     });
   });
 

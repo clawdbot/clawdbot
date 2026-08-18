@@ -11,8 +11,8 @@ import {
   deliverInboundReplyWithMessageSendContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import {
+  readChannelAllowFromStore,
   recordInboundSession,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";

@@ -931,7 +931,7 @@ describe("sessions_list gating", () => {
       mode: "tree",
       restricted: true,
       warning:
-        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; reads also cover any watched same-agent group sessions). Sessions outside that scope are omitted from results and count.",
+        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; the main session sees all sessions of its agent). Sessions outside that scope are omitted from results and count.",
     });
   });
 
@@ -1034,6 +1034,22 @@ describe("sessions_send gating", () => {
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("rejects an unrepresentable agent id before resolving a main session", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-invalid-agent", {
+      agentId: "агент✨",
+      message: "hello",
+      timeoutSeconds: 5,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("conceals missing explicit keys denied by session visibility", async () => {

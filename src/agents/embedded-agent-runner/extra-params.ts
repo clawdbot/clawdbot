@@ -1,5 +1,8 @@
-import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "@openclaw/ai/transports";
-import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
+import {
+  canonicalizeMaxTokensParam,
+  resolveMaxTokensParam,
+  detectOpenAICompletionsCompat,
+} from "@openclaw/ai/transports";
 import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
@@ -41,6 +44,7 @@ import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
+import type { ProviderThinkLevel } from "./utils.js";
 
 function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
   if (!streamFn) {
@@ -48,7 +52,6 @@ function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
   }
   return streamFn;
 }
-import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,

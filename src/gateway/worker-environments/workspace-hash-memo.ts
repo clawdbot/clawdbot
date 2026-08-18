@@ -13,13 +13,17 @@ export type WorkspaceReconcileMetrics = {
   remoteManifestCalls: number;
   remoteContentHashCount: number;
   remoteMemoHitCount: number;
+  remoteMemoTruncatedCount: number;
   remoteHashDurationMs: number;
   remoteManifestDurationMs: number;
   remoteManifestWallDurationMs: number;
   localReconciliationDurationMs: number;
 };
 
-type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & { totalDurationMs: number };
+type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
+  memoTruncatedCount: number;
+  totalDurationMs: number;
+};
 
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
 
@@ -40,6 +44,7 @@ export function createWorkspaceReconcileMetrics(): WorkspaceReconcileMetrics {
     remoteManifestCalls: 0,
     remoteContentHashCount: 0,
     remoteMemoHitCount: 0,
+    remoteMemoTruncatedCount: 0,
     remoteHashDurationMs: 0,
     remoteManifestDurationMs: 0,
     remoteManifestWallDurationMs: 0,
@@ -87,6 +92,7 @@ export function recordRemoteWorkspaceHashMetrics(
 ): void {
   aggregate.remoteContentHashCount += metrics.contentHashCount;
   aggregate.remoteMemoHitCount += metrics.memoHitCount;
+  aggregate.remoteMemoTruncatedCount += metrics.memoTruncatedCount;
   aggregate.remoteHashDurationMs += metrics.contentHashDurationMs;
   aggregate.remoteManifestDurationMs += metrics.totalDurationMs;
 }

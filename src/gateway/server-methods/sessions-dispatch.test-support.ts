@@ -31,7 +31,10 @@ import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
 
-export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
+export function makeReclaimedPlacement(): Extract<
+  WorkerSessionPlacementRecord,
+  { state: "reclaimed" }
+> {
   return {
     sessionId: dispatchTestSessionId,
     agentId: "main",
@@ -56,7 +59,7 @@ export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
   };
 }
 
-export function makeFailedPlacement(): WorkerSessionPlacementRecord {
+export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
   return {
     ...makeReclaimedPlacement(),
     state: "failed",
@@ -107,7 +110,9 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId: string } | { deviceId: string } = { profileId: "test" },
+  target: { profileId: string; machineClass?: string } | { deviceId: string } = {
+    profileId: "test",
+  },
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
@@ -116,6 +121,31 @@ export async function invokeSessionDispatch(
   )({
     req: { id: "dispatch-request" } as never,
     params: { key: dispatchTestSessionKey, ...target },
+    respond,
+    context,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
+export async function invokeSessionMove(
+  context: GatewayRequestContext,
+  params: {
+    expected: { generation: number; environmentId: string; ownerEpoch: number };
+    target:
+      | { kind: "gateway" }
+      | { kind: "profile"; profileId: string }
+      | { kind: "device"; deviceId: string };
+  },
+) {
+  const respond = vi.fn() as unknown as RespondFn;
+  await expectDefined(
+    sessionDispatchHandlers["sessions.move"],
+    'sessionDispatchHandlers["sessions.move"] test invariant',
+  )({
+    req: { id: "move-request" } as never,
+    params: { key: dispatchTestSessionKey, ...params },
     respond,
     context,
     client: null,

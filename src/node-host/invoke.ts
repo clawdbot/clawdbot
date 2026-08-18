@@ -1,7 +1,6 @@
 /** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
-import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -958,10 +957,7 @@ type McpInvokeContentBlock =
   | { type: "image"; data: string; mimeType: string };
 
 function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null {
-  if (!isRecord(block)) {
-    return null;
-  }
-  return mcpContentBlockToAgentContent(block as ContentBlock);
+  return isRecord(block) ? mcpContentBlockToAgentContent(block) : null;
 }
 
 function serializedJsonBytes(value: unknown): number {
@@ -972,16 +968,17 @@ function serializedJsonBytes(value: unknown): number {
 function boundMcpToolResultPayload(result: {
   content: readonly unknown[];
   structuredContent?: Record<string, unknown>;
-}): { content: McpInvokeContentBlock[]; structuredContent?: Record<string, unknown> } {
+  isError?: boolean;
+}): {
+  content: McpInvokeContentBlock[];
+  structuredContent?: Record<string, unknown>;
+  isError?: true;
+} {
   const normalizedBlocks = result.content
     .map(normalizeMcpContentBlock)
     .filter((block): block is McpInvokeContentBlock => block !== null);
   const totalTextBytes = normalizedBlocks.reduce<number>(
-    (total, block) =>
-      total +
-      (isRecord(block) && block.type === "text" && typeof block.text === "string"
-        ? Buffer.byteLength(block.text)
-        : 0),
+    (total, block) => total + (block.type === "text" ? Buffer.byteLength(block.text) : 0),
     0,
   );
   let remainingTextBytes =
@@ -991,15 +988,8 @@ function boundMcpToolResultPayload(result: {
   let markedTruncated = false;
   const textBoundedContent: McpInvokeContentBlock[] = [];
   for (const block of normalizedBlocks) {
-    if (
-      block.type === "image" &&
-      typeof block.data === "string" &&
-      typeof block.mimeType === "string"
-    ) {
+    if (block.type === "image") {
       textBoundedContent.push(block);
-      continue;
-    }
-    if (block.type !== "text" || typeof block.text !== "string") {
       continue;
     }
     if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
@@ -1027,7 +1017,10 @@ function boundMcpToolResultPayload(result: {
   }
   const payloadMarker = { type: "text" as const, text: MCP_PAYLOAD_TRUNCATION_MARKER };
   const reservedMarkerBytes = serializedJsonBytes(payloadMarker) + 1;
-  let usedBytes = Buffer.byteLength('{"content":[]}');
+  const isError = result.isError === true;
+  let usedBytes = Buffer.byteLength(
+    JSON.stringify({ content: [], ...(isError ? { isError } : {}) }),
+  );
   let payloadTruncated = false;
   const content: McpInvokeContentBlock[] = [];
   for (const block of textBoundedContent) {
@@ -1052,19 +1045,11 @@ function boundMcpToolResultPayload(result: {
   if (payloadTruncated) {
     content.push(payloadMarker);
   }
-  return { content, ...(structuredContent ? { structuredContent } : {}) };
-}
-
-function mcpToolErrorMessage(result: { content: readonly unknown[] }): string {
-  const text = result.content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        isRecord(block) && block.type === "text" && typeof block.text === "string",
-    )
-    .map((block) => block.text.trim())
-    .filter(Boolean)
-    .join("\n");
-  return truncateUtf16Safe(text || "MCP tool returned an error", 1_024);
+  return {
+    content,
+    ...(structuredContent ? { structuredContent } : {}),
+    ...(isError ? { isError } : {}),
+  };
 }
 
 async function handleMcpToolsCall(
@@ -1090,10 +1075,6 @@ async function handleMcpToolsCall(
       timeoutMs: frame.timeoutMs ?? undefined,
       ...(signal ? { signal } : {}),
     });
-    if (result.isError) {
-      await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));
-      return;
-    }
     await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
   } catch (error) {
     if (error instanceof NodeHostMcpError) {

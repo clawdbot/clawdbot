@@ -46,9 +46,6 @@ interface EmbeddedGatewayRuntime {
   };
   getMaxChatHistoryMessagesBytes: () => number;
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
-  enforceChatHistoryFinalBudget: (opts: { messages: unknown[]; maxBytes: number }) => {
-    messages: unknown[];
-  };
   replaceOversizedChatHistoryMessages: (opts: {
     messages: unknown[];
     maxSingleMessageBytes: number;

@@ -10,10 +10,12 @@ import { callGateway } from "../gateway/call.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import {
-  listApprovedPairedDeviceRoles,
-  listDevicePairingReadOnly,
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
+} from "../infra/device-pairing-tokens.js";
+import {
+  listApprovedPairedDeviceRoles,
+  listDevicePairingReadOnly,
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";

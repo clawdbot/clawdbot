@@ -80,8 +80,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
+  recordSessionCreated,
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
@@ -1057,6 +1057,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       entry: sessionEntry,
       dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
+      mainKey,
     });
   }
   const sessionStore = committed.sessionStoreView;

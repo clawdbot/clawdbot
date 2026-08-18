@@ -279,6 +279,7 @@ fun ShellScreen(
         onSelectDestination = selectSidebarDestination,
         drawerContent = {
           OpenClawSidebar(
+            viewModel = viewModel,
             agents = gatewayAgents,
             selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
             sessions = chatSessions,
