@@ -269,7 +269,70 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(audioEvents).toHaveLength(2);
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
-    ).toEqual([512 * 1024, 512 * 1024]);
+    ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
+    bridge.close();
+  });
+
+  it("drops stalled input audio and rate-limits aggregate warnings", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const provider = buildOpenAIRealtimeVoiceProvider({ logger });
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "test-api-key-test" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      openSocket(socket);
+      emitSessionUpdated(socket);
+      await connecting;
+      socket.bufferedAmount = 1024 * 1024 + 1;
+
+      bridge.sendAudio(Buffer.from("first"));
+      await vi.advanceTimersByTimeAsync(4_000);
+      bridge.sendAudio(Buffer.from("second"));
+      await vi.advanceTimersByTimeAsync(1_000);
+      bridge.sendAudio(Buffer.from("third"));
+
+      expect(
+        parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+      ).toHaveLength(0);
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        1,
+        "OpenAI realtime input audio backpressure; droppedFrames=1",
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        2,
+        "OpenAI realtime input audio backpressure; droppedFrames=2",
+      );
+      bridge.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes readiness-drained audio through websocket backpressure", async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const provider = buildOpenAIRealtimeVoiceProvider({ logger });
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "test-api-key-test" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    bridge.sendAudio(Buffer.from("queued-before-ready"));
+    socket.bufferedAmount = 1024 * 1024 + 1;
+    emitSessionUpdated(socket);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "OpenAI realtime input audio backpressure; droppedFrames=1",
+    );
     bridge.close();
   });
 

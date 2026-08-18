@@ -85,6 +85,7 @@ function createHarness(params?: {
   const onError = vi.fn();
   const onClose = vi.fn();
   const onEvent = vi.fn();
+  const logger = { warn: vi.fn() };
   const bridge = new OpenAIQuicksilverVoiceBridge({
     providerConfig: {},
     model: "gpt-live-1-codex",
@@ -104,10 +105,12 @@ function createHarness(params?: {
     onError,
     onClose,
     onEvent,
+    logger,
   });
   return {
     bridge,
     connections,
+    logger,
     onAudio,
     onClose,
     onError,
@@ -205,7 +208,11 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     expect(audioEvents).toHaveLength(2);
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
-    ).toEqual([512 * 1024, 512 * 1024]);
+    ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
+    expect(harness.logger.warn).toHaveBeenCalledOnce();
+    expect(harness.logger.warn).toHaveBeenCalledWith(
+      "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
+    );
     harness.bridge.close();
   });
 

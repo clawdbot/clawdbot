@@ -1,6 +1,7 @@
 // GPT-Live backend bridge over the Frameless Bidi WebSocket protocol used by Codex realtime v3.
 import { randomUUID } from "node:crypto";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -44,6 +45,7 @@ type OpenAIQuicksilverVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
   voice?: string;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
+  logger?: Pick<PluginLogger, "warn">;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
 };
 
@@ -73,7 +75,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   readonly handlesInputAudioBargeIn = false;
 
   private socket: OpenAIQuicksilverSocket | undefined;
-  private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
+  private readonly lifecycle: RealtimeVoiceSessionLifecycle;
   private readonly inboundTelephonyResampler = createStreamingPcmResampler(
     8_000,
     OPENAI_QUICKSILVER_SAMPLE_RATE,
@@ -90,7 +92,15 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     threadId: randomUUID(),
   };
 
-  constructor(private readonly config: OpenAIQuicksilverVoiceBridgeConfig) {}
+  constructor(private readonly config: OpenAIQuicksilverVoiceBridgeConfig) {
+    this.lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow: () =>
+        (config.logger?.warn ?? console.warn)(
+          "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
+        ),
+    });
+  }
 
   async connect(): Promise<void> {
     await this.lifecycle.connect((connection) => this.connectConnection(connection));
