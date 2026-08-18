@@ -209,7 +209,7 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   ) {
     return normalized as OpenAIApiReasoningEffort;
   }
-  if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
+  if (supported.some((supportedEffort) => supportedEffort === normalized)) {
     return normalized as OpenAIApiReasoningEffort;
   }
   if (requested === "off" && supported.includes("none")) {
