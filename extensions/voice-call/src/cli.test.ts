@@ -8,6 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
 const findCallMatchesInStoreMock = vi.hoisted(() => vi.fn());
 const loadActiveCallsFromStoreMock = vi.hoisted(() => vi.fn());
+const tailscaleMocks = vi.hoisted(() => ({
+  cleanup: vi.fn(),
+  getSelfInfo: vi.fn(),
+  setup: vi.fn(),
+}));
 const sleepMock = vi.hoisted(() =>
   vi.fn(
     async (ms: number) =>
@@ -30,6 +35,12 @@ vi.mock("./manager/store.js", async (importOriginal) => ({
   findCallMatchesInStore: findCallMatchesInStoreMock,
   loadActiveCallsFromStore: loadActiveCallsFromStoreMock,
 }));
+vi.mock("./webhook/tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./webhook/tailscale.js")>()),
+  cleanupTailscaleExposureRoute: tailscaleMocks.cleanup,
+  getTailscaleSelfInfo: tailscaleMocks.getSelfInfo,
+  setupTailscaleExposureRoute: tailscaleMocks.setup,
+}));
 
 import { registerVoiceCallCli } from "./cli.js";
 
@@ -50,6 +61,9 @@ describe("voice-call CLI status fallback", () => {
     callGatewayFromCliMock.mockReset();
     findCallMatchesInStoreMock.mockReset();
     loadActiveCallsFromStoreMock.mockReset();
+    tailscaleMocks.cleanup.mockReset();
+    tailscaleMocks.getSelfInfo.mockReset();
+    tailscaleMocks.setup.mockReset();
     sleepMock.mockReset();
     sleepMock.mockImplementation(
       async (ms: number) =>
@@ -149,6 +163,96 @@ describe("voice-call CLI status fallback", () => {
     await expect(
       program.parseAsync(["voicecall", "tail", "--since", "0x10"], { from: "user" }),
     ).rejects.toThrow("Invalid numeric value for --since: 0x10");
+  });
+
+  it("exposes the webhook target and enabled stream paths", async () => {
+    tailscaleMocks.setup.mockResolvedValue("https://bot.example.ts.net/voice/webhook");
+    const program = buildProgram(
+      {},
+      {
+        serve: { port: 3334, path: "/voice/webhook" },
+        tailscale: { mode: "off", path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+        streaming: { enabled: true, streamPath: "/voice/stream" },
+      },
+    );
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(
+        [
+          "voicecall",
+          "expose",
+          "--mode",
+          "funnel",
+          "--port",
+          "4444",
+          "--path",
+          "/custom/webhook",
+          "--serve-path",
+          "/custom/webhook",
+        ],
+        { from: "user" },
+      );
+    } finally {
+      capturer.restore();
+    }
+
+    expect(tailscaleMocks.setup.mock.calls).toEqual([
+      [
+        {
+          mode: "funnel",
+          path: "/custom/webhook",
+          localUrl: "http://127.0.0.1:4444/custom/webhook",
+        },
+      ],
+      [
+        {
+          mode: "funnel",
+          path: "/voice/stream/realtime",
+          localUrl: "http://127.0.0.1:4444/voice/stream/realtime",
+        },
+      ],
+      [
+        {
+          mode: "funnel",
+          path: "/voice/stream",
+          localUrl: "http://127.0.0.1:4444/voice/stream",
+        },
+      ],
+    ]);
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      localUrl: "http://127.0.0.1:4444/custom/webhook",
+      streamPaths: ["/voice/stream/realtime", "/voice/stream"],
+    });
+  });
+
+  it("clears webhook and stream paths for both Tailscale modes", async () => {
+    const program = buildProgram(
+      {},
+      {
+        serve: { port: 3334, path: "/voice/webhook" },
+        tailscale: { mode: "off", path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+        streaming: { enabled: true, streamPath: "/voice/stream" },
+      },
+    );
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "expose", "--mode", "off"], { from: "user" });
+    } finally {
+      capturer.restore();
+    }
+
+    expect(tailscaleMocks.cleanup.mock.calls).toEqual(
+      ["/voice/webhook", "/voice/stream/realtime", "/voice/stream"].flatMap((exposurePath) => [
+        [{ mode: "serve", path: exposurePath }],
+        [{ mode: "funnel", path: exposurePath }],
+      ]),
+    );
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      mode: "off",
+      streamPaths: ["/voice/stream/realtime", "/voice/stream"],
+    });
   });
 
   async function runCustomLogTailShortRead(

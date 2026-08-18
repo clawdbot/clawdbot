@@ -7,6 +7,7 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
+  resolveVoiceCallStreamExposurePaths: vi.fn(),
   resolveTwilioAuthToken: vi.fn(),
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock("./config.js", () => ({
     return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
   },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
+  resolveVoiceCallStreamExposurePaths: mocks.resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
 }));
@@ -248,6 +250,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     mocks.resolveRealtimeFastContextConsult.mockReset();
     mocks.resolveRealtimeFastContextConsult.mockResolvedValue({ handled: false });
+    mocks.resolveVoiceCallStreamExposurePaths.mockReset();
+    mocks.resolveVoiceCallStreamExposurePaths.mockReturnValue(["/voice/stream/realtime"]);
     mocks.startTunnel.mockResolvedValue(null);
     mocks.setupTailscaleExposure.mockResolvedValue(null);
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
@@ -270,6 +274,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       }),
     ).rejects.toThrow("init failed");
 
+    expect(mocks.startTunnel).toHaveBeenCalledWith(
+      expect.objectContaining({ streamPaths: ["/voice/stream/realtime"] }),
+    );
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);

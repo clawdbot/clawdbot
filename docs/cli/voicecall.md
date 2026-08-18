@@ -187,7 +187,8 @@ JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
 ### `expose`
 
 Enable, disable, or change the Tailscale serve/funnel configuration for the
-voice webhook.
+voice webhook. When realtime or streaming audio is enabled, the command also
+exposes or clears that mode's WebSocket stream path.
 
 | Flag                  | Default                                   | Description                                     |
 | --------------------- | ----------------------------------------- | ----------------------------------------------- |

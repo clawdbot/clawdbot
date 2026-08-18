@@ -6,6 +6,7 @@ import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
+  resolveVoiceCallStreamExposurePaths,
   validateProviderConfig,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
@@ -825,6 +826,44 @@ describe("normalizeVoiceCallConfig", () => {
       id: "ELEVENLABS_API_KEY",
     });
     expect(elevenlabs.voiceSettings).toEqual({ speed: 1.1 });
+  });
+});
+
+describe("resolveVoiceCallStreamExposurePaths", () => {
+  it("returns no paths when both audio modes are disabled", () => {
+    const config = normalizeVoiceCallConfig({});
+
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual([]);
+  });
+
+  it("derives the default realtime path from the webhook path", () => {
+    const config = normalizeVoiceCallConfig({
+      serve: { path: "/custom/webhook" },
+      realtime: { enabled: true },
+    });
+
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual(["/custom/stream/realtime"]);
+  });
+
+  it("normalizes explicit realtime and streaming paths", () => {
+    const config = normalizeVoiceCallConfig({
+      realtime: { enabled: true, streamPath: "custom/realtime" },
+      streaming: { enabled: true, streamPath: "custom/stream" },
+    });
+
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual([
+      "/custom/realtime",
+      "/custom/stream",
+    ]);
+  });
+
+  it("deduplicates equal realtime and streaming paths", () => {
+    const config = normalizeVoiceCallConfig({
+      realtime: { enabled: true, streamPath: "/voice/stream" },
+      streaming: { enabled: true, streamPath: "/voice/stream" },
+    });
+
+    expect(resolveVoiceCallStreamExposurePaths(config)).toEqual(["/voice/stream"]);
   });
 });
 

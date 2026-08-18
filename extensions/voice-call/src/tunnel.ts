@@ -77,6 +77,8 @@ interface TunnelConfig {
   port: number;
   /** Path prefix for the tunnel (e.g., /voice/webhook) */
   path: string;
+  /** Additional local WebSocket paths exposed by Tailscale */
+  streamPaths?: string[];
   /** ngrok auth token (optional, enables longer sessions) */
   ngrokAuthToken?: string;
   /** ngrok custom domain (paid feature) */
@@ -277,6 +279,7 @@ async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
   path: string;
+  streamPaths?: string[];
 }): Promise<TunnelResult> {
   // Get Tailscale DNS name
   const dnsName = await getTailscaleDnsName();
@@ -285,26 +288,42 @@ async function startTailscaleTunnel(config: {
   }
 
   const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
-  const localUrl = `http://127.0.0.1:${config.port}${path}`;
+  const exposurePaths = [
+    path,
+    ...(config.streamPaths ?? []).map((streamPath) =>
+      streamPath.startsWith("/") ? streamPath : `/${streamPath}`,
+    ),
+  ];
+  const mountedPaths: string[] = [];
 
-  const result = await runCommandWithTimeout(
-    ["tailscale", config.mode, "--bg", "--yes", "--set-path", path, localUrl],
-    {
-      killProcessTree: true,
-      maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
-      outputCapture: "tail",
-      timeoutMs: 10_000,
-    },
-  );
-  if (result.termination === "timeout") {
-    throw new Error(`Tailscale ${config.mode} timed out`);
-  }
-  if (result.code !== 0) {
-    const output = result.stderr
-      ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
-      : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
-    const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
-    throw new Error(`Tailscale ${config.mode} failed with code ${result.code}${detail}`);
+  for (const exposurePath of exposurePaths) {
+    const localUrl = `http://127.0.0.1:${config.port}${exposurePath}`;
+    const result = await runCommandWithTimeout(
+      ["tailscale", config.mode, "--bg", "--yes", "--set-path", exposurePath, localUrl],
+      {
+        killProcessTree: true,
+        maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
+        outputCapture: "tail",
+        timeoutMs: 10_000,
+      },
+    );
+    let failure: Error | undefined;
+    if (result.termination === "timeout") {
+      failure = new Error(`Tailscale ${config.mode} timed out`);
+    } else if (result.code !== 0) {
+      const output = result.stderr
+        ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
+        : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
+      const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
+      failure = new Error(`Tailscale ${config.mode} failed with code ${result.code}${detail}`);
+    }
+    if (failure) {
+      for (const mountedPath of mountedPaths) {
+        await stopTailscaleTunnel(config.mode, mountedPath);
+      }
+      throw failure;
+    }
+    mountedPaths.push(exposurePath);
   }
   const publicUrl = `https://${dnsName}${path}`;
   console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
@@ -313,7 +332,9 @@ async function startTailscaleTunnel(config: {
     publicUrl,
     provider: `tailscale-${config.mode}`,
     stop: async () => {
-      await stopTailscaleTunnel(config.mode, path);
+      for (const exposurePath of exposurePaths) {
+        await stopTailscaleTunnel(config.mode, exposurePath);
+      }
     },
   };
 }
@@ -347,6 +368,7 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
         mode: "serve",
         port: config.port,
         path: config.path,
+        streamPaths: config.streamPaths,
       });
 
     case "tailscale-funnel":
@@ -354,6 +376,7 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
         mode: "funnel",
         port: config.port,
         path: config.path,
+        streamPaths: config.streamPaths,
       });
 
     default:

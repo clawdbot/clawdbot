@@ -1,6 +1,6 @@
 // Voice Call plugin module implements tailscale behavior.
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import type { VoiceCallConfig } from "../config.js";
+import { resolveVoiceCallStreamExposurePaths, type VoiceCallConfig } from "../config.js";
 
 type TailscaleSelfInfo = {
   dnsName: string | null;
@@ -96,11 +96,25 @@ export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<s
 
   const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
   const localUrl = `http://127.0.0.1:${config.serve.port}${config.serve.path}`;
-  return setupTailscaleExposureRoute({
+  const publicUrl = await setupTailscaleExposureRoute({
     mode,
     path: config.tailscale.path,
     localUrl,
   });
+  for (const streamPath of resolveVoiceCallStreamExposurePaths(config)) {
+    const streamLocalUrl = `http://127.0.0.1:${config.serve.port}${streamPath}`;
+    const streamPublicUrl = await setupTailscaleExposureRoute({
+      mode,
+      path: streamPath,
+      localUrl: streamLocalUrl,
+    });
+    if (!streamPublicUrl) {
+      console.warn(
+        `[voice-call] Realtime/streaming calls will fail because Tailscale ${mode} could not expose ${streamPath}. Run tailscale ${mode} --bg --yes --set-path ${streamPath} ${streamLocalUrl} manually.`,
+      );
+    }
+  }
+  return publicUrl;
 }
 
 export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise<void> {
@@ -110,4 +124,7 @@ export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise
 
   const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
   await cleanupTailscaleExposureRoute({ mode, path: config.tailscale.path });
+  for (const streamPath of resolveVoiceCallStreamExposurePaths(config)) {
+    await cleanupTailscaleExposureRoute({ mode, path: streamPath });
+  }
 }

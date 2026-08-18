@@ -539,6 +539,21 @@ function defaultRealtimeStreamPathForServePath(servePath: string): string {
   return `${normalized}/stream/realtime`;
 }
 
+export function resolveVoiceCallStreamExposurePaths(config: VoiceCallConfig): string[] {
+  const paths: string[] = [];
+  if (config.realtime.enabled) {
+    paths.push(
+      config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
+    );
+  }
+  if (config.streaming.enabled) {
+    paths.push(config.streaming.streamPath);
+  }
+  // Accepted tradeoff: exotic prefixed tailscale paths are not prefix-mapped;
+  // stream mounts keep the proven public-path-equals-local-path shape.
+  return [...new Set(paths.map((path) => normalizeWebhookPath(path)))];
+}
+
 function normalizeVoiceCallTtsConfig(
   defaults: VoiceCallTtsConfig,
   overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,

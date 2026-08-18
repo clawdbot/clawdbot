@@ -148,17 +148,23 @@ describe("voice-call tailscale helpers", () => {
       setupTailscaleExposure({
         tailscale: { mode: "off", path: "/voice" },
         serve: { port: 8787, path: "/webhook" },
+        realtime: { enabled: false },
+        streaming: { enabled: false },
       } as never),
     ).resolves.toBeNull();
     await expect(
       setupTailscaleExposure({
         tailscale: { mode: "funnel", path: "/voice" },
         serve: { port: 8787, path: "/webhook" },
+        realtime: { enabled: false },
+        streaming: { enabled: false },
       } as never),
     ).resolves.toBe("https://bot.example.ts.net/voice");
     await cleanupTailscaleExposure({
       tailscale: { mode: "serve", path: "/voice" },
       serve: { port: 8787, path: "/webhook" },
+      realtime: { enabled: false },
+      streaming: { enabled: false },
     } as never);
 
     expect(runCommandMock.mock.calls[1]?.[0]).toEqual([
@@ -171,5 +177,76 @@ describe("voice-call tailscale helpers", () => {
       "http://127.0.0.1:8787/webhook",
     ]);
     expect(runCommandMock.mock.calls[2]?.[0]).toEqual(["tailscale", "serve", "off", "/voice"]);
+  });
+
+  it.each([
+    {
+      name: "realtime",
+      config: { realtime: { enabled: true, streamPath: "/voice/stream/realtime" } },
+      streamPath: "/voice/stream/realtime",
+    },
+    {
+      name: "streaming",
+      config: { streaming: { enabled: true, streamPath: "/voice/stream" } },
+      streamPath: "/voice/stream",
+    },
+  ])("mounts and cleans up the enabled $name stream path", async ({ config, streamPath }) => {
+    runCommandMock.mockImplementation(async (command: string[]) =>
+      command[1] === "status"
+        ? commandResult({
+            stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
+          })
+        : commandResult(),
+    );
+    const voiceCallConfig = {
+      tailscale: { mode: "funnel", path: "/voice/webhook" },
+      serve: { port: 8787, path: "/voice/webhook" },
+      realtime: { enabled: false },
+      streaming: { enabled: false },
+      ...config,
+    } as never;
+
+    await setupTailscaleExposure(voiceCallConfig);
+    await cleanupTailscaleExposure(voiceCallConfig);
+
+    expect(runCommandMock).toHaveBeenCalledWith(
+      [
+        "tailscale",
+        "funnel",
+        "--bg",
+        "--yes",
+        "--set-path",
+        streamPath,
+        `http://127.0.0.1:8787${streamPath}`,
+      ],
+      expect.any(Object),
+    );
+    expect(runCommandMock).toHaveBeenCalledWith(
+      ["tailscale", "funnel", "off", streamPath],
+      expect.any(Object),
+    );
+  });
+
+  it("deduplicates equal realtime and streaming paths", async () => {
+    runCommandMock.mockImplementation(async (command: string[]) =>
+      command[1] === "status"
+        ? commandResult({
+            stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
+          })
+        : commandResult(),
+    );
+    const config = {
+      tailscale: { mode: "funnel", path: "/voice/webhook" },
+      serve: { port: 8787, path: "/voice/webhook" },
+      realtime: { enabled: true, streamPath: "/voice/stream" },
+      streaming: { enabled: true, streamPath: "/voice/stream" },
+    } as never;
+
+    await setupTailscaleExposure(config);
+
+    const streamMounts = runCommandMock.mock.calls.filter(
+      ([command]) => command[5] === "/voice/stream",
+    );
+    expect(streamMounts).toHaveLength(1);
   });
 });
