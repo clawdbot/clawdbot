@@ -49,11 +49,6 @@ export type ChatTranscriptSession = {
   handleFocusOut(event: FocusEvent): void;
 };
 
-type TranscriptRowHeightCache = {
-  read: (sessionKey: string, rowKey: string) => number | undefined;
-  write: (sessionKey: string, rowKey: string, height: number) => void;
-};
-
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
 // Initial virtual rows can correct their estimates for several frames. Hold a
@@ -93,6 +88,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private observedWidth: number | null = null;
   private observedHeight: number | null = null;
   private contentReady = false;
+  private implicitEndAnchorPending: boolean;
   private pendingScrollOffset: {
     offset: number;
     stableFrames: number;
@@ -151,7 +147,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       []) {
       const index = instance.indexFromElement(row);
       const size = row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"];
-      this.recordRowHeight(index, size);
       instance.resizeItem(index, size);
     }
   }
@@ -217,20 +212,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly sessionKey: string,
-    private readonly rowHeightCache?: TranscriptRowHeightCache,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
   ) {
+    this.implicitEndAnchorPending = initialOffset === null;
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
       getScrollElement: () => this.scrollElement,
-      estimateSize: (index) => {
-        const rowKey = this.rowKeys[index];
-        return rowKey
-          ? (this.rowHeightCache?.read(this.sessionKey, rowKey) ?? CHAT_TRANSCRIPT_ESTIMATED_ROW_PX)
-          : CHAT_TRANSCRIPT_ESTIMATED_ROW_PX;
-      },
+      estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
@@ -273,11 +262,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
             this.queueConnectedRowMeasure();
           }
         }),
-      measureElement: (element, entry, instance) => {
-        const size = measureVirtualElement(element, entry, instance);
-        this.recordRowHeight(instance.indexFromElement(element), size);
-        return size;
-      },
+      measureElement: measureVirtualElement,
       rangeExtractor: (range) => {
         const indexes = defaultRangeExtractor(range);
         const focused =
@@ -342,6 +327,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
   }
 
@@ -506,6 +492,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     offset: number,
     onSettled?: (position: ChatSessionScrollPosition) => void,
   ): void {
+    this.implicitEndAnchorPending = false;
     this.pendingScrollOffset = { offset, stableFrames: 0, zeroMaxFrames: 0, onSettled };
     if (this.connected) {
       this.host.requestUpdate();
@@ -533,13 +520,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return null;
     }
     return row.dataset.virtualRowKey || null;
-  }
-
-  private recordRowHeight(index: number, height: number): void {
-    const rowKey = this.rowKeys[index];
-    if (rowKey && Number.isFinite(height) && height > 0) {
-      this.rowHeightCache?.write(this.sessionKey, rowKey, height);
-    }
   }
 
   private syncAnnouncement(announcement: TranscriptAnnouncement | null, announce: boolean): void {
@@ -590,6 +570,31 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       ...virtualizer.options,
       scrollMargin,
     });
+  }
+
+  private reconcileImplicitEndAnchor(): void {
+    if (!this.implicitEndAnchorPending || !this.connected || !this.contentReady) {
+      return;
+    }
+    const maxOffset = this.getMaxScrollOffset();
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const scrollOffset = virtualizer.scrollOffset;
+    if (maxOffset === null || scrollOffset === null) {
+      return;
+    }
+    if (scrollOffset >= 0 && scrollOffset <= maxOffset) {
+      this.implicitEndAnchorPending = false;
+      return;
+    }
+    if (maxOffset !== 0) {
+      return;
+    }
+    this.implicitEndAnchorPending = false;
+    // The DOM clamps an underfilled end anchor to zero without a scroll event,
+    // so TanStack cannot reconcile its maximum-integer initial offset itself.
+    virtualizer.scrollOffset = 0;
+    virtualizer.scrollToOffset(0);
+    this.host.requestUpdate();
   }
 
   private applyPendingScrollOffset(): void {
@@ -668,10 +673,7 @@ export class ChatTranscriptController implements ReactiveController {
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   private connected = false;
 
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly rowHeightCache?: TranscriptRowHeightCache,
-  ) {
+  constructor(private readonly host: ReactiveControllerHost) {
     host.addController(this);
   }
 
@@ -695,8 +697,6 @@ export class ChatTranscriptController implements ReactiveController {
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
         this.host,
-        sessionKey,
-        this.rowHeightCache,
         initialOffset,
         initialOffset === null
           ? undefined
