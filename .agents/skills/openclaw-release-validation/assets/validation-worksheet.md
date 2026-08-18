@@ -8,22 +8,24 @@
 
 - Release:
 - Commit:
-- Release notes:
+- Release notes: {{RELEASE_NOTES_URL}}
 - Source version:
 - Source commit:
 - Shared issue:
 - Upgrade result: pending
 
-## Priority for this release
+## Test first
+
+[Release notes]({{RELEASE_NOTES_URL}})
 
 {{RELEASE_PRIORITIES}}
 
 ## How to use this worksheet
 
 Start with the priorities above or choose any subsystem you know well. Add notes
-directly beneath that subsystem's heading; an empty section means you did not
-test it. Record failures, regressions, confusing behavior, and meaningful
-latency under **Release findings** as well.
+directly beneath that subsystem's heading; an empty or comment-only section
+means you did not test it. Record failures, regressions, confusing behavior,
+and meaningful latency under **Release findings** as well.
 
 ## Release findings
 
@@ -41,43 +43,81 @@ section is never published to GitHub.
 
 ## Subsystem notes
 
-### Pairing — pair a client or sender and confirm it can act
+#### Pairing
 
-### Channels — use the channel you know best and confirm one reply per message
+<!-- Pair a client or sender and confirm it can act. Add notes below. -->
 
-### Control UI — hold a real conversation with tools, reload, and continue
+#### Channels
 
-### TUI — drive history, streaming, shortcuts, and reconnect yourself
+<!-- Use the channel you know best and confirm one reply per message. Add notes below. -->
 
-### Onboarding — complete setup and reach a working conversation
+#### Control UI
 
-### Slash commands — try familiar commands and check their results
+<!-- Hold a real conversation with tools, reload, and continue. Add notes below. -->
 
-### Memory — retrieve old memory, add new memory, and retrieve it later
+#### TUI
 
-### Subagents — spawn a child, receive its result, and confirm it exits
+<!-- Drive history, streaming, shortcuts, and reconnect yourself. Add notes below. -->
 
-### Agents — create or switch agents and confirm their state stays separate
+#### Onboarding
 
-### Cron — create, run, inspect, and remove one disposable job
+<!-- Complete setup and reach a working conversation. Add notes below. -->
 
-### Sessions — restart or reconnect and confirm conversation continuity
+#### Slash commands
 
-### Context Engine — confirm relevant context appears without obvious excess
+<!-- Try familiar commands and check their results. Add notes below. -->
 
-### Skill Workshop — invoke a skill, revise it, and invoke the revision
+#### Memory
 
-### MCP — discover a familiar server and complete one real call
+<!-- Retrieve old memory, add new memory, and retrieve it later. Add notes below. -->
 
-### Models — list, select, use, and persist a model
+#### Subagents
 
-### Approvals — deny once and approve once; confirm each action happens once
+<!-- Spawn a child, receive its result, and confirm it exits. Add notes below. -->
 
-### Compaction — compact a real conversation and confirm continuity
+#### Agents
 
-### Codex harness — complete useful tool work and inspect its artifacts
+<!-- Create or switch agents and confirm their state stays separate. Add notes below. -->
 
-### OpenClaw harness — complete a real task and inspect its artifacts
+#### Cron
+
+<!-- Create, run, inspect, and remove one disposable job. Add notes below. -->
+
+#### Sessions
+
+<!-- Restart or reconnect and confirm conversation continuity. Add notes below. -->
+
+#### Context Engine
+
+<!-- Confirm relevant context appears without obvious excess. Add notes below. -->
+
+#### Skill Workshop
+
+<!-- Invoke a skill, revise it, and invoke the revision. Add notes below. -->
+
+#### MCP
+
+<!-- Discover a familiar server and complete one real call. Add notes below. -->
+
+#### Models
+
+<!-- List, select, use, and persist a model. Add notes below. -->
+
+#### Approvals
+
+<!-- Deny once and approve once; confirm each action happens once. Add notes below. -->
+
+#### Compaction
+
+<!-- Compact a real conversation and confirm continuity. Add notes below. -->
+
+#### Codex harness
+
+<!-- Complete useful tool work and inspect its artifacts. Add notes below. -->
+
+#### OpenClaw harness
+
+<!-- Complete a real task and inspect its artifacts. Add notes below. -->
 
 ## Final feedback
 

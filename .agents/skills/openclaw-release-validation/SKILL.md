@@ -37,11 +37,14 @@ When the issue does not exist, become the campaign creator:
 2. Map the user-visible and upgrade-sensitive changes to the subsystem headings
    in `assets/validation-worksheet.md`. Select the three to five subsystems with
    the largest changed surface or regression risk.
-3. Write a two- or three-sentence priority summary for each selected subsystem:
-   state what changed and what behavior a human should stress. Synthesize related
-   notes instead of copying the changelog.
+3. Build a compact `Subsystem | What changed | Try` table with one short phrase
+   or sentence per cell. Put `[Release notes](<release-url>)` immediately above
+   it. Hyperlink every issue or PR reference, using only references cited by the
+   release notes or verified live. When a row has no issue or PR, link its
+   subsystem name to the release notes. Synthesize related notes instead of
+   copying the changelog.
 4. Make a working copy of the worksheet asset and fill it with the exact
-   candidate identity, release-notes URL, and priority summaries. Ensure no
+   candidate identity, release-notes URL, and priority table. Ensure no
    template placeholder remains.
 5. Create the issue with the stable marker, a short participation note, and the
    completed worksheet verbatim between the worksheet markers. Re-query open
@@ -117,7 +120,7 @@ upgrade or gateway readiness is unresolved.
 
 Ask: **What do you want to test first?** Recommend starting with a release
 priority, but let the tester choose one subsystem at a time in any order. After
-each item, add their notes beneath that subsystem's `###` heading, then ask what
+each item, add their notes beneath that subsystem's `####` heading, then ask what
 they want to test next.
 
 The tester drives interactive surfaces such as the TUI, Control UI, onboarding,
@@ -126,8 +129,10 @@ to look for, then wait for their result. Take control only when explicitly
 asked. Do not turn the checklist into an automated scenario runner.
 
 A subsystem counts as tested only when tester-authored text appears beneath its
-heading. An empty section means untouched. Add concise detail under **Release
-findings** when something feels broken, slow, confusing, or regressed.
+heading. Ignore HTML guidance comments when deciding whether a section was
+tested; an empty or comment-only section means untouched. Add concise detail
+under **Release findings** when something feels broken, slow, confusing, or
+regressed.
 
 ## 6. Finish and publish
 
