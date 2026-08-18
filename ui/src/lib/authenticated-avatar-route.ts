@@ -53,8 +53,9 @@ function avatarRouteKey(
   url: string,
   authTokens: readonly string[],
   cacheNotFound: boolean,
+  retryUnavailable: boolean,
 ): string {
-  return `${cacheNotFound ? "stable-miss" : "retry-miss"}\0${authTokens.join("")}\0${url}`;
+  return `${cacheNotFound ? "stable-miss" : "retry-miss"}\0${retryUnavailable ? "retry-503" : "drop-503"}\0${authTokens.join("")}\0${url}`;
 }
 
 function releaseEntry(key: string, owner: symbol) {
@@ -82,6 +83,7 @@ async function fetchAvatarRoute(
   url: string,
   authTokens: readonly string[],
   cacheNotFound: boolean,
+  retryUnavailable: boolean,
   entry: AvatarRouteEntry,
 ) {
   const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
@@ -102,7 +104,7 @@ async function fetchAvatarRoute(
         break;
       }
       notFound = response.status === 404;
-      retryDelayMs = retryAfterMs(response);
+      retryDelayMs = retryUnavailable ? retryAfterMs(response) : undefined;
       if (response.status !== 401 && response.status !== 403) {
         break;
       }
@@ -134,7 +136,7 @@ async function fetchAvatarRoute(
             return;
           }
           entry.controller = new AbortController();
-          void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
+          void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
         }, retryDelayMs);
       } else if (entry.consumers.size > 0) {
         // Keep the exhausted entry through a cooldown so render churn cannot
@@ -163,7 +165,7 @@ export class AuthenticatedAvatarRouteLoader {
 
   constructor(
     private readonly onUpdate: () => void,
-    private readonly options: { cacheNotFound?: boolean } = {},
+    private readonly options: { cacheNotFound?: boolean; retryUnavailable?: boolean } = {},
   ) {}
 
   reset() {
@@ -193,7 +195,8 @@ export class AuthenticatedAvatarRouteLoader {
       return url;
     }
     const cacheNotFound = this.options.cacheNotFound === true;
-    const key = avatarRouteKey(url, authTokens, cacheNotFound);
+    const retryUnavailable = this.options.retryUnavailable === true;
+    const key = avatarRouteKey(url, authTokens, cacheNotFound, retryUnavailable);
     let entry = sharedAvatarRoutes.get(key);
     if (!entry) {
       entry = {
@@ -206,7 +209,7 @@ export class AuthenticatedAvatarRouteLoader {
         retryEligibleAt: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
+      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
     } else if (
       entry.blobUrl === null &&
       entry.retryTimer === undefined &&
@@ -216,7 +219,7 @@ export class AuthenticatedAvatarRouteLoader {
       entry.retryAttempts = 0;
       entry.retryEligibleAt = undefined;
       entry.controller = new AbortController();
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
+      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
     }
     if (entry.releaseTimer !== undefined) {
       clearTimeout(entry.releaseTimer);

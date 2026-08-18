@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 // Workspace icon tests cover conventional-path resolution, process-stable
 // caching, and the authenticated route's scoping, limits, and headers.
-import { createServer, get as httpGet } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -14,25 +14,6 @@ const mocks = vi.hoisted(() => ({
   resolveIsOwner: vi.fn(),
   resolveLocalSessionWorkspaceRoot: vi.fn(),
 }));
-
-const iconReadControl = vi.hoisted(() => ({
-  gate: null as Promise<void> | null,
-}));
-
-vi.mock("../infra/boundary-file-read.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/boundary-file-read.js")>();
-  return {
-    ...actual,
-    readFileDescriptorBounded: async (
-      ...args: Parameters<typeof actual.readFileDescriptorBounded>
-    ) => {
-      if (iconReadControl.gate) {
-        await iconReadControl.gate;
-      }
-      return actual.readFileDescriptorBounded(...args);
-    },
-  };
-});
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
@@ -243,32 +224,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
   const iconRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}/__openclaw__/workspace-icon/${encodeURIComponent(sessionKey)}`;
 
-  /** Lets in-flight requests reach the route before the test publishes or asserts. */
-  const settleRequests = () =>
-    new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-
-  /**
-   * Own socket per request: the wait pool is bounded per session and per
-   * process, so these cases need real concurrency, not a pooled queue.
-   */
-  const openIconRequest = (sessionKey: string) => {
-    const request = httpGet(iconRoute(sessionKey), { agent: false });
-    const status = new Promise<number>((resolve) => {
-      request.once("response", (response) => {
-        response.resume();
-        resolve(response.statusCode ?? 0);
-      });
-      request.once("error", () => resolve(0));
-    });
-    return { abort: () => request.destroy(), status };
-  };
-
-  /** One request per distinct session key, filling `MAX_WAITING_SESSIONS`. */
-  const saturateWaitPool = () =>
-    Array.from({ length: 32 }, (_unused, index) => openIconRequest(`agent:main:crowd-${index}`));
-
   it("serves the session workspace icon with sandboxed asset headers", async () => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
@@ -334,73 +289,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("serves a request that arrives before chat startup publishes its snapshot", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-
-    // The icon GET and chat.startup travel on different transports, so the
-    // request can land while nothing has been prepared for the session yet.
-    const responsePromise = fetch(iconRoute("agent:main:racing"));
-    const settled = vi.fn();
-    void responsePromise.then(settled);
-    await settleRequests();
-    expect(settled).not.toHaveBeenCalled();
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
-
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:racing" });
-    const response = await responsePromise;
-    expect(response.status).toBe(200);
-    expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
-    // One request, one answer: the client never had to poll for readiness.
-    expect(mocks.authorize).toHaveBeenCalledOnce();
-  });
-
-  it("answers 404 when the awaited publish carries no icon", async () => {
-    // The common no-icon race: the request wins, then preparation publishes an
-    // absence. A published absence is an answer, not a missing snapshot.
-    const responsePromise = fetch(iconRoute("agent:main:iconless"));
-    await settleRequests();
-
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:iconless" });
-    const response = await responsePromise;
-    expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("stops admitting waits once the wait pool is saturated", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    const held = saturateWaitPool();
-    await settleRequests();
-
-    const refused = openIconRequest("agent:main:refused");
-    await settleRequests();
-    // Admission already answered this one, so the publish cannot reach it.
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:refused" });
-    await expect(refused.status).resolves.toBe(503);
-
-    for (const request of held) {
-      request.abort();
-    }
-  });
-
-  it("frees the wait slot a disconnected client held", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    const abandoned = saturateWaitPool();
-    await settleRequests();
-    for (const request of abandoned) {
-      request.abort();
-    }
-    await settleRequests();
-
-    const admitted = openIconRequest("agent:main:after-disconnect");
-    await settleRequests();
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:after-disconnect" });
-    await expect(admitted.status).resolves.toBe(200);
-  });
-
-  it("advertises a bounded retry when no chat startup owns the session", async () => {
+  it("keeps a request made before chat startup retryable", async () => {
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -419,98 +308,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const response = await responsePromise;
     expect(response.status).toBe(200);
     expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
-  });
-
-  it("serves a pending snapshot after the first request times out and retries", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    let releaseRead = () => {};
-    iconReadControl.gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:slow-pending" });
-
-    try {
-      const timedOut = await fetch(iconRoute("agent:main:slow-pending"));
-      expect(timedOut.status).toBe(503);
-      expect(timedOut.headers.get("retry-after")).toBe("1");
-
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-      const retried = await fetch(iconRoute("agent:main:slow-pending"));
-      expect(retried.status).toBe(200);
-      expect(Buffer.from(await retried.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
-    } finally {
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-    }
-  });
-
-  it("bounds requests waiting on a cached pending preparation", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    let releaseRead = () => {};
-    iconReadControl.gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:cached-pending" });
-    const held = Array.from({ length: 4 }, () => openIconRequest("agent:main:cached-pending"));
-    await settleRequests();
-    const refused = fetch(iconRoute("agent:main:cached-pending"));
-
-    try {
-      const response = await refused;
-      expect(response.status).toBe(503);
-      expect(response.headers.get("retry-after")).toBe("1");
-    } finally {
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-      for (const request of held) {
-        request.abort();
-      }
-      await Promise.all(held.map((request) => request.status));
-    }
-  });
-
-  it("releases a cached pending wait when its client disconnects", async () => {
-    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    let releaseRead = () => {};
-    iconReadControl.gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:cached-abort" });
-    const abandoned = Array.from({ length: 4 }, () => openIconRequest("agent:main:cached-abort"));
-
-    try {
-      await settleRequests();
-      for (const request of abandoned) {
-        request.abort();
-      }
-      await settleRequests();
-
-      const admitted = openIconRequest("agent:main:cached-abort");
-      const settled = vi.fn();
-      void admitted.status.then(settled);
-      await settleRequests();
-      expect(settled).not.toHaveBeenCalled();
-
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-      await expect(admitted.status).resolves.toBe(200);
-    } finally {
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-      for (const request of abandoned) {
-        request.abort();
-      }
-      await Promise.all(abandoned.map((request) => request.status));
-    }
   });
 
   it("records the fallback when preparation fails", async () => {
@@ -554,42 +351,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:newest" });
 
     expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
-    // Eviction is terminal until a new chat.startup republishes the session,
-    // so the evicted key answers only once the publish deadline passes.
     expect((await fetch(iconRoute("agent:main:filler-0"))).status).toBe(503);
-  });
-
-  it("completes an admitted pending request after its cache entry is evicted", async () => {
-    const root = await makeWorkspace({ "favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockImplementation((params: { sessionKey: string }) =>
-      params.sessionKey === "agent:main:pending-eviction" ? root : undefined,
-    );
-    let releaseRead = () => {};
-    iconReadControl.gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const preparation = prepareSessionWorkspaceIcon({
-      sessionKey: "agent:main:pending-eviction",
-    });
-    const responsePromise = fetch(iconRoute("agent:main:pending-eviction"));
-
-    try {
-      await settleRequests();
-      for (let index = 0; index < 128; index += 1) {
-        await prepareSessionWorkspaceIcon({ sessionKey: `agent:main:evictor-${index}` });
-      }
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-
-      const response = await responsePromise;
-      expect(response.status).toBe(200);
-      expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
-    } finally {
-      releaseRead();
-      iconReadControl.gate = null;
-      await preparation;
-    }
   });
 
   const malformed = ["/__openclaw__/workspace-icon/", "/__openclaw__/workspace-icon/a/b"];

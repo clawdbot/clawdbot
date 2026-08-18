@@ -15,7 +15,7 @@ it("cancels an advertised retry when the last consumer releases the route", asyn
     headers: new Headers({ "retry-after": "1" }),
   } as Response);
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const loader = new AuthenticatedAvatarRouteLoader(vi.fn());
+  const loader = new AuthenticatedAvatarRouteLoader(vi.fn(), { retryUnavailable: true });
 
   expect(loader.resolve("/avatar/retrying", ["token"])).toBeNull();
   await Promise.resolve();
@@ -35,7 +35,7 @@ it("backs off after one retry window before a later render can recover", async (
     headers: new Headers({ "retry-after": "1" }),
   } as Response);
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const loader = new AuthenticatedAvatarRouteLoader(vi.fn());
+  const loader = new AuthenticatedAvatarRouteLoader(vi.fn(), { retryUnavailable: true });
 
   expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
   await vi.advanceTimersByTimeAsync(10_000);

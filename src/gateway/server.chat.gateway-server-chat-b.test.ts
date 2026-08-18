@@ -111,25 +111,6 @@ vi.mock("../plugins/provider-thinking.js", () => ({
   },
 }));
 
-// A held gate for prepareSessionWorkspaceIcon() so a test can prove chat.startup
-// never waits on decorative icon discovery: left unset, every other test's
-// preparation resolves through the real implementation exactly as before.
-const workspaceIconPrepControl = vi.hoisted(() => ({
-  gate: null as Promise<void> | null,
-}));
-vi.mock("./workspace-icon-http.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./workspace-icon-http.js")>();
-  return {
-    ...actual,
-    prepareSessionWorkspaceIcon: (
-      params: Parameters<typeof actual.prepareSessionWorkspaceIcon>[0],
-    ) =>
-      workspaceIconPrepControl.gate
-        ? workspaceIconPrepControl.gate.then(() => actual.prepareSessionWorkspaceIcon(params))
-        : actual.prepareSessionWorkspaceIcon(params),
-  };
-});
-
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 2_000, interval: 1 } as const;
 function waitForFast<T>(
@@ -806,34 +787,6 @@ describe("gateway server chat", () => {
       }
     },
   );
-
-  test("chat.startup responds without waiting for workspace icon discovery to finish", async () => {
-    const stall = createDeferred();
-    workspaceIconPrepControl.gate = stall.promise;
-    openDirectChatSession();
-    try {
-      await writeMainSessionStore();
-      const context = createDirectChatContext();
-      const responses: CapturedChatResponse[] = [];
-      // Held gate never resolves during the call: on pre-fix code that awaits
-      // icon preparation before responding, this call would hang past the
-      // default test timeout instead of returning.
-      await callDirectChat("chat.startup", {
-        id: "chat.startup",
-        params: makeMainSessionParams(),
-        respond: captureChatResponse(responses),
-        context,
-      });
-
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
-    } finally {
-      stall.resolve();
-      workspaceIconPrepControl.gate = null;
-      testState.sessionStorePath = undefined;
-      clearConfigCache();
-    }
-  });
 
   test.each(["chat.history", "chat.startup"] as const)(
     "%s adopts the in-flight run for a non-default agent alias key",
