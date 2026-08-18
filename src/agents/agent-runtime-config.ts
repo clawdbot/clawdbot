@@ -156,6 +156,9 @@ function hasAgentRuntimeSecretRefs(params: {
   if (hasNestedSecretRef(config.skills?.entries)) {
     return true;
   }
+  if (hasNestedSecretRef(config.mcp?.servers)) {
+    return true;
+  }
   if (hasNestedSecretRef(config.tools?.web?.search)) {
     return true;
   }

@@ -3,11 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  isSecretRef,
   resolveSecretInputRef,
   type SecretProviderConfig,
   type SecretRef,
 } from "../config/types.secrets.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { shouldIncludeConfigureMcpCandidate } from "./mcp-target-sensitivity.js";
 import type { SecretsApplyPlan } from "./plan.js";
 import { isRecord } from "./shared.js";
 import {
@@ -73,6 +75,10 @@ function resolveAuthProfileProvider(
   return provider.length > 0 ? provider : undefined;
 }
 
+function isMcpConfigureTarget(id: string): boolean {
+  return id === "mcp.servers.*.env.*" || id === "mcp.servers.*.headers.*";
+}
+
 /** Builds configure candidates for OpenClaw config plus an optional auth-profile scope. */
 export function buildConfigureCandidatesForScope(params: {
   config: OpenClawConfig;
@@ -89,12 +95,25 @@ export function buildConfigureCandidatesForScope(params: {
 
   const openclawCandidates = discoverConfigSecretTargets(params.config)
     .filter((entry) => entry.entry.includeInConfigure)
+    .filter(
+      (entry) =>
+        !isMcpConfigureTarget(entry.entry.id) ||
+        shouldIncludeConfigureMcpCandidate({
+          name: entry.pathSegments.at(-1) ?? "",
+          value: entry.value,
+        }),
+    )
     .map((entry) => {
       const resolved = resolveSecretInputRef({
         value: entry.value,
         refValue: entry.refValue,
         defaults: params.config.secrets?.defaults,
       });
+      const existingRef = isMcpConfigureTarget(entry.entry.id)
+        ? isSecretRef(entry.value)
+          ? entry.value
+          : undefined
+        : resolved.ref;
       const pathExists = hasPathInAuthoredConfig(entry.pathSegments);
       const refPathExists = entry.refPathSegments
         ? hasPathInAuthoredConfig(entry.refPathSegments)
@@ -110,7 +129,7 @@ export function buildConfigureCandidatesForScope(params: {
           configFile: `openclaw.json` as const,
           expectedResolvedValue: entry.entry.expectedResolvedValue,
         },
-        resolved.ref ? { existingRef: resolved.ref } : {},
+        existingRef ? { existingRef } : {},
         pathExists || refPathExists ? {} : { isDerived: true },
         entry.providerId ? { providerId: entry.providerId } : {},
         entry.accountId ? { accountId: entry.accountId } : {},

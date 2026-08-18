@@ -1093,6 +1093,25 @@ describe("cron webhook schema", () => {
   });
 });
 
+describe("core MCP SecretRef schema", () => {
+  it("accepts SecretRef objects in stdio env and HTTP headers", () => {
+    const secretRef = { source: "env", provider: "default", id: "MCP_TOKEN" };
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          local: { command: "example-mcp", env: { API_TOKEN: secretRef } },
+          remote: {
+            url: "https://mcp.example.test",
+            headers: { Authorization: secretRef },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({

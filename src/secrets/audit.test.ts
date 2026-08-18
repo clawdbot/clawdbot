@@ -291,6 +291,53 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
+  it("audits sensitive MCP literals and canonical refs without flagging benign values", async () => {
+    await writeJsonFile(fixture.configPath, {
+      mcp: {
+        servers: {
+          local: {
+            command: "example-mcp",
+            env: { API_TOKEN: "plain-secret", NUMERIC_APIKEY: 12345, MODE: "debug" },
+          },
+          remote: {
+            url: "https://mcp.example.test",
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "MCP_AUTH_TOKEN",
+              },
+            },
+          },
+        },
+      },
+    });
+    fixture.env.MCP_AUTH_TOKEN = "resolved-secret";
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "mcp.servers.local.env.API_TOKEN",
+      }),
+    );
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "mcp.servers.local.env.NUMERIC_APIKEY",
+      }),
+    );
+    expect(report.findings.some((entry) => entry.jsonPath === "mcp.servers.local.env.MODE")).toBe(
+      false,
+    );
+    expect(
+      report.findings.some(
+        (entry) => entry.jsonPath === "mcp.servers.remote.headers.Authorization",
+      ),
+    ).toBe(false);
+  });
+
   it("reports plaintext that duplicates the store while resolving store refs", async () => {
     writeSecretStoreEntry({
       scope: { kind: "team" },

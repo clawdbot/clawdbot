@@ -724,6 +724,33 @@ Example:
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
 
+Core MCP `headers` and `env` entries accept structured SecretRef objects. HTTP header refs are resolved only for the selected HTTP transport; stdio env refs are resolved only for the selected stdio transport. Disabled servers and inactive transport fields do not trigger secret resolution.
+
+```json5
+{
+  mcp: {
+    servers: {
+      "remote-tools": {
+        url: "https://mcp.example.com",
+        headers: {
+          Authorization: { source: "env", provider: "default", id: "MCP_AUTH_TOKEN" },
+        },
+      },
+      "local-tools": {
+        command: "example-mcp",
+        env: {
+          API_TOKEN: { source: "env", provider: "default", id: "MCP_API_TOKEN" },
+        },
+      },
+    },
+  },
+}
+```
+
+MCP fields intentionally require the structured object form: strings such as `$MCP_API_TOKEN` remain literal for backward compatibility. A resolved stdio value is injected into the configured child process, so trust that MCP server with the credential. OpenClaw still drops blocked process-control env keys before launch.
+
+`openclaw doctor --allow-exec` materializes MCP exec SecretRefs before its live runtime tool-schema check. Without `--allow-exec`, Doctor keeps its normal non-executing SecretRef posture.
+
 ### OAuth workflow
 
 OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled. By default, OAuth credentials are shared and operator-managed. Credentials saved by `openclaw mcp login` work with embedded MCP, CLI runners, and the local Codex app-server.

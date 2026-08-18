@@ -41,6 +41,7 @@ import {
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { shouldAuditPlaintextMcpValue } from "../secrets/mcp-target-sensitivity.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
@@ -180,27 +181,8 @@ const MCP_DOCTOR_CONCURRENCY = 4;
 const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
   "tools have no safety annotations; calls will require interactive approval";
 
-const SENSITIVE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "x-api-key",
-  "api-key",
-  "api_key",
-]);
-
-const SENSITIVE_KEY_PATTERN =
-  /(?:^|[_-])(api[_-]?key|authorization|bearer|password|secret|token)$/i;
-
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };
-}
-
-function hasSensitiveKey(name: string): boolean {
-  return SENSITIVE_HEADER_NAMES.has(name.trim().toLowerCase()) || SENSITIVE_KEY_PATTERN.test(name);
-}
-
-function hasLiteralSensitiveValue(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0 && !value.trim().startsWith("$");
 }
 
 function resolveConfiguredPath(filePath: string, cwd: unknown): string {
@@ -361,11 +343,11 @@ async function collectMcpDoctorIssues(params: {
     ["env", asRecord(server.env)],
   ] as const) {
     for (const [key, value] of Object.entries(values ?? {})) {
-      if (hasSensitiveKey(key) && hasLiteralSensitiveValue(value)) {
+      if (shouldAuditPlaintextMcpValue({ name: key, value })) {
         issues.push(
           issue(
             "warning",
-            `${field}.${key} contains a literal sensitive value; prefer an environment-backed value outside committed config`,
+            `${field}.${key} contains a literal sensitive value; prefer a structured SecretRef`,
           ),
         );
       }

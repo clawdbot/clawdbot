@@ -2849,9 +2849,13 @@ process.on("SIGINT", shutdown);`,
 
   it("recreates the session runtime when MCP config changes", async () => {
     const createRuntime: RuntimeFactory = (params) => {
-      const probeText = String(
-        params.cfg?.mcp?.servers?.configuredProbe?.env?.BUNDLE_PROBE_TEXT ?? "FROM-CONFIG",
-      );
+      const configuredProbeText = params.cfg?.mcp?.servers?.configuredProbe?.env?.BUNDLE_PROBE_TEXT;
+      const probeText =
+        typeof configuredProbeText === "string" ||
+        typeof configuredProbeText === "number" ||
+        typeof configuredProbeText === "boolean"
+          ? String(configuredProbeText)
+          : "FROM-CONFIG";
       return {
         ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
         sessionId: params.sessionId,

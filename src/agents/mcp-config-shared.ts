@@ -32,7 +32,7 @@ const MCP_EXPLICIT_CREDENTIAL_ENV_KEYS = new Set([
   "REDIS_URL",
 ]);
 
-function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
+export function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
   if (isDangerousHostEnvVarName(rawKey)) {
     return true;
   }

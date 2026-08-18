@@ -434,6 +434,19 @@ describe("agentCommand runtime config", () => {
     });
   });
 
+  it("preserves MCP shorthand strings as literals", async () => {
+    await withTempHome(async (home) => {
+      const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
+      loadedConfig.mcp = {
+        servers: { local: { command: "example-mcp", env: { API_TOKEN: "$MCP_TOKEN" } } },
+      };
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     {
       name: "global memory headers",
@@ -472,6 +485,21 @@ describe("agentCommand runtime config", () => {
             },
           },
         } as unknown as OpenClawConfig["agents"];
+      },
+    },
+    {
+      name: "core MCP server",
+      apply: (config: OpenClawConfig) => {
+        config.mcp = {
+          servers: {
+            local: {
+              command: "example-mcp",
+              env: {
+                API_TOKEN: { source: "env", provider: "default", id: "MCP_TOKEN" },
+              },
+            },
+          },
+        };
       },
     },
     {
