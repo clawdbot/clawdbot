@@ -2119,6 +2119,11 @@ button.chat-reply-preview--message:disabled {
   color: var(--bg);
 }
 
+.task-suggestion__menu-trigger:hover:not(:disabled),
+.task-suggestion__menu-trigger:focus-visible {
+  border-left-color: color-mix(in srgb, var(--bg) 18%, transparent);
+}
+
 .task-suggestion__menu-trigger svg {
   width: 12px;
   height: 12px;
