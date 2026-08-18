@@ -176,6 +176,18 @@ export function formatGatewayServiceStartRepairIssues(
   return issues.map((issue) => issue.message).join("; ");
 }
 
+export async function readGatewayServiceLoadState(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs = {},
+): Promise<GatewayServiceLoadState> {
+  try {
+    const loaded = await service.isLoaded(args);
+    return { status: loaded ? "loaded" : "not-loaded" };
+  } catch (error) {
+    return { status: "unknown", detail: String(error) };
+  }
+}
+
 export async function readGatewayServiceState(
   service: GatewayService,
   args: ReadGatewayServiceStateArgs = {},
@@ -190,15 +202,7 @@ export async function readGatewayServiceState(
   // instead of hanging both probes. readCommand parses local files and needs no
   // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
   const [loadState, runtime] = await Promise.all([
-    service
-      .isLoaded({ env, timeoutMs: args.timeoutMs })
-      .then((loaded): GatewayServiceLoadState => ({ status: loaded ? "loaded" : "not-loaded" }))
-      .catch(
-        (error: unknown): GatewayServiceLoadState => ({
-          status: "unknown",
-          detail: String(error),
-        }),
-      ),
+    readGatewayServiceLoadState(service, { env, timeoutMs: args.timeoutMs }),
     service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
       (error: unknown) =>
         ({

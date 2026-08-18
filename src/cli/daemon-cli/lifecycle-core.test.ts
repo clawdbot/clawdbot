@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
+  createGatewayServiceRunArgs as createServiceRunArgs,
+  createGatewayUninstallArgs,
   lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
@@ -71,21 +73,12 @@ vi.mock("./lifecycle-audit.js", () => ({
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
 let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+let runServiceUninstall: typeof import("./lifecycle-core.js").runServiceUninstall;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function readJsonLog<T extends object>() {
   const jsonLine = lifecycleRuntimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;
-}
-
-function createServiceRunArgs(checkTokenDrift?: boolean) {
-  return {
-    serviceNoun: "Gateway",
-    service,
-    renderStartHints: () => [],
-    opts: { json: true as const },
-    ...(checkTokenDrift ? { checkTokenDrift } : {}),
-  };
 }
 
 function stubConfigSecretRefGatewayToken() {
@@ -140,7 +133,8 @@ function expectUnsupportedServiceCheckFailure() {
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart, runServiceStop, runServiceUninstall } =
+      await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
@@ -232,6 +226,58 @@ describe("runServiceRestart token drift", () => {
     expect(onNotLoaded).not.toHaveBeenCalled();
     expect(postRestartCheck).not.toHaveBeenCalled();
     expectUnsupportedServiceCheckFailure();
+  });
+
+  it.each([
+    {
+      name: "initial uninstall inspection",
+      arrange: () => service.isLoaded.mockRejectedValue(new Error("initial inspection failed")),
+      run: () => runServiceUninstall(createGatewayUninstallArgs()),
+      action: "uninstall",
+      detail: "initial inspection failed",
+      stopCalls: 0,
+      uninstallCalls: 0,
+    },
+    {
+      name: "post-uninstall verification",
+      arrange: () =>
+        service.isLoaded
+          .mockResolvedValueOnce(false)
+          .mockRejectedValueOnce(new Error("uninstall verification failed")),
+      run: () => runServiceUninstall(createGatewayUninstallArgs()),
+      action: "uninstall",
+      detail: "uninstall verification failed",
+      stopCalls: 0,
+      uninstallCalls: 1,
+    },
+    {
+      name: "post-stop verification",
+      arrange: () =>
+        service.isLoaded
+          .mockResolvedValueOnce(true)
+          .mockRejectedValueOnce(new Error("stop verification failed")),
+      run: () => runServiceStop({ serviceNoun: "Gateway", service, opts: { json: true } }),
+      action: "stop",
+      detail: "stop verification failed",
+      stopCalls: 1,
+      uninstallCalls: 0,
+    },
+  ])("fails $name without reporting false absence", async (testCase) => {
+    testCase.arrange();
+
+    await expect(testCase.run()).rejects.toThrow("__exit__:1");
+
+    expect(
+      readJsonLog<{ action?: string; ok?: boolean; result?: string; error?: string }>(),
+    ).toEqual(
+      expect.objectContaining({
+        action: testCase.action,
+        ok: false,
+        error: expect.stringContaining(testCase.detail),
+      }),
+    );
+    expect(service.stop).toHaveBeenCalledTimes(testCase.stopCalls);
+    expect(service.uninstall).toHaveBeenCalledTimes(testCase.uninstallCalls);
   });
 
   it("fails restart with the container hint when no service is installed", async () => {
