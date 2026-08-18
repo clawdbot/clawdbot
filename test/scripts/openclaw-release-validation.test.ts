@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildFixturePlan,
@@ -11,6 +16,13 @@ import {
   renderRunComment,
   selectLatestBetaRelease,
 } from "../../.agents/skills/openclaw-release-validation/scripts/release-validation.mts";
+
+const releaseValidationScript = fileURLToPath(
+  new URL(
+    "../../.agents/skills/openclaw-release-validation/scripts/release-validation.mts",
+    import.meta.url,
+  ),
+);
 
 describe("openclaw release validation", () => {
   it("selects the newest published OpenClaw beta and ignores unrelated prereleases", () => {
@@ -168,7 +180,7 @@ describe("openclaw release validation", () => {
   it("copies real state into a run-owned root before upgrading the imported fixture", () => {
     const plan = buildFixturePlan({
       fixture: "copied",
-      candidate: { kind: "published", version: "2026.8.1-beta.3" },
+      candidate: { kind: "published", version: "v2026.8.1-beta.3" },
       envName: "release-validation-run-123",
       runRoot: "/tmp/release-validation/run-123",
       sourceGateway: {
@@ -183,9 +195,12 @@ describe("openclaw release validation", () => {
 
     expect(plan.map((step) => step.operation)).toEqual([
       "stop-source",
-      "copy-state",
+      "stage-copy",
       "adopt-copy",
       "upgrade-copy",
+      "normalize-local-gateway",
+      "preflight-copy",
+      "enforce-single-channel-owner",
       "start-copy",
       "verify-copy",
     ]);
@@ -196,7 +211,7 @@ describe("openclaw release validation", () => {
     expect(plan[3]?.args).toEqual([
       "upgrade",
       "release-validation-run-123",
-      "--version",
+      "--runtime",
       "2026.8.1-beta.3",
       "--json",
     ]);
@@ -204,6 +219,57 @@ describe("openclaw release validation", () => {
       false,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "stages copied state without sockets and normalizes source-root config paths",
+    async () => {
+      const root = mkdtempSync("/tmp/openclaw-rv-");
+      const source = path.join(root, "source");
+      const destination = path.join(root, "run", "source-state");
+      const socketPath = path.join(source, "exec-approvals.sock");
+      mkdirSync(path.join(source, "workspace"), { recursive: true });
+      mkdirSync(path.dirname(destination), { recursive: true });
+      writeFileSync(path.join(source, "workspace", "canary.txt"), "preserved\n");
+      writeFileSync(
+        path.join(source, "openclaw.json"),
+        `${JSON.stringify({ agents: { defaults: { workspace: path.join(source, "workspace") } } }, null, 2)}\n`,
+      );
+      const socket = createServer();
+      await new Promise<void>((resolve, reject) => {
+        socket.once("error", reject);
+        socket.listen(socketPath, resolve);
+      });
+
+      try {
+        const receipt = JSON.parse(
+          execFileSync(
+            process.execPath,
+            [
+              releaseValidationScript,
+              "stage-copy",
+              "--source",
+              source,
+              "--destination",
+              destination,
+            ],
+            { encoding: "utf8" },
+          ),
+        ) as { configPathReplacements: number; copiedSockets: number };
+
+        expect(receipt).toMatchObject({ configPathReplacements: 1, copiedSockets: 0 });
+        expect(readFileSync(path.join(destination, "workspace", "canary.txt"), "utf8")).toBe(
+          "preserved\n",
+        );
+        expect(readFileSync(path.join(destination, "openclaw.json"), "utf8")).toContain(
+          path.join(destination, "workspace"),
+        );
+        expect(existsSync(path.join(destination, "exec-approvals.sock"))).toBe(false);
+      } finally {
+        await new Promise<void>((resolve) => socket.close(() => resolve()));
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("builds source candidates only from a detached run-owned checkout", () => {
     const plan = buildIsolatedRuntimePlan({

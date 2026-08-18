@@ -26,7 +26,7 @@ The detailed mission source of truth is
 `references/subsystem-checklist.json`. Print the compact test menu at any time:
 
 ```sh
-node --import tsx .agents/skills/openclaw-release-validation/scripts/release-validation.mts board --fixture copied
+node .agents/skills/openclaw-release-validation/scripts/release-validation.mts board --fixture copied
 ```
 
 ## 1. Candidate and campaign
@@ -35,8 +35,8 @@ Default to the newest published tag matching `vYYYY.M.D-beta.N`; an explicit
 version overrides it. Get or create the shared issue using the stable marker:
 
 ```sh
-node --import tsx .agents/skills/openclaw-release-validation/scripts/release-validation.mts campaign
-node --import tsx .agents/skills/openclaw-release-validation/scripts/release-validation.mts campaign --version v2026.8.1-beta.3
+node .agents/skills/openclaw-release-validation/scripts/release-validation.mts campaign
+node .agents/skills/openclaw-release-validation/scripts/release-validation.mts campaign --version v2026.8.1-beta.3
 ```
 
 Use one issue per beta release and one comment per tester run. Record the exact
@@ -54,27 +54,38 @@ For `copied`, discover stopped and running OCM environments plus plain
 `~/.openclaw`. Show each detected version and running state, then ask which
 gateway to copy. Never silently choose the personal gateway.
 
-Copy the selected `.openclaw` state into the run-owned artifact root before
-importing it with `ocm adopt import`. The source remains untouched. If live
-channel testing uses copied credentials, stop the source gateway first and
-record that this run owns restoring it.
+Before preparing a copied fixture, read `references/copied-fixture.md`
+completely. It owns the exact staging, path normalization, plugin preflight,
+single-owner channel check, and readiness sequence. Keep a run-owned `run.json`
+ledger of every stopped gateway and fixture-only change; do not rely on chat or
+tool memory for cleanup after a restart.
 
 ## 3. Candidate isolation
 
-Published beta validation uses the exact package version through OCM. For a
-source build, create a detached, run-owned checkout; install, check, and build
-there; then create and verify an OCM package runtime with
+Published beta validation installs and verifies the exact package runtime
+through OCM, then starts or upgrades with `--runtime <exact-runtime>` so OCM
+reuses those verified bytes. Do not use `--version` after the runtime is
+installed: it may try to replace bytes shared by another env. For a source
+build, create a detached, run-owned checkout; install, check, and build there;
+then create and verify an OCM package runtime with
 `ocm runtime build-local`. Keep the active/shared checkout read-only.
+
+```sh
+ocm runtime install --version <tag-without-v>
+ocm runtime verify <tag-without-v>
+```
 
 Preview the fixture plan before executing it. Every env, runtime, checkout,
 and artifact path uses the run id.
 
 ## 4. Upgrade
 
-For clean state, create the env at the candidate version and complete
-onboarding. For copied state, import the copied state and upgrade that env to
-the exact candidate. Verify service status, `--version`, logs, and a real
-gateway action; OCM `running` alone is not proof.
+For clean state, create the env from the verified candidate runtime and complete
+onboarding. For copied state, import the staged state and upgrade that env with
+the verified exact runtime. Run copy, import, and upgrade as separate
+long-running commands; wait for each authoritative receipt and read back OCM
+state before continuing. Verify service status, `--version`, logs, HTTP health,
+and `gateway probe --json`; OCM `running` alone is not proof.
 
 ## 5. Subsystem missions
 

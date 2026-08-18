@@ -1,9 +1,20 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
 export type GithubRelease = {
   tagName: string;
@@ -75,6 +86,13 @@ export type FixturePlanStep = {
   source?: string;
   destination?: string;
   checks?: Array<{ command: string; args: string[] }>;
+};
+
+export type StagedStateReceipt = {
+  source: string;
+  destination: string;
+  configPathReplacements: number;
+  copiedSockets: 0;
 };
 
 const OPENCLAW_BETA_TAG = /^v(\d{4})\.(\d+)\.(\d+)-beta\.(\d+)$/u;
@@ -304,12 +322,13 @@ export function buildFixturePlan({
   if (candidate.kind !== "published") {
     throw new Error("source candidate preparation requires an isolated runtime plan");
   }
+  const runtimeName = candidate.version.replace(/^v/u, "");
   if (fixture === "clean") {
     return [
       {
         operation: "onboard-clean",
         command: "ocm",
-        args: ["start", envName, "--version", candidate.version, "--onboard"],
+        args: ["start", envName, "--runtime", runtimeName, "--onboard"],
       },
       {
         operation: "verify-clean",
@@ -340,7 +359,16 @@ export function buildFixturePlan({
   }
   steps.push(
     {
-      operation: "copy-state",
+      operation: "stage-copy",
+      command: "node",
+      args: [
+        SCRIPT_PATH,
+        "stage-copy",
+        "--source",
+        sourceGateway.stateDir,
+        "--destination",
+        copiedState,
+      ],
       source: sourceGateway.stateDir,
       destination: copiedState,
     },
@@ -352,7 +380,25 @@ export function buildFixturePlan({
     {
       operation: "upgrade-copy",
       command: "ocm",
-      args: ["upgrade", envName, "--version", candidate.version, "--json"],
+      args: ["upgrade", envName, "--runtime", runtimeName, "--json"],
+    },
+    {
+      operation: "normalize-local-gateway",
+      command: "ocm",
+      args: [`@${envName}`, "--", "config", "set", "gateway.mode", "local"],
+    },
+    {
+      operation: "preflight-copy",
+      checks: [
+        { command: "ocm", args: [`@${envName}`, "--", "plugins", "list", "--json"] },
+        {
+          command: "ocm",
+          args: [`@${envName}`, "--", "plugins", "update", "--all", "--dry-run"],
+        },
+      ],
+    },
+    {
+      operation: "enforce-single-channel-owner",
     },
     {
       operation: "start-copy",
@@ -364,11 +410,96 @@ export function buildFixturePlan({
       checks: [
         { command: "ocm", args: ["service", "status", envName, "--json"] },
         { command: "ocm", args: [`@${envName}`, "--", "--version"] },
+        { command: "ocm", args: [`@${envName}`, "--", "gateway", "probe", "--json"] },
         { command: "ocm", args: ["logs", envName, "--tail", "100", "--json"] },
       ],
     },
   );
   return steps;
+}
+
+function countOccurrences(value: string, search: string): number {
+  return value.split(search).length - 1;
+}
+
+export function stageCopiedState(source: string, destination: string): StagedStateReceipt {
+  if (!path.isAbsolute(source) || !path.isAbsolute(destination)) {
+    throw new Error("stage-copy requires absolute --source and --destination paths");
+  }
+  const inputSource = path.resolve(source);
+  const resolvedSource = realpathSync(source);
+  const resolvedDestination = path.resolve(destination);
+  const relativeDestination = path.relative(resolvedSource, resolvedDestination);
+  if (
+    relativeDestination === "" ||
+    (!relativeDestination.startsWith(`..${path.sep}`) && relativeDestination !== "..")
+  ) {
+    throw new Error("stage-copy destination must be outside the source tree");
+  }
+  if (existsSync(resolvedDestination)) {
+    throw new Error(`stage-copy destination already exists: ${resolvedDestination}`);
+  }
+
+  mkdirSync(resolvedDestination);
+  execFileSync(
+    "rsync",
+    ["-a", "--exclude=*.sock", `${resolvedSource}${path.sep}`, `${resolvedDestination}${path.sep}`],
+    { stdio: "inherit" },
+  );
+
+  const remaining = execFileSync(
+    "rsync",
+    [
+      "-ani",
+      "--delete",
+      "--exclude=*.sock",
+      "--exclude=openclaw.json",
+      `${resolvedSource}${path.sep}`,
+      `${resolvedDestination}${path.sep}`,
+    ],
+    { encoding: "utf8" },
+  ).trim();
+  if (remaining.length > 0) {
+    throw new Error(`stage-copy verification found uncopied state:\n${remaining}`);
+  }
+
+  const configPath = path.join(resolvedDestination, "openclaw.json");
+  const sourceConfigPath = path.join(resolvedSource, "openclaw.json");
+  let configPathReplacements = 0;
+  if (existsSync(sourceConfigPath) && !existsSync(configPath)) {
+    throw new Error("stage-copy verification did not find the copied openclaw.json");
+  }
+  if (existsSync(configPath)) {
+    const original = readFileSync(configPath, "utf8");
+    const sourcePrefixes = [...new Set([inputSource, resolvedSource])];
+    let normalized = original;
+    for (const sourcePrefix of sourcePrefixes) {
+      configPathReplacements += countOccurrences(normalized, sourcePrefix);
+      normalized = normalized.replaceAll(sourcePrefix, resolvedDestination);
+    }
+    if (configPathReplacements > 0) {
+      const temporaryPath = `${configPath}.release-validation.tmp`;
+      writeFileSync(temporaryPath, normalized, "utf8");
+      chmodSync(temporaryPath, statSync(configPath).mode);
+      renameSync(temporaryPath, configPath);
+    }
+  }
+
+  const copiedSocket = execFileSync(
+    "find",
+    [resolvedDestination, "-type", "s", "-print", "-quit"],
+    { encoding: "utf8" },
+  ).trim();
+  if (copiedSocket.length > 0) {
+    throw new Error(`stage-copy unexpectedly copied a Unix socket: ${copiedSocket}`);
+  }
+
+  return {
+    source: resolvedSource,
+    destination: resolvedDestination,
+    configPathReplacements,
+    copiedSockets: 0,
+  };
 }
 
 export function buildIsolatedRuntimePlan({
@@ -592,6 +723,17 @@ function runMissionCommand(fixture: FixtureKind, subsystemId: string | undefined
 
 async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2);
+  if (command === "stage-copy") {
+    const sourceIndex = args.indexOf("--source");
+    const destinationIndex = args.indexOf("--destination");
+    const source = sourceIndex === -1 ? undefined : args[sourceIndex + 1];
+    const destination = destinationIndex === -1 ? undefined : args[destinationIndex + 1];
+    if (!source || !destination) {
+      throw new Error("stage-copy requires --source <absolute-path> --destination <absolute-path>");
+    }
+    process.stdout.write(`${JSON.stringify(stageCopiedState(source, destination), null, 2)}\n`);
+    return;
+  }
   if (command === "campaign") {
     const versionIndex = args.indexOf("--version");
     await runCampaignCommand(versionIndex === -1 ? undefined : args[versionIndex + 1]);
@@ -617,6 +759,7 @@ async function main(): Promise<void> {
     [
       "OpenClaw release-validation helpers",
       "",
+      "  stage-copy --source <path> --destination <path>  Copy state, omit sockets, normalize paths",
       "  campaign [--version vYYYY.M.D-beta.N]  Get or create the shared release issue",
       "  board [--fixture clean|copied]          Show the compact test-selection menu",
       "  mission <id> [--fixture clean|copied]   Show details for one selected mission",
@@ -626,7 +769,7 @@ async function main(): Promise<void> {
 }
 
 const isDirectInvocation =
-  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === SCRIPT_PATH;
 if (isDirectInvocation) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
