@@ -166,52 +166,10 @@
   font-weight: 500;
 }
 
-/* Transcript tables use horizontal structure instead of a nested card surface.
-   Local cover gradients reveal only the edge that still has scrollable content. */
-.chat-thread .chat-bubble .chat-markdown-table {
-  position: relative;
-  width: 100%;
-  margin-block: 1.25em;
-}
-
-.chat-thread .chat-bubble .chat-markdown-table__viewport {
-  width: 100%;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.chat-thread .chat-bubble .chat-markdown-table.has-overflow-left .chat-markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(to right, transparent, black 32px);
-  mask-image: linear-gradient(to right, transparent, black 32px);
-}
-
-.chat-thread .chat-bubble .chat-markdown-table.has-overflow-right .chat-markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
-  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
-}
-
-.chat-thread
-  .chat-bubble
-  .chat-markdown-table.has-overflow-left.has-overflow-right
-  .chat-markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent,
-    black 32px,
-    black calc(100% - 32px),
-    transparent
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    black 32px,
-    black calc(100% - 32px),
-    transparent
-  );
-}
-
 .chat-thread .chat-bubble .chat-text :where(table) {
   display: table;
+  overflow-x: auto;
+  scrollbar-width: thin;
   width: max-content;
   min-width: 100%;
   margin: 0;
