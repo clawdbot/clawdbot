@@ -1397,7 +1397,7 @@ extensions/voice-call/src/realtime-agent-context.ts	1
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	3
 extensions/voice-call/src/tts-provider-voice.ts	1
-extensions/voice-call/src/webhook.ts	12
+extensions/voice-call/src/webhook.ts	11
 extensions/voice-call/src/webhook/realtime-handler.ts	3
 extensions/voice-call/src/webhook/stream-frame-adapter.ts	2
 extensions/volcengine/tts.ts	2

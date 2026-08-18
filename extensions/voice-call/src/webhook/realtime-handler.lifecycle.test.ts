@@ -11,6 +11,7 @@ import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
+import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 function createRealtimeConfig(): VoiceCallRealtimeConfig {
   return {
@@ -37,6 +38,12 @@ function createRealtimeConfig(): VoiceCallRealtimeConfig {
     providers: {},
   };
 }
+
+const noOpStreamDisconnectLifecycle = {
+  connect: () => {},
+  disconnect: () => {},
+  retire: () => {},
+};
 
 function createBridge(
   close: () => void,
@@ -82,6 +89,7 @@ function createCarrierLifecycleHarness(
   options: {
     initialMessage?: string;
     resolveCallRegistration?: ConstructorParameters<typeof RealtimeCallHandler>[3];
+    streamDisconnectLifecycle?: ConstructorParameters<typeof RealtimeCallHandler>[5];
   } = {},
 ) {
   const realtimeProvider = makeRealtimeProvider(createBridgeForCall);
@@ -109,6 +117,7 @@ function createCarrierLifecycleHarness(
     { name: "twilio", hangupCall } as unknown as VoiceCallProvider,
     options.resolveCallRegistration ?? makeCallRegistrationResolver(realtimeProvider),
     "/voice/webhook",
+    options.streamDisconnectLifecycle ?? noOpStreamDisconnectLifecycle,
   );
   return { call, handler, hangupCall, processEvent };
 }
@@ -534,6 +543,132 @@ describe("RealtimeCallHandler lifecycle", () => {
     }
   });
 
+  it("keeps a replacement stream alive through predecessor disconnect grace", async () => {
+    const bridgeCloses = [vi.fn(), vi.fn()];
+    const bridgeAudio = [vi.fn(), vi.fn()];
+    const bridgeCallbacks: Array<{
+      onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+    }> = [];
+    const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>((request) => {
+      const index = bridgeCallbacks.length;
+      const close = bridgeCloses[index];
+      const sendAudio = bridgeAudio[index];
+      if (!close || !sendAudio) {
+        throw new Error("unexpected realtime replacement bridge");
+      }
+      bridgeCallbacks.push(request);
+      return createBridge(close, { sendAudio });
+    });
+    const endedEvents: Array<{ providerCallId: string }> = [];
+    let processEvent = vi.fn();
+    const streamDisconnectLifecycle = new StreamDisconnectGrace(({ providerCallId }) => {
+      endedEvents.push({ providerCallId });
+      processEvent({
+        id: `disconnect-grace-expired-${providerCallId}`,
+        type: "call.ended",
+        callId: "call-startup",
+        providerCallId,
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+    });
+    let resolveFirstDisconnect: (() => void) | undefined;
+    let resolveSecondDisconnect: (() => void) | undefined;
+    const firstDisconnect = new Promise<void>((resolve) => {
+      resolveFirstDisconnect = resolve;
+    });
+    const secondDisconnect = new Promise<void>((resolve) => {
+      resolveSecondDisconnect = resolve;
+    });
+    const originalDisconnect = streamDisconnectLifecycle.disconnect.bind(streamDisconnectLifecycle);
+    vi.spyOn(streamDisconnectLifecycle, "disconnect").mockImplementation(
+      (providerCallId, streamId) => {
+        originalDisconnect(providerCallId, streamId);
+        if (streamId === "MZ-previous") {
+          resolveFirstDisconnect?.();
+        } else if (streamId === "MZ-replacement") {
+          resolveSecondDisconnect?.();
+        }
+      },
+    );
+    const harness = createCarrierLifecycleHarness(createBridgeForCall, {
+      streamDisconnectLifecycle,
+    });
+    processEvent = harness.processEvent;
+    const previous = await connectCarrierStream(harness.handler);
+    let replacement: Awaited<ReturnType<typeof connectCarrierStream>> | undefined;
+
+    try {
+      previous.ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-previous", callSid: harness.call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
+
+      vi.useFakeTimers();
+      previous.ws.send(JSON.stringify({ event: "stop" }));
+      await firstDisconnect;
+      expect(bridgeCloses[0]).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      replacement = await connectCarrierStream(harness.handler);
+      replacement.ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-replacement", callSid: harness.call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(2));
+
+      const previousClosed = waitForClose(previous.ws);
+      previous.ws.close();
+      await previousClosed;
+      await vi.advanceTimersByTimeAsync(2_100);
+      expect(endedEvents).toHaveLength(0);
+
+      replacement.ws.send(
+        JSON.stringify({
+          event: "media",
+          media: { payload: Buffer.from([0xff, 0xff]).toString("base64") },
+        }),
+      );
+      await vi.waitFor(() => expect(bridgeAudio[1]).toHaveBeenCalledTimes(1));
+      expect(bridgeAudio[0]).not.toHaveBeenCalled();
+
+      const speechBeforeStaleCallback = processEvent.mock.calls.filter(
+        ([event]) => event.type === "call.speech",
+      ).length;
+      bridgeCallbacks[0]?.onTranscript?.("user", "stale predecessor transcript", true);
+      expect(
+        processEvent.mock.calls.filter(([event]) => event.type === "call.speech"),
+      ).toHaveLength(speechBeforeStaleCallback);
+
+      replacement.ws.send(JSON.stringify({ event: "stop" }));
+      await secondDisconnect;
+      expect(bridgeCloses[1]).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(endedEvents).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(endedEvents).toEqual([{ providerCallId: harness.call.providerCallId }]);
+      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
+        1,
+      );
+    } finally {
+      vi.useRealTimers();
+      if (previous.ws.readyState !== WebSocket.CLOSED) {
+        previous.ws.terminate();
+      }
+      if (replacement?.ws.readyState !== WebSocket.CLOSED) {
+        replacement?.ws.terminate();
+      }
+      await harness.handler.close();
+      await replacement?.server.close();
+      await previous.server.close();
+    }
+  });
+
   it("terminates active sockets and treats server shutdown as completed", async () => {
     const bridgeClose = vi.fn();
     const createBridgeForCall = vi.fn(() => createBridge(bridgeClose));
@@ -569,6 +704,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       } as unknown as VoiceCallProvider,
       makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
+      noOpStreamDisconnectLifecycle,
     );
     const { streamUrl } = handler.issueStreamSession();
     const server = await startUpgradeWsServer({
@@ -678,6 +814,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       } as unknown as VoiceCallProvider,
       makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
+      noOpStreamDisconnectLifecycle,
     );
     const { streamUrl } = handler.issueStreamSession();
     const server = await startUpgradeWsServer({
@@ -765,6 +902,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       } as unknown as VoiceCallProvider,
       makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
+      noOpStreamDisconnectLifecycle,
     );
     const consult = vi.fn(async () => ({ text: "This should not run." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
@@ -880,6 +1018,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       } as unknown as VoiceCallProvider,
       makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
       "/voice/webhook",
+      noOpStreamDisconnectLifecycle,
     );
     handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
       consultSignal = context.abortSignal;

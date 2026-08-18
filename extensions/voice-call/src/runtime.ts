@@ -379,6 +379,7 @@ export async function createVoiceCallRuntime(params: {
       provider,
       resolveCallRegistration,
       config.serve.path,
+      webhookServer.getStreamDisconnectLifecycle(),
       cfg,
     );
     if (config.realtime.toolPolicy !== "none") {

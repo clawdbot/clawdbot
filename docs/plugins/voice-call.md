@@ -50,6 +50,12 @@ Gateway, then restart the Gateway to load it.
     Set config under `plugins.entries.voice-call.config` (see
     [Configuration](#configuration) below). At minimum: `provider`, provider
     credentials, `fromNumber`, and a publicly reachable webhook URL.
+
+    For an inbound Twilio number, set its **Voice webhook** to the public Voice
+    Call webhook URL with method `POST`. Set the number-level **Status
+    Callback** to the same URL with `?type=status`, also using `POST`, so
+    terminal inbound call statuses reach the plugin.
+
   </Step>
   <Step title="Verify setup">
     ```bash
@@ -700,11 +706,12 @@ playback state:
 
 ### Twilio stream disconnect grace
 
-When a Twilio media stream disconnects, Voice Call waits **2000 ms** before
-auto-ending the call:
+When a Twilio classic streaming or realtime media stream disconnects, Voice
+Call waits **2000 ms** before auto-ending the call:
 
 - If the stream reconnects during that window, auto-end is canceled.
 - If no stream re-registers after the grace period, the call is ended to prevent stuck active calls.
+- Realtime bridge/session resources, queued audio, transcript ownership, and in-flight consult work close immediately. Only call/provider finalization waits for reconnect.
 
 ## Stale call reaper
 
@@ -915,6 +922,18 @@ Confirm the provider console points at the exact public webhook URL:
 ```text
 https://voice.example.com/voice/webhook
 ```
+
+For a Twilio inbound number, configure both number-level callbacks in the
+Twilio Console:
+
+- **Voice webhook:** `https://voice.example.com/voice/webhook` using `POST`.
+- **Status Callback:** `https://voice.example.com/voice/webhook?type=status` using `POST`.
+
+Media Streams `stop`/WebSocket close handling is the primary auto-end path and
+does not depend on the HTTP status callback. Twilio's optional `<Stream
+statusCallback>` is a separate stream-diagnostic signal and is not required for
+teardown. `openclaw voicecall setup` validates local configuration and webhook
+exposure; it cannot inspect or change Twilio Console settings.
 
 Then inspect runtime state:
 

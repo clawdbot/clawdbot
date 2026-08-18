@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   webhookSetRealtimeHandler: vi.fn(),
   webhookGetRealtimeHandler: vi.fn(),
   webhookGetMediaStreamHandler: vi.fn(),
+  webhookGetStreamDisconnectLifecycle: vi.fn(),
   webhookCtorArgs: [] as unknown[][],
   realtimeHandlerCtorArgs: [] as unknown[][],
   realtimeHandlerRegisterToolHandler: vi.fn(),
@@ -87,6 +88,7 @@ vi.mock("./webhook.js", () => ({
     setRealtimeHandler = mocks.webhookSetRealtimeHandler;
     getRealtimeHandler = mocks.webhookGetRealtimeHandler;
     getMediaStreamHandler = mocks.webhookGetMediaStreamHandler;
+    getStreamDisconnectLifecycle = mocks.webhookGetStreamDisconnectLifecycle;
   },
 }));
 
@@ -238,6 +240,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
     });
     mocks.webhookGetMediaStreamHandler.mockReturnValue(undefined);
+    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue({
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      retire: vi.fn(),
+    });
     mocks.webhookCtorArgs.length = 0;
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.realtimeHandlerRegisterToolHandler.mockReset();
@@ -366,6 +373,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
+    expect(mocks.realtimeHandlerCtorArgs[0]?.[5]).toBe(
+      mocks.webhookGetStreamDisconnectLifecycle.mock.results[0]?.value,
+    );
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     if (typeof resolveCallRegistration !== "function") {
       throw new Error("expected per-call realtime registration resolver");

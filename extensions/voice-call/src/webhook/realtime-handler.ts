@@ -33,6 +33,7 @@ import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
   type StreamFrameAdapter,
   TelnyxStreamFrameAdapter,
@@ -311,7 +312,7 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type RealtimeCallEndCause = "hangup" | "stream-close" | "inactivity" | "error";
+type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
@@ -381,6 +382,7 @@ export class RealtimeCallHandler {
     private readonly provider: VoiceCallProvider,
     private readonly resolveCallRegistration: ResolveRealtimeCallRegistration,
     private readonly servePath: string,
+    private readonly streamDisconnectLifecycle: StreamDisconnectLifecycle,
     private readonly coreConfig?: OpenClawConfig,
   ) {}
 
@@ -461,7 +463,7 @@ export class RealtimeCallHandler {
       let telephonyBinding: RealtimeTelephonyBinding | null = null;
       let initialized = false;
       let activeCallSid = "unknown";
-      let stopReceived = false;
+      let activeStreamSid = "unknown";
       let lastMediaTimestamp: number | undefined;
       let lastMediaGapWarnAt = 0;
 
@@ -477,6 +479,7 @@ export class RealtimeCallHandler {
             }
             initialized = true;
             activeCallSid = frame.providerCallId;
+            activeStreamSid = frame.streamId;
             const nextBinding = this.handleCall(
               frame.streamId,
               frame.providerCallId,
@@ -488,6 +491,7 @@ export class RealtimeCallHandler {
               return;
             }
             telephonyBinding = nextBinding;
+            this.streamDisconnectLifecycle.connect(activeCallSid, activeStreamSid);
             return;
           }
           if (!telephonyBinding) {
@@ -524,26 +528,21 @@ export class RealtimeCallHandler {
             return;
           }
           if (frame.kind === "stop") {
-            stopReceived = true;
-            telephonyBinding.close("hangup");
+            telephonyBinding.close("disconnect");
           }
         } catch (error) {
           console.error("[voice-call] realtime WS parse failed:", error);
         }
       });
 
-      ws.on("close", (code) => {
+      ws.on("close", () => {
         this.activeSockets.delete(ws);
-        const reason =
-          this.serverClosingSockets.has(ws) || stopReceived || code === 1000 || code === 1005
-            ? "stream-close"
-            : "error";
+        const reason = this.serverClosingSockets.has(ws) ? "shutdown" : "disconnect";
         telephonyBinding?.close(reason);
       });
 
       ws.on("error", (error) => {
         console.error("[voice-call] realtime WS error:", error);
-        telephonyBinding?.close("error");
         ws.terminate();
       });
 
@@ -676,9 +675,6 @@ export class RealtimeCallHandler {
       const reason: EndReason =
         cause === "error" ? "error" : cause === "inactivity" ? "timeout" : "completed";
       this.endCallInManager(callSid, callId, reason);
-      console.log(
-        `[voice-call] Realtime call ended callId=${callId} providerCallId=${callSid} reason=${cause}`,
-      );
       if (cause !== "error" && cause !== "inactivity") {
         return;
       }
@@ -1066,6 +1062,7 @@ export class RealtimeCallHandler {
         if (reason !== "error") {
           return;
         }
+        this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(1011, "Bridge disconnected");
         }
@@ -1170,7 +1167,12 @@ export class RealtimeCallHandler {
         );
       } finally {
         this.clearActiveTelephonyBinding(callId, binding);
-        if (ownsCall && cause) {
+        if (cause === "disconnect") {
+          this.streamDisconnectLifecycle.disconnect(callSid, streamSid);
+        } else {
+          this.streamDisconnectLifecycle.retire(callSid, streamSid);
+        }
+        if (ownsCall && cause && cause !== "disconnect") {
           emitCallEnd(cause);
         }
       }
@@ -1213,6 +1215,7 @@ export class RealtimeCallHandler {
     session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       const ownsCallState = this.isActiveBridgeOwner(callId, session);
+      this.streamDisconnectLifecycle.retire(callSid, streamSid);
       try {
         session.close();
       } catch (closeError) {
