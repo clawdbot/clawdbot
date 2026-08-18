@@ -919,8 +919,12 @@ describe("GatewayBrowserClient", () => {
     await vi.waitFor(() => expect(client.connected).toBe(true));
     ws.sent.length = 0;
 
-    await expect(client.request("chat.send", { text: "x".repeat(256) })).rejects.toThrow(
+    const oversized = client.request("chat.send", { text: "x".repeat(256) });
+    await expect(oversized).rejects.toThrow(
       "gateway request chat.send exceeds negotiated max payload",
+    );
+    await expect(oversized).rejects.toThrow(
+      "Shorten the message or remove one or more attachments and retry.",
     );
     expect(ws.sent).toHaveLength(0);
 
