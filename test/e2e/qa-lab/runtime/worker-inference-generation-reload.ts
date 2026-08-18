@@ -16,6 +16,7 @@ import {
   PROOF_TIMEOUT_MS,
   waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
+import workerGenerationProviderFixture from "./fixtures/worker-inference-generation-provider/index.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -306,7 +307,10 @@ async function readMockRequests(baseUrl: string) {
 }
 
 async function runProof(options: ProducerOptions) {
-  // openclaw-temp-dir: allow standalone QA producer owns and removes this fixture root.
+  if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
+    throw new Error("worker generation fixture id does not match its configured plugin id");
+  }
+  // openclaw-temp-dir: standalone QA producer owns and removes this fixture root.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-generation-"));
   const tracePath = path.join(options.artifactBase, `${SCENARIO_ID}-trace.jsonl`);
   const barrierPath = path.join(root, "auth-preparation-barrier");
