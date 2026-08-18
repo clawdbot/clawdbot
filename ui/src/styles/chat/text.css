@@ -55,7 +55,7 @@
 }
 
 .chat-message-disclosure__toggle:hover {
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  background: transparent;
   color: var(--text);
 }
 
