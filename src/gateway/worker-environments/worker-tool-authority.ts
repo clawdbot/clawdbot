@@ -87,6 +87,7 @@ export function resolveWorkerToolAuthority(params: {
     node: configuredNode,
   } = resolveExecDefaults({
     cfg: turn.config,
+    sessionEntry: turn.execSession,
     execOverrides: turn.execOverrides,
     agentId: turn.agentId,
     sessionKey: turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId,

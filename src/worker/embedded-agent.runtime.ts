@@ -27,6 +27,7 @@ import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-co
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { maxAsk, minSecurity, resolveExecPolicyForMode } from "../infra/exec-approvals.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
@@ -176,6 +177,20 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     security: "deny" as const,
     ask: "off" as const,
   };
+  const permissionExecPolicy = permissionToolPolicy
+    ? resolveExecPolicyForMode(permissionToolPolicy.execMode)
+    : undefined;
+  const execSecurity = minSecurity(
+    execAuthority.security,
+    permissionExecPolicy?.security ?? "full",
+  );
+  const execAsk = maxAsk(execAuthority.ask, permissionExecPolicy?.ask ?? "off");
+  const execMode =
+    permissionToolPolicy &&
+    execSecurity === permissionExecPolicy?.security &&
+    execAsk === permissionExecPolicy.ask
+      ? permissionToolPolicy.execMode
+      : undefined;
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
@@ -195,7 +210,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     execDefaults: {
       bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
       ...execAuthority,
-      mode: permissionToolPolicy?.execMode ?? "full",
+      security: execSecurity,
+      ask: execAsk,
+      ...(execMode ? { mode: execMode } : {}),
       // Safe clamp v1 keeps allowlist hits local but denies misses before review.
       // Worker LLM review and interactive approval RPC remain a named follow-up.
       nonInteractiveApproval: Boolean(

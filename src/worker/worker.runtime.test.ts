@@ -1961,6 +1961,7 @@ describe("worker runtime", () => {
 
   it("keeps explicit deny through owner hooks, construction defaults, and plugin filtering", async () => {
     const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.permissionMode = "full";
     launch.assignment.toolAuthority = {
       allowedToolNames: ["exec", "process"],
       exec: { host: "gateway", security: "deny", ask: "off" },

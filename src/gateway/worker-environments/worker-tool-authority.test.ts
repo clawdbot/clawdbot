@@ -90,6 +90,32 @@ describe("resolveWorkerToolAuthority", () => {
     },
   );
 
+  it.each([
+    {
+      name: "deny",
+      execSession: { execSecurity: "deny" as const },
+      expected: { host: "gateway", security: "deny", ask: "off" },
+    },
+    {
+      name: "approval",
+      execSession: { execAsk: "always" as const },
+      expected: { host: "gateway", security: "full", ask: "always" },
+    },
+    {
+      name: "node binding",
+      execSession: { execHost: "node" as const, execNode: "session-node" },
+      expected: { host: "node", security: "full", ask: "off", node: "session-node" },
+    },
+  ])("preserves session-owned exec $name at the worker boundary", ({ execSession, expected }) => {
+    expect(
+      resolvedAuthority({
+        config: { tools: { exec: { host: "gateway", mode: "full" } } },
+        execSession,
+        toolsAllow: ["exec", "process"],
+      }).exec,
+    ).toEqual(expected);
+  });
+
   it("keeps the resolved node binding authoritative when a worker request names another node", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({
       nodes: [

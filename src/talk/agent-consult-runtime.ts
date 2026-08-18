@@ -442,6 +442,7 @@ export async function consultRealtimeVoiceAgent(params: {
         verboseLevel: "off",
         reasoningLevel: "off",
         toolResultFormat: "plain",
+        execSession: sessionEntry,
         toolsAllow: params.toolsAllow,
         timeoutMs,
         runId,

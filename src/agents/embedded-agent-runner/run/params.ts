@@ -46,6 +46,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
+import type { ExecSessionDefaults } from "../../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine-turn-attempt.js";
@@ -314,6 +315,8 @@ export type RunEmbeddedAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
   bootstrapPromptWarningSignature?: string;
+  /** Canonical persisted exec policy for this session. */
+  execSession?: ExecSessionDefaults;
   execOverrides?: Pick<
     ExecToolDefaults,
     | "host"

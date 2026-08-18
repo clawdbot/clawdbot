@@ -821,6 +821,27 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards canonical session exec policy to embedded worker placement", async () => {
+    const embedded = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-session-exec-policy",
+      sessionEntry: {
+        execHost: "node",
+        execSecurity: "allowlist",
+        execAsk: "always",
+        execNode: "session-node",
+        execCwd: "/session/worktree",
+      },
+    });
+
+    expect(embedded.execSession).toMatchObject({
+      execHost: "node",
+      execSecurity: "allowlist",
+      execAsk: "always",
+      execNode: "session-node",
+      execCwd: "/session/worktree",
+    });
+  });
+
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
     sessionEntry: SessionEntry;
