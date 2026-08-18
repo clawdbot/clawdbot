@@ -66,7 +66,11 @@ async function waitForDurableDraft(
         const requestResult = <T>(request: IDBRequest<T>) =>
           new Promise<T>((resolve, reject) => {
             request.addEventListener("success", () => resolve(request.result), { once: true });
-            request.addEventListener("error", () => reject(request.error), { once: true });
+            request.addEventListener(
+              "error",
+              () => reject(request.error ?? new Error("IndexedDB request failed")),
+              { once: true },
+            );
           });
         try {
           const database = await requestResult(indexedDB.open("openclaw-control-ui", 1));
