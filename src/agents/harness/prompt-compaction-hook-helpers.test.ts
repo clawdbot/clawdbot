@@ -11,24 +11,36 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
-  it("forwards a per-turn tool restriction to native harness adapters", async () => {
+  it("runs a lazy builder with hook tool policy while preserving replacement order", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_prompt_build",
-          handler: () => ({ toolsAllow: [] }),
+          handler: () => ({
+            appendSystemContext: "after replacement",
+            prependSystemContext: "before replacement",
+            systemPrompt: "hook replacement",
+            toolsAllow: ["read"],
+          }),
         },
       ]),
     );
+    const build = vi.fn(() => "policy-filtered base");
 
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "answer directly",
-      developerInstructions: "base instructions",
+      developerInstructions: { build },
       messages: [],
       ctx: {},
     });
 
-    expect(result.toolsAllow).toEqual([]);
+    expect(build).toHaveBeenCalledWith({ toolsAllow: ["read"] });
+    expect(result).toMatchObject({
+      toolsAllow: ["read"],
+      developerInstructions:
+        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
+    });
+    expect(result.developerInstructions).not.toContain("policy-filtered base");
   });
 
   it("retains an empty prompt range without hooks", async () => {
