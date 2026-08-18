@@ -181,7 +181,11 @@ describe("worker session tool topology", () => {
       sourceClaim,
       PARENT_EXECUTION_IDENTITY_TOKEN,
       sourceOperationalRun,
-      { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
+      {
+        agentId: SOURCE.agentId,
+        sessionKey: SOURCE.sessionKey,
+        sessionHandoffRequester: { messageProvider: "whatsapp", senderId: "guest" },
+      },
     );
     identity = {
       environmentId: SOURCE.environmentId,
@@ -766,6 +770,15 @@ describe("worker session tool topology", () => {
       },
     });
     placements.authorizeWorkerTurnTools(grandchildClaim, ["sessions_send"]);
+    const grandchildOperationalRun = createOperationalRunInstanceRef(grandchildClaim.runId);
+    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(grandchildOperationalRun));
+    bindWorkerTurnExecutionIdentity(
+      placements,
+      grandchildClaim,
+      undefined,
+      grandchildOperationalRun,
+      { agentId: GRANDCHILD.agentId, sessionKey: spawnedGrandchildKey! },
+    );
     await execute({
       identity: {
         ...identity,
@@ -855,6 +868,14 @@ describe("worker session tool topology", () => {
         args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
         options: expect.objectContaining({
           expectedTargetSessionId: TARGET.sessionId,
+          handoffContext: {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["sessions_spawn", "sessions_send"],
+              deny: [],
+            },
+            requester: { messageProvider: "whatsapp", senderId: "guest" },
+          },
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
         }),
       }),
