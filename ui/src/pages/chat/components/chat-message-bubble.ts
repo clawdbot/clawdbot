@@ -83,7 +83,7 @@ function renderInlineToolCards(
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-    isToolExpanded?: (toolCardId: string) => boolean | undefined;
+    isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     runActive?: boolean;
     canvasPluginSurfaceUrl?: string | null;
@@ -229,7 +229,7 @@ export function renderGroupedMessage(
     onToggleUserMessageExpanded?: (messageId: string) => void;
     assistantMessageDisclosure?: AssistantMessageDisclosure;
     actionMarkdown?: string;
-    isToolExpanded?: (toolCardId: string) => boolean | undefined;
+    isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;

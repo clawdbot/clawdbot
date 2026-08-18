@@ -72,7 +72,7 @@ type RenderMessageGroupOptions = {
   loadFullAssistantMessage?: SidebarFullMessageLoader;
   getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
   onToggleAssistantMessageExpanded?: (messageId: string) => void;
-  isToolExpanded?: (toolCardId: string) => boolean | undefined;
+  isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
   onAssistantAttachmentLoaded?: () => void;
