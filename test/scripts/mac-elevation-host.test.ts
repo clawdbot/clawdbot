@@ -1286,7 +1286,7 @@ describe("mac elevation host command contract", () => {
     ]);
 
     const failed = run('codesign_value_for_arch "$1" CDHash arm64', true);
-    expect(failed.status).toBe(1);
+    expect(failed.status).toBe(7);
     expect(failed.stdout).toBe("");
   });
 

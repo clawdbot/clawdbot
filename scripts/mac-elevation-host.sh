@@ -316,9 +316,10 @@ plist_file_value() {
 codesign_metadata_value() {
   local target="$1" key="$2" output
   shift 2
-  if ! output="$(codesign -dv --verbose=4 "$@" "$target" 2>&1)"; then
-    return 1
-  fi
+  output="$(codesign -dv --verbose=4 "$@" "$target" 2>&1)" || {
+    local rc=$?
+    return "$rc"
+  }
   awk -F= -v key="$key" '
     $1 == key && !found { value = $2; found = 1 }
     END { if (!found) exit 1; print value }
