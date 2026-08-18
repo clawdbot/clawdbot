@@ -357,6 +357,50 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
   });
 
+  it("keeps presence-driven device reloads gated on pairing access", async () => {
+    const request = vi.fn(async (method: string) => (method === "node.list" ? { nodes: [] } : {}));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["node.list", "device.pair.list", "exec.approvals.get"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, snapshot);
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+    const nodeListCallsBefore = request.mock.calls.filter(([method]) => method === "node.list");
+
+    onEvent?.({
+      event: "presence",
+      payload: { presence: [{ instanceId: "browser-1", ts: 2_000, reason: "connect" }] },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "node.list").length,
+      ).toBeGreaterThan(nodeListCallsBefore.length),
+    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+    page.remove();
+  });
+
   it("retries a node load after a same-client disconnect", async () => {
     const first = deferred<{ nodes: Array<Record<string, unknown>> }>();
     const second = deferred<{ nodes: Array<Record<string, unknown>> }>();

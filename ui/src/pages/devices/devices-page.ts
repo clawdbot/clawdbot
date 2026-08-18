@@ -160,7 +160,9 @@ class DevicesPage extends OpenClawLightDomElement {
             void this.presenceTask.run([null, null]);
             this.presence = presence;
             if (connectivityChanged) {
-              void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+              if (this.canManagePairing) {
+                void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+              }
               void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
             }
           }
