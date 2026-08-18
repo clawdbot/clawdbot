@@ -99,7 +99,7 @@ export async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
-  resolveGatewayContext?: import("../../../gateway/server-plugin-in-process-dispatch.js").GatewayContextResolver;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
   if (sourceOwnerChanged()) {

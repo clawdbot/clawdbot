@@ -73,7 +73,7 @@ async function runAnnounceAgentCall(params: {
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
   timeoutMs?: number;
-  resolveGatewayContext?: import("../../../gateway/server-plugin-in-process-dispatch.js").GatewayContextResolver;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
   return await dispatchSubagentAnnounceAgent(params.agentParams, {
     expectFinal: params.expectFinal,
@@ -107,7 +107,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   requesterIsSubagent: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
-  resolveGatewayContext?: import("../../../gateway/server-plugin-in-process-dispatch.js").GatewayContextResolver;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
     return {

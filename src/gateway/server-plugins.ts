@@ -31,12 +31,15 @@ import type {
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
-import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestHandler,
+  GatewayRequestOptions,
+} from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
-  type GatewayContextResolver,
 } from "./server-plugin-in-process-dispatch.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
 import {

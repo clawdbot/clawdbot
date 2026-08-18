@@ -618,9 +618,15 @@ export async function spawnSubagentDirect(
               }),
             });
             try {
-              if (
-                !startQueuedSubagentRun(childRunId, gatewayRunId, undefined, gatewayContextResolver)
-              ) {
+              const started = gatewayContextResolver
+                ? startQueuedSubagentRun(
+                    childRunId,
+                    gatewayRunId,
+                    undefined,
+                    gatewayContextResolver,
+                  )
+                : startQueuedSubagentRun(childRunId, gatewayRunId);
+              if (!started) {
                 throw new Error(
                   "collector registry row could not transition from queued to running",
                 );

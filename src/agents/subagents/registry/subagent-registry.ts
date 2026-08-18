@@ -2,7 +2,7 @@
 import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
-import type { GatewayContextResolver } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {

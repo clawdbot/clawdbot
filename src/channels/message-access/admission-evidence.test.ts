@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayContextResolver } from "../../gateway/server-plugin-in-process-dispatch.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   buildChannelInboundEventContext,
   buildHostChannelInboundEventContext,

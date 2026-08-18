@@ -1,5 +1,5 @@
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayContextResolver } from "../../gateway/server-plugin-in-process-dispatch.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   finalizedContextScopeKey,

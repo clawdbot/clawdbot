@@ -41,6 +41,6 @@ export type AgentTurnContext = Pick<
   | "loadGatewayModelCatalog"
   | "loadGatewayModelCatalogSnapshot"
   | "logGateway"
-  | "recoveryRuntime"
+  | "resolveGatewayContext"
   | "validateAgentRuntimeApprovalAuthority"
 >;

@@ -356,7 +356,7 @@ export function startAgentRunExecution(params: {
               onAdmittedRunContext: (admittedRunContext) => {
                 bindGatewayContextResolver(
                   admittedRunContext,
-                  params.context.recoveryRuntime?.resolveGatewayContext,
+                  params.context.resolveGatewayContext,
                 );
                 const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
                 if (!authority) {

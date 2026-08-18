@@ -16,9 +16,12 @@ import {
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
-import type { GatewayContextResolver } from "../server-plugin-in-process-dispatch.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 
 export type TrustedGroupMetadata = {
   groupId?: string;

@@ -1,4 +1,4 @@
-import type { GatewayContextResolver } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns subagent registration and queued collector launch transitions. */
 import {
   getAgentEventLifecycleGeneration,

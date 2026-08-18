@@ -14,6 +14,7 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type {
   GatewayAgentRunTaskOwner,
+  GatewayContextResolver,
   GatewayRequestContext,
   GatewayRequestOptions,
   TrustedAgentToolCaller,
@@ -54,8 +55,6 @@ type DispatchGatewayMethodInProcessOptions = {
   signal?: AbortSignal;
   resolveGatewayContext?: GatewayContextResolver;
 };
-
-export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 
 type ResolvedInProcessGatewayDispatch = {
   client: NonNullable<GatewayRequestOptions["client"]>;
