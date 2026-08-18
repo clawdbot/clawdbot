@@ -75,14 +75,13 @@ export function resolveNodeGatewayOptions(
   const port = options.port === undefined ? baselinePort : parsePort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
+  // An explicit-but-empty --tls-fingerprint must not silently disable pinning:
+  // treat it as unset and fall back to the configured baseline fingerprint.
   const selectedTlsFingerprint =
     options.tls === false
       ? undefined
-      : options.tlsFingerprint !== undefined
-        ? options.tlsFingerprint
-        : endpointChanged
-          ? undefined
-          : baselineTlsFingerprint;
+      : (normalizeOptionalString(options.tlsFingerprint) ??
+        (endpointChanged ? undefined : baselineTlsFingerprint));
   const baselineTls = pair?.tls ?? config?.gateway?.tls;
   const tlsFingerprint = selectedTlsFingerprint
     ? requireTlsFingerprint(selectedTlsFingerprint)
