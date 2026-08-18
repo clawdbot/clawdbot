@@ -241,7 +241,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     const decorationLine = (link: Locator) =>
       link.evaluate((element) => getComputedStyle(element).textDecorationLine);
-    expect(await decorationLine(pullLink)).toBe("underline");
+    expect(await decorationLine(pullLink)).toBe("none");
     expect(await decorationLine(page.getByRole("link", { name: "the docs" }))).toBe("underline");
 
     await pullLink.hover();

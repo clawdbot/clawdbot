@@ -528,7 +528,7 @@
      starts on; the file-link chip's `display: inline-block` could not. */
   position: relative;
   padding-inline-start: 1.3em; /* the mark's 1em box plus the 0.3em gap it had */
-  text-decoration: underline;
+  text-decoration: none;
 }
 
 /* The inherited `overflow-wrap: anywhere` breaks a word only once every other

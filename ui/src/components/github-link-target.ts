@@ -55,8 +55,11 @@ export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
 export function formatGitHubLinkLabel(url: URL): string {
   const segments = url.pathname.split("/").filter(Boolean);
   const item = parseGitHubItemPath(url);
-  if (item) {
+  if (item && segments.length === 4 && !url.search && !url.hash) {
     return `#${item.number}`;
+  }
+  if (item) {
+    return url.href;
   }
   if (segments.length === 2) {
     return segments.map((segment) => decodePathSegment(segment) ?? segment).join("/");

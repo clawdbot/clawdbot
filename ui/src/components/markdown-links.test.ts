@@ -639,6 +639,23 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
+      ["a files-tab path", "https://github.com/openclaw/openclaw/pull/3434/files"],
+      ["a commits path", "https://github.com/openclaw/openclaw/pull/3434/commits"],
+      [
+        "an issue comment fragment",
+        "https://github.com/openclaw/openclaw/issues/3434#issuecomment-1",
+      ],
+      ["a review comment query", "https://github.com/openclaw/openclaw/pull/3434?tab=files"],
+      ["a diff anchor", "https://github.com/openclaw/openclaw/pull/3434/files#diff-abc123"],
+    ])("keeps the specific destination visible for %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.classList.contains("markdown-github-link")).toBe(true);
+      expect(link?.textContent).toBe(input);
+      expect(link?.getAttribute("href")).toBe(input);
+    });
+
+    it.each([
       ["non-github host", "[docs](https://example.com/openclaw)"],
       ["lookalike host", "[docs](https://notgithub.com/openclaw)"],
       ["github in query", "[docs](https://example.com/?to=https://github.com/openclaw)"],
