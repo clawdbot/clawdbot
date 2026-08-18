@@ -1097,6 +1097,28 @@ describe("deliverOutboundPayloads", () => {
     expect(fencedMediaLogWarn).not.toHaveBeenCalled();
   });
 
+  it("does not mark fenced MEDIA skip when extractMediaDirectives is false on durable prepare (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: fenced, extractMediaDirectives: false }],
+      deps: { matrix: vi.fn() },
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(1);
+    const entry = accepted[0];
+    expect(entry).toMatchObject({ status: "accepted" });
+    if (entry?.status === "accepted") {
+      expect(entry.mediaTokenSkippedInFence).toBeUndefined();
+      expect(entry.fencedSkippedMediaDirectives).toBeUndefined();
+      expect(entry.payload.extractMediaDirectives).toBe(false);
+    }
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+  });
+
   it("warns for fenced MEDIA only after durable physical send succeeds (#41966)", async () => {
     fencedMediaLogWarn.mockClear();
     const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";

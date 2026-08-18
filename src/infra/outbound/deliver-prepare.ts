@@ -266,13 +266,29 @@ export async function prepareOutboundPayloadBatch(
         return acceptedText.split("\n").some((line) => line.trim() === identity);
       },
     );
+    // Preserve block-reply / disabled parsing mode on accepted replan. Passing
+    // text-only would default extractMediaDirectives on and falsely mark fenced
+    // MEDIA as skipped for durable diagnostics (#41966 / ClawSweeper P2).
     const acceptedPlan = acceptedText
-      ? createOutboundPayloadPlan([{ text: acceptedText }], {
-          cfg: params.cfg,
-          sessionKey: params.session?.policyKey ?? params.session?.key,
-          surface: params.channel,
-          conversationType: params.session?.conversationType,
-        })[0]
+      ? createOutboundPayloadPlan(
+          [
+            {
+              text: acceptedText,
+              ...(compactPayload.extractMediaDirectives === false
+                ? { extractMediaDirectives: false as const }
+                : compactPayload.extractMediaDirectives === true
+                  ? { extractMediaDirectives: true as const }
+                  : {}),
+            },
+          ],
+          {
+            cfg: params.cfg,
+            sessionKey: params.session?.policyKey ?? params.session?.key,
+            surface: params.channel,
+            conversationType: params.session?.conversationType,
+            extractMediaDirectives: compactPayload.extractMediaDirectives,
+          },
+        )[0]
       : undefined;
     const durableDirectives =
       retainedDirectives.length > 0
