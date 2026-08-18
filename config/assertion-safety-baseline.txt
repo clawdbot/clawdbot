@@ -1382,7 +1382,6 @@ extensions/vllm/stream.ts	1
 extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
-extensions/voice-call/src/cli.ts	2
 extensions/voice-call/src/config.ts	2
 extensions/voice-call/src/manager.ts	2
 extensions/voice-call/src/manager/outbound.ts	3
