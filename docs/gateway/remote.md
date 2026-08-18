@@ -110,6 +110,7 @@ application token from an operator-installed `cloudflared` binary:
         command: "/usr/local/bin/cloudflared",
         args: ["access", "token", "-app=https://gateway.example"],
         jsonOnly: false,
+        passEnv: ["HOME"],
         trustedDirs: ["/usr/local/bin"],
       },
     },
@@ -132,7 +133,14 @@ application token from an operator-installed `cloudflared` binary:
 
 `secrets.providers.*.command` must be an absolute path; replace
 `/usr/local/bin/cloudflared` with the real, non-symlink install location on your
-host, such as the resolved executable under a Homebrew prefix.
+host, such as the resolved executable under a Homebrew prefix, and keep
+`trustedDirs` pointing at the directory that actually holds it.
+
+Exec providers run with a scrubbed environment. `cloudflared` reads its cached
+application token from the user's home directory, so `passEnv: ["HOME"]` is
+required; without it the provider exits non-zero and no header is produced.
+Run `cloudflared access login <gateway-url>` once first so a token exists to
+read.
 
 For a Cloudflare Access service token, provide the two fixed headers from any
 supported secret provider. This example reads them from environment-backed

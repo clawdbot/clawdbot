@@ -1991,7 +1991,6 @@ src/agents/plugin-model-catalog.ts	4
 src/agents/plugin-text-transforms.ts	5
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
-src/agents/prepared-model-runtime-lease.ts	1
 src/agents/prepared-model-runtime.configured.ts	2
 src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.plugin-context.ts	2

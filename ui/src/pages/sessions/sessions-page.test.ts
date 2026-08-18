@@ -868,7 +868,7 @@ describe("sessions page lifecycle", () => {
       if (method === "chat.history") {
         return Promise.resolve({ messages: [] });
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return captured.promise;
       }
       return Promise.resolve({});
@@ -895,7 +895,7 @@ describe("sessions page lifecycle", () => {
       page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
+      expect(request).toHaveBeenCalledWith("workboard.cards.captureSession", expect.any(Object)),
     );
 
     mutableGateway.emit({ phase: "reconnecting", client });

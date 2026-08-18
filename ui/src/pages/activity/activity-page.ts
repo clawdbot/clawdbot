@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
@@ -9,6 +9,7 @@ import {
   type GatewayEventFrame,
 } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -17,6 +18,7 @@ import {
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -74,6 +76,7 @@ class ActivityPage extends OpenClawLightDomElement {
   };
   @state() private toolFilter = "";
   @state() private expandedIds = new Set<string>();
+  @state() private expandedAutomationDays = new Set<string>();
   @state() private autoFollow = true;
   @state() private runInspector: RunInspectorState = { status: "empty" };
   @state() private presencePayload: PresencePayload | undefined;
@@ -337,20 +340,14 @@ class ActivityPage extends OpenClawLightDomElement {
     );
   }
 
-  private selectMode(mode: "sessions" | "live" | "run") {
+  private selectMode(mode: "sessions" | "live") {
     if (mode === "sessions") {
       this.context.navigate("activity", { search: "" });
       return;
     }
     if (mode === "live") {
       this.context.navigate("activity", { search: "?view=live" });
-      return;
     }
-    const search = new URLSearchParams({ view: "run" });
-    if (this.routeData?.mode === "run" && this.routeData.selector) {
-      search.set(this.routeData.selector.kind, this.routeData.selector.id);
-    }
-    this.context.navigate("activity", { search: `?${search.toString()}` });
   }
 
   private rebuildEntries(
@@ -437,6 +434,7 @@ class ActivityPage extends OpenClawLightDomElement {
 
   override render() {
     const liveActivity = renderActivity({
+      basePath: this.context.basePath,
       entries: this.entries,
       filterText: this.filterText,
       statusFilters: this.statusFilters,
@@ -499,39 +497,63 @@ class ActivityPage extends OpenClawLightDomElement {
       this.retainedIdentities.set(retainedIdentity.id, retainedIdentity);
     }
     const body = html`
-      ${renderHubTabs({
-        id: "activity-mode",
-        active: mode,
-        tabs: [
-          { value: "sessions", label: t("activityFeed.sessionsMode") },
-          { value: "live", label: t("activity.runInspector.liveMode") },
-          { value: "run", label: t("activity.runInspector.mode") },
-        ],
-        ariaLabel: t("activity.runInspector.activityView"),
-        panelId: "activity-mode-panel",
-        className: "activity-mode-tabs",
-        variant: "sub",
-        onSelect: (selected) => this.selectMode(selected),
-      })}
-      <div id="activity-mode-panel" role="tabpanel" aria-labelledby=${`activity-mode-tab-${mode}`}>
+      ${mode === "run"
+        ? nothing
+        : renderHubTabs({
+            id: "activity-mode",
+            active: mode,
+            tabs: [
+              { value: "sessions", label: t("activityFeed.sessionsMode") },
+              { value: "live", label: t("activity.runInspector.liveMode") },
+            ],
+            ariaLabel: t("activity.runInspector.activityView"),
+            panelId: "activity-mode-panel",
+            className: "activity-mode-tabs",
+            variant: "sub",
+            onSelect: (selected) => this.selectMode(selected),
+          })}
+      <div
+        id="activity-mode-panel"
+        role=${mode === "run" ? nothing : "tabpanel"}
+        aria-labelledby=${mode === "run" ? nothing : `activity-mode-tab-${mode}`}
+      >
         ${mode === "sessions"
           ? renderSessionActivityView({
               context: this.context,
+              expandedAutomationDays: this.expandedAutomationDays,
               filters,
               presenceViewers,
               retainedIdentity,
               rows: sessionRows,
+              onAutomationDayToggle: (dayKey) => {
+                const next = new Set(this.expandedAutomationDays);
+                if (next.has(dayKey)) {
+                  next.delete(dayKey);
+                } else {
+                  next.add(dayKey);
+                }
+                this.expandedAutomationDays = next;
+              },
               onFiltersChange: (next) =>
                 this.context.navigate("activity", { search: sessionActivitySearch(next) }),
             })
           : mode === "run"
-            ? renderRunInspector({
-                basePath: this.context.basePath,
-                state: this.runInspector,
-                onLoadMoreExecutions: () => this.loadMoreExecutions(),
-                onRetry: () =>
-                  this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
-              })
+            ? html`<a
+                  class="activity-run-inspector-back"
+                  href=${pathForRoute("activity", this.context.basePath)}
+                  >${icons.arrowLeft}${t("activityFeed.backToSessions")}</a
+                >
+                ${renderRunInspector({
+                  basePath: this.context.basePath,
+                  state: this.runInspector,
+                  onLoadMoreExecutions: () => this.loadMoreExecutions(),
+                  onRetry: () =>
+                    this.syncRunInspector(
+                      this.context.gateway,
+                      this.context.gateway.snapshot,
+                      true,
+                    ),
+                })}`
             : html`<div id="activity-live-panel">${liveActivity}</div>`}
       </div>
     `;

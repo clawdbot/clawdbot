@@ -172,7 +172,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(events[0]?.status).toBeUndefined();
   });
 
-  it("records provider response status and preserves the original response callback", async () => {
+  it("records legacy response status without inferring provider acceptance", async () => {
     const originalOnResponse = vi.fn(async () => undefined);
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
@@ -212,7 +212,54 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       type: "provider.request",
       ok: true,
       status: 200,
+      attributes: {
+        providerAccepted: false,
+      },
     });
+  });
+
+  it("records provider acceptance when an SDK hides HTTP metadata", async () => {
+    const originalOnProviderAccepted = vi.fn(async () => undefined);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        return options?.onProviderAccepted?.({ kind: "provider_stream_opened" }, model);
+      }) as unknown as StreamFn,
+      {
+        runId: "run-timeline-accepted",
+        provider: "google",
+        model: "gemini-2.5-pro",
+        api: "google-generative-ai",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-accepted",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      await wrapped(
+        { id: "gemini-2.5-pro" } as never,
+        {} as never,
+        { onProviderAccepted: originalOnProviderAccepted } as never,
+      );
+    });
+
+    expect(originalOnProviderAccepted).toHaveBeenCalledWith(
+      { kind: "provider_stream_opened" },
+      { id: "gemini-2.5-pro" },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      ok: true,
+      attributes: {
+        providerAccepted: true,
+        providerAcceptanceKind: "provider_stream_opened",
+      },
+    });
+    expect(events[0]?.status).toBeUndefined();
   });
 
   it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {

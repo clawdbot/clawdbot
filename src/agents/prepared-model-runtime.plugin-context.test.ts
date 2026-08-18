@@ -30,7 +30,6 @@ describe("prepared model runtime plugin metadata ownership", () => {
       agentDir: `/tmp/${name}-agent`,
       config,
       workspaceDir: `/tmp/${name}-workspace`,
-      workspacePluginRootPresent: false,
     }));
     const pluginGeneration = {
       configuredCatalogEntries: [],
@@ -80,7 +79,6 @@ describe("prepared model runtime plugin metadata ownership", () => {
             agentDir: "/tmp/direct-agent",
             config,
             workspaceDir,
-            workspacePluginRootPresent: false,
           },
           process.env,
           undefined,

@@ -265,16 +265,14 @@ export async function runConfigUnset(opts: {
           ],
         });
       }
-      if (cliOptions.dryRun) {
-        runtime.error(danger(missingPathMessage));
-        runtime.exit(1);
-        return;
+      if (!cliOptions.dryRun) {
+        assertStrictConfigForMutation(
+          currentConfig,
+          mutationStart.writeOptions.basePluginMetadataSnapshot,
+        );
       }
-      assertStrictConfigForMutation(
-        currentConfig,
-        mutationStart.writeOptions.basePluginMetadataSnapshot,
-      );
-      runtime.log(info("No change"));
+      runtime.error(danger(missingPathMessage));
+      runtime.exit(1);
       return;
     }
     const operation = buildUnsetOperation(parsedPath);

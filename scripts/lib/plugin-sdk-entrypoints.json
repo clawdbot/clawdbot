@@ -287,6 +287,7 @@
   "provider-entry",
   "provider-env-vars",
   "provider-http",
+  "provider-lifecycle",
   "provider-binary-stream",
   "provider-model-types",
   "provider-model-shared",

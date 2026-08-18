@@ -28,6 +28,7 @@ type RunAgentAttempt = typeof runAgentAttempt;
 type CaptureSessionDiffBaseline =
   (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
 type CliCompactionParams = {
+  pluginGeneration?: unknown;
   sessionId: string;
   sessionEntry?: SessionEntry;
   sessionKey: string;
@@ -224,9 +225,7 @@ let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
 
 beforeAll(async () => {
-  const command = await import("./agent-command.js");
-  agentCommand = command.agentCommand;
-  agentCommandFromGatewayIngress = command.agentCommandFromGatewayIngress;
+  ({ agentCommand, agentCommandFromGatewayIngress } = await import("./agent-command.js"));
 });
 
 beforeEach(async () => {
@@ -345,6 +344,7 @@ function readLifecyclePhases(): Array<string | undefined> {
 
 const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
+const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
 
 describe("agentCommand compaction transcript rotation", () => {
   it.each([
@@ -583,9 +583,7 @@ describe("agentCommand compaction transcript rotation", () => {
         cwd: state.workspaceDir,
         allowModelOverride: false,
       },
-      defaultRuntime,
-      undefined,
-      {},
+      ...GATEWAY_INGRESS_ARGS,
     );
 
     const events = (await loadTranscriptEvents({
@@ -614,41 +612,37 @@ describe("agentCommand compaction transcript rotation", () => {
     );
   });
 
-  it("persists the pending final before CLI compaction failure and still delivers", async () => {
+  it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
     const sessionId = "cli-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const text = "cli reply generated before compaction";
-    let compactionSessionEntry: SessionEntry | undefined;
+    const pluginGeneration = {
+      pluginMetadataSnapshot: { workspaceDir: state.workspaceDir },
+    } as never;
     let storedEntryBeforeCompaction: SessionEntry | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text, runner: "cli" }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      compactionSessionEntry = params.sessionEntry;
+      expect(params.pluginGeneration).toBe(pluginGeneration);
       storedEntryBeforeCompaction = findStoredSessionEntry(sessionKey);
       throw new Error(COMPACTION_ERROR);
     });
 
-    const result = await agentCommand({
-      message: "room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
-
-    expect(compactionSessionEntry).toMatchObject({
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text,
-        context: {
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
-        },
+    const result = await agentCommandFromGatewayIngress(
+      {
+        message: "room message",
+        sessionId,
+        sessionKey,
+        cwd: state.workspaceDir,
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
+        allowModelOverride: false,
       },
-    });
+      ...GATEWAY_INGRESS_ARGS,
+      { config: state.cfg ?? {}, pluginGeneration },
+    );
+
     expect(storedEntryBeforeCompaction).toMatchObject({
       pendingFinalDelivery: { kind: "replayable", text },
     });

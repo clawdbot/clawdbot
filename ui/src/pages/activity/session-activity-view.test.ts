@@ -7,7 +7,12 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
-function row(key: string, owner: { id: string; label?: string }, updatedAt: number) {
+function row(
+  key: string,
+  owner: { id: string; label?: string },
+  updatedAt: number,
+  overrides: Partial<GatewaySessionRow> = {},
+) {
   const actor = { type: "human" as const, ...owner };
   return {
     key,
@@ -16,6 +21,7 @@ function row(key: string, owner: { id: string; label?: string }, updatedAt: numb
     updatedAt,
     createdActor: actor,
     owner: { actor },
+    ...overrides,
   } satisfies GatewaySessionRow;
 }
 
@@ -33,6 +39,8 @@ function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0
     presenceViewers: [] as PresenceViewer[],
     retainedIdentity: null,
     rows: [] as GatewaySessionRow[],
+    expandedAutomationDays: new Set<string>(),
+    onAutomationDayToggle: vi.fn(),
     onFiltersChange: vi.fn(),
     ...overrides,
   };
@@ -108,5 +116,183 @@ describe("session activity people filter", () => {
       query: "release",
       time: "30d",
     });
+  });
+});
+
+describe("session activity automation grouping", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("collapses two automation sessions, keeps one inline, and bypasses grouping for filters", () => {
+    const current = new Date();
+    const now = new Date(
+      current.getFullYear(),
+      current.getMonth(),
+      current.getDate(),
+      12,
+    ).getTime();
+    const owner = { id: "owner", label: "Owner" };
+    const regular = row("Regular session", owner, now);
+    const automationOne = row("Automation one", owner, now - 1_000, { hasAutomation: true });
+    const automationTwo = row("Automation two", owner, now - 2_000, { hasAutomation: true });
+    const onAutomationDayToggle = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({ rows: [regular, automationOne, automationTwo], onAutomationDayToggle }),
+      ),
+      container,
+    );
+
+    const group = container.querySelector<HTMLButtonElement>("[data-activity-automation-group]");
+    expect(group?.textContent).toContain("2 automation sessions");
+    expect(group?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(1);
+    const dayKey = group?.dataset.activityAutomationGroup;
+    expect(dayKey).toBeTruthy();
+    group?.click();
+    expect(onAutomationDayToggle).toHaveBeenCalledWith(dayKey);
+
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [regular, automationOne, automationTwo],
+          expandedAutomationDays: new Set([dayKey!]),
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(3);
+
+    render(renderSessionActivityView(props({ rows: [regular, automationOne] })), container);
+    expect(container.querySelector("[data-activity-automation-group]")).toBeNull();
+    expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(2);
+
+    for (const filteredProps of [
+      { filters: { personId: null, query: "Automation", time: "7d" as const } },
+      {
+        filters: { personId: "owner", query: "", time: "7d" as const },
+        retainedIdentity: { id: "owner", name: "Owner", watchedSessions: [] },
+      },
+    ]) {
+      render(
+        renderSessionActivityView(
+          props({ rows: [automationOne, automationTwo], ...filteredProps }),
+        ),
+        container,
+      );
+      expect(container.querySelector("[data-activity-automation-group]")).toBeNull();
+      expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(2);
+    }
+  });
+});
+
+describe("session activity live status", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("uses the recorded active run and observer digest for the row status", () => {
+    const now = Date.now();
+    const owner = { id: "owner", label: "Owner" };
+    const observerDigest = {
+      headline: "  Waiting on a fake approval  ",
+      health: "waiting-on-user" as const,
+      revision: 1,
+      runId: "fake-run",
+      updatedAt: now,
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [
+            row("Active session", owner, now, { hasActiveRun: true, observerDigest }),
+            row("Inactive session", owner, now - 1_000, {
+              observerDigest,
+              status: "running",
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const active = container.querySelector('[data-activity-session="Active session"]');
+    const inactive = container.querySelector('[data-activity-session="Inactive session"]');
+    expect(active?.querySelector(".activity-feed__run-dot")).not.toBeNull();
+    expect(active?.querySelector(".activity-feed__session-headline")?.textContent?.trim()).toBe(
+      "Waiting on a fake approval",
+    );
+    expect(
+      active?.querySelector(".activity-feed__session-headline")?.getAttribute("data-health"),
+    ).toBe("waiting-on-user");
+    expect(active?.textContent).toContain("Owner");
+    expect(inactive?.querySelector(".activity-feed__run-dot")).toBeNull();
+    expect(inactive?.querySelector(".activity-feed__session-headline")).toBeNull();
+  });
+
+  it("links active rows to their recorded run ids", () => {
+    const now = Date.now();
+    const owner = { id: "owner", label: "Owner" };
+    const base = props();
+    const context = { ...base.context, basePath: "/control" } as ApplicationContext;
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          context,
+          rows: [
+            row("Digest run", owner, now, {
+              activeRunIds: ["fallback-run", "digest run:a/b"],
+              hasActiveRun: true,
+              observerDigest: {
+                headline: "Running",
+                health: "on-track",
+                revision: 1,
+                runId: "digest run:a/b",
+                updatedAt: now,
+              },
+            }),
+            row("Stale digest", owner, now - 500, {
+              activeRunIds: ["current-run"],
+              hasActiveRun: true,
+              observerDigest: {
+                headline: "Running",
+                health: "on-track",
+                revision: 1,
+                runId: "ended-run",
+                updatedAt: now,
+              },
+            }),
+            row("Active run fallback", owner, now - 1_000, {
+              activeRunIds: ["fallback run:a/b"],
+              hasActiveRun: true,
+            }),
+            row("Inactive run", owner, now - 2_000, {
+              activeRunIds: ["inactive-run"],
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      [...container.querySelectorAll<HTMLAnchorElement>(".activity-feed__inspect-run")].map(
+        (link) => link.getAttribute("href"),
+      ),
+    ).toEqual([
+      "/control/activity?view=run&run=digest%20run%3Aa%2Fb",
+      "/control/activity?view=run&run=current-run",
+      "/control/activity?view=run&run=fallback%20run%3Aa%2Fb",
+    ]);
   });
 });

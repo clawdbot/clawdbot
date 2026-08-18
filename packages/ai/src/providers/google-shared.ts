@@ -19,6 +19,7 @@ import { googleFlashSupportsMinimalThinking } from "../transports/google-thinkin
 import {
   assignTransportErrorDetails,
   coerceTransportToolCallArguments,
+  notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -421,7 +422,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   stream: AssistantMessageEventStream;
   model: Model<T>;
   output: AssistantMessage;
-  options?: Pick<StreamOptions, "signal" | "onPayload">;
+  options?: Pick<StreamOptions, "signal" | "onPayload" | "onProviderAccepted">;
   createClient: () => GoogleGenerateContentClient;
   buildParams: () => GenerateContentParameters;
   nextToolCallId: (name: string | undefined) => string;
@@ -436,8 +437,16 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       requestParams = nextParams as GenerateContentParameters;
     }
     const googleStream = await client.models.generateContentStream(requestParams);
+    const googleIterator = googleStream[Symbol.asyncIterator]();
+    try {
+      await notifyProviderStreamOpened({ options, model });
+    } catch (error) {
+      // Cleanup is best effort; callback failure must not wait on an unread SDK stream.
+      void Promise.resolve(googleIterator.return?.()).catch(() => undefined);
+      throw error;
+    }
     await consumeGoogleGenerateContentStream({
-      chunks: googleStream,
+      chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
       stream,

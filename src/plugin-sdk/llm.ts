@@ -37,6 +37,7 @@ export type {
   Message,
   Model,
   ModelThinkingLevel,
+  ProviderAcceptance,
   ProviderResponse,
   ProviderStreamOptions,
   SimpleStreamOptions,

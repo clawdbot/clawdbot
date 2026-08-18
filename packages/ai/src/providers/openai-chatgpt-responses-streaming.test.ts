@@ -151,6 +151,57 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     });
   });
 
+  it("reports acceptance before the default WebSocket stream starts", async () => {
+    class AcceptedWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: JSON.stringify({
+                type: "response.completed",
+                response: {
+                  id: "resp_ws_accepted",
+                  status: "completed",
+                  output: [],
+                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+                },
+              }),
+            }),
+          );
+        });
+      }
+
+      close(): void {}
+    }
+
+    const order: string[] = [];
+    const onProviderAccepted = vi.fn(async () => {
+      order.push("accepted");
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("WebSocket", AcceptedWebSocket);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      onProviderAccepted,
+    });
+    for await (const event of stream) {
+      order.push(event.type);
+    }
+
+    expect(order).toEqual(["accepted", "start", "done"]);
+    expect(onProviderAccepted).toHaveBeenCalledWith({ kind: "provider_stream_opened" }, model);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("emits an error for a content-filtered incomplete WebSocket turn", async () => {
     class ContentFilteredWebSocket extends EventTarget {
       constructor() {

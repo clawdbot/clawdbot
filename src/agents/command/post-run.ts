@@ -355,6 +355,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           senderIsOwner: params.opts.senderIsOwner,
           thinkLevel: effectiveTurnThinkLevel,
           extraSystemPrompt: params.opts.extraSystemPrompt,
+          pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
         });
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

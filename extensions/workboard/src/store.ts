@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
   WorkboardCard,
+  WorkboardDiagnostic,
+  WorkboardExecution,
   WorkboardExecutionStatus,
+  WorkboardMetadata,
   WorkboardStaleState,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
@@ -17,13 +20,15 @@ import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
   cardBoardId,
+  cardRunId,
+  cardSessionKey,
   closeRunningAttempts,
   computeCardDiagnostics,
   isDependencyPromotableStatus,
   latestRunningAttempt,
   mergeDiagnostics,
-  removeUndefinedCardFields,
   retryBudgetExhausted,
+  shouldSkipPersistedLifecycleStatusUpdate,
   shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
 import {
@@ -40,18 +45,99 @@ import type {
   WorkboardDispatchOptions,
   WorkboardDispatchResult,
 } from "./store-inputs.js";
-import {
-  metadataIsEmpty,
-  normalizeBoardId,
-  normalizeTimestamp,
-  trimMetadataToBudget,
-} from "./store-normalizers.js";
+import { normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
+export { WorkboardCardConflictError } from "./store-core.js";
+
+type WorkboardExecutionAssociationInput = {
+  expectedSessionKey?: string;
+  expectedRunId?: string;
+  sessionKey: string;
+  runId?: string;
+  execution: WorkboardExecution;
+};
+
+type WorkboardLifecycleAssociation = Omit<WorkboardExecutionAssociationInput, "execution">;
+type WorkboardExecutionAssociationPatch = WorkboardCardPatch & {
+  metadata?: WorkboardMetadata;
+};
+
+function executionAssociationPatch(
+  card: WorkboardCard,
+  input: WorkboardExecutionAssociationInput,
+): WorkboardExecutionAssociationPatch | undefined {
+  if (
+    cardSessionKey(card) !== input.expectedSessionKey ||
+    cardRunId(card) !== input.expectedRunId
+  ) {
+    return undefined;
+  }
+  const attempts = [...(card.metadata?.attempts ?? [])];
+  const attemptIndex = attempts.findLastIndex(
+    (attempt) =>
+      attempt.status === "running" &&
+      ((input.expectedRunId && attempt.runId === input.expectedRunId) ||
+        (!input.expectedRunId &&
+          input.expectedSessionKey &&
+          attempt.sessionKey === input.expectedSessionKey)),
+  );
+  if (attemptIndex >= 0) {
+    const attempt = attempts[attemptIndex];
+    if (attempt) {
+      attempts[attemptIndex] = {
+        ...attempt,
+        id: input.runId ?? attempt.id,
+        sessionKey: input.sessionKey,
+        ...(input.runId ? { runId: input.runId } : {}),
+      };
+    }
+  }
+  return {
+    sessionKey: input.sessionKey,
+    ...(input.runId ? { runId: input.runId } : {}),
+    execution: input.execution,
+    ...(attemptIndex >= 0 ? { metadata: { ...card.metadata, attempts } } : {}),
+  };
+}
+
+function lifecycleExecution(params: {
+  card: WorkboardCard;
+  association: WorkboardLifecycleAssociation;
+  status?: WorkboardExecutionStatus;
+  now: number;
+}): WorkboardExecution {
+  const existing = params.card.execution;
+  const runId = params.association.runId ?? existing?.runId;
+  return {
+    id: existing?.id ?? `${params.card.id}:agent-session`,
+    kind: "agent-session",
+    mode: existing?.mode ?? "autonomous",
+    status: params.status ?? existing?.status ?? "running",
+    ...(existing?.engine ? { engine: existing.engine } : {}),
+    ...(existing?.model ? { model: existing.model } : {}),
+    sessionKey: params.association.sessionKey,
+    ...(runId ? { runId } : {}),
+    startedAt: existing?.startedAt ?? params.card.startedAt ?? params.card.updatedAt,
+    updatedAt: params.now,
+  };
+}
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  async enrichExecutionAssociation(
+    id: string,
+    input: WorkboardExecutionAssociationInput,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const result = await this.updateLatestCard(id, (current) =>
+        executionAssociationPatch(current, input),
+      );
+      return result.card;
+    });
+  }
+
   async syncLifecycle(
     id: string,
     input: {
@@ -60,58 +146,93 @@ export class WorkboardStore extends WorkboardNotificationStore {
       sourceUpdatedAt: number | undefined;
       stale: WorkboardStaleState | undefined;
       now: number;
+      association?: WorkboardLifecycleAssociation;
     },
   ): Promise<boolean> {
     return await this.enqueueMutation(async () => {
-      const card = await this.get(id);
-      if (!card || card.metadata?.archivedAt) {
-        return false;
-      }
-      const patch: WorkboardCardPatch = {};
-      let metadata: Record<string, unknown> | undefined;
-      // Recheck manual status under the mutation lock; a hook can race an operator move.
-      if (
-        input.sourceUpdatedAt !== undefined &&
-        shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
-      ) {
-        patch.status = input.targetStatus;
-        metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
-      }
-      if (
-        card.execution &&
-        input.executionStatus &&
-        card.execution.status !== input.executionStatus
-      ) {
-        patch.execution = {
-          ...card.execution,
-          status: input.executionStatus,
-          updatedAt: input.now,
-        };
-      }
-      if (input.stale) {
-        const existing = card.metadata?.stale;
+      const result = await this.updateLatestCard(id, (card) => {
+        if (card.metadata?.archivedAt) {
+          return undefined;
+        }
+        const patch: WorkboardCardPatch = {};
+        let metadata: Record<string, unknown> | undefined;
+        const associationIsCurrent =
+          !input.association ||
+          ((input.sourceUpdatedAt === undefined ||
+            !shouldSkipPersistedLifecycleStatusUpdate(card, input.sourceUpdatedAt)) &&
+            cardSessionKey(card) === input.association.expectedSessionKey &&
+            cardRunId(card) === input.association.expectedRunId);
+        // Recompute from the latest row after every cross-host CAS conflict.
         if (
-          !existing ||
-          existing.lastSessionUpdatedAt !== input.stale.lastSessionUpdatedAt ||
-          existing.reason !== input.stale.reason
+          associationIsCurrent &&
+          input.sourceUpdatedAt !== undefined &&
+          shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
         ) {
-          metadata = {
-            ...metadata,
-            stale: { ...input.stale, detectedAt: existing?.detectedAt ?? input.stale.detectedAt },
+          patch.status = input.targetStatus;
+          metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
+        }
+        const associationNeedsUpdate =
+          input.association &&
+          (card.sessionKey !== input.association.sessionKey ||
+            (input.association.runId !== undefined && card.runId !== input.association.runId) ||
+            !card.execution ||
+            card.execution.sessionKey !== input.association.sessionKey ||
+            (input.association.runId !== undefined &&
+              card.execution.runId !== input.association.runId) ||
+            (input.executionStatus !== undefined &&
+              card.execution.status !== input.executionStatus));
+        if (associationIsCurrent && input.association && associationNeedsUpdate) {
+          const associationPatch = executionAssociationPatch(card, {
+            ...input.association,
+            execution: lifecycleExecution({
+              card,
+              association: input.association,
+              status: input.executionStatus,
+              now: input.now,
+            }),
+          });
+          if (associationPatch) {
+            Object.assign(patch, associationPatch);
+            metadata = { ...associationPatch.metadata, ...metadata };
+          }
+        } else if (
+          !input.association &&
+          card.execution &&
+          input.executionStatus &&
+          card.execution.status !== input.executionStatus
+        ) {
+          patch.execution = {
+            ...card.execution,
+            status: input.executionStatus,
+            updatedAt: input.now,
           };
         }
-      } else if (card.metadata?.stale) {
-        metadata = { ...metadata, stale: null };
-      }
-      if (metadata) {
-        patch.metadata = metadata;
-      }
-      if (Object.keys(patch).length === 0) {
-        return false;
-      }
-      await this.updateCard(id, patch);
-      return true;
+        if (associationIsCurrent && input.stale) {
+          const existing = card.metadata?.stale;
+          if (
+            !existing ||
+            existing.lastSessionUpdatedAt !== input.stale.lastSessionUpdatedAt ||
+            existing.reason !== input.stale.reason
+          ) {
+            metadata = {
+              ...metadata,
+              stale: { ...input.stale, detectedAt: existing?.detectedAt ?? input.stale.detectedAt },
+            };
+          }
+        } else if (associationIsCurrent && card.metadata?.stale) {
+          metadata = { ...metadata, stale: null };
+        }
+        if (metadata) {
+          patch.metadata = metadata;
+        }
+        return Object.keys(patch).length === 0 ? undefined : patch;
+      });
+      return result.updated;
     });
+  }
+
+  async prepareStart(id: string, now = Date.now()): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => await this.promoteDependencyReady(id, now));
   }
 
   private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
@@ -296,25 +417,22 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const cards = await this.list();
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
-        const latest = await this.get(card.id);
-        if (!latest || latest.metadata?.archivedAt) {
-          continue;
-        }
-        const diagnostics = mergeDiagnostics(
-          latest.metadata?.diagnostics,
-          computeCardDiagnostics(latest, now),
-        );
-        if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
-          continue;
-        }
-        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
-        const next = removeUndefinedCardFields({
-          ...latest,
-          metadata: metadataIsEmpty(metadata) ? undefined : metadata,
+        let diagnostics: WorkboardDiagnostic[] = [];
+        const result = await this.updateLatestCard(card.id, (current) => {
+          if (current.metadata?.archivedAt) {
+            return undefined;
+          }
+          diagnostics = mergeDiagnostics(
+            current.metadata?.diagnostics,
+            computeCardDiagnostics(current, now),
+          );
+          if (diagnostics.length === 0 && !current.metadata?.diagnostics?.length) {
+            return undefined;
+          }
+          return { metadata: { ...current.metadata, diagnostics } };
         });
-        await this.store.register(next.id, { version: 1, card: next });
         if (diagnostics.length > 0) {
-          rows.push({ card: next, diagnostics });
+          rows.push({ card: result.card, diagnostics });
         }
       }
       return {

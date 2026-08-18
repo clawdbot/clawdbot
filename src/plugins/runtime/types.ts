@@ -37,6 +37,8 @@ type PluginManagedWorktree = {
 
 type SubagentRunResult = {
   runId: string;
+  /** Canonical accepted session identity. Optional for explicit/custom runtimes. */
+  sessionKey?: string;
   runtime?: {
     harness: string;
     provider: string;

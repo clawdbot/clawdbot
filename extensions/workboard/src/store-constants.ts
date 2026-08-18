@@ -1,5 +1,6 @@
-import type { WorkboardClaim } from "@openclaw/workboard-contract";
+import type { WorkboardCard, WorkboardClaim } from "@openclaw/workboard-contract";
 import {
+  isFutureDateTimestampMs,
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -31,6 +32,22 @@ export function isWorkboardClaimReclaimable(
   now: number,
 ): boolean {
   return Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+}
+
+export function workboardCardConsumesOwnerSlot(card: WorkboardCard, now: number): boolean {
+  const claim = card.metadata?.claim;
+  const activeClaim = claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now });
+  return (
+    !card.metadata?.archivedAt &&
+    !isWorkboardClaimReclaimable(claim, now) &&
+    (card.status === "running" ||
+      (card.status !== "done" && activeClaim) ||
+      card.execution?.status === "running")
+  );
+}
+
+export function workboardCardSlotOwner(card: WorkboardCard): string {
+  return card.metadata?.claim?.ownerId ?? card.agentId ?? DEFAULT_WORKBOARD_DISPATCH_OWNER;
 }
 
 export function secondsToDurationMs(seconds: number): number {

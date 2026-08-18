@@ -18,6 +18,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import {
   ACTIVITY_TIME_FILTERS,
   projectSessionActivity,
@@ -30,10 +31,12 @@ import {
 
 type SessionActivityViewProps = {
   context: ApplicationContext;
+  expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
   retainedIdentity: PresenceViewer | null;
   rows: readonly GatewaySessionRow[];
+  onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
 };
 
@@ -247,34 +250,106 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
   const owner = sessionActivityOwner(row);
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
+  const headline = row.hasActiveRun === true ? row.observerDigest?.headline.trim() : "";
+  // The observer digest can outlive the run it described (restart/overlap), so its
+  // runId may reference an obsolete audit record; trust it only when it is still an
+  // active run, otherwise fall back to the row's own active-run list.
+  const digestRunId = row.observerDigest?.runId;
+  const activeRunId =
+    row.hasActiveRun === true
+      ? digestRunId && row.activeRunIds?.includes(digestRunId)
+        ? digestRunId
+        : row.activeRunIds?.[0]
+      : undefined;
   const scope = row.channel
     ? t("activityFeed.channelLabel", { value: row.channel })
     : row.agentId
       ? t("activityFeed.agentLabel", { value: row.agentId })
       : null;
-  return html`<a
-    class="activity-feed__session"
-    data-activity-session=${row.key}
-    href=${sessionHref(context, row)}
-    @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
-  >
-    <openclaw-viewer-avatar
-      .user=${owner}
-      .markAsViewer=${false}
-      variant="footer"
-    ></openclaw-viewer-avatar>
-    <span class="activity-feed__session-main">
-      <span class="activity-feed__session-title">${resolveSessionDisplayName(row.key, row)}</span>
-      <span class="activity-feed__session-meta">
-        <span>${ownerName}</span>${scope
-          ? html`<span class="activity-feed__session-scope">${scope}</span>`
+  return html`<div class="activity-feed__session-row">
+    <a
+      class="activity-feed__session"
+      data-activity-session=${row.key}
+      href=${sessionHref(context, row)}
+      @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
+    >
+      <span class="activity-feed__session-avatar">
+        ${row.hasActiveRun === true
+          ? html`<span
+              class="activity-feed__presence-dot activity-feed__run-dot"
+              aria-hidden="true"
+            ></span>`
+          : nothing}
+        <openclaw-viewer-avatar
+          .user=${owner}
+          .markAsViewer=${false}
+          variant="footer"
+        ></openclaw-viewer-avatar>
+      </span>
+      <span class="activity-feed__session-main">
+        <span class="activity-feed__session-title">${resolveSessionDisplayName(row.key, row)}</span>
+        <span class="activity-feed__session-meta">
+          ${headline
+            ? html`<span
+                class="activity-feed__session-headline"
+                data-health=${row.observerDigest?.health ?? nothing}
+                >${headline}</span
+              >`
+            : html`<span>${ownerName}</span>`}${scope
+            ? html`<span class="activity-feed__session-scope">${scope}</span>`
+            : nothing}
+        </span>
+      </span>
+      <span class="activity-feed__session-time">
+        ${headline ? html`<span class="activity-feed__session-owner">${ownerName}</span>` : nothing}
+        ${activityAt > 0
+          ? html`<span>${formatRelativeTimestamp(activityAt, { fallback: "" })}</span>`
           : nothing}
       </span>
-    </span>
-    <span class="activity-feed__session-time">
-      ${activityAt > 0 ? formatRelativeTimestamp(activityAt, { fallback: "" }) : nothing}
-    </span>
-  </a>`;
+    </a>
+    ${activeRunId
+      ? html`<a
+          class="activity-feed__inspect-run"
+          href=${activityRunInspectorHref(activeRunId, context.basePath)}
+          >${t("activityFeed.inspectRun")}</a
+        >`
+      : nothing}
+  </div>`;
+}
+
+function renderDaySessions(
+  props: SessionActivityViewProps,
+  day: ReturnType<typeof projectSessionActivity>["days"][number],
+) {
+  if (props.filters.query || props.filters.personId) {
+    return day.sessions.map((row) => renderSessionLink(props.context, row));
+  }
+  // GatewaySessionRow.hasAutomation records that an enabled cron job is bound to the session;
+  // grouping must consume that fact directly rather than infer automation from titles or keys.
+  const automation = day.sessions.filter((row) => row.hasAutomation === true);
+  if (automation.length < 2) {
+    return day.sessions.map((row) => renderSessionLink(props.context, row));
+  }
+  const expanded = props.expandedAutomationDays.has(day.key);
+  return html`
+    ${day.sessions
+      .filter((row) => row.hasAutomation !== true)
+      .map((row) => renderSessionLink(props.context, row))}
+    <button
+      type="button"
+      class="activity-feed__session activity-feed__automation-group"
+      data-activity-automation-group=${day.key}
+      aria-expanded=${String(expanded)}
+      @click=${() => props.onAutomationDayToggle(day.key)}
+    >
+      <span class="activity-feed__automation-group-icon" aria-hidden="true">${icons.clock}</span>
+      <span>${t("activityFeed.automationGroup", { count: String(automation.length) })}</span>
+      <span class="activity-feed__automation-group-chevron" aria-hidden="true"
+        >${icons.chevronRight}</span
+      >
+    </button>
+    ${expanded ? automation.map((row) => renderSessionLink(props.context, row)) : nothing}
+  `;
 }
 
 function renderIdentityHeader(
@@ -410,9 +485,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                 ? projection.days.map(
                     (day) => html`<section class="activity-feed__day">
                       <h3>${dayLabel(day.timestamp)}</h3>
-                      <div class="activity-feed__sessions">
-                        ${day.sessions.map((row) => renderSessionLink(props.context, row))}
-                      </div>
+                      <div class="activity-feed__sessions">${renderDaySessions(props, day)}</div>
                     </section>`,
                   )
                 : html`<section class="activity-feed__empty" role="status">

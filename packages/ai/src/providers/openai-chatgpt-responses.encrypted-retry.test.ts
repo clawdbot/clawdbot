@@ -544,6 +544,47 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
+  it("WebSocket commits stripped compaction before a provider acceptance callback fails", async () => {
+    const context = createReplayContext("compaction");
+    const onCompactionRejected = vi.fn();
+    const observations: ResponsesPromptObservation[] = [];
+    const scripted = installScriptedWebSocket([
+      { events: [invalidEncryptedEvent()] },
+      { events: [completionEvent("resp_ws_hook_failure")] },
+    ]);
+    const onProviderAccepted = vi.fn(async () => {
+      if (scripted.requests.length >= 2) {
+        throw new Error("acceptance callback failed");
+      }
+    });
+    const options = createObservedOptions(
+      {
+        apiKey: createJwt(),
+        transport: "websocket" as const,
+        onCompactionRejected,
+        onProviderAccepted,
+        ...REPLAY_IDENTITY,
+      },
+      observations,
+    );
+
+    const result = await streamOpenAICodexResponses(model, context, options).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance callback failed",
+      providerReplay: { type: "openai-responses-compaction-suppression" },
+    });
+    expect(scripted.requests).toHaveLength(2);
+    expect(hasInputType(requireItem(scripted.requests, 0), "compaction")).toBe(true);
+    expect(hasInputType(requireItem(scripted.requests, 1), "compaction")).toBe(false);
+    expect(observations.map((entry) => entry.payloadVariant)).toEqual([
+      "initial",
+      "compaction-stripped",
+    ]);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
+  });
+
   it("WebSocket preserves compaction when reasoning-stripped recovery succeeds", async () => {
     const context = createReplayContext("mixed");
     const observations: ResponsesPromptObservation[] = [];

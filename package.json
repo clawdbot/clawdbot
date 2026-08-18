@@ -1319,6 +1319,10 @@
     "./plugin-sdk/provider-http": {
       "default": "./dist/plugin-sdk/provider-http.js"
     },
+    "./plugin-sdk/provider-lifecycle": {
+      "types": "./dist/plugin-sdk/provider-lifecycle.d.ts",
+      "default": "./dist/plugin-sdk/provider-lifecycle.js"
+    },
     "./plugin-sdk/provider-binary-stream": {
       "types": "./dist/plugin-sdk/provider-binary-stream.d.ts",
       "default": "./dist/plugin-sdk/provider-binary-stream.js"
