@@ -629,8 +629,8 @@ export function setupSidebarTest() {
       configurable: true,
       value: createStorageMock(),
     });
-    // Coding and Online default to compact states; most cases assert their
-    // expanded contents, so start expanded. Collapse tests override this value.
+    // Coding defaults to compact; most cases assert expanded contents, so start
+    // expanded. Collapse tests override this value.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 

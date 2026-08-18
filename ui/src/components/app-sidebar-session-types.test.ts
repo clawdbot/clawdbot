@@ -81,8 +81,8 @@ describe("sidebar session sort preference", () => {
 });
 
 describe("collapsed sidebar sections preference", () => {
-  it("defaults Coding and Online to their compact states", () => {
-    expect([...loadStoredCollapsedSessionSections()]).toEqual(["work", "online"]);
+  it("defaults Coding to compact while Online remains expanded", () => {
+    expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
   });
 });
 
