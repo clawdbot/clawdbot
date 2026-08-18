@@ -172,7 +172,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(events[0]?.status).toBeUndefined();
   });
 
-  it("records provider response status and preserves the original response callback", async () => {
+  it("records legacy response status without inferring provider acceptance", async () => {
     const originalOnResponse = vi.fn(async () => undefined);
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
@@ -213,8 +213,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       ok: true,
       status: 200,
       attributes: {
-        providerAccepted: true,
-        providerAcceptanceKind: "http_response",
+        providerAccepted: false,
       },
     });
   });

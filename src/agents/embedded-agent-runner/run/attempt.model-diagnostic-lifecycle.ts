@@ -402,7 +402,6 @@ function withDiagnosticRequestContext(
   const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
     // Retrying providers can expose several responses; the terminal request status
     // is the latest response observed before the model call completes or fails.
-    observer.state.providerAcceptanceKind ??= "http_response";
     observer.state.responseStatus = response.status;
     return originalOnResponse?.(response, model);
   };

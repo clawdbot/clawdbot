@@ -137,11 +137,16 @@ export async function notifyProviderHttpResponse(params: {
   }
   const status = params.response.status;
   const headers = headersToRecord(params.response.headers);
-  await params.options.onProviderAccepted?.(
-    { kind: "http_response", status, headers },
-    params.model,
-  );
-  await params.options.onResponse?.({ status, headers }, params.model);
+  try {
+    await params.options.onProviderAccepted?.(
+      { kind: "http_response", status, headers },
+      params.model,
+    );
+    await params.options.onResponse?.({ status, headers }, params.model);
+  } catch (error) {
+    await params.response.body?.cancel(error).catch(() => undefined);
+    throw error;
+  }
 }
 
 /** Report an accepted SDK stream when the SDK does not expose HTTP metadata. */
