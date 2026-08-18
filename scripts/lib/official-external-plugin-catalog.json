@@ -667,6 +667,7 @@
             "onboardingScopes": [
               "text-inference"
             ],
+            "allowsKeyless": true,
             "credentialLabel": "Tavily API key",
             "envVars": [
               "TAVILY_API_KEY"

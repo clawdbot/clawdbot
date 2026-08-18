@@ -33,6 +33,19 @@ describe("web-search install catalog", () => {
     ).toBe(true);
   });
 
+  it("keeps Tavily keyed for auto-detect and keyless for explicit setup", () => {
+    const entry = resolveWebSearchInstallCatalogEntry({
+      providerId: "tavily",
+      pluginId: "tavily",
+    });
+
+    expect(entry?.provider).toMatchObject({
+      id: "tavily",
+      allowsKeyless: true,
+    });
+    expect(entry?.provider.requiresCredential).not.toBe(false);
+  });
+
   it("resolves credential-backed plugins for env-only auto-detection", () => {
     expect(
       resolveWebSearchInstallCatalogEntriesForEnv({

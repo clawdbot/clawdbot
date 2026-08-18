@@ -307,6 +307,7 @@ function createWebSearchProviderEntry(
     | "signupUrl"
     | "credentialPath"
     | "requiresCredential"
+    | "allowsKeyless"
   >,
 ): PluginWebSearchProviderEntry {
   return {
@@ -1821,6 +1822,48 @@ describe("finalizeSetupWizard", () => {
       "Web search",
     );
     // The credential-required warning must NOT appear for a keyless provider.
+    expect(
+      vi
+        .mocked(prompter.note)
+        .mock.calls.some(
+          ([message, title]) =>
+            title === "Web search" &&
+            (message.includes("no API key was found") ||
+              message.includes("will not work until a key is added")),
+        ),
+    ).toBe(false);
+  });
+
+  it("reports an optional-key provider as ready when no API key is stored", async () => {
+    listConfiguredWebSearchProviders.mockReturnValue([
+      createWebSearchProviderEntry({
+        id: "optional-search",
+        label: "Optional Search",
+        hint: "API key optional (rate-limited keyless)",
+        envVars: [],
+        placeholder: "opt-...",
+        signupUrl: "https://example.com/",
+        credentialPath: "plugins.entries.optional-search.config.webSearch.apiKey",
+        allowsKeyless: true,
+      }),
+    ]);
+
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: {
+          tools: { web: { search: { provider: "optional-search", enabled: true } } },
+        },
+        prompter,
+      }),
+    );
+
+    expectNoteContains(
+      prompter,
+      "Web search is ready — this provider works with no API key.",
+      "Web search",
+    );
     expect(
       vi
         .mocked(prompter.note)

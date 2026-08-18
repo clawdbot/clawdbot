@@ -63,6 +63,7 @@ export type OfficialExternalWebSearchProvider = {
   hint?: string;
   onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
+  allowsKeyless?: boolean;
   credentialLabel?: string;
   envVars?: readonly string[];
   placeholder?: string;

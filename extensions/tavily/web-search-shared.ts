@@ -29,6 +29,8 @@ export function buildTavilyWebSearchProviderBase(): Omit<WebSearchProviderPlugin
     label: "Tavily Search",
     hint: "Structured results with domain filters and AI answer summaries; API key optional (rate-limited keyless)",
     onboardingScopes: ["text-inference"],
+    // Keep requiresCredential default-true so auto-detect still needs a key.
+    allowsKeyless: true,
     credentialLabel: "Tavily API key",
     envVars: ["TAVILY_API_KEY"],
     placeholder: "tvly-...",

@@ -69,7 +69,7 @@ Tavily returns structured results optimized for LLM consumption, with configurab
 </Steps>
 
 <Tip>
-Choosing Tavily in onboarding or `openclaw configure --section web` installs and enables the official Tavily plugin when needed.
+Choosing Tavily in onboarding or `openclaw configure --section web` installs and enables the official Tavily plugin when needed. Leave the API key blank to pin Tavily and use rate-limited keyless access.
 </Tip>
 
 ## Tool reference

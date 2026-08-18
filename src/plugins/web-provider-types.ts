@@ -94,6 +94,11 @@ export type WebSearchProviderPlugin = {
   hint: string;
   onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
+  /**
+   * Setup may pin this provider with no key. Auto-detect still requires a
+   * credential; omitting this would make blank-key onboarding disable search.
+   */
+  allowsKeyless?: boolean;
   credentialLabel?: string;
   envVars: string[];
   /** Optional model-provider auth profile id that can satisfy this web provider without a tool-specific API key. */

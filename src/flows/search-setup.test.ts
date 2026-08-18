@@ -125,6 +125,34 @@ const mockCodexProvider = vi.hoisted(() => ({
   credentialPath: "",
 }));
 
+const mockOptionalKeylessProvider = vi.hoisted(() => ({
+  id: "optional-search",
+  pluginId: "optional-search",
+  label: "Optional Search",
+  hint: "API key optional (rate-limited keyless)",
+  docsUrl: "https://docs.openclaw.ai/tools/web",
+  allowsKeyless: true,
+  credentialLabel: "Optional Search API key",
+  placeholder: "opt-...",
+  signupUrl: "https://example.com/",
+  envVars: ["OPTIONAL_SEARCH_API_KEY"],
+  onboardingScopes: ["text-inference"],
+  credentialPath: "plugins.entries.optional-search.config.webSearch.apiKey",
+  getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+    searchConfigTarget.apiKey = value;
+  },
+  getConfiguredCredentialValue: () => undefined,
+  setConfiguredCredentialValue: (configTarget: Record<string, unknown>, value: unknown) => {
+    const plugins = (configTarget.plugins ??= {}) as Record<string, unknown>;
+    const entries = (plugins.entries ??= {}) as Record<string, unknown>;
+    const pluginEntry = (entries["optional-search"] ??= {}) as Record<string, unknown>;
+    const pluginConfig = (pluginEntry.config ??= {}) as Record<string, unknown>;
+    const webSearch = (pluginConfig.webSearch ??= {}) as Record<string, unknown>;
+    webSearch.apiKey = value;
+  },
+}));
+
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: webSearchProviderMocks.resolvePluginWebSearchProviders,
 }));
@@ -307,6 +335,117 @@ describe("runSearchSetupFlow", () => {
       }),
     );
     expect(grokOption).not.toHaveProperty("hint");
+  });
+
+  it("omits the required-key suffix for optional-key providers", async () => {
+    webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([
+      mockGrokProvider,
+      mockOptionalKeylessProvider,
+    ]);
+    const select = vi.fn().mockResolvedValueOnce("__skip__");
+    const prompter = createWizardPrompter({
+      select: select as never,
+    });
+
+    await runSearchSetupFlow({}, createNonExitingRuntime(), prompter);
+
+    const options = select.mock.calls[0]?.[0]?.options as
+      | Array<{ value: string; label?: string }>
+      | undefined;
+    const optionalOption = options?.find((option) => option.value === "optional-search");
+    const grokOption = options?.find((option) => option.value === "grok");
+
+    expect(optionalOption?.label).toBe("Optional Search (API key optional (rate-limited keyless))");
+    expect(optionalOption?.label).not.toMatch(/API key required/i);
+    expect(grokOption?.label).toContain("xAI API key required");
+  });
+
+  it("pins an optional-key provider without disabling web_search", async () => {
+    webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([
+      mockOptionalKeylessProvider,
+    ]);
+    const select = vi.fn().mockResolvedValueOnce("optional-search");
+    const text = vi.fn().mockResolvedValue("");
+    const note = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      note: note as never,
+      select: select as never,
+      text: text as never,
+    });
+
+    const { config: next, outcome } = await runSearchSetupFlow(
+      {},
+      createNonExitingRuntime(),
+      prompter,
+    );
+
+    expect(outcome).toBe("completed");
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Optional Search API key (leave blank for keyless)",
+      }),
+    );
+    expect(next.tools?.web?.search).toMatchObject({
+      enabled: true,
+      provider: "optional-search",
+    });
+    expect(note).toHaveBeenCalledWith(
+      [
+        "No Optional Search API key stored — Optional Search will use rate-limited keyless access.",
+        "Add a key later for higher limits: https://example.com/",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Web search",
+    );
+  });
+
+  it("disables web_search when a keyed provider is selected without a key", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValue("no");
+    const text = vi.fn().mockResolvedValue("");
+    const note = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      note: note as never,
+      select: select as never,
+      text: text as never,
+    });
+
+    const { config: next } = await runSearchSetupFlow({}, createNonExitingRuntime(), prompter);
+
+    expect(next.tools?.web?.search).toMatchObject({
+      enabled: false,
+      provider: "grok",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("won't work until a key is available"),
+      "Web search",
+    );
+  });
+
+  it("does not store a SecretRef when an optional-key provider has no env key", async () => {
+    webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([
+      mockOptionalKeylessProvider,
+    ]);
+    const select = vi.fn().mockResolvedValueOnce("optional-search");
+    const prompter = createWizardPrompter({
+      select: select as never,
+    });
+
+    const { config: next } = await withEnvAsync(
+      { OPTIONAL_SEARCH_API_KEY: undefined },
+      async () =>
+        await runSearchSetupFlow({}, createNonExitingRuntime(), prompter, {
+          secretInputMode: "ref",
+        }),
+    );
+
+    expect(next.tools?.web?.search).toMatchObject({
+      enabled: true,
+      provider: "optional-search",
+    });
+    const pluginConfig = next.plugins?.entries?.["optional-search"]?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(pluginConfig?.webSearch?.apiKey).toBeUndefined();
   });
 
   it("recommends Codex hosted search first when the configured model uses Codex", async () => {
