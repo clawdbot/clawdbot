@@ -1962,11 +1962,21 @@ button.chat-reply-preview--message:disabled {
 
 .task-suggestion__instructions > summary {
   position: relative;
+  display: flex;
+  align-items: center;
   width: fit-content;
   padding: 5px 0 5px 20px;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
+  cursor: var(--cursor-action);
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+}
+
+.task-suggestion__instructions > summary::-webkit-details-marker {
+  display: none;
 }
 
 .task-suggestion__instructions > summary::before {
