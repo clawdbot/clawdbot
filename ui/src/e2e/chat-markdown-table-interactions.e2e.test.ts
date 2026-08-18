@@ -121,7 +121,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       const readStyles = async (locator: typeof inlineTable, properties: readonly string[]) =>
         locator.evaluate((element, propertyNames) => {
           const styles = getComputedStyle(element);
-          return Object.fromEntries(propertyNames.map((property) => [property, styles[property]]));
+          return Object.fromEntries(
+            propertyNames.map((property) => [property, styles.getPropertyValue(property)]),
+          );
         }, properties);
       expect(await readStyles(fullscreenTable, tableProperties)).toEqual(
         await readStyles(inlineTable, tableProperties),
