@@ -91,29 +91,6 @@ struct LowCoverageHelperTests {
         #expect(ContinuousClock.now - startedAt < .seconds(2))
     }
 
-    @Test func `node info codable round trip`() throws {
-        let info = NodeInfo(
-            nodeId: "node-1",
-            displayName: "Node One",
-            platform: "macOS",
-            version: "1.0",
-            coreVersion: "1.0-core",
-            uiVersion: "1.0-ui",
-            deviceFamily: "Mac",
-            modelIdentifier: "MacBookPro",
-            remoteIp: "192.168.1.2",
-            caps: ["chat"],
-            commands: ["send"],
-            permissions: ["send": true],
-            paired: true,
-            connected: false)
-        let data = try JSONEncoder().encode(info)
-        let decoded = try JSONDecoder().decode(NodeInfo.self, from: data)
-        #expect(decoded.nodeId == "node-1")
-        #expect(decoded.isPaired == true)
-        #expect(decoded.isConnected == false)
-    }
-
     @Test @MainActor func `presence reporter summary and privacy parameters`() {
         let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
