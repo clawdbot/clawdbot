@@ -11,6 +11,7 @@ import {
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   isJsonObject,
@@ -325,6 +326,7 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
+  const configured = buildCodexProjectDocThreadConfig(config);
   // Native goal RPCs remain available through app-server, but the Codex goals
   // feature also starts autonomous turns. Keep it disabled until a run owner exists.
   const codeModeConfig: JsonObject = {
@@ -333,7 +335,7 @@ export function buildCodexRuntimeThreadConfig(
   };
   if (options.nativeCodeModeEnabled === false) {
     const disabledConfig = mergeCodexThreadConfigs(
-      config,
+      configured,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
@@ -350,7 +352,7 @@ export function buildCodexRuntimeThreadConfig(
   if (options.nativeCodeModeOnlyEnabled === true) {
     const merged = mergeCodexThreadConfigs(
       codeModeConfig,
-      config,
+      configured,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
       {
@@ -366,7 +368,7 @@ export function buildCodexRuntimeThreadConfig(
   }
   const merged = mergeCodexThreadConfigs(
     codeModeConfig,
-    config,
+    configured,
     CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
     CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
   ) ?? {

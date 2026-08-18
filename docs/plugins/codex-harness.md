@@ -254,6 +254,18 @@ Changing auth order does not make a custom, Completions, HTTP, or
 request-overridden route Codex-compatible. Valid model-scoped Fast-mode and
 cutoff controls are runtime controls, not request overrides.
 
+### Project instructions
+
+Codex loads `AGENTS.md` files through native project-document discovery. For
+normal app-server threads, OpenClaw raises Codex's aggregate root-to-working-
+directory budget from the upstream 32 KiB default to a bounded 128 KiB so later
+scoped instructions are not silently clipped. Lightweight and restricted turns
+set the native project-document budget to zero instead.
+
+This byte budget is separate from the character-based workspace bootstrap
+limits configured through `agents.defaults.bootstrapMaxChars` and
+`agents.defaults.bootstrapTotalMaxChars`.
+
 ### Compaction
 
 Do not set `compaction.model` or `compaction.provider` on Codex-backed
