@@ -85,6 +85,16 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority({}, true)).toContain("github_publish");
   });
 
+  it("records the post-permission surface used by a read-only worker", () => {
+    expect(authority({ permissionMode: "read-only" })).toEqual([
+      "read",
+      "exec",
+      "process",
+      "sessions_spawn",
+      "sessions_send",
+    ]);
+  });
+
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {
     const config = {
       tools: {

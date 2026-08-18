@@ -1,3 +1,6 @@
+import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
+
 export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "read",
   "write",
@@ -39,3 +42,24 @@ export function isWorkerToolName(value: unknown): value is WorkerToolName {
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
 };
+
+const READ_ONLY_WORKER_TOOL_DENY = new Set<WorkerToolName>(["write", "edit", "apply_patch"]);
+
+/** Resolve the concrete worker surface after session permission mode is applied. */
+export function resolveWorkerPermissionToolAuthority(params: {
+  allowedToolNames: readonly WorkerToolName[];
+  permissionMode?: SessionPermissionMode;
+}) {
+  const permissionToolPolicy = params.permissionMode
+    ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
+    : undefined;
+  const allowed = new Set(params.allowedToolNames);
+  return {
+    allowedToolNames: WORKER_TOOL_NAMES.filter(
+      (name) =>
+        allowed.has(name) &&
+        !(permissionToolPolicy?.readOnly && READ_ONLY_WORKER_TOOL_DENY.has(name)),
+    ),
+    permissionToolPolicy,
+  };
+}

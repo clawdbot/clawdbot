@@ -7,6 +7,7 @@ import { logWarn } from "../../logger.js";
 import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
+  resolveWorkerPermissionToolAuthority,
   type WorkerOptionalLocalToolName,
   type WorkerToolName,
   type WorkerToolAuthority,
@@ -96,5 +97,10 @@ export function resolveWorkerToolAuthority(params: {
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
-  return { allowedToolNames: projected };
+  return {
+    allowedToolNames: resolveWorkerPermissionToolAuthority({
+      allowedToolNames: projected,
+      permissionMode: turn.permissionMode,
+    }).allowedToolNames,
+  };
 }

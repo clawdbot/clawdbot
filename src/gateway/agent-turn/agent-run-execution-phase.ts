@@ -55,6 +55,7 @@ import {
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import { resolveAgentRunToolAllowlist } from "./agent-run-tool-allowlist.js";
 import {
   finalizePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurn,
@@ -323,8 +324,10 @@ export function startAgentRunExecution(params: {
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
               transcriptMessage: prepared.trustedSessionHandoff?.transcriptMessage,
-              toolsAllow:
-                params.restoredCronContinuation?.toolsAllow ?? sessionHandoffPolicy?.allow,
+              toolsAllow: resolveAgentRunToolAllowlist({
+                restoredCronToolsAllow: params.restoredCronContinuation?.toolsAllow,
+                sessionHandoffToolsAllow: sessionHandoffPolicy?.allow,
+              }),
               trustedSessionHandoff: sessionHandoffPolicy !== undefined,
               sessionHandoffRequester: prepared.trustedSessionHandoff?.requester,
               runtimePluginToolGrant,
