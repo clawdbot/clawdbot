@@ -331,6 +331,7 @@ function createDefaultState(): WorkboardUiState {
     draftOpen: false,
     draftSaving: false,
     editingCardId: null,
+    editingCardBase: null,
     draftTitle: "",
     draftNotes: "",
     draftStatus: "todo",

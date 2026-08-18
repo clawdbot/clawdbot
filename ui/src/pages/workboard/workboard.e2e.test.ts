@@ -520,13 +520,15 @@ suite.define(() => {
         "workboard.cards.update",
         updateBeforeEdit,
       );
-      expect(requestParams(editRequest)).toMatchObject({ id: createdCard.id });
-      expect(requireRecord(requestParams(editRequest).patch)).toMatchObject({
-        labels: ["ui", "proof", "e2e"],
-        notes: editedCard.notes,
-        priority: "high",
-        sessionKey: linkedSessionKey,
-        title: editedCard.title,
+      expect(requestParams(editRequest)).toEqual({
+        id: createdCard.id,
+        expectedUpdatedAt: createdCard.updatedAt,
+        patch: {
+          labels: ["ui", "proof", "e2e"],
+          notes: editedCard.notes,
+          priority: "high",
+          title: editedCard.title,
+        },
       });
       await writableGateway.resolveDeferred("workboard.cards.update", { card: editedCard });
       await cardInColumn(writable.page, "Todo", editedCard.title).waitFor({ state: "visible" });

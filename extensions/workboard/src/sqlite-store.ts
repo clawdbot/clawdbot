@@ -20,8 +20,12 @@ import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openNodeSqliteDatabase,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -29,7 +33,9 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardOwnerClaimResult,
 } from "./persistence-types.js";
+import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
@@ -108,18 +114,6 @@ function blobToBase64(value: unknown): string {
     return Buffer.from(value).toString("base64");
   }
   return "";
-}
-
-function runTransaction<T>(db: DatabaseSync, run: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = run();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
@@ -1201,11 +1195,72 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
 class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  async register(key: string, value: PersistedWorkboardCard): Promise<void> {
+  private validatePayload(key: string, value: PersistedWorkboardCard): void {
     if (value.version !== 1 || value.card.id !== key) {
       throw new Error("invalid workboard card payload");
     }
-    runTransaction(this.db, () => insertCard(this.db, value.card));
+  }
+
+  async register(key: string, value: PersistedWorkboardCard): Promise<void> {
+    this.validatePayload(key, value);
+    runSqliteImmediateTransactionSync(this.db, () => insertCard(this.db, value.card));
+  }
+
+  async registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean> {
+    this.validatePayload(key, value);
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      if (this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(key)) {
+        return false;
+      }
+      insertCard(this.db, value.card);
+      return true;
+    });
+  }
+
+  async registerIfUpdatedAt(
+    key: string,
+    value: PersistedWorkboardCard,
+    expectedUpdatedAt: number,
+  ): Promise<boolean> {
+    this.validatePayload(key, value);
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const current = this.db
+        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
+        .get(key);
+      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+        return false;
+      }
+      insertCard(this.db, value.card);
+      return true;
+    });
+  }
+
+  async claimIfOwnerAvailable(
+    key: string,
+    value: PersistedWorkboardCard,
+    expectedUpdatedAt: number,
+    ownerId: string,
+    now: number,
+  ): Promise<WorkboardOwnerClaimResult> {
+    this.validatePayload(key, value);
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const current = this.db
+        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
+        .get(key);
+      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+        return "conflict";
+      }
+      const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
+      const preloaded = loadCardChildRows(this.db);
+      for (const row of rows) {
+        const card = readCard(this.db, row, preloaded);
+        if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
+          return "owner_busy";
+        }
+      }
+      insertCard(this.db, value.card);
+      return "updated";
+    });
   }
 
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {
@@ -1216,7 +1271,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   }
 
   async delete(key: string): Promise<boolean> {
-    const result = runTransaction(this.db, () => {
+    const result = runSqliteImmediateTransactionSync(this.db, () => {
       this.db
         .prepare(
           `
@@ -1533,7 +1588,7 @@ class WorkboardSqliteAttachmentStore implements WorkboardKeyedStore<PersistedWor
   }
 
   async delete(key: string): Promise<boolean> {
-    const deleted = runTransaction(this.db, () => {
+    const deleted = runSqliteImmediateTransactionSync(this.db, () => {
       this.db.prepare("DELETE FROM workboard_attachment_blobs WHERE attachment_id = ?").run(key);
       return this.db.prepare("DELETE FROM workboard_card_attachments WHERE id = ?").run(key);
     });

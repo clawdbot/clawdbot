@@ -6,16 +6,18 @@ import { DatabaseSync } from "node:sqlite";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { normalizeExecution } from "./store-normalizers.js";
-import { WorkboardStore } from "./store.js";
+import { WorkboardCardConflictError, WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   beforeRegister?: (key: string, value: T) => Promise<void> | void;
@@ -34,6 +36,62 @@ function createMemoryStore<T = PersistedWorkboardCard>(options?: {
     },
     async entries() {
       return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
+    },
+  };
+}
+
+function createPausedCardStore(delegate: WorkboardCardStore) {
+  let pause:
+    | {
+        reached: () => void;
+        waitForResume: Promise<void>;
+      }
+    | undefined;
+  const beforeWrite = async () => {
+    const current = pause;
+    if (!current) {
+      return;
+    }
+    pause = undefined;
+    current.reached();
+    await current.waitForResume;
+  };
+  return {
+    store: {
+      async register(key, value) {
+        await beforeWrite();
+        await delegate.register(key, value);
+      },
+      async registerIfAbsent(key, value) {
+        await beforeWrite();
+        return await delegate.registerIfAbsent(key, value);
+      },
+      async registerIfUpdatedAt(key, value, expectedUpdatedAt) {
+        await beforeWrite();
+        return await delegate.registerIfUpdatedAt(key, value, expectedUpdatedAt);
+      },
+      async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
+        await beforeWrite();
+        return await delegate.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now);
+      },
+      async lookup(key) {
+        return await delegate.lookup(key);
+      },
+      async delete(key) {
+        return await delegate.delete(key);
+      },
+      async entries() {
+        return await delegate.entries();
+      },
+      async listBoardAggregates() {
+        return await delegate.listBoardAggregates();
+      },
+    } satisfies WorkboardCardStore,
+    pauseNextWrite() {
+      const reached = createDeferred();
+      const resume = createDeferred();
+      pause = { reached: () => reached.resolve(), waitForResume: resume.promise };
+      return { reached: reached.promise, resume: () => resume.resolve() };
     },
   };
 }
@@ -132,6 +190,207 @@ describe("WorkboardStore", () => {
       readerStores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects stale card edits across sqlite connections", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cas-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards);
+    const second = new WorkboardStore(secondStores.cards);
+    try {
+      const base = await first.create({ title: "Original", status: "todo" });
+      const moved = await second.move(base.id, "blocked", 2000);
+
+      await expect(
+        first.update(
+          base.id,
+          { title: "Stale title", status: "todo" },
+          {
+            expectedUpdatedAt: base.updatedAt,
+          },
+        ),
+      ).rejects.toMatchObject({
+        name: "WorkboardCardConflictError",
+        current: expect.objectContaining({
+          id: base.id,
+          status: "blocked",
+          position: 2000,
+        }),
+      } satisfies Partial<WorkboardCardConflictError>);
+      await expect(first.get(base.id)).resolves.toMatchObject({
+        title: "Original",
+        status: "blocked",
+        position: 2000,
+        updatedAt: moved.updatedAt,
+      });
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["move", "lifecycle"] as const)(
+    "recomputes a %s write after a concurrent editor commit",
+    async (owner) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-workboard-${owner}-race-`));
+      const dbPath = path.join(dir, "workboard.sqlite");
+      const firstStores = createWorkboardSqliteStores({ dbPath });
+      const secondStores = createWorkboardSqliteStores({ dbPath });
+      const paused = createPausedCardStore(firstStores.cards);
+      const first = new WorkboardStore(paused.store, {
+        boards: firstStores.boards,
+        subscriptions: firstStores.subscriptions,
+        attachments: firstStores.attachments,
+      });
+      const second = new WorkboardStore(secondStores.cards, {
+        boards: secondStores.boards,
+        subscriptions: secondStores.subscriptions,
+        attachments: secondStores.attachments,
+      });
+      try {
+        const sessionKey = "agent:main:dashboard:cas-race";
+        const base = await first.create({
+          title: "Original title",
+          status: owner === "move" ? "todo" : "running",
+          ...(owner === "lifecycle"
+            ? {
+                sessionKey,
+                runId: "run-cas",
+                execution: {
+                  id: "exec-cas",
+                  kind: "agent-session",
+                  mode: "autonomous",
+                  status: "running",
+                  sessionKey,
+                  runId: "run-cas",
+                  startedAt: 1,
+                  updatedAt: 1,
+                },
+              }
+            : {}),
+        });
+        const pause = paused.pauseNextWrite();
+        const ownerWrite =
+          owner === "move"
+            ? first.move(base.id, "blocked", 2000)
+            : first.syncLifecycle(base.id, {
+                targetStatus: "review",
+                executionStatus: "review",
+                sourceUpdatedAt: base.updatedAt + 1_000,
+                stale: undefined,
+                now: base.updatedAt + 1_000,
+              });
+
+        await pause.reached;
+        await second.update(
+          base.id,
+          { title: "Concurrent editor title" },
+          { expectedUpdatedAt: base.updatedAt },
+        );
+        pause.resume();
+        await ownerWrite;
+
+        const current = await first.get(base.id);
+        expect(current?.title).toBe("Concurrent editor title");
+        if (owner === "move") {
+          expect(current).toMatchObject({ status: "blocked", position: 2000 });
+        } else {
+          expect(current).toMatchObject({
+            status: "review",
+            execution: { status: "review" },
+            metadata: { lifecycleStatusSourceUpdatedAt: base.updatedAt + 1_000 },
+          });
+        }
+      } finally {
+        secondStores.close();
+        firstStores.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("converges concurrent session captures from independent sqlite hosts", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-capture-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards);
+    const second = new WorkboardStore(secondStores.cards);
+    try {
+      const sessionKey = `agent:main:dashboard:${"x".repeat(480)}`;
+      const [left, right] = await Promise.all([
+        first.captureSession({ title: "Captured by host A", sessionKey, boardId: "ops" }),
+        second.captureSession({ title: "Captured by host B", sessionKey, boardId: "other" }),
+      ]);
+
+      expect(left.id).toBe(right.id);
+      expect(left.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(left).toEqual(right);
+      expect(["ops", "other"]).toContain(left.metadata?.automation?.boardId);
+      await expect(first.list()).resolves.toEqual([left]);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows only one cross-host claim per owner", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-claim-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    const first = new WorkboardStore(firstStores.cards);
+    const second = new WorkboardStore(secondStores.cards);
+    try {
+      const firstCard = await first.create({ title: "First", status: "ready", agentId: "worker" });
+      const secondCard = await first.create({
+        title: "Second",
+        status: "ready",
+        agentId: "worker",
+      });
+
+      const claims = await Promise.allSettled([
+        first.claim(firstCard.id, { ownerId: "worker" }),
+        second.claim(secondCard.id, { ownerId: "worker" }),
+      ]);
+
+      expect(claims.filter((claim) => claim.status === "fulfilled")).toHaveLength(1);
+      expect(claims.filter((claim) => claim.status === "rejected")).toHaveLength(1);
+      expect((await first.list()).filter((card) => card.status === "running")).toHaveLength(1);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses the active captured session across boards and archived duplicates", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:captured";
+    const active = await store.create({ title: "Active", sessionKey, boardId: "default" });
+    const historical = await store.create({ title: "Historical", sessionKey, boardId: "ops" });
+    await store.archive(historical.id, true);
+
+    const captured = await store.captureSession({
+      title: "Duplicate",
+      sessionKey,
+      boardId: "other",
+    });
+
+    expect(captured.id).toBe(active.id);
+    expect(captured.metadata?.automation?.boardId).toBe("default");
+    expect((await store.list()).filter((card) => !card.metadata?.archivedAt)).toEqual([active]);
+
+    await store.archive(active.id, true);
+    const restored = await store.captureSession({ title: "Restore", sessionKey, boardId: "other" });
+    expect(restored.id).toBe(active.id);
+    expect(restored.metadata?.archivedAt).toBeUndefined();
   });
 
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
@@ -2291,8 +2550,9 @@ describe("WorkboardStore", () => {
 
       expect(createdRunningTimed.startedAt).toBe(1_000);
       expect(result.count).toBe(4);
-      await expect(store.get(ready.id)).resolves.toMatchObject({
-        updatedAt: readyUpdatedAt,
+      const dispatchedReady = await store.get(ready.id);
+      expect(dispatchedReady?.updatedAt).toBeGreaterThan(readyUpdatedAt);
+      expect(dispatchedReady).toMatchObject({
         metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
         events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
       });
@@ -2635,8 +2895,9 @@ describe("WorkboardStore", () => {
     const diagnostics = await store.refreshDiagnostics(now);
 
     expect(diagnostics.count).toBeGreaterThanOrEqual(4);
-    await expect(store.get(ready.id)).resolves.toMatchObject({ updatedAt: ready.updatedAt });
-    await expect(store.get(ready.id)).resolves.toMatchObject({
+    const diagnosedReady = await store.get(ready.id);
+    expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
+    expect(diagnosedReady).toMatchObject({
       metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
     });
     await expect(store.get(running.id)).resolves.toMatchObject({

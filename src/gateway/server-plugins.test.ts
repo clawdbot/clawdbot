@@ -1458,6 +1458,7 @@ describe("loadGatewayPlugins", () => {
       expect(opts.req.method).toBe("agent");
       opts.respond(true, {
         runId: "run-claude",
+        sessionKey: "agent:worker:s-runtime",
         runtime: {
           harness: "claude-cli",
           provider: "anthropic",
@@ -1473,6 +1474,7 @@ describe("loadGatewayPlugins", () => {
       }),
     ).resolves.toEqual({
       runId: "run-claude",
+      sessionKey: "agent:worker:s-runtime",
       runtime: {
         harness: "claude-cli",
         provider: "anthropic",
