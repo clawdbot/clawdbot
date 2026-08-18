@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import type { SpeechProviderConfig } from "openclaw/plugin-sdk/speech-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -55,5 +55,43 @@ copyFileSync(${JSON.stringify(wavPath)}, process.argv[outIndex + 1]);
       expect(result.audioBuffer.byteLength).toBeGreaterThan(0);
       expect(readFileSync(wavPath).byteLength).toBeGreaterThan(0);
     });
+  }, 30_000);
+
+  it("detects MP3 stdout and converts it to configured WAV", async () => {
+    const providerConfig: SpeechProviderConfig = {
+      command: resolveFfmpegBin(),
+      args: [
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=660:duration=0.1",
+        "-c:a",
+        "libmp3lame",
+        "-f",
+        "mp3",
+        "pipe:1",
+      ],
+      outputFormat: "wav",
+      timeoutMs: 30_000,
+    };
+
+    const result = await buildCliSpeechProvider().synthesize({
+      text: "hello world",
+      cfg: {} as OpenClawConfig,
+      providerConfig,
+      providerOverrides: {},
+      timeoutMs: 30_000,
+      target: "audio-file",
+    });
+
+    expect(result.outputFormat).toBe("wav");
+    expect(result.fileExtension).toBe(".wav");
+    expect(result.voiceCompatible).toBe(false);
+    expect(result.audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
   }, 30_000);
 });

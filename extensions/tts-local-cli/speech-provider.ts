@@ -134,7 +134,7 @@ function findAudioFile(dir: string, baseName: string): string | null {
   return null;
 }
 
-function detectFormat(filePath: string): "mp3" | "opus" | "wav" | null {
+function detectFormatFromExtension(filePath: string): OutputFormat | null {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".opus" || ext === ".ogg") {
     return "opus";
@@ -146,6 +146,17 @@ function detectFormat(filePath: string): "mp3" | "opus" | "wav" | null {
     return "mp3";
   }
   return null;
+}
+
+function detectAudioFormat(buffer: Buffer): OutputFormat | null {
+  const prefix = buffer.toString("ascii", 0, 12);
+  if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WAVE") {
+    return "wav";
+  }
+  if (prefix.startsWith("ID3") || (buffer[0] === 0xff && ((buffer[1] ?? 0) & 0xe0) === 0xe0)) {
+    return "mp3";
+  }
+  return prefix.startsWith("OggS") ? "opus" : null;
 }
 
 function getFileExt(format: string): string {
@@ -224,12 +235,13 @@ async function runCli(params: {
 
   const audioFile = findAudioFile(params.outputDir, params.filePrefix);
   if (audioFile) {
-    const format = detectFormat(audioFile);
+    const buffer = readAudioFile(audioFile);
+    const format = detectAudioFormat(buffer) ?? detectFormatFromExtension(audioFile);
     if (!format) {
       throw new Error(`CLI TTS: unknown format for ${audioFile}`);
     }
     return {
-      buffer: readAudioFile(audioFile),
+      buffer,
       actualFormat: format,
       audioPath: audioFile,
     };
@@ -240,8 +252,13 @@ async function runCli(params: {
 
   const stdout = result.stdout;
   if (stdout.length > 0) {
-    // Assume WAV for stdout output; could be MP3 but caller should convert if needed
-    return { buffer: stdout, actualFormat: "wav" };
+    const actualFormat = detectAudioFormat(stdout);
+    if (!actualFormat) {
+      throw new Error(
+        "CLI TTS stdout audio format is not recognized; emit WAV, MP3, or Ogg Opus bytes, or write a supported audio file",
+      );
+    }
+    return { buffer: stdout, actualFormat };
   }
   if (result.termination === "error") {
     throw new Error(`CLI TTS failed: ${result.error?.message ?? result.termination}`);

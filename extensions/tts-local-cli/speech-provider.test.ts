@@ -42,11 +42,36 @@ const stdin = await new Promise((resolve) => {
   process.stdin.on("data", (chunk) => { data += chunk; });
   process.stdin.on("end", () => resolve(data));
 });
-const payload = Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg }));
+const payload = Buffer.concat([
+  Buffer.from("RIFF"),
+  Buffer.alloc(4),
+  Buffer.from("WAVE"),
+  Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg })),
+]);
 if (outputPath) {
   writeFileSync(outputPath, payload);
 } else {
   process.stdout.write(payload);
+}
+`,
+  );
+  return { dir, script };
+}
+
+function createRawAudioFixture(audio: readonly number[]): { dir: string; script: string } {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-raw-test-"));
+  const script = path.join(dir, "emit-audio.mjs");
+  writeFileSync(
+    script,
+    `
+import { writeFileSync } from "node:fs";
+const outIndex = process.argv.indexOf("--out");
+const outputPath = outIndex >= 0 ? process.argv[outIndex + 1] : "";
+const audio = Buffer.from(${JSON.stringify(audio)});
+if (outputPath) {
+  writeFileSync(outputPath, audio);
+} else {
+  process.stdout.write(audio);
 }
 `,
   );
@@ -81,7 +106,8 @@ async function synthesize(params: {
 }
 
 function parseAudioPayload(result: { audioBuffer: Buffer }) {
-  return JSON.parse(result.audioBuffer.toString("utf8")) as {
+  const jsonStart = result.audioBuffer.indexOf("{");
+  return JSON.parse(result.audioBuffer.subarray(jsonStart).toString("utf8")) as {
     stdin?: string;
     textArg?: string;
   };
@@ -154,13 +180,13 @@ describe("buildCliSpeechProvider", () => {
       const result = await synthesize({
         providerConfig: baseProviderConfig(fixture.script, {
           args: [fixture.script, "--out", "{{OutputPath}}"],
-          outputFormat: "mp3",
+          outputFormat: "wav",
         }),
         text: "hello 😀 world",
       });
 
-      expect(result.outputFormat).toBe("mp3");
-      expect(result.fileExtension).toBe(".mp3");
+      expect(result.outputFormat).toBe("wav");
+      expect(result.fileExtension).toBe(".wav");
       expect(result.voiceCompatible).toBe(false);
       const audioPayload = parseAudioPayload(result);
       expect(audioPayload.stdin).toBe("hello world");
@@ -233,6 +259,52 @@ describe("buildCliSpeechProvider", () => {
         voiceCompatible: false,
       });
       expectArgsContainSequence(requireFfmpegArgs(), ["-c:a", "libmp3lame", "-b:a", "128k"]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { transport: "stdout", audio: [...Buffer.from("ID3audio")], writeFile: false },
+    { transport: "templated file", audio: [0xff, 0xfb], writeFile: true },
+  ])("converts detected MP3 bytes from $transport to configured WAV", async (testCase) => {
+    const fixture = createRawAudioFixture(testCase.audio);
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [
+            fixture.script,
+            "--text",
+            "{{Text}}",
+            ...(testCase.writeFile ? ["--out", "{{OutputPath}}"] : []),
+          ],
+          outputFormat: "wav",
+        }),
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.wav"),
+        outputFormat: "wav",
+        fileExtension: ".wav",
+        voiceCompatible: false,
+      });
+      expectArgsContainSequence(requireFfmpegArgs(), ["-f", "wav"]);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unrecognized stdout with supported-format guidance", async () => {
+    const fixture = createRawAudioFixture([...Buffer.from("not audio")]);
+    try {
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--text", "{{Text}}"],
+            outputFormat: "wav",
+          }),
+        }),
+      ).rejects.toThrow("stdout audio format is not recognized");
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
