@@ -81,6 +81,15 @@
   color: var(--chat-tool-activity-color);
 }
 
+.chat-tool-msg-summary :where(span, code, button),
+.chat-activity-group__summary :where(span, code, button) {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+}
+
 .chat-tool-msg-summary {
   gap: 7px;
   width: fit-content;
@@ -505,16 +514,6 @@
   padding: 0;
   font-size: inherit;
   color: inherit;
-}
-
-.chat-tool-row__cmd,
-.chat-tool-row__cmd code,
-.chat-tool-row__cmd span {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 400;
-  line-height: 1.5;
-  letter-spacing: 0;
 }
 
 /* ── Command token colors (display-only highlighting) ── */
