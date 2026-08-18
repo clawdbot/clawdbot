@@ -90,6 +90,23 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
 }
 
 describe("DraftPlaceBrowser", () => {
+  it("tracks overlapping popover hides independently", () => {
+    const { browser } = createBrowser(async () => ({}));
+
+    browser.onPopoverHide("project");
+    browser.onPopoverHide("where");
+
+    expect(browser.popoverHiding("project")).toBe(true);
+    expect(browser.popoverHiding("where")).toBe(true);
+
+    browser.onPopoverAfterHide("project");
+    expect(browser.popoverHiding("project")).toBe(false);
+    expect(browser.popoverHiding("where")).toBe(true);
+
+    browser.onPopoverAfterHide("where");
+    expect(browser.popoverHiding("where")).toBe(false);
+  });
+
   it.each([
     ["the Gateway omits recents", async () => ({ projects: [] })],
     [
