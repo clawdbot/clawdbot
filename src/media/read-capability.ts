@@ -47,24 +47,16 @@ function isAgentScopedMediaReadAllowedByToolPolicy(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  const hasRequesterIdentity = Boolean(
-    params.requesterSenderId ||
-    params.requesterSenderName ||
-    params.requesterSenderUsername ||
-    params.requesterSenderE164,
-  );
-  const senderPolicy = hasRequesterIdentity
-    ? resolveSenderToolPolicy({
-        config: params.cfg,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        messageProvider: params.messageProvider,
-        senderId: params.requesterSenderId,
-        senderName: params.requesterSenderName,
-        senderUsername: params.requesterSenderUsername,
-        senderE164: params.requesterSenderE164,
-      })
-    : undefined;
+  const senderPolicy = resolveSenderToolPolicy({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    messageProvider: params.messageProvider,
+    senderId: params.requesterSenderId,
+    senderName: params.requesterSenderName,
+    senderUsername: params.requesterSenderUsername,
+    senderE164: params.requesterSenderE164,
+  });
   if (!isToolAllowedByPolicies("read", [groupPolicy, senderPolicy])) {
     return false;
   }

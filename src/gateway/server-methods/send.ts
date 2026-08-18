@@ -999,32 +999,25 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (accountId) {
             request.params.accountId = accountId;
           }
-          const resolvedMediaAccess =
-            request.action === "send"
-              ? resolveAgentScopedOutboundMediaAccess({
-                  cfg,
-                  agentId,
-                  sessionKey,
-                  messageProvider: sessionKey ? undefined : channel,
-                  accountId: sessionKey
-                    ? (trustedContext.requesterAccountId ?? accountId)
-                    : accountId,
-                  requesterSenderId: trustedContext.requesterSenderId,
-                  requesterSenderName: trustedContext.requesterSenderName,
-                  requesterSenderUsername: trustedContext.requesterSenderUsername,
-                  requesterSenderE164: trustedContext.requesterSenderE164,
-                })
-              : undefined;
+          const resolvedMediaAccess = resolveAgentScopedOutboundMediaAccess({
+            cfg,
+            agentId,
+            sessionKey,
+            messageProvider: sessionKey ? undefined : channel,
+            accountId: sessionKey ? (trustedContext.requesterAccountId ?? accountId) : accountId,
+            requesterSenderId: trustedContext.requesterSenderId,
+            requesterSenderName: trustedContext.requesterSenderName,
+            requesterSenderUsername: trustedContext.requesterSenderUsername,
+            requesterSenderE164: trustedContext.requesterSenderE164,
+          });
           // Gateway actions receive policy-scoped roots/workspace only; the
           // originating agent turn never delegates its host reader over RPC.
-          const mediaAccess = resolvedMediaAccess
-            ? {
-                localRoots: resolvedMediaAccess.localRoots,
-                ...(resolvedMediaAccess.workspaceDir
-                  ? { workspaceDir: resolvedMediaAccess.workspaceDir }
-                  : {}),
-              }
-            : undefined;
+          const mediaAccess = {
+            localRoots: resolvedMediaAccess.localRoots,
+            ...(resolvedMediaAccess.workspaceDir
+              ? { workspaceDir: resolvedMediaAccess.workspaceDir }
+              : {}),
+          };
           if (request.action === "send") {
             await hydrateAttachmentParamsForAction({
               cfg,
@@ -1089,9 +1082,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
             inboundEventKind: request.inboundTurnKind,
             agentId,
-            ...(mediaAccess
-              ? { mediaAccess, mediaLocalRoots: mediaAccess.localRoots }
-              : { mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId) }),
+            mediaAccess,
+            mediaLocalRoots: mediaAccess.localRoots,
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,

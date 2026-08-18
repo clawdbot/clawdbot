@@ -174,6 +174,16 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       } as OpenClawConfig,
       identity: { messageProvider: "requestchat", requesterSenderId: "attacker" },
     },
+    {
+      name: "sender wildcard without identity",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "*": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat" },
+    },
   ])("does not enable host reads for $name policy", ({ cfg, identity }) => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
