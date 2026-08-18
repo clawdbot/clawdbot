@@ -13,6 +13,7 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   loadPreparedModelRuntimeSnapshot,
@@ -152,6 +153,25 @@ describe("prepared model runtime owner selection", () => {
         allowGatewaySubagentBinding: true,
       }),
     ).rejects.toThrow("prepared model runtime owner was not published");
+  });
+
+  it("keeps a caller-pinned agent dir for isolated read-only leases on an active gateway", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+
+    // Run-provenance leases rebind a pinned agentDir to the committed configured
+    // owner; isolated read-only leases keep the pinned dir so synthetic probe
+    // credentials stay resolvable from that generation's auth store.
+    const lease = await acquireReadOnlyPreparedModelRuntime({
+      agentId: "default",
+      config,
+      agentDir: "/tmp/isolated-probe-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/isolated-probe-workspace",
+    });
+    expect(lease.snapshot.agentDir).toBe("/tmp/isolated-probe-agent");
+    lease.release();
   });
 
   it("publishes provider selections kept on the core runtime by request parameters", async () => {

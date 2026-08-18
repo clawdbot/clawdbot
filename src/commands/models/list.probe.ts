@@ -83,6 +83,17 @@ function loadEmbeddedRunnerModule() {
   return embeddedRunnerModuleLoader.load();
 }
 
+/** Widened runner call shape for isolated auth probe generations (see setup-inference-core). */
+type ProbeRunEmbeddedAgentParams = Parameters<
+  (typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]
+>[0] & {
+  preparedModelRuntimeMode?: "isolated-read-only";
+};
+
+type ProbeRunEmbeddedAgent = (
+  params: ProbeRunEmbeddedAgentParams,
+) => ReturnType<(typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]>;
+
 /** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
   | "ok"
@@ -808,7 +819,10 @@ async function probeTarget(params: {
     // Any bound-value target runs in an empty agent dir so stored profiles are
     // absent and cannot satisfy the probe via failover. Direct values pin a
     // synthetic profile; marker values are resolved by the runtime from the
-    // profile-order-cleared config.
+    // profile-order-cleared config. Inside a Gateway, the isolated-read-only
+    // runtime mode set on the runner call keeps this pinned generation
+    // authoritative: a run-provenance lease would rebind it to the committed
+    // configured owner and lose the synthetic profile.
     if (target.boundValue || target.useRuntimeAuth) {
       // Canonicalize so the isolated agent DB registers and unregisters under
       // one path. os.tmpdir() is a symlink on macOS (/var -> /private/var), and
@@ -842,7 +856,8 @@ async function probeTarget(params: {
         throw new Error("Could not prepare isolated auth probe profile");
       }
     }
-    const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
+    const runEmbeddedAgent = (await loadEmbeddedRunnerModule())
+      .runEmbeddedAgent as ProbeRunEmbeddedAgent;
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       probeConfig,
       runId,
@@ -875,6 +890,10 @@ async function probeTarget(params: {
       disableTools: true,
       modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
+      // Keep the isolated generation outside configured Gateway ownership: a
+      // run-provenance lease rebinds the pinned agentDir to the committed
+      // configured owner, losing the synthetic probe profile below.
+      ...(isolatedAgentDir ? { preparedModelRuntimeMode: "isolated-read-only" as const } : {}),
       abortSignal: params.abortSignal,
     })) as AgentRunResultView;
     const terminalError = extractAgentRunTerminalError(runResult);
