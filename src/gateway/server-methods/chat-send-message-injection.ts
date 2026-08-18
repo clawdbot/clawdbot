@@ -1,13 +1,9 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
-import { resolveOriginMessageProvider } from "../../auto-reply/reply/origin-routing.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -15,11 +11,9 @@ import {
   type ReplyBackendQueueMessageOptions,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
-  type ReplyToolAuthorityOverlay,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
@@ -31,54 +25,6 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
-
-function resolveChatSendToolAuthorityOverlay(params: {
-  ctx: RuntimeMsgContext;
-  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
-}): ReplyToolAuthorityOverlay {
-  const { ctx, session } = params;
-  const authorization = resolveCommandAuthorization({
-    ctx,
-    cfg: session.cfg,
-    commandAuthorized: ctx.CommandAuthorized === true,
-  });
-  const senderIsOwner = authorization.senderIsOwner;
-  return {
-    originatingChannel: ctx.OriginatingChannel,
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: ctx.OriginatingChannel,
-      provider: ctx.Provider,
-    }),
-    chatType: normalizeChatType(ctx.ChatType),
-    agentAccountId: ctx.AccountId,
-    conversationToolPolicy: ctx.ConversationToolPolicy,
-    groupId: resolveGroupSessionKey(ctx)?.id,
-    groupChannel:
-      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
-    groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    memberRoleIds: Array.isArray(ctx.MemberRoleIds)
-      ? ctx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
-          (roleId): roleId is string => Boolean(roleId),
-        )
-      : undefined,
-    spawnedBy: session.entry?.spawnedBy,
-    senderId: normalizeOptionalString(ctx.SenderId),
-    senderName: normalizeOptionalString(ctx.SenderName),
-    senderUsername: normalizeOptionalString(ctx.SenderUsername),
-    senderE164: normalizeOptionalString(ctx.SenderE164),
-    senderIsOwner,
-    inputProvenance: ctx.InputProvenance,
-    trustedInternalHandoff: undefined,
-    scheduledToolPolicy: undefined,
-    runtimePluginToolGrant: undefined,
-    toolsAllow: undefined,
-    disableTools: false,
-    traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
-    approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
-    clientCaps: ctx.GatewayClientCaps,
-    toolBindings: ctx.GatewayRunToolBindings,
-  };
-}
 
 /** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
 export function createChatSendMessageInjectionStarter(params: {
@@ -105,6 +51,11 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    const authorization = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: ctx.CommandAuthorized === true,
+    });
     const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
@@ -113,7 +64,12 @@ export function createChatSendMessageInjectionStarter(params: {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
-        toolAuthorityOverlay: resolveChatSendToolAuthorityOverlay({ ctx, session: params.session }),
+        toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
+          ctx,
+          sessionEntry: entry,
+          senderIsOwner: authorization.senderIsOwner,
+          disableTools: false,
+        }),
         ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),

@@ -16,6 +16,7 @@ import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/c
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
   beginReplyMessageInjectionTarget,
@@ -32,7 +33,6 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   registerReplyOperationSuccessorBarrier,
   type ReplyBackendQueueMessageOptions,
-  type ReplyToolAuthorityOverlay,
   ReplyRunAlreadyActiveError,
   ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,

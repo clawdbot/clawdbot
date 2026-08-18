@@ -20,6 +20,7 @@ import {
   replyRunRegistry,
   type ReplyMessageInjectionTarget,
 } from "./reply-run-registry.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -60,7 +61,7 @@ function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
 
 function resolveSteerTarget(
   targetSessionKey: string,
-): { sessionId: string; target: ReplyMessageInjectionTarget } | undefined {
+): { sessionId: string; sessionKey: string; target: ReplyMessageInjectionTarget } | undefined {
   const candidateKeys = listSteerCandidateSessionKeys(targetSessionKey);
   for (const candidateKey of candidateKeys) {
     const operation = replyRunRegistry.get(candidateKey);
@@ -68,7 +69,7 @@ function resolveSteerTarget(
       ? replyRunRegistry.resolveCurrentMessageInjectionTarget(candidateKey)
       : undefined;
     if (operation && target) {
-      return { sessionId: operation.sessionId, target };
+      return { sessionId: operation.sessionId, sessionKey: candidateKey, target };
     }
   }
 
@@ -114,6 +115,16 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
       target: steerTarget.target,
       attempt: beginReplyMessageInjectionTarget(steerTarget.target, message, {
         steeringMode: "all",
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
+          ctx: params.ctx,
+          sessionEntry:
+            params.sessionStore?.[steerTarget.sessionKey] ??
+            (params.sessionKey === steerTarget.sessionKey ? params.sessionEntry : undefined),
+          senderIsOwner: params.command.senderIsOwner,
+          toolsAllow: params.opts?.toolsAllow,
+          disableTools: params.opts?.disableTools === true,
+        }),
         debounceMs: 0,
         ...(params.opts?.sourceReplyDeliveryMode
           ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
