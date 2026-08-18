@@ -491,7 +491,7 @@ describe("new-session model runtime", () => {
     expect(navigate).toHaveBeenCalledWith("model-setup");
   });
 
-  it("keeps a successful empty catalog explicit when its refresh fails", async () => {
+  it("keeps the default model visible when an empty catalog refresh fails", async () => {
     const refresh = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     const control = new NewSessionModelControl(() => undefined);
@@ -505,7 +505,7 @@ describe("new-session model runtime", () => {
     request.mockReturnValueOnce(refresh.promise);
 
     control.load(context, "main", true);
-    expect(renderControl(control, context).textContent).toContain("Authentication failed");
+    expect(renderControl(control, context).textContent).toContain("Refreshing models…");
 
     refresh.reject(new Error("refresh failed"));
     await vi.waitFor(() =>
@@ -516,9 +516,9 @@ describe("new-session model runtime", () => {
     const container = renderControl(control, context);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-      "Authentication failed",
+      "gpt-5.6-luna",
     );
-    expect(container.textContent).not.toContain("GPT-5.6 Luna");
+    expect(container.textContent).not.toContain("Authentication failed");
   });
 
   it("preserves the remembered pair when metadata validation fails", async () => {

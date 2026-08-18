@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { includeConfiguredStaticCatalogEntries } from "./models-list-configured-static.js";
 
-export async function augmentExplicitModelsListWithHarness(params: {
+async function augmentExplicitModelsListWithHarness(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;

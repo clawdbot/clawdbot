@@ -7,17 +7,6 @@ enum AppNavigationActions {
         DashboardManager.shared.presentDashboard()
     }
 
-    /// Post-AI-setup handoff: land in the dashboard's custodian onboarding,
-    /// which owns everything after working inference (memory import, channels,
-    /// app recommendations, hatch).
-    static func openDashboardOnboarding() {
-        Task { @MainActor in
-            await DashboardManager.shared.show(
-                atPath: DashboardRouteMap.custodianPagePath,
-                search: DashboardRouteMap.custodianOnboardingSearch)
-        }
-    }
-
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {
         NSApp.activate(ignoringOtherApps: true)
         Task { @MainActor in

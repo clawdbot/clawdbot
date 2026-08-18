@@ -295,7 +295,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: remove obsolete transcript display helper exports.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      4328,
+      // +1: account-scoped model catalog discovery for native agent harnesses.
+      4329,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

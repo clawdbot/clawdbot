@@ -1,25 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { codexAppServerModelsToCatalogEntries } from "./model-catalog.js";
+import { loadCodexAppServerModelCatalog } from "./model-catalog.js";
 
 describe("Codex app-server model catalog", () => {
-  it("projects picker models onto the ChatGPT Codex route", () => {
+  it("projects picker models onto the ChatGPT Codex route", async () => {
     expect(
-      codexAppServerModelsToCatalogEntries([
+      await loadCodexAppServerModelCatalog(
         {
-          id: "gpt-5.6-terra",
-          model: "gpt-5.6-terra",
-          displayName: "GPT-5.6 Terra",
-          inputModalities: ["text", "image", "unknown"],
-          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          config: {},
+          agentId: "main",
+          agentDir: "/tmp/main-agent",
+          workspaceDir: "/tmp/workspace",
         },
-        {
-          id: "gpt-5.6-luna",
-          model: "gpt-5.6-luna",
-          displayName: "GPT-5.6 Luna",
-          inputModalities: ["text"],
-          supportedReasoningEfforts: [],
-        },
-      ]),
+        undefined,
+        async () => ({
+          models: [
+            {
+              id: "gpt-5.6-terra",
+              model: "gpt-5.6-terra",
+              displayName: "GPT-5.6 Terra",
+              inputModalities: ["text", "image", "unknown"],
+              supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            },
+            {
+              id: "gpt-5.6-luna",
+              model: "gpt-5.6-luna",
+              displayName: "GPT-5.6 Luna",
+              inputModalities: ["text"],
+              supportedReasoningEfforts: [],
+            },
+          ],
+        }),
+      ),
     ).toEqual([
       {
         provider: "openai",

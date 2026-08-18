@@ -15,7 +15,7 @@ function isModelInputType(value: string): value is ModelInputType {
   return INPUT_TYPES.has(value);
 }
 
-export function codexAppServerModelsToCatalogEntries(
+function codexAppServerModelsToCatalogEntries(
   models: readonly CodexAppServerModel[],
 ): ModelCatalogEntry[] {
   return models.map((model, providerOrder) => {
