@@ -65,8 +65,7 @@ export function readSessionMethodAccess(
       cause: "disconnected",
     };
   }
-  // Older Gateways may omit method metadata. Only an explicit absence is authoritative.
-  if (isGatewayMethodAdvertised(snapshot, request.method) === false) {
+  if (isGatewayMethodAdvertised(snapshot, request.method) !== true) {
     return {
       allowed: false,
       requiredScope,
@@ -74,12 +73,12 @@ export function readSessionMethodAccess(
       cause: "method-unavailable",
     };
   }
-  const auth = snapshot.hello?.auth ?? null;
-  // Older Gateways did not advertise auth scopes. Preserve their existing UI behavior.
+  const auth = snapshot.hello?.auth;
   if (
-    !auth?.scopes ||
+    auth &&
+    Array.isArray(auth.scopes) &&
     roleScopesAllow({
-      role: auth.role ?? "operator",
+      role: auth.role,
       requestedScopes: [requiredScope],
       allowedScopes: auth.scopes,
     })

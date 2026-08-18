@@ -524,6 +524,12 @@ export class SessionLinkHovercardProvider extends ReactiveElement {
       return;
     }
     if (anchor === this.activeAnchor && this.activeTarget?.sessionKey === target.sessionKey) {
+      if (trigger === "pointer") {
+        this.hovercard.pointerInside = true;
+      } else {
+        this.hovercard.focusInside = true;
+      }
+      this.hovercard.clearClose();
       return;
     }
     this.close();

@@ -290,6 +290,23 @@ describe("openclaw-session-link-hovercard-provider", () => {
     expect(document.activeElement).toBe(anchor);
   });
 
+  it("keeps a pointer-opened card while its trigger gains keyboard focus", async () => {
+    const { provider } = createProvider({ response: previewResponse() });
+    const anchor = sessionAnchor();
+    provider.append(anchor);
+    document.body.append(provider);
+
+    await hover(anchor);
+    anchor.focus();
+    anchor.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, composed: true, relatedTarget: document.body }),
+    );
+    await vi.advanceTimersByTimeAsync(121);
+
+    expect(document.activeElement).toBe(anchor);
+    expect(document.querySelector(".session-link-hovercard")).not.toBeNull();
+  });
+
   it("defers unseeded preview requests until intent across many attached anchors", async () => {
     const seededKey = "agent:main:seeded";
     const seededRow = {
