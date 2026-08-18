@@ -149,6 +149,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   // Thread routing owns the final session key, so mint the bound result at dispatch preparation.
   const boundIngress = await resolveMSTeamsSenderAccess({
     cfg,
+    accountId: route.accountId,
     activity,
     hasControlCommand: admission.isControlCommand,
     conversationThreadId: facts.threadId,

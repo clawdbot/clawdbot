@@ -20,6 +20,7 @@ type MessageHandlerDepsOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveStorePath?: () => string | undefined;
+  buildContext?: PluginRuntime["channel"]["inbound"]["buildContext"];
   getTeamDetails?: ReturnType<typeof vi.fn>;
 };
 
@@ -60,6 +61,7 @@ export function createMessageHandlerDeps(
     resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
     resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
+    ...(options.buildContext ? { buildContext: options.buildContext } : {}),
   });
 
   const conversationStore = {

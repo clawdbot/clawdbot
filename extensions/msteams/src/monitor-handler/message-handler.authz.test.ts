@@ -1,4 +1,8 @@
 // Msteams tests cover message handler.authz plugin behavior.
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
@@ -484,6 +488,108 @@ describe("msteams monitor handler authz", () => {
     expect(meta.sender).toBe("attacker-aad");
     expect(meta.dmPolicy).toBe("allowlist");
     expect(meta.reason).toBe("dmPolicy=allowlist (not allowlisted)");
+  });
+
+  it("keeps the active named account on the dispatch-time sender binding", async () => {
+    resetThreadMocks();
+    const contextInputs: BuildChannelInboundEventContextParams[] = [];
+    const buildContext = ((params: BuildChannelInboundEventContextParams) => {
+      contextInputs.push(params);
+      return buildChannelInboundEventContext(params);
+    }) as PluginRuntime["channel"]["inbound"]["buildContext"];
+    const cfg = {
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["default-owner-aad"],
+          accounts: {
+            jimmy: {
+              dmPolicy: "allowlist",
+              allowFrom: ["owner-aad"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { deps } = createMessageHandlerDeps(cfg, {
+      buildContext,
+      resolveAgentRoute: vi.fn(() => ({
+        sessionKey: "msteams:direct:owner-aad",
+        agentId: "ea-jimmy-puckett",
+        accountId: "jimmy",
+      })),
+    });
+    deps.accountId = "jimmy";
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler(
+      createMessageActivity({
+        id: "msg-named-account",
+        text: "send the reply now",
+        from: { id: "owner-id", aadObjectId: "owner-aad", name: "Owner" },
+        conversation: { id: "owner-dm", conversationType: "personal" },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const contextInput = contextInputs[0];
+    expect(contextInput?.route.accountId).toBe("jimmy");
+    expect(contextInput?.channelIngress).toMatchObject({
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+      },
+    });
+  });
+
+  it("does not carry one account's owner admission into another routed account", async () => {
+    resetThreadMocks();
+    const contextInputs: BuildChannelInboundEventContextParams[] = [];
+    const buildContext = ((params: BuildChannelInboundEventContextParams) => {
+      contextInputs.push(params);
+      return buildChannelInboundEventContext(params);
+    }) as PluginRuntime["channel"]["inbound"]["buildContext"];
+    const cfg = {
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["default-owner-aad"],
+          accounts: {
+            jimmy: { dmPolicy: "allowlist", allowFrom: ["owner-aad"] },
+            david: { dmPolicy: "allowlist", allowFrom: ["david-owner-aad"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { deps } = createMessageHandlerDeps(cfg, {
+      buildContext,
+      resolveAgentRoute: vi.fn(() => ({
+        sessionKey: "msteams:direct:owner-aad",
+        agentId: "ea-david-knight",
+        accountId: "david",
+      })),
+    });
+    deps.accountId = "jimmy";
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler(
+      createMessageActivity({
+        id: "msg-cross-account",
+        text: "send the reply now",
+        from: { id: "owner-id", aadObjectId: "owner-aad", name: "Owner" },
+        conversation: { id: "owner-dm", conversationType: "personal" },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const contextInput = contextInputs[0];
+    expect(contextInput?.route.accountId).toBe("david");
+    expect(contextInput?.channelIngress).toMatchObject({
+      senderAccess: {
+        allowed: false,
+        decision: "block",
+      },
+    });
   });
 
   it("logs an info drop reason when group policy has an empty allowlist", async () => {

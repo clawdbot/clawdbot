@@ -29,6 +29,7 @@ type MSTeamsTestRuntimeOptions = {
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
   resolveStorePath?: () => string | undefined;
+  buildContext?: PluginRuntime["channel"]["inbound"]["buildContext"];
 };
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
@@ -183,7 +184,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         resolveStorePath,
       },
       inbound: {
-        buildContext: buildChannelInboundEventContext,
+        buildContext: options.buildContext ?? buildChannelInboundEventContext,
         run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
       },
     },
