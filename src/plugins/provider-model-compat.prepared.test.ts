@@ -58,9 +58,13 @@ describe("normalizeModelCompat prepared metadata", () => {
   it("uses the exact owner generation supplied by its registry", () => {
     const firstOwners = makeOwners("first");
     const secondOwners = makeOwners("second");
+    const firstModel = attachModelProviderRequestRouteFacts(model, firstOwners);
+    const secondModel = attachModelProviderRequestRouteFacts(model, secondOwners);
 
-    normalizeModelCompat(attachModelProviderRequestRouteFacts(model, firstOwners));
-    normalizeModelCompat(attachModelProviderRequestRouteFacts(model, secondOwners));
+    resolveProviderRequestCapabilities.mockClear();
+
+    normalizeModelCompat(firstModel);
+    normalizeModelCompat(secondModel);
 
     expect(resolveProviderRequestCapabilities).toHaveBeenNthCalledWith(
       1,
