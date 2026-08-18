@@ -16,9 +16,28 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
+  it.each(["wham_token_expired", "wham_account_dead"] as const)(
+    "retains %s cooldown classification through state normalization",
+    (cooldownReason) => {
+      const persisted = buildPersistedAuthProfileState({
+        usageStats: {
+          "openai:default": {
+            cooldownUntil: 1_900_000_000_000,
+            cooldownReason,
+          },
+        },
+      });
+
+      expect(coerceAuthProfileState(persisted).usageStats?.["openai:default"]?.cooldownReason).toBe(
+        cooldownReason,
+      );
+    },
+  );
+
   it("normalizes malformed persisted credentials and state before runtime use", () => {
     const store = coercePersistedAuthProfileStore({
       version: "not-a-version",

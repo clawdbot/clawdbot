@@ -17,6 +17,22 @@ import {
 } from "./oauth-refresh-failure.js";
 
 describe("buildAuthProfileUnusableHint", () => {
+  it.each(["wham_token_expired", "wham_account_dead"] as const)(
+    "gives re-authentication guidance for %s cooldowns",
+    (reason) => {
+      expect(
+        buildAuthProfileUnusableHint({
+          kind: "cooldown",
+          reason,
+          provider: "openai",
+          profileId: "openai:default",
+        }),
+      ).toContain(
+        "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+      );
+    },
+  );
+
   it("keeps Claude subscription and Anthropic API-key recovery distinct", () => {
     expect(
       buildAuthProfileUnusableHint({

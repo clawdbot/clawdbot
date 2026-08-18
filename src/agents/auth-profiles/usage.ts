@@ -21,6 +21,7 @@ import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
+  AuthProfileCooldownReason,
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileStore,
@@ -132,6 +133,12 @@ type WhamCooldownProbeResult = {
   blockedUntil?: number;
   blockedSource?: AuthProfileBlockedSource;
 };
+
+function resolveWhamAuthCooldownReason(
+  reason: string,
+): Extract<AuthProfileCooldownReason, `wham_${string}`> | undefined {
+  return reason === "wham_token_expired" || reason === "wham_account_dead" ? reason : undefined;
+}
 
 function shouldProbeWhamForFailure(
   profile: AuthProfileCredential | undefined,
@@ -245,6 +252,7 @@ function applyWhamCooldownResult(params: {
       cooldownModel: undefined,
     };
   }
+  const whamAuthCooldownReason = resolveWhamAuthCooldownReason(params.whamResult.reason);
   return {
     ...params.computed,
     lastProbeAt: params.now,
@@ -252,6 +260,8 @@ function applyWhamCooldownResult(params: {
       existingActiveCooldownUntil,
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
+    cooldownReason: whamAuthCooldownReason ?? params.computed.cooldownReason,
+    cooldownModel: whamAuthCooldownReason ? undefined : params.computed.cooldownModel,
   };
 }
 
@@ -295,11 +305,26 @@ async function probeWhamForCooldown(
 
     if (!res.ok) {
       await cancelUnreadResponseBody(res);
-      if (res.status === 401) {
-        return { cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS, reason: "wham_token_expired" };
-      }
-      if (res.status === 403) {
-        return { cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS, reason: "wham_account_dead" };
+      if (res.status === 401 || res.status === 403) {
+        const result =
+          res.status === 401
+            ? {
+                cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS,
+                reason: "wham_token_expired" as const,
+              }
+            : {
+                cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS,
+                reason: "wham_account_dead" as const,
+              };
+        authProfileUsageLog.warn("WHAM probe classified auth profile unavailable", {
+          event: "auth_profile_wham_auth_classification",
+          profileId,
+          status: res.status,
+          cooldownReason: result.reason,
+          cooldownMs: result.cooldownMs,
+          tags: ["auth_profiles", "provider_probe"],
+        });
+        return result;
       }
       return { cooldownMs: WHAM_HTTP_ERROR_COOLDOWN_MS, reason: "wham_http_error" };
     }
@@ -624,6 +649,17 @@ export function resolveProfilesUnavailableReason(params: {
       continue;
     }
 
+    const whamUnavailableReason =
+      stats.cooldownReason === "wham_token_expired"
+        ? "auth"
+        : stats.cooldownReason === "wham_account_dead"
+          ? "auth_permanent"
+          : null;
+    if (whamUnavailableReason) {
+      addScore(whamUnavailableReason, 1_000);
+      continue;
+    }
+
     let recordedReason = false;
     for (const [rawReason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
       const reason = rawReason as AuthProfileFailureReason;
@@ -806,6 +842,19 @@ function updateUsageStatsEntry(
 ): void {
   store.usageStats = store.usageStats ?? {};
   store.usageStats[profileId] = updater(store.usageStats[profileId]);
+}
+
+function notifyAuthProfileFailureSafely(): void {
+  try {
+    notifyAuthProfileFailureHook();
+  } catch (err) {
+    // Hook errors must not break failure recording; log and continue.
+    authProfileUsageLog.warn("auth profile failure hook threw", {
+      event: "auth_profile_failure_hook_error",
+      tags: ["error_handling", "auth_profiles"],
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function keepActiveWindowOrRecompute(params: {
@@ -1013,16 +1062,7 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
-    try {
-      notifyAuthProfileFailureHook();
-    } catch (err) {
-      // Hook errors must not break failure recording; log and continue.
-      authProfileUsageLog.warn("auth profile failure hook threw", {
-        event: "auth_profile_failure_hook_error",
-        tags: ["error_handling", "auth_profiles"],
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    notifyAuthProfileFailureSafely();
     return;
   }
   if (updated === null) {
@@ -1189,7 +1229,7 @@ export async function markInlineProviderApiKeyFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureHook();
+    notifyAuthProfileFailureSafely();
     return;
   }
   if (updated === null) {

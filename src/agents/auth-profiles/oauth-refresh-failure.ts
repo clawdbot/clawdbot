@@ -7,7 +7,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
  * commands without trusting raw provider text.
  */
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
-import type { AuthProfileFailureReason } from "./types.js";
+import type { AuthProfileCooldownReason } from "./types.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -243,14 +243,16 @@ export function buildOAuthRefreshFailureLoginCommand(
 /** Build operator guidance for an active profile cooldown or disable window. */
 export function buildAuthProfileUnusableHint(params: {
   kind: "cooldown" | "disabled";
-  reason?: AuthProfileFailureReason;
+  reason?: AuthProfileCooldownReason;
   provider: string;
   profileId: string;
 }): string {
   if (
     params.reason === "auth" ||
     params.reason === "auth_permanent" ||
-    params.reason === "session_expired"
+    params.reason === "session_expired" ||
+    params.reason === "wham_token_expired" ||
+    params.reason === "wham_account_dead"
   ) {
     if (params.provider === "google-gemini-cli") {
       // The legacy runtime has no auth method of its own. Recovery creates a

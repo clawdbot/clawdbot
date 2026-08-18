@@ -13,6 +13,7 @@ import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sq
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
+  AuthProfileCooldownReason,
   AuthProfileFailureReason,
   AuthProfileState,
   AuthProfileStateStore,
@@ -33,6 +34,11 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
   "no_error_details",
   "unclassified",
   "unknown",
+]);
+const AUTH_COOLDOWN_REASONS = new Set<AuthProfileCooldownReason>([
+  ...AUTH_FAILURE_REASONS,
+  "wham_token_expired",
+  "wham_account_dead",
 ]);
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
@@ -113,7 +119,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: asFiniteNumber(raw.cooldownUntil),
-    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
+    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_COOLDOWN_REASONS),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
     disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),

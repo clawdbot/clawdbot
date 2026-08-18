@@ -1218,6 +1218,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     store: ReturnType<typeof makeStore>;
     now: number;
     reason?: "rate_limit" | "no_error_details" | "unknown";
+    modelId?: string;
     mockLock?: boolean;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -1229,6 +1230,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         store: params.store,
         profileId: "openai:default",
         reason: params.reason ?? "rate_limit",
+        modelId: params.modelId,
       });
     } finally {
       dateNowSpy.mockRestore();
@@ -1504,15 +1506,41 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
   });
 
-  it("maps HTTP 401 to a 12h cooldown", async () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({});
-    mockWhamResponse(401);
+  it.each([
+    {
+      status: 401,
+      expectedMs: 12 * 60 * 60 * 1000,
+      expectedCooldownReason: "wham_token_expired",
+      expectedUnavailableReason: "auth",
+    },
+    {
+      status: 403,
+      expectedMs: 24 * 60 * 60 * 1000,
+      expectedCooldownReason: "wham_account_dead",
+      expectedUnavailableReason: "auth_permanent",
+    },
+  ])(
+    "persists WHAM HTTP $status auth classification and canonical fallback reason",
+    async ({ status, expectedMs, expectedCooldownReason, expectedUnavailableReason }) => {
+      const now = 1_700_000_000_000;
+      const store = makeStore({});
+      mockWhamResponse(status);
 
-    await markCodexFailureAt({ store, now });
+      await markCodexFailureAt({ store, now, modelId: "gpt-5.6-luna" });
 
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 43_200_000);
-  });
+      const stats = store.usageStats?.["openai:default"];
+      expect(stats?.cooldownUntil).toBe(now + expectedMs);
+      expect(stats?.cooldownReason).toBe(expectedCooldownReason);
+      expect(stats?.cooldownModel).toBeUndefined();
+      expect(
+        resolveProfilesUnavailableReason({
+          store,
+          profileIds: ["openai:default"],
+          now,
+        }),
+      ).toBe(expectedUnavailableReason);
+    },
+  );
 
   it("skips WHAM probe for locally expired OAuth access tokens", async () => {
     const now = 1_700_000_000_000;
@@ -1530,16 +1558,6 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     const stats = store.usageStats?.["openai:default"];
     expect(stats?.cooldownUntil).toBe(now + 30_000);
     expect(stats?.cooldownReason).toBe("rate_limit");
-  });
-
-  it("maps HTTP 403 to a 24h cooldown", async () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({});
-    mockWhamResponse(403);
-
-    await markCodexFailureAt({ store, now });
-
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 86_400_000);
   });
 
   it("maps other HTTP errors to a 5m cooldown", async () => {
