@@ -22,6 +22,31 @@ const PROCESS_LIFECYCLE_SCENARIO = "channel-chat-baseline";
 const SUITE_COMPLETION_TIMEOUT_MS = 420_000;
 const POST_SUMMARY_EXIT_TIMEOUT_MS = 45_000;
 
+function buildSuiteProcessEnv(outputDir: string) {
+  const home = path.join(outputDir, "process-home");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    OPENCLAW_HOME: home,
+    OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+    OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+    OPENCLAW_QA_SUITE_PROGRESS: "1",
+  };
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
+  delete env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
+  delete env.OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER;
+  delete env.NODE_COMPILE_CACHE;
+  delete env.NODE_DISABLE_COMPILE_CACHE;
+  delete env.OPENCLAW_NODE_COMPILE_CACHE_WRITER;
+  if (env.NODE_ENV === "test") {
+    delete env.NODE_ENV;
+  }
+  return env;
+}
+
 function forceStopProcessTree(child: ChildProcess) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) {
     return;
@@ -86,7 +111,7 @@ function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
     ["--import", "tsx", fixturePath, outputDir, ...scenarioIds],
     {
       cwd: repoRoot,
-      env: { ...process.env, OPENCLAW_QA_SUITE_PROGRESS: "1" },
+      env: buildSuiteProcessEnv(outputDir),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -135,9 +160,35 @@ async function isTcpPortOpen(port: number) {
   });
 }
 
-async function waitForCompletedSummary(outputDir: string, timeoutMs: number) {
-  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-  const deadline = Date.now() + timeoutMs;
+async function waitForCompletedSummary(params: {
+  outputDir: string;
+  timeoutMs: number;
+  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  output: () => { stderr: string; stdout: string };
+}) {
+  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  const deadline = Date.now() + params.timeoutMs;
+  const processState: {
+    error?: unknown;
+    outcome?: { code: number | null; signal: NodeJS.Signals | null };
+  } = {};
+  void params.closed.then(
+    (outcome) => {
+      processState.outcome = outcome;
+    },
+    (error: unknown) => {
+      processState.error = error;
+    },
+  );
+  const throwIfProcessClosed = () => {
+    if (!processState.error && !processState.outcome) {
+      return;
+    }
+    const output = params.output();
+    throw new Error(
+      `QA suite process exited before writing a completed summary: ${JSON.stringify(processState.outcome ?? { error: String(processState.error) })}\nstdout:\n${output.stdout.slice(-8_000)}\nstderr:\n${output.stderr.slice(-8_000)}`,
+    );
+  };
   while (Date.now() < deadline) {
     let summary: QaSuiteSummaryJson;
     try {
@@ -146,6 +197,7 @@ async function waitForCompletedSummary(outputDir: string, timeoutMs: number) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
+      throwIfProcessClosed();
       await sleep(50);
       continue;
     }
@@ -156,9 +208,13 @@ async function waitForCompletedSummary(outputDir: string, timeoutMs: number) {
     if (runStatus !== "running") {
       throw new Error(`QA suite summary is missing lifecycle status: ${String(runStatus)}`);
     }
+    throwIfProcessClosed();
     await sleep(50);
   }
-  throw new Error(`QA suite did not write a completed summary within ${timeoutMs}ms`);
+  const output = params.output();
+  throw new Error(
+    `QA suite did not write a completed summary within ${params.timeoutMs}ms\nstdout:\n${output.stdout.slice(-8_000)}\nstderr:\n${output.stderr.slice(-8_000)}`,
+  );
 }
 
 async function waitForProcessClose(
@@ -204,9 +260,12 @@ describe("qa suite command process lifecycle", () => {
         );
       }, 30_000);
       heartbeat.unref();
-      const summary = await waitForCompletedSummary(outputDir, SUITE_COMPLETION_TIMEOUT_MS).finally(
-        () => clearInterval(heartbeat),
-      );
+      const summary = await waitForCompletedSummary({
+        outputDir,
+        timeoutMs: SUITE_COMPLETION_TIMEOUT_MS,
+        closed: run.closed,
+        output: run.output,
+      }).finally(() => clearInterval(heartbeat));
       const outcome = await waitForProcessClose(run.closed, POST_SUMMARY_EXIT_TIMEOUT_MS);
       const output = run.output();
 
