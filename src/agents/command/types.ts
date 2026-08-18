@@ -7,6 +7,7 @@ import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { AgentRuntimeSessionHandoffRequester } from "../../gateway/agent-runtime-session-handoff.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
@@ -123,6 +124,9 @@ export type AgentCommandOpts = {
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Consumed one-shot sessions_send authority; never accepted from public RPC params. */
+  trustedSessionHandoff?: boolean;
+  sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
   /** Internal marker identifying a server-managed default cap. */
   toolsAllowIsDefault?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */

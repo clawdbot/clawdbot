@@ -64,10 +64,7 @@ export async function runDirectSessionAnnounceScenario(params: {
       },
     });
     agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "direct announcement delivered", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+      runTranscriptAgentStep: async () => "direct announcement delivered",
     });
 
     await runSessionsSendA2AFlow({

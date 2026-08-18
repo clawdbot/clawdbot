@@ -1608,6 +1608,71 @@ describe("sessions_send gating", () => {
     expect(parentTranscriptWriteCalls).toBe(0);
   });
 
+  it("carries the exact source tool surface through a fresh session handoff", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const callAgentWithHandoff = vi.fn(async () => ({
+      runId: "run-policy-handoff",
+      acceptedAt: 123,
+    }));
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      handoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "whatsapp", senderId: "speaker-1" },
+      },
+      callAgentWithHandoff,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-policy-self-send", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("accepted");
+    expect(callAgentWithHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.not.objectContaining({ toolPolicy: expect.anything() }),
+      }),
+      {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "whatsapp", senderId: "speaker-1" },
+      },
+    );
+    expect(vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0].handoffContext).toEqual({
+      inheritedToolPolicy: {
+        version: 1,
+        allow: ["sessions_send", "read"],
+        deny: ["message"],
+      },
+      requester: { messageProvider: "whatsapp", senderId: "speaker-1" },
+    });
+  });
+
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
     vi.mocked(runSessionsSendA2AFlow).mockClear();

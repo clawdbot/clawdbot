@@ -271,10 +271,7 @@ describe("sessions tools", () => {
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+      runTranscriptAgentStep: async () => "ANNOUNCE_SKIP",
     });
   });
   afterEach(resetGatewayWorkAdmission);
@@ -1383,10 +1380,7 @@ describe("sessions tools", () => {
       return {};
     });
     agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "announce now", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+      runTranscriptAgentStep: async () => "announce now",
     });
 
     const tool = getSessionTool("sessions_send", {
@@ -1505,16 +1499,13 @@ describe("sessions tools", () => {
       return {};
     });
     agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => {
+      runTranscriptAgentStep: async () => {
         finalAnnounceAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
         if (finalAnnounceAdmissionClosed) {
           throw new GatewayDrainingError();
         }
         finalAnnounceProviderStarts += 1;
-        return {
-          payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-          meta: { durationMs: 1 },
-        };
+        return "ANNOUNCE_SKIP";
       },
     });
 
@@ -1727,6 +1718,10 @@ describe("sessions tools", () => {
 
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    const handoffCalls: Array<{
+      request: { method?: string; params?: unknown };
+      context: unknown;
+    }> = [];
     const requesterKey = "agent:main:cron:source-job:run:source-run";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
@@ -1762,19 +1757,29 @@ describe("sessions tools", () => {
           ],
         };
       }
-      if (request.method === "agent") {
-        return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
-      }
       if (request.method === "agent.wait") {
         return { runId: "durable-fallback-run", status: "ok" };
       }
       return {};
     });
 
-    const tool = getSessionTool("sessions_send", {
+    const tool = createSessionsSendTool({
       agentSessionKey: requesterKey,
       agentChannel: "telegram",
       config: cloneTestConfig(),
+      callGateway: callGatewayMock,
+      handoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "telegram", senderId: "source-speaker" },
+      },
+      callAgentWithHandoff: async (request, context) => {
+        handoffCalls.push({ request, context });
+        return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
+      },
     });
 
     const result = await tool.execute("call-run-scoped-caller", {
@@ -1788,12 +1793,19 @@ describe("sessions tools", () => {
     expect(details.runId).toBe("durable-fallback-run");
     expect(details.sessionKey).toBe(runScopedCallerKey);
     expect(queueMessage).not.toHaveBeenCalled();
-    const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(1);
-    const params = agentParams(agentCalls[0] ?? {});
+    expect(handoffCalls).toHaveLength(1);
+    const params = agentParams(handoffCalls[0]?.request ?? {});
     expect(params.sessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
+    expect(handoffCalls[0]?.context).toEqual({
+      inheritedToolPolicy: {
+        version: 1,
+        allow: ["sessions_send", "read"],
+        deny: ["message"],
+      },
+      requester: { messageProvider: "telegram", senderId: "source-speaker" },
+    });
     await waitForCalls(
       () =>
         countMatching(
@@ -1810,9 +1822,8 @@ describe("sessions tools", () => {
         call.method === "chat.history" &&
         (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCronCallerKey,
     );
-    const fallbackAgentIndex = calls.findIndex((call) => call.method === "agent");
-    expect(firstFallbackHistoryIndex).toBeLessThan(fallbackAgentIndex);
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(firstFallbackHistoryIndex).toBeGreaterThanOrEqual(0);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(0);
   });
 
   it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
@@ -1932,6 +1943,9 @@ describe("sessions tools", () => {
 
   it("sessions_send preserves active delivery when transcript commit wait is unsupported", async () => {
     const calls: Array<{ method?: string }> = [];
+    const callAgentWithHandoff = vi.fn(async () => {
+      throw new Error("fresh agent should not start while active steering succeeds");
+    });
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
@@ -1954,9 +1968,16 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = getSessionTool("sessions_send", {
+    const tool = createSessionsSendTool({
       agentSessionKey: "agent:re-portal:main",
       agentChannel: "telegram",
+      config: cloneTestConfig(),
+      callGateway: callGatewayMock,
+      handoffContext: {
+        inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: ["exec"] },
+        requester: {},
+      },
+      callAgentWithHandoff,
     });
 
     const result = await tool.execute("call-run-scoped-caller", {
@@ -1976,6 +1997,7 @@ describe("sessions tools", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(calls.some((call) => call.method === "agent")).toBe(false);
+    expect(callAgentWithHandoff).not.toHaveBeenCalled();
   });
 
   it("sessions_send reports run-scoped queue admission failures without gateway fallback", async () => {
@@ -2275,10 +2297,7 @@ describe("sessions tools", () => {
       return {};
     });
     agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "announce now", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+      runTranscriptAgentStep: async () => "announce now",
     });
 
     const tool = getSessionTool("sessions_send", {

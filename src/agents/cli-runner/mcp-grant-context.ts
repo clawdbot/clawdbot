@@ -146,6 +146,18 @@ export function buildCliMcpGrantContext(params: {
     ...(params.run.skillWorkshopProposalRevision
       ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
       : {}),
+    ...(params.run.cliToolAvailability
+      ? {
+          cliToolAvailability: {
+            native: [...params.run.cliToolAvailability.native],
+            openClaw: [...params.run.cliToolAvailability.openClaw],
+          },
+        }
+      : {}),
+    ...(params.run.trustedSessionHandoff ? { trustedSessionHandoff: true } : {}),
+    ...(params.run.trustedSessionHandoff && params.run.sessionHandoffRequester
+      ? { sessionHandoffRequester: { ...params.run.sessionHandoffRequester } }
+      : {}),
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
       : {}),

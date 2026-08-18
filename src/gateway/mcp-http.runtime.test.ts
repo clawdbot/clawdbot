@@ -105,6 +105,36 @@ describe("resolveMcpLoopbackScopedTools", () => {
     );
   });
 
+  it("adds only recognized CLI-native equivalents to fresh-session handoffs", () => {
+    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["message"]));
+
+    resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["message"],
+        cliToolAvailability: {
+          native: ["Read", "Bash", "Edit", "Agent", "vendor_magic"],
+          openClaw: ["message"],
+        },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["message", "read", "exec", "apply_patch", "spawn_agent"],
+      deny: [],
+    });
+  });
+
+  it("uses the concrete loopback catalog instead of a wildcard for unknown CLI surfaces", () => {
+    resolveMcpLoopbackScopedTools(scopeParams());
+
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["memory_search", "memory_get", "message", "automations"],
+      deny: [],
+    });
+  });
+
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
 

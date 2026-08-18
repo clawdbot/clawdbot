@@ -1,15 +1,13 @@
 import "./agent-step.js";
 
-type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
-type AgentStepTesting = {
-  setDepsForTest(
-    overrides?: Partial<{
-      agentCommandFromIngress: AgentCommandRunner;
-    }>,
-  ): void;
-};
+type TranscriptAgentStepRunner = (params: {
+  sessionKey: string;
+  message: string;
+  transcriptMessage: string;
+}) => Promise<string | undefined>;
+
 type AgentStepTestApi = {
-  testing: AgentStepTesting;
+  setTranscriptRunnerForTest(runner?: TranscriptAgentStepRunner): void;
 };
 
 function getTestApi(): AgentStepTestApi {
@@ -18,4 +16,8 @@ function getTestApi(): AgentStepTestApi {
   ] as AgentStepTestApi;
 }
 
-export const testing = getTestApi().testing;
+export const testing = {
+  setDepsForTest(overrides?: { runTranscriptAgentStep?: TranscriptAgentStepRunner }): void {
+    getTestApi().setTranscriptRunnerForTest(overrides?.runTranscriptAgentStep);
+  },
+};

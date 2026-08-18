@@ -17,6 +17,7 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-session-handoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -71,6 +72,7 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -78,6 +80,7 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
+import { callSessionHandoffAgent } from "./session-handoff-agent-call.js";
 import {
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
@@ -369,6 +372,7 @@ function shouldFallbackCronRunScopedActiveDelivery(
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
+  callAgent: GatewayCaller;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
@@ -436,7 +440,7 @@ async function startAgentRun(params: {
         fallbackSessionKey &&
         shouldFallbackCronRunScopedActiveDelivery(queueOutcome)
       ) {
-        const response = await params.callGateway<{ runId: string }>({
+        const response = await params.callAgent<{ runId: string }>({
           method: "agent",
           params: {
             ...params.sendParams,
@@ -457,7 +461,7 @@ async function startAgentRun(params: {
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
       throw new Error(queueSummary);
     }
-    const response = await params.callGateway<{ runId: string }>({
+    const response = await params.callAgent<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
       timeoutMs: 10_000,
@@ -488,6 +492,11 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  handoffContext?: AgentRuntimeSessionHandoffContext;
+  callAgentWithHandoff?: (
+    request: Parameters<GatewayCaller>[0],
+    context: AgentRuntimeSessionHandoffContext,
+  ) => Promise<unknown>;
   /** Backend-derived target incarnation; never sourced from model arguments. */
   expectedTargetSessionId?: string;
   /** Backend-owned downstream operation id; never sourced from model arguments. */
@@ -505,6 +514,32 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const authority = getGatewayToolCallerIdentity();
+      const handoffContext: AgentRuntimeSessionHandoffContext | undefined = opts?.handoffContext
+        ? {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: [...opts.handoffContext.inheritedToolPolicy.allow],
+              deny: [...opts.handoffContext.inheritedToolPolicy.deny],
+            },
+            requester: { ...opts.handoffContext.requester },
+          }
+        : undefined;
+      const agentCall: GatewayCaller = handoffContext
+        ? async <T = Record<string, unknown>>(request: Parameters<GatewayCaller>[0]) => {
+            if (opts?.callAgentWithHandoff) {
+              return (await opts.callAgentWithHandoff(request, handoffContext)) as T;
+            }
+            if (!authority) {
+              throw new Error("sessions_send policy handoff requires trusted caller identity");
+            }
+            return await callSessionHandoffAgent<T>({
+              request,
+              authority,
+              context: handoffContext,
+            });
+          }
+        : gatewayCall;
       const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
@@ -1122,6 +1157,8 @@ export function createSessionsSendTool(opts?: {
                   roundOneReply,
                   waitRunId,
                   notifyRequesterOnWaitFailure,
+                  authority,
+                  handoffContext,
                 }),
               ),
             ).catch((err: unknown) => {
@@ -1135,6 +1172,7 @@ export function createSessionsSendTool(opts?: {
           if (timeoutSeconds === 0) {
             const start = await startAgentRun({
               callGateway: gatewayCall,
+              callAgent: agentCall,
               runId,
               sendParams,
               sessionKey: displayKey,
@@ -1171,6 +1209,7 @@ export function createSessionsSendTool(opts?: {
 
           const start = await startAgentRun({
             callGateway: gatewayCall,
+            callAgent: agentCall,
             runId,
             sendParams,
             sessionKey: displayKey,

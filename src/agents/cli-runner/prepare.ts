@@ -1095,7 +1095,18 @@ export async function prepareCliRunContext(
     (promptBuildRestrictsTools ? projectedTools.map((tool) => tool.name) : undefined);
   const mcpGrantContext =
     mcpContextBase && restrictedLoopbackToolsAllow !== undefined
-      ? { ...mcpContextBase, toolsAllow: [...restrictedLoopbackToolsAllow] }
+      ? {
+          ...mcpContextBase,
+          toolsAllow: [...restrictedLoopbackToolsAllow],
+          ...(params.cliToolAvailability
+            ? {
+                cliToolAvailability: {
+                  native: [...params.cliToolAvailability.native],
+                  openClaw: [...params.cliToolAvailability.openClaw],
+                },
+              }
+            : {}),
+        }
       : mcpContextBase;
   const toolBoundExtraSystemPromptHash = params.cliToolAvailability
     ? hashCliSessionText(

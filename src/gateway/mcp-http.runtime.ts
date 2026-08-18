@@ -2,10 +2,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import {
+  normalizeToolPolicyName,
+  replaceWithEffectiveToolAllowlist,
+} from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import type { AgentRuntimeSessionHandoffContext } from "./agent-runtime-session-handoff.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -21,6 +25,18 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
+const CLI_NATIVE_HANDOFF_CAPABILITIES = new Map<string, string>([
+  ["bash", "exec"],
+  ["exec", "exec"],
+  ["exec_command", "exec"],
+  ["run_shell_command", "exec"],
+  ["read", "read"],
+  ["write", "apply_patch"],
+  ["edit", "apply_patch"],
+  ["apply_patch", "apply_patch"],
+  ["agent", "spawn_agent"],
+  ["spawn_agent", "spawn_agent"],
+]);
 
 type CachedScopedTools = {
   agentId: string | undefined;
@@ -94,6 +110,11 @@ function resolveMcpLoopbackTools(
     grantToken: _grantToken,
     ...scopeParams
   } = params;
+  const sessionsSendToolPolicy: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"] = {
+    version: 1,
+    allow: [],
+    deny: [],
+  };
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
     agentDir: authProfileStoreAgentDir,
@@ -102,14 +123,28 @@ function resolveMcpLoopbackTools(
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
+    sessionsSendToolPolicy,
   });
+  const tools =
+    mode === "exact"
+      ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
+      : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
+  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, tools);
+  // CLI-native tools do not appear in the loopback catalog. Carry only named
+  // capability equivalents; an unknown native name narrows the child instead
+  // of accidentally granting a same-named OpenClaw or plugin tool.
+  const effectiveNames = new Set(sessionsSendToolPolicy.allow);
+  for (const nativeName of params.cliToolAvailability?.native ?? []) {
+    const capability = CLI_NATIVE_HANDOFF_CAPABILITIES.get(normalizeToolPolicyName(nativeName));
+    if (capability && !effectiveNames.has(capability)) {
+      effectiveNames.add(capability);
+      sessionsSendToolPolicy.allow.push(capability);
+    }
+  }
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools:
-      mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, params.toolsAllow),
+    tools,
   };
 }
 

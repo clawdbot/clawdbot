@@ -3,7 +3,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
-import { testing } from "./agent-step.test-support.js";
 
 const runWaitMocks = vi.hoisted(() => ({
   waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
@@ -11,6 +10,10 @@ const runWaitMocks = vi.hoisted(() => ({
 
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+}));
+
+const handoffMocks = vi.hoisted(() => ({
+  callSessionHandoffAgent: vi.fn(),
 }));
 
 vi.mock("../run-wait.js", () => ({
@@ -22,9 +25,22 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
 }));
 
+vi.mock("./session-handoff-agent-call.js", () => ({
+  callSessionHandoffAgent: handoffMocks.callSessionHandoffAgent,
+}));
+
+const handoffContext = {
+  inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
+  requester: { senderId: "speaker-1" },
+};
+
+const authority = {
+  agentId: "main",
+  sessionKey: "agent:main:source",
+};
+
 describe("runAgentStep", () => {
   afterEach(() => {
-    testing.setDepsForTest();
     vi.clearAllMocks();
   });
 
@@ -96,13 +112,7 @@ describe("runAgentStep", () => {
   });
 
   it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [{ text: "done", mediaUrl: null }],
-      meta: { durationMs: 1 },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
-    });
+    handoffMocks.callSessionHandoffAgent.mockResolvedValue({ runId: "run-announce" });
     runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
       status: "ok",
       replyText: "done",
@@ -114,41 +124,24 @@ describe("runAgentStep", () => {
       transcriptMessage: "",
       extraSystemPrompt: "announce only",
       timeoutMs: 10_000,
+      handoffContext,
+      authority,
     });
 
-    expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
-    const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
-    >;
-    const ingress = ingressCalls[0]?.[0];
-    expect(ingress?.message).toContain("internal announce step");
-    expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(ingress?.transcriptMessage).toBe("");
+    expect(handoffMocks.callSessionHandoffAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ transcriptMessage: "" }),
+        request: expect.objectContaining({
+          params: expect.objectContaining({
+            message: expect.stringContaining("internal announce step"),
+            sourceReplyDeliveryMode: "message_tool_only",
+          }),
+        }),
+      }),
+    );
   });
 
-  it("does not return failed transcript-mode output as an announce reply", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [
-        {
-          text: "⚠️ Agent couldn't generate a response. Please try again.",
-          mediaUrl: null,
-          isError: true,
-        },
-      ],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn" as const,
-          message: "Agent couldn't generate a response.",
-          fallbackSafe: true,
-          terminalPresentation: false,
-        },
-      },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
-    });
-
+  it("rejects private transcript bodies without source handoff authority", async () => {
     await expect(
       runAgentStep({
         sessionKey: "agent:main:subagent:child",
@@ -157,41 +150,6 @@ describe("runAgentStep", () => {
         extraSystemPrompt: "announce only",
         timeoutMs: 10_000,
       }),
-    ).resolves.toBeUndefined();
-
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
-      sessionKey: "agent:main:subagent:child",
-      reason: "nested-agent-step-complete",
-    });
-  });
-
-  it("returns trusted terminal presentations from incomplete transcript turns", async () => {
-    const presentation =
-      "The read-only lookup completed successfully.\n\n⚠️ Agent couldn't generate a response. Please try again.";
-    const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [{ text: presentation, mediaUrl: null, isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn" as const,
-          message: "Agent couldn't generate a response.",
-          fallbackSafe: true,
-          terminalPresentation: true,
-        },
-      },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
-    });
-
-    await expect(
-      runAgentStep({
-        sessionKey: "agent:main:subagent:child",
-        message: "internal announce step",
-        transcriptMessage: "",
-        extraSystemPrompt: "announce only",
-        timeoutMs: 10_000,
-      }),
-    ).resolves.toBe(presentation);
+    ).rejects.toThrow("private transcript agent step requires session handoff authority");
   });
 });

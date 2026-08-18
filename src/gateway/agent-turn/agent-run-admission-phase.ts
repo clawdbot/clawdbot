@@ -26,6 +26,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  consumeAgentRuntimeSessionHandoff,
+  type AgentRuntimeSessionHandoffContext,
+} from "../agent-runtime-session-handoff.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { ChatImageContent, OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -67,6 +71,7 @@ export type PreparedAgentRunDispatch = {
   effectiveThinking?: string;
   effectiveAllowModelOverride: boolean;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   restoredCronContinuationLifecycleRevision?: string;
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
@@ -321,6 +326,26 @@ export async function prepareAgentRunDispatch(params: {
     inputProvenance: params.inputProvenance,
     internalEvents: params.request.internalEvents,
   });
+  const runtimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+  const trustedSessionHandoff =
+    runtimeIdentity?.sessionHandoffContext &&
+    params.resolvedSessionKey &&
+    params.context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) === true
+      ? consumeAgentRuntimeSessionHandoff(runtimeIdentity, {
+          sessionKey: params.resolvedSessionKey,
+          idempotencyKey: params.request.idempotencyKey,
+        })
+      : undefined;
+  if (runtimeIdentity?.sessionHandoffContext && !trustedSessionHandoff) {
+    activeRunAbort.cleanup({ force: true });
+    activeGatewayWorkAdmission.release();
+    params.io.emitAcceptance([
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "session handoff authority is stale or mismatched"),
+    ]);
+    return undefined;
+  }
   const trustedInternalHandoff =
     params.providerOverride === undefined &&
     params.modelOverride === undefined &&
@@ -557,6 +582,7 @@ export async function prepareAgentRunDispatch(params: {
     effectiveThinking,
     effectiveAllowModelOverride,
     trustedInternalHandoff,
+    trustedSessionHandoff,
     restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
     lifecycleStorePath,
     resolvedThreadId,

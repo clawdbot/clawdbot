@@ -40,6 +40,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     inheritedToolAllowlist,
+    sessionsSendToolPolicy,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -224,6 +225,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // parent's complete authorized surface, never denied bundled tools.
       replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
     }
+    // sessions_send always carries an exact final surface; an empty allowlist
+    // therefore fails closed instead of meaning unrestricted authority.
+    replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, schemaProjection.tools);
     logRuntimeToolSchemaQuarantine({
       diagnostics: schemaProjection.diagnostics,
       tools: projectedTools,

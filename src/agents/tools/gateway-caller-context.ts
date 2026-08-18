@@ -14,7 +14,7 @@ import {
 } from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "./common.js";
 
-type GatewayToolCallerIdentity = {
+export type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
   operationalRunInstance?: OperationalRunInstanceRef;

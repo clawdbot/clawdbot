@@ -13,6 +13,7 @@ import {
 import { loadPublishedGatewayReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
@@ -264,6 +265,7 @@ export function startAgentRunExecution(params: {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
+      const sessionHandoffPolicy = prepared.trustedSessionHandoff?.inheritedToolPolicy;
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(
           {
@@ -320,7 +322,11 @@ export function startAgentRunExecution(params: {
               }),
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-              toolsAllow: params.restoredCronContinuation?.toolsAllow,
+              transcriptMessage: prepared.trustedSessionHandoff?.transcriptMessage,
+              toolsAllow:
+                params.restoredCronContinuation?.toolsAllow ?? sessionHandoffPolicy?.allow,
+              trustedSessionHandoff: sessionHandoffPolicy !== undefined,
+              sessionHandoffRequester: prepared.trustedSessionHandoff?.requester,
               runtimePluginToolGrant,
               trustedInternalHandoff: prepared.trustedInternalHandoff,
               toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
@@ -346,7 +352,10 @@ export function startAgentRunExecution(params: {
               sourceReplyDeliveryMode: params.restoredCronContinuation
                 ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
                 : params.request.sourceReplyDeliveryMode,
-              disableMessageTool: params.request.disableMessageTool,
+              disableMessageTool:
+                params.request.disableMessageTool === true ||
+                (sessionHandoffPolicy !== undefined &&
+                  !isToolAllowedByPolicyName("message", sessionHandoffPolicy)),
               swarmCollector: params.request.swarmCollector,
               swarmOutputSchema: params.request.swarmOutputSchema,
               forceRestartSafeTools: params.request.forceRestartSafeTools,

@@ -329,6 +329,71 @@ describe("agent runtime identity token", () => {
     expect(readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext)).toBeUndefined();
   });
 
+  it("redeems a private session handoff once for its exact target", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const sessionHandoff = await import("./agent-runtime-session-handoff.js");
+    const run = operationalRun("run-handoff");
+    const handoff = sessionHandoff.createAgentRuntimeSessionHandoff({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      delegatedAuthority: run.delegatedAuthority,
+      context: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "discord", senderId: "speaker-1" },
+      },
+      target: {
+        sessionKey: "agent:helper:main",
+        idempotencyKey: "handoff-request-1",
+      },
+    });
+    expect(handoff).toBeDefined();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      sessionHandoffId: handoff?.id,
+    });
+
+    const [payload] = token.split(".");
+    const decodedPayload = Buffer.from(payload ?? "", "base64url").toString("utf8");
+    expect(decodedPayload).not.toContain("speaker-1");
+    expect(decodedPayload).not.toContain("sessions_send");
+
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(identity?.sessionHandoffContext).toMatchObject({
+      inheritedToolPolicy: { allow: ["sessions_send", "read"], deny: ["message"] },
+      requester: { messageProvider: "discord", senderId: "speaker-1" },
+    });
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:other",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toBeUndefined();
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toMatchObject({ inheritedToolPolicy: { allow: ["sessions_send", "read"] } });
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toBeUndefined();
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toBeUndefined();
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

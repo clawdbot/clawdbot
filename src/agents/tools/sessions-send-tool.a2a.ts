@@ -4,6 +4,7 @@
  * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
  */
 import crypto from "node:crypto";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-session-handoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
@@ -19,6 +20,7 @@ import {
   waitForAgentRun,
 } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
+import type { GatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -114,6 +116,8 @@ export async function runSessionsSendA2AFlow(params: {
   roundOneReply?: string;
   waitRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
+  authority?: GatewayToolCallerIdentity;
+  handoffContext?: AgentRuntimeSessionHandoffContext;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
@@ -157,6 +161,8 @@ export async function runSessionsSendA2AFlow(params: {
             lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
             sourceSessionKey: params.targetSessionKey,
             sourceTool: "sessions_send",
+            authority: params.authority,
+            handoffContext: params.handoffContext,
             callGateway: gatewayCall,
           });
         }
@@ -235,6 +241,8 @@ export async function runSessionsSendA2AFlow(params: {
           sourceSessionKey: nextSessionKey,
           sourceChannel: nextRole === "requester" ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
+          authority: params.authority,
+          handoffContext: params.handoffContext,
           callGateway: gatewayCall,
         });
         if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
@@ -274,6 +282,8 @@ export async function runSessionsSendA2AFlow(params: {
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
+      authority: params.authority,
+      handoffContext: params.handoffContext,
       callGateway: gatewayCall,
     });
     if (

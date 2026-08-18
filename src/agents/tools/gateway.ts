@@ -20,6 +20,7 @@ import {
   readAgentRuntimeExecutionLineage,
 } from "../../gateway/agent-runtime-execution-lineage.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeSessionHandoff } from "../../gateway/agent-runtime-session-handoff.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -37,6 +38,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { getGatewaySessionHandoffContext } from "./gateway-session-handoff-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
 
@@ -351,6 +353,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
 
 async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   method: string;
+  callParams: unknown;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
   required?: boolean;
@@ -390,6 +393,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   }
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
+    const sessionHandoffContext = getGatewaySessionHandoffContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
     const activeAuthority = getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
     const executionLineage = readAgentRuntimeExecutionLineage(sessionSpawnContext);
@@ -412,6 +416,31 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     if (executionLineage && !lineageHandoff) {
       throw new Error("execution lineage handoff could not bind the parent admission");
     }
+    const agentCall = params.method === "agent" ? asNullableRecord(params.callParams) : null;
+    const targetSessionKey = normalizeOptionalString(agentCall?.sessionKey);
+    const targetIdempotencyKey = normalizeOptionalString(agentCall?.idempotencyKey);
+    if (sessionHandoffContext && (!targetSessionKey || !targetIdempotencyKey)) {
+      lineageHandoff?.revoke();
+      throw new Error("session handoff requires an exact target session and idempotency key");
+    }
+    const sessionHandoff =
+      sessionHandoffContext && targetSessionKey && targetIdempotencyKey && activeAuthority
+        ? createAgentRuntimeSessionHandoff({
+            agentId: identity.agentId,
+            sessionKey: identity.sessionKey,
+            operationalRunInstance: identity.operationalRunInstance,
+            delegatedAuthority: activeAuthority,
+            context: sessionHandoffContext,
+            target: {
+              sessionKey: targetSessionKey,
+              idempotencyKey: targetIdempotencyKey,
+            },
+          })
+        : undefined;
+    if (sessionHandoffContext && !sessionHandoff) {
+      lineageHandoff?.revoke();
+      throw new Error("session handoff could not bind the source admission");
+    }
     try {
       return await mintAgentRuntimeIdentityToken({
         ...identity,
@@ -422,9 +451,11 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
           : sessionSpawnContext
             ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
             : {}),
+        ...(sessionHandoff ? { sessionHandoffId: sessionHandoff.id } : {}),
       });
     } catch (error) {
       lineageHandoff?.revoke();
+      sessionHandoff?.revoke();
       throw error;
     }
   } catch (error) {
@@ -594,6 +625,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   });
   const agentRuntimeIdentityToken = await resolveAgentRuntimeIdentityTokenForGatewayTool({
     method,
+    callParams,
     opts,
     target: gateway.target,
     required: extra?.requireAgentRuntimeIdentity,

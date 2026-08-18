@@ -54,6 +54,15 @@ describe("resolveSkillDispatchTools", () => {
     const args = createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
+    expect(args?.sessionsSendHandoff?.inheritedToolPolicy).toEqual({
+      version: 1,
+      allow: ["read", "automations"],
+      deny: [],
+    });
+    expect(args?.sessionsSendHandoff?.requester).toEqual({
+      messageProvider: "telegram",
+      senderId: "user-1",
+    });
     expect(args?.nativeChannelId).toBe("native-room-1");
   });
 
@@ -79,6 +88,12 @@ describe("resolveSkillDispatchTools", () => {
       { name: "automations" },
       { name: "exec" },
       { name: "conversations_send" },
+    ]);
+    expect(args?.sessionsSendHandoff?.inheritedToolPolicy.allow).toEqual([
+      "read",
+      "automations",
+      "exec",
+      "conversations_send",
     ]);
   });
 

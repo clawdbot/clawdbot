@@ -507,6 +507,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
+            handoffContext: options?.sessionsSendHandoff,
           }),
         ]),
     ...(!embedded || options?.allowGatewaySubagentBinding === true
@@ -585,7 +586,6 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
-
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
