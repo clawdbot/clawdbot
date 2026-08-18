@@ -458,6 +458,149 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(pullCount).toBeLessThanOrEqual(18);
     expect(canceled).toBe(true);
   });
+
+  it("redacts reflected credentials from the error body of a failed request", async () => {
+    const needle = "mmVlmProbe0123456789abcdefWXYZ";
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(`upstream echoed Authorization: Bearer ${needle}`, {
+        status: 401,
+        statusText: "Unauthorized",
+      }),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+    });
+
+    const error = await minimaxUnderstandImage({
+      apiKey: needle,
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((err: unknown) => err);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject a 401 response");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toContain("MiniMax VLM request failed (401");
+    expect(error.message).toContain("Bearer mmVlmP…WXYZ");
+  });
+
+  it("redacts a reflected Bearer credential from the response reason phrase", async () => {
+    const needle = "mmVlmProbe0123456789abcdefWXYZ";
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("", { status: 401, statusText: `reflected Bearer ${needle}` }),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+    });
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((err: unknown) => err);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject a 401 response");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toContain("MiniMax VLM request failed (401 reflected Bearer");
+  });
+
+  it("masks a short reflected Bearer credential below the shared pattern's length floor", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("", { status: 401, statusText: "reflected Bearer abc" }),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+    });
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((err: unknown) => err);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject a 401 response");
+    }
+    expect(error.message).not.toContain("Bearer abc");
+    expect(error.message).toBe("MiniMax VLM request failed (401 reflected Bearer ***).");
+  });
+
+  it("masks a lowercase reflected bearer credential in the response reason phrase", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("", { status: 401, statusText: "reflected bearer abc" }),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+    });
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((err: unknown) => err);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject a 401 response");
+    }
+    expect(error.message).not.toContain("bearer abc");
+    expect(error.message).toBe("MiniMax VLM request failed (401 reflected bearer ***).");
+  });
+
+  it("redacts a reflected Bearer credential from the Trace-Id response header", async () => {
+    const needle = "mmVlmProbe0123456789abcdefWXYZ";
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("bad", {
+        status: 401,
+        statusText: "Unauthorized",
+        headers: { "Trace-Id": `trace-Bearer ${needle}` },
+      }),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+    });
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((err: unknown) => err);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject a 401 response");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toContain("Trace-Id: trace-Bearer mmVlmP…WXYZ");
+  });
+
+  it("redacts a reflected Bearer credential from the application-level status_msg", async () => {
+    const needle = "mmVlmProbe0123456789abcdefWXYZ";
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          base_resp: { status_code: 1001, status_msg: `invalid key Bearer ${needle}` },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+    });
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((err: unknown) => err);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject a non-zero base_resp");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toBe("MiniMax VLM API error (1001): invalid key Bearer mmVlmP…WXYZ.");
+  });
 });
 
 describe("isMinimaxVlmModel", () => {
