@@ -195,15 +195,14 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
     model.api === "openai-responses" && model.compat && typeof model.compat === "object"
       ? model.compat
       : undefined;
-  const compatMapped =
-    isCanonicalReasoning && compat && "reasoningEffortMap" in compat
-      ? compat.reasoningEffortMap?.[reasoning]
-      : undefined;
+  const compatReasoningEffortMap: Record<string, string> | undefined =
+    compat && "reasoningEffortMap" in compat ? compat.reasoningEffortMap : undefined;
+  const compatMapped = isCanonicalReasoning ? compatReasoningEffortMap?.[reasoning] : undefined;
   if (compatMapped !== undefined) {
     return resolveOpenAIReasoningEffortForModel({
       model,
       effort: reasoning,
-      fallbackMap: compat.reasoningEffortMap,
+      fallbackMap: compatReasoningEffortMap,
     });
   }
   return isCanonicalReasoning ? (model.thinkingLevelMap?.[reasoning] ?? reasoning) : reasoning;
