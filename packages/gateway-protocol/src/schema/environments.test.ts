@@ -10,8 +10,8 @@ import {
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
-  WorkerSlotSummarySchema,
 } from "../index.js";
+import { WorkerSlotSummarySchema } from "./environments.js";
 
 const workerStates = [
   "requested",
