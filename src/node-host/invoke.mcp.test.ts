@@ -1,6 +1,7 @@
 /** Tests the built-in node-host MCP invocation command. */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { MCP_INVOKE_PAYLOAD_MAX_BYTES, MCP_TEXT_CONTENT_MAX_BYTES } from "./invoke-mcp-result.js";
 import { handleInvoke } from "./invoke.js";
 import { testing } from "./invoke.test-support.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
@@ -159,7 +160,7 @@ describe("mcp.tools.call.v1", () => {
     const result = await invokeMcp(
       managerWith(async () => ({
         content: [
-          { type: "text", text: "a".repeat(testing.MCP_TEXT_CONTENT_MAX_BYTES) },
+          { type: "text", text: "a".repeat(MCP_TEXT_CONTENT_MAX_BYTES) },
           { type: "text", text: "overflow" },
         ],
       })),
@@ -169,12 +170,12 @@ describe("mcp.tools.call.v1", () => {
       content: Array<{ type: string; text: string }>;
     };
     const text = payload.content.map((block) => block.text).join("");
-    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(testing.MCP_TEXT_CONTENT_MAX_BYTES);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MCP_TEXT_CONTENT_MAX_BYTES);
     expect(text).toContain("truncated: MCP text content exceeded 1 MB");
   });
 
   it("drops oversized images and structured content before node.invoke serialization", async () => {
-    const oversized = "A".repeat(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES);
+    const oversized = "A".repeat(MCP_INVOKE_PAYLOAD_MAX_BYTES);
     const result = await invokeMcp(
       managerWith(async () => ({
         content: [{ type: "image", data: oversized, mimeType: "image/png" }],
@@ -187,7 +188,7 @@ describe("mcp.tools.call.v1", () => {
       structuredContent?: Record<string, unknown>;
     };
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
-      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
+      MCP_INVOKE_PAYLOAD_MAX_BYTES,
     );
     expect(payload.content).toEqual([
       { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
@@ -197,7 +198,7 @@ describe("mcp.tools.call.v1", () => {
 
   it("preserves structured content and recovery guidance when an exact JSON mirror is oversized", async () => {
     const structuredContent = {
-      oversized: "S".repeat(Math.floor(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
+      oversized: "S".repeat(Math.floor(MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
     };
     const recovery = "authentication expired; run login";
     const result = await invokeMcp(
@@ -206,7 +207,7 @@ describe("mcp.tools.call.v1", () => {
           { type: "text", text: JSON.stringify(structuredContent, null, 2) },
           {
             type: "image",
-            data: "I".repeat(Math.floor(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
+            data: "I".repeat(Math.floor(MCP_INVOKE_PAYLOAD_MAX_BYTES / 2)),
             mimeType: "image/png",
           },
           { type: "text", text: recovery },
@@ -229,7 +230,7 @@ describe("mcp.tools.call.v1", () => {
       { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
     ]);
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
-      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
+      MCP_INVOKE_PAYLOAD_MAX_BYTES,
     );
   });
 
@@ -244,7 +245,7 @@ describe("mcp.tools.call.v1", () => {
       (result.payload as { structuredContent: { escaped: string } }).structuredContent.escaped,
     ).toBe(escaped);
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
-      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
+      MCP_INVOKE_PAYLOAD_MAX_BYTES,
     );
   });
 });
