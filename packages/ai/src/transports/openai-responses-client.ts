@@ -201,17 +201,18 @@ async function postOpenAIResponsesCompaction(params: {
           isRecord(candidate) && candidate.type === "message" && candidate.role === "user",
       ).length
     : 0;
-  const compactionItems = output.filter(
-    (candidate) => isRecord(candidate) && candidate.type === "compaction",
-  );
+  const retainedMessagePrefixSupported = supportsNativeOpenAIResponsesEndpoint({
+    provider: params.model.provider,
+    api: params.model.api,
+    baseUrl: params.model.baseUrl,
+  });
   const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
   if (
     !isRecord(response) ||
     response.object !== "response.compaction" ||
-    compactionItems.length !== 1 ||
-    compactionItems[0] !== item ||
     !retainedMessagesAreValid ||
-    (retainedItems.length > 0 && retainedUserMessageCount !== inputUserMessageCount) ||
+    (retainedItems.length > 0 &&
+      (!retainedMessagePrefixSupported || retainedUserMessageCount !== inputUserMessageCount)) ||
     !isRecord(item) ||
     item.type !== "compaction" ||
     typeof item.encrypted_content !== "string" ||

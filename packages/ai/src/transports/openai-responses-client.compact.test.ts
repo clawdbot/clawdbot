@@ -36,6 +36,14 @@ const model = {
   maxTokens: 8_192,
 } satisfies Model<"openai-responses">;
 
+const officialOpenAIModel = {
+  ...model,
+  id: "gpt-5.6-luna",
+  name: "GPT-5.6 Luna",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+} satisfies Model<"openai-responses">;
+
 const context = {
   systemPrompt: "Retain the conversation.",
   messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }],
@@ -47,7 +55,7 @@ describe("responses compact endpoint", () => {
     sdkState.post.mockReset();
   });
 
-  it("posts the normal Responses input and returns the validated checkpoint with usage", async () => {
+  it("accepts retained-message prefixes from the official OpenAI endpoint", async () => {
     sdkState.post.mockResolvedValue({
       object: "response.compaction",
       output: [
@@ -68,22 +76,22 @@ describe("responses compact endpoint", () => {
 
     const result = await requestPreparedOpenAIResponsesCompaction(
       createOpenAIResponsesTransportStreamFn(),
-      model,
+      officialOpenAIModel,
       context,
       { apiKey: "test-key", sessionId: "session-1" },
     );
 
     expect(sdkState.clients[0]).toMatchObject({
       apiKey: "test-key",
-      baseURL: "https://api.x.ai/v1",
+      baseURL: "https://api.openai.com/v1",
     });
     expect(sdkState.post).toHaveBeenCalledWith(
       "/responses/compact",
       expect.objectContaining({
         body: {
-          model: "grok-4.5",
+          model: "gpt-5.6-luna",
           input: [
-            expect.objectContaining({ role: "system", type: "message" }),
+            expect.objectContaining({ role: "developer", type: "message" }),
             expect.objectContaining({ role: "user", type: "message" }),
           ],
         },
@@ -93,13 +101,37 @@ describe("responses compact endpoint", () => {
       item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
       historyMode: "retained-users",
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
-      model,
+      model: officialOpenAIModel,
       replayMetadata: {
         source: "openai-responses",
-        provider: "xai",
-        model: "grok-4.5",
+        provider: "openai",
+        model: "gpt-5.6-luna",
       },
     });
+  });
+
+  it("rejects retained-message prefixes from native xAI", async () => {
+    sdkState.post.mockResolvedValue({
+      object: "response.compaction",
+      output: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
+        },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        model,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).rejects.toThrow("one trailing compaction item");
   });
 
   it.each([

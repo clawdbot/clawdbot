@@ -72,18 +72,6 @@ beforeEach(() => {
 
 describe("xAI server compaction request preparation", () => {
   it("compacts and replays through the legacy fast-mode wrapper", async () => {
-    sdkState.post.mockResolvedValueOnce({
-      object: "response.compaction",
-      output: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
-        },
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-      ],
-      usage: { input_tokens: 1_000, output_tokens: 200 },
-    });
     const streamFn = wrapResponses({ fastMode: true });
     const owner: AssistantMessage = {
       role: "assistant",
@@ -109,10 +97,11 @@ describe("xAI server compaction request preparation", () => {
       "/responses/compact",
       expect.objectContaining({ body: expect.objectContaining({ model: "grok-4-fast" }) }),
     );
+    expect(compacted.historyMode).toBe("compacted-prefix");
     captureOpenAIResponsesCompaction(
       owner,
       compacted.item,
-      "retained-users",
+      owner.content.length,
       compacted.model,
       compacted.replayMetadata,
     );
@@ -143,11 +132,10 @@ describe("xAI server compaction request preparation", () => {
     expect(replayPayload?.model).toBe("grok-4-fast");
     expect(replayPayload?.input).toEqual([
       expect.objectContaining({ role: "system", type: "message" }),
-      expect.objectContaining({ role: "user", type: "message" }),
       expect.objectContaining({ type: "compaction", encrypted_content: "opaque" }),
       expect.objectContaining({ role: "user", type: "message" }),
     ]);
-    expect(JSON.stringify(replayPayload)).toContain("NORTH-COPPER-17");
+    expect(JSON.stringify(replayPayload)).not.toContain("NORTH-COPPER-17");
   });
 
   it("uses the same OAuth proxy headers as a normal turn", async () => {
