@@ -324,7 +324,7 @@ export function createBeamMirrorRunner(params: {
         // endpoint for this service instance; a fresh instance probes once so a receiver
         // fixed in place can recover without a meaningless config change.
         redirectBlockedEndpoint = endpoint;
-        warnThrottled(
+        params.logger.warn(
           `beam mirror upload blocked for ${payload.source}: receiver returned redirect (${error.status}); redirects are not followed; configure the final endpoint`,
         );
         return false;
