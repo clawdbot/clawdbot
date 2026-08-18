@@ -70,15 +70,22 @@
   margin-top: 0;
 }
 
+.chat-tool-msg-summary,
+.chat-activity-group__summary {
+  --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
+
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--chat-tool-activity-color);
+}
+
 .chat-tool-msg-summary {
   gap: 7px;
   width: fit-content;
   max-width: 100%;
   padding: 5px 0;
-  font-family: var(--font-body);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 400;
-  line-height: 1.5;
   list-style: none;
   appearance: none;
   -webkit-appearance: none;
@@ -148,7 +155,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: inherit;
   font: inherit;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 18%, transparent);
@@ -217,7 +224,7 @@
   overflow: hidden;
   white-space: nowrap;
   font: inherit;
-  color: var(--text);
+  color: inherit;
 }
 
 .chat-tool-msg-summary__names,
@@ -234,7 +241,7 @@
 .chat-tool-row__prompt {
   flex-shrink: 0;
   font: inherit;
-  color: var(--muted);
+  color: inherit;
 }
 
 .chat-tool-row__title {
@@ -251,9 +258,7 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-family: var(--mono);
-  font-size: inherit;
-  color: var(--muted);
+  color: inherit;
 }
 
 .chat-tool-row__cmd--secondary {
@@ -264,7 +269,7 @@
 .chat-tool-row__verb {
   flex-shrink: 0;
   font: inherit;
-  color: var(--muted);
+  color: inherit;
 }
 
 .chat-tool-row__target {
@@ -273,7 +278,7 @@
   overflow: hidden;
   white-space: nowrap;
   font: inherit;
-  color: var(--muted);
+  color: inherit;
 }
 
 .chat-tool-row__detail {
@@ -282,7 +287,7 @@
   overflow: hidden;
   white-space: nowrap;
   font: inherit;
-  color: color-mix(in srgb, var(--muted) 88%, var(--text) 12%);
+  color: inherit;
 }
 
 .chat-tool-row--running .chat-tool-msg-summary__icon {
@@ -492,6 +497,7 @@
 /* Command/diff text reuses <code> for semantics only; kill the markdown pill. */
 .chat-tool-row__cmd,
 .chat-tool-row__cmd code,
+.chat-tool-row__cmd span,
 .chat-tool-term__cmd code,
 .chat-tool-term__out code {
   background: none;
@@ -499,6 +505,16 @@
   padding: 0;
   font-size: inherit;
   color: inherit;
+}
+
+.chat-tool-row__cmd,
+.chat-tool-row__cmd code,
+.chat-tool-row__cmd span {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
 }
 
 /* ── Command token colors (display-only highlighting) ── */
@@ -1098,7 +1114,6 @@
 .chat-activity-group__summary {
   gap: 8px;
   padding-block: 5px;
-  color: var(--text);
 }
 
 .chat-activity-group__icon {
@@ -1123,9 +1138,7 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-size: inherit;
-  font-weight: 400;
-  line-height: 1.4;
+  font: inherit;
   white-space: nowrap;
 }
 
@@ -1169,11 +1182,11 @@
 }
 
 .chat-work-group .chat-activity-group__label {
-  color: color-mix(in srgb, var(--muted) 88%, transparent);
+  color: inherit;
 }
 
 .chat-group--activity .chat-activity-group__label {
-  color: color-mix(in srgb, var(--muted) 88%, transparent);
+  color: inherit;
 }
 
 .chat-work-group__separator {
