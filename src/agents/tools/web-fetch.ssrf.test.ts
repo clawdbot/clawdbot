@@ -207,7 +207,7 @@ describe("web_fetch SSRF protection", () => {
     await expectBlockedUrl(
       tool,
       "https://www.nytimes.com/",
-      /domain policy blocked.*example\.com.*Try a URL on a permitted domain/i,
+      /domain policy: blocked hostname.*example\.com.*Try a URL on a permitted domain/i,
     );
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
@@ -240,7 +240,7 @@ describe("web_fetch SSRF protection", () => {
     await expectBlockedUrl(
       restricted,
       url,
-      /domain policy.*example\.com.*Try a URL on a permitted domain/i,
+      /domain policy: blocked hostname.*example\.com.*Try a URL on a permitted domain/i,
     );
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
