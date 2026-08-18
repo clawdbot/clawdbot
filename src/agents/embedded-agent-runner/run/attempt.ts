@@ -26,6 +26,7 @@ import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js"
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import type { EmbeddedAttemptExecutionState } from "./attempt-execution-types.js";
+import { uninstallStepAuditApi } from "./attempt-step-audit.js";
 import {
   createEmbeddedAttemptExternalAbortController,
   type EmbeddedAttemptAbortStatePort,
@@ -538,6 +539,7 @@ export async function runEmbeddedAttempt(
   } finally {
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);
+    uninstallStepAuditApi(params.runId);
     try {
       await cleanupEmbeddedPrepResourcesAfterEarlyExit();
     } catch (cleanupErr) {
