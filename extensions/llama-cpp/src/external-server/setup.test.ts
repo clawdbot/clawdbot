@@ -198,12 +198,16 @@ describe("llama-server setup", () => {
     };
     const result = await runLlamaServerSetup({
       config: {
-        auth: {
-          profiles: {
-            "llama-server:default": { provider: "llama-server", mode: "api_key" },
-            "llama-server:custom": { provider: "llama-server", mode: "api_key" },
+        models: {
+          providers: {
+            "llama-server": {
+              baseUrl: "http://localhost:8080/v1",
+              auth: "api-key",
+              apiKey: "old-inline-key",
+              headers: { "X-Tenant": "one" },
+              models: [],
+            },
           },
-          order: { "llama-server": ["llama-server:default", "llama-server:custom"] },
         },
       },
       env: {},
@@ -215,18 +219,16 @@ describe("llama-server setup", () => {
     } as unknown as ProviderAuthContext);
 
     expect(result.profiles).toEqual([]);
-    expect(
-      result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.apiKey,
-    ).toBeUndefined();
+    const provider = result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+    expect(provider?.auth).toBeUndefined();
+    expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.headers).toEqual({ "X-Tenant": "one" });
     expect(result.defaultModel).toBe("llama-server/qwen/model:Q4_K_M");
     expect(updateAuthProfileStoreMock).toHaveBeenCalledWith({
       agentDir: undefined,
       updater: expect.any(Function),
     });
-    expect(result.configPatch?.auth).toEqual({
-      profiles: { "llama-server:default": undefined },
-      order: { "llama-server": ["llama-server:custom"] },
-    });
+    expect(result.configPatch?.auth).toBeUndefined();
   });
 
   it("does not send stored credentials to a replacement endpoint", async () => {

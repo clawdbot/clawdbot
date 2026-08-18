@@ -82,6 +82,18 @@ function stripCredentialOverrides(
   };
 }
 
+function stripApiKeyOverrides(
+  provider: ModelProviderConfig | undefined,
+): ModelProviderConfig | undefined {
+  return provider
+    ? {
+        ...provider,
+        auth: undefined,
+        apiKey: undefined,
+      }
+    : undefined;
+}
+
 function stripEndpointCredentials(
   provider: ModelProviderConfig | undefined,
 ): ModelProviderConfig | undefined {
@@ -182,6 +194,7 @@ function buildSetupResult(params: {
   modelId: string;
   credentialInput?: SecretInput;
   useApiKey?: boolean;
+  clearApiKeyOverrides?: boolean;
   clearStoredProfile?: boolean;
   clearEndpointCredentials?: boolean;
 }): ProviderAuthResult {
@@ -191,7 +204,9 @@ function buildSetupResult(params: {
     : configuredProvider;
   const existingProvider = params.useApiKey
     ? stripCredentialOverrides(endpointSafeProvider)
-    : endpointSafeProvider;
+    : params.clearApiKeyOverrides
+      ? stripApiKeyOverrides(endpointSafeProvider)
+      : endpointSafeProvider;
   return {
     profiles: params.credentialInput
       ? [
@@ -436,6 +451,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     modelId,
     credentialInput,
     useApiKey: Boolean(apiKey),
+    clearApiKeyOverrides: !usesApiKey,
     clearStoredProfile: !credentialInput,
     clearEndpointCredentials: endpointChanged,
   });
