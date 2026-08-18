@@ -358,10 +358,10 @@ export class NewSessionModelControl {
     if (!context || snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.cancelMetadataRequest();
       this.restoringPreference = false;
-      if (snapshot?.phase !== "connected" && this.metadataState.hasSnapshot) {
+      if (context && snapshot?.phase !== "connected") {
         this.metadataState = {
           ...this.metadataState,
-          status: "error",
+          status: "offline",
         };
       }
       this.notify();
@@ -397,6 +397,7 @@ export class NewSessionModelControl {
   isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
     return (
       this.metadataState.hasSnapshot &&
+      this.metadataState.status === "ready" &&
       isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
     );
   }

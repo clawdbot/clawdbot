@@ -34,7 +34,6 @@ type WorkerEnvironmentStore = ReturnType<
   typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
 >;
 type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
-type WorkerGatewayEndpoint = { host: "127.0.0.1" | "::1"; port: number } | undefined;
 type WorkerEnvironmentLogger = {
   child: (name: string) => { warn: (message: string) => void };
 };
@@ -105,7 +104,6 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
   getPluginRegistry: () => Pick<PluginRegistry, "workerProviders">;
-  resolveWorkerGateway: () => WorkerGatewayEndpoint;
   desktopSessionRegistry: DesktopSessionRegistry;
   startup: GatewayWorkerEnvironmentStartupState;
   log: WorkerEnvironmentLogger;
@@ -258,7 +256,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
     stopNodeWorkerBundleTransfers: () => nodeWorkerBundleTransfer.closeAll(),
-    resolveWorkerGateway: params.resolveWorkerGateway,
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
     }).commit,

@@ -202,6 +202,7 @@ async function executeWorkerTurn(params: {
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
     agentId: placement.agentId,
     runtimeInstanceId: placement.environmentId,
+    placements: params.placements,
     sessionKey: placement.sessionKey,
     turn,
     turnClaim: params.turnClaim,
@@ -286,6 +287,9 @@ async function executeWorkerTurn(params: {
       handoffAbort.abort(handoffError);
     }
   };
+  if (!tunnel.launchTurn) {
+    throw new Error("Worker tunnel does not support worker turns");
+  }
   const processPromise = tunnel.launchTurn({
     plan,
     turnClaim: params.turnClaim,

@@ -3,13 +3,11 @@ import { performance } from "node:perf_hooks";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
-import {
-  discardPreparedChatSendAttachments,
-  prepareChatSendAttachments,
-} from "./chat-send-attachments.js";
+import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
@@ -81,7 +79,7 @@ async function handleChatSendWithOptions(
   let preparedMediaRecorder: { hasPersisted: () => boolean } | undefined;
   admitted.value.setDiscardAbandonedPreparedMedia(() => {
     if (!preparedMediaRecorder?.hasPersisted()) {
-      void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
+      void discardPreparedInboundMedia(preparedAttachments.value.offloadedRefs);
     }
   });
   if (activeRunAbort.controller.signal.aborted) {

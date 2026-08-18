@@ -23,6 +23,7 @@ import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js"
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
 
@@ -243,7 +244,7 @@ export function createNodesTool(options?: {
               throw new Error("title or body required");
             }
             const nodeId = await resolveAgentNodeId(gatewayOpts, node);
-            await callGatewayTool("node.invoke", gatewayOpts, {
+            await callNodesToolNodeInvoke(gatewayOpts, {
               nodeId,
               command: "system.notify",
               params: {

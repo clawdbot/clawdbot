@@ -30,6 +30,7 @@ import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
   isClaudeStreamJsonResult,
+  isClaudeSubagentRecord,
   isGeminiStreamJsonDialect,
   isStreamJsonDialect,
   missingMessageBoundarySeparator,
@@ -368,7 +369,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
-    if (parsed.type === "assistant" && isRecord(parsed.message)) {
+    if (
+      parsed.type === "assistant" &&
+      isRecord(parsed.message) &&
+      !isClaudeSubagentRecord(parsed)
+    ) {
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {

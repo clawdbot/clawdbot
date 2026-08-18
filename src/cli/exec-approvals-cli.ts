@@ -42,6 +42,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -381,6 +382,7 @@ function formatCliError(err: unknown): string {
 }
 
 function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
+  rethrowExpectedCliError(err);
   const message = formatCliError(err);
   if (opts.json) {
     throw new Error(message);

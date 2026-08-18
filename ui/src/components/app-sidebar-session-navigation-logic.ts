@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -364,6 +365,7 @@ export function buildReconciledSidebarZone(input: {
   workboardBoards: readonly SidebarWorkboardBoard[];
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   workboardBoardsReady: boolean;
+  controlUiTabs: readonly GatewayControlUiPluginTab[] | undefined;
 }) {
   const pinnedRows = input.rows.filter((row) => row.pinned);
   // Only loaded rows count as authoritative unpinned state; entries for
@@ -377,6 +379,7 @@ export function buildReconciledSidebarZone(input: {
     input.workboardBoards,
     input.enabledRouteIds?.includes("workboard") ?? true,
     input.workboardBoardsReady,
+    input.controlUiTabs?.some((tab) => tab.placement === "route:workboard") === true,
   );
   return {
     ...reconciled,

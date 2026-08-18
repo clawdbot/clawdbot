@@ -194,6 +194,45 @@ describe("managed-child-process", () => {
     });
   });
 
+  it("signals the direct child when process-group ownership is disabled", () => {
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+
+    expect(
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "linux",
+        useProcessGroup: false,
+      }),
+    ).toEqual({ processTreeState: "signaled" });
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("reports process-group signal errors before falling back to the direct child", () => {
+    const originalKill = process.kill.bind(process);
+    const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+    const onProcessGroupSignalError = vi.fn();
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -12345 && signal === "SIGTERM") {
+        throw groupError;
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      expect(
+        terminateManagedChild(child, "SIGTERM", {
+          onProcessGroupSignalError,
+          platform: "linux",
+        }),
+      ).toEqual({ processTreeState: "signaled" });
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(onProcessGroupSignalError).toHaveBeenCalledWith(groupError);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("shares process signal listeners across parallel managed commands", async () => {
     const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
     const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));

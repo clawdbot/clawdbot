@@ -2447,7 +2447,7 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: subagentHandoffTaskForProvider(providerVariant),
       label: "qa-sidecar",
-      thread: false,
+      ...(!/nested worker lineage handoff/i.test(allInputText) ? { thread: false } : {}),
     });
   }
   if (

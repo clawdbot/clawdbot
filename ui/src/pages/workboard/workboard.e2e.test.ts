@@ -408,6 +408,21 @@ suite.define(() => {
         .locator(".workboard-toolbar__filters .workboard-select")
         .nth(1);
       const priorityCombobox = prioritySelect.getByRole("combobox");
+      const directRoutePickerStyles = await prioritySelect.evaluate((select) => {
+        const label = select.querySelector(".picker-select__label");
+        const copy = select.querySelector(".picker-select__copy");
+        if (!label || !copy) {
+          throw new Error("Workboard picker style probe did not render");
+        }
+        return {
+          copyDisplay: getComputedStyle(copy).display,
+          labelFontWeight: getComputedStyle(label).fontWeight,
+        };
+      });
+      expect(directRoutePickerStyles).toEqual({
+        copyDisplay: "grid",
+        labelFontWeight: "650",
+      });
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");

@@ -16,6 +16,7 @@ import {
   pastePng,
   pollLocatorText,
   reconnectProofArtifactDir,
+  waitForPersistedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -47,6 +48,7 @@ suite.define(() => {
       await firstPage.goto(`${suite.server.baseUrl}new`);
       const firstMessage = firstPage.locator(".new-session-page__message");
       await firstMessage.fill(text);
+      await waitForPersistedNewSessionDraft(firstPage, text, 0);
       await firstPage.reload();
       await expect.poll(() => firstMessage.inputValue()).toBe(text);
       await firstPage.close();
@@ -86,10 +88,16 @@ suite.define(() => {
       const incognito = firstPage.getByRole("switch", { name: "Incognito" });
       await incognito.click();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
+      await waitForPersistedNewSessionDraft(firstPage, null, 0);
       await incognito.click();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
       await firstMessage.fill("restore this prompt after restart and incognito");
       await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
+      await waitForPersistedNewSessionDraft(
+        firstPage,
+        "restore this prompt after restart and incognito",
+        1,
+      );
       await firstPage.reload();
       await expect
         .poll(() => firstMessage.inputValue())

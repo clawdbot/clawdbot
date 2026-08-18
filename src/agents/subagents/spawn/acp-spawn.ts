@@ -5,6 +5,7 @@ import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types
 import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spawn.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
+import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
@@ -28,7 +29,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
-import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import {
   recordSessionCreated,
   recordSubagentSpawned,
@@ -43,7 +43,6 @@ import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "../../inherited-tool-deny.js";
-import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import {
   runSpawnPipeline,
@@ -65,6 +64,7 @@ import {
   toGatewayImageAttachments,
   type AcpSpawnBootstrapDeliveryPlan,
 } from "./acp-spawn-bootstrap-delivery.js";
+import { launchAcpChildThroughGateway } from "./acp-spawn-gateway.js";
 import {
   type AcpSpawnParentRelayHandle,
   startAcpSpawnParentStreamRelay,
@@ -87,17 +87,17 @@ import {
   resolveConfiguredAcpSubagentTargetIds,
   resolveTargetAcpAgentId,
 } from "./acp-spawn-target.js";
+import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
-import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
+import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 
 type SpawnAcpMode = "run" | "session";
 type SpawnAcpSandboxMode = "inherit" | "require";
-type SpawnAcpStreamTarget = "parent";
 
 type SpawnAcpParams = {
   task: string;
@@ -114,7 +114,7 @@ type SpawnAcpParams = {
   sandbox?: SpawnAcpSandboxMode;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
-  streamTo?: SpawnAcpStreamTarget;
+  streamTo?: "parent";
   attachments?: AcpTurnAttachment[];
 };
 
@@ -587,31 +587,31 @@ export async function spawnAcpDirect(
           cfg,
         });
       }
-      const response = await callSubagentGateway({
-        method: "agent",
-        params: {
-          message: params.task,
-          sessionKey,
-          channel: state.deliveryPlan.channel,
-          to: state.deliveryPlan.to,
-          accountId: state.deliveryPlan.accountId,
-          threadId: state.deliveryPlan.threadId,
-          idempotencyKey: childIdem,
-          deliver: state.deliveryPlan.useInlineDelivery,
-          lane: AGENT_LANE_SUBAGENT,
-          acpTurnSource: "manual_spawn",
-          timeout: runTimeoutSeconds,
-          label: params.label || undefined,
-          ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
-        },
-        timeoutMs: 10_000,
-      });
-      recordSessionParticipantBestEffort({
-        actor: { type: "agent", id: requesterAgentId },
-        agentId: targetAgentId,
+      const response = await launchAcpChildThroughGateway({
+        task: params.task,
         sessionKey,
-        source: "agent",
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+        deliveryPlan: state.deliveryPlan,
+        childIdem,
+        runTimeoutSeconds,
+        label: params.label,
+        attachments: gatewayAttachments,
+        lineage: {
+          enabled: isExecutionIdentityCollectionEnabled(cfg),
+          backend: "acp",
+          parentAgentId: requesterAgentId,
+          requesterRef: requesterInternalKey,
+          controllerRef: ownership.controllerSessionKey,
+          depth: admission.childSessionPatch?.spawnDepth ?? 1,
+          maxDepth: admission.maxSpawnDepth,
+          targetAgentId,
+          sandbox: params.sandbox === "require" ? "require" : "inherit",
+          inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+          inheritedToolDenylist: ctx.inheritedToolDenylist,
+        },
+        parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
+        participantStorePath: resolveSessionStorePathCore(cfg.session?.store, {
+          agentId: targetAgentId,
+        }),
       });
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem && parentSessionKey) {

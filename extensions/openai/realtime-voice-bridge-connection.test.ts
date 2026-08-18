@@ -194,6 +194,28 @@ describe("OpenAI realtime voice bridge connection", () => {
       type: "session.created",
       detail: "tools=1 toolChoice=auto",
     });
+
+    bridge.setMediaTimestamp(1_000);
+    emitServerEvent(socket, {
+      type: "response.output_audio.delta",
+      item_id: "item_pcm",
+      delta: Buffer.alloc(3_700 * 48).toString("base64"),
+    });
+    bridge.setMediaTimestamp(4_760);
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "response.cancel",
+        event_id: expect.stringMatching(/^openclaw-response-cancel-/),
+      },
+      {
+        type: "conversation.item.truncate",
+        item_id: "item_pcm",
+        content_index: 0,
+        audio_end_ms: 3_700,
+      },
+    ]);
     bridge.close();
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });

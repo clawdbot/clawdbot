@@ -20,7 +20,6 @@ import {
   CHAT_SNAPSHOT_STORE_NAME,
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
-const MAX_STORED_ROW_HEIGHTS = 500;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 
 const paginationSchema = z.discriminatedUnion("hasMore", [
@@ -49,13 +48,8 @@ const snapshotSchema = z
   })
   .strict();
 
-const rowHeightsSchema = z
-  .map(z.string(), z.number().finite().positive())
-  .refine((rowHeights) => rowHeights.size <= MAX_STORED_ROW_HEIGHTS);
-
 const recordSchema = z
   .object({
-    rowHeights: rowHeightsSchema,
     savedAt: z.number().finite().nonnegative(),
     sessionId: z.string().nullable(),
     sessionKey: z.string().min(1),
@@ -65,11 +59,10 @@ const recordSchema = z
   .refine((record) => record.sessionId === record.snapshot.sessionId);
 
 type SessionSnapshotRecord = z.infer<typeof recordSchema>;
-type StoredSessionState = {
-  rowHeights: Map<string, number>;
+type PendingSessionState = {
+  savedAt: number;
   snapshot: ChatSessionSnapshot;
 };
-type PendingSessionState = StoredSessionState & { savedAt: number };
 
 const activeStores = new Set<SessionSnapshotStore>();
 let snapshotStoreGeneration = 0;
@@ -128,7 +121,6 @@ function createSnapshotRecord(
     return null;
   }
   const parsed = recordSchema.safeParse({
-    rowHeights: pending.rowHeights,
     savedAt: pending.savedAt,
     sessionId: pending.snapshot.sessionId,
     sessionKey,
@@ -202,7 +194,6 @@ function measureStoredRecordWeight(record: SessionSnapshotRecord): number {
     return (
       snapshotWeight +
       JSON.stringify({
-        rowHeights: [...record.rowHeights],
         savedAt: record.savedAt,
         sessionId: record.sessionId,
         sessionKey: record.sessionKey,
@@ -269,7 +260,6 @@ async function writeSnapshotRecords(
 
 export class SessionSnapshotStore implements ChatCacheObserver {
   private connected = false;
-  private readonly sessions = new Map<string, StoredSessionState>();
   private readonly pending = new Map<string, PendingSessionState>();
   private readonly hydratedSnapshots = new Map<string, ChatSessionSnapshot>();
   private readonly revisions = new Map<string, number>();
@@ -307,14 +297,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     ) {
       return null;
     }
-    // A network write can win while IndexedDB is pending. Keep its snapshot and
-    // measurements authoritative even though the caller will discard this read.
-    if (!this.sessions.has(sessionKey)) {
-      setSessionCacheValue(this.sessions, sessionKey, {
-        rowHeights: new Map(record.rowHeights),
-        snapshot: record.snapshot,
-      });
-    }
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, record.snapshot);
     return record.snapshot;
   }
@@ -334,15 +316,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       return;
     }
     this.hydratedSnapshots.delete(sessionKey);
-    const existing = getSessionCacheValue(this.sessions, sessionKey);
     // Cache reconciliation replaces snapshots immutably, so retaining this raw
     // reference until the debounced flush cannot observe in-place mutation.
-    const state = {
-      rowHeights: existing?.rowHeights ?? new Map<string, number>(),
-      snapshot,
-    };
-    setSessionCacheValue(this.sessions, sessionKey, state);
-    this.schedule(sessionKey, state);
+    this.schedule(sessionKey, snapshot);
   }
 
   async delete(sessionKey: string): Promise<void> {
@@ -355,32 +331,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
     this.pending.delete(sessionKey);
     this.hydratedSnapshots.delete(sessionKey);
-    this.sessions.delete(sessionKey);
     this.savedAtBySession.delete(sessionKey);
-  }
-
-  readRowHeight(sessionKey: string, rowKey: string): number | undefined {
-    return getSessionCacheValue(this.sessions, sessionKey)?.rowHeights.get(rowKey);
-  }
-
-  recordRowHeight(sessionKey: string, rowKey: string, height: number): void {
-    if (!Number.isFinite(height) || height <= 0) {
-      return;
-    }
-    const state = getSessionCacheValue(this.sessions, sessionKey);
-    if (!state || state.rowHeights.get(rowKey) === height) {
-      return;
-    }
-    state.rowHeights.delete(rowKey);
-    state.rowHeights.set(rowKey, height);
-    while (state.rowHeights.size > MAX_STORED_ROW_HEIGHTS) {
-      const oldest = state.rowHeights.keys().next().value;
-      if (typeof oldest !== "string") {
-        break;
-      }
-      state.rowHeights.delete(oldest);
-    }
-    this.schedule(sessionKey, state);
   }
 
   async flush(): Promise<void> {
@@ -422,7 +373,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
     this.pending.clear();
     this.hydratedSnapshots.clear();
-    this.sessions.clear();
     this.revisions.clear();
     this.savedAtBySession.clear();
     this.memoryCache?.clear();
@@ -432,11 +382,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     await this.writeChain;
   }
 
-  private schedule(sessionKey: string, state: StoredSessionState): void {
+  private schedule(sessionKey: string, snapshot: ChatSessionSnapshot): void {
     const pending = {
-      rowHeights: new Map(state.rowHeights),
       savedAt: Date.now(),
-      snapshot: state.snapshot,
+      snapshot,
     };
     this.pending.set(sessionKey, pending);
     this.savedAtBySession.set(sessionKey, pending.savedAt);

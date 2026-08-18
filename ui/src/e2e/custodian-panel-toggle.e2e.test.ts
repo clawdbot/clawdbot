@@ -62,7 +62,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
     await server?.close();
   });
 
-  it("hides the chrome toggle when openclaw.chat is not advertised", async () => {
+  it("hides the sidebar footer toggle when openclaw.chat is not advertised", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -76,7 +76,8 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
       await page.locator(".shell-chrome-controls__search").waitFor();
-      await expect.poll(() => page.locator(".shell-chrome-controls__custodian").count()).toBe(0);
+      await page.locator(".sidebar-identity-card").waitFor();
+      await expect.poll(() => page.locator(".sidebar-footer-bar__custodian").count()).toBe(0);
       await page.screenshot({
         animations: "disabled",
         path: path.join(artifactDir, "00-gated-off-no-button.png"),
@@ -86,7 +87,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
     }
   });
 
-  it("toggles the panel from chrome and palette and reuses the persisted session id", async () => {
+  it("toggles the panel from the sidebar and palette and reuses the persisted session id", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -101,16 +102,16 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      // The lobster chrome button renders only while openclaw.chat is advertised.
-      const chromeToggle = page.locator(".shell-chrome-controls__custodian");
-      await chromeToggle.waitFor();
+      // The lobster footer button renders only while openclaw.chat is advertised.
+      const footerToggle = page.locator(".sidebar-footer-bar__custodian");
+      await footerToggle.waitFor();
       await page.screenshot({
         animations: "disabled",
-        path: path.join(artifactDir, "01-chrome-button.png"),
+        path: path.join(artifactDir, "01-sidebar-footer-button.png"),
       });
 
       // Opening the panel renders the durable machine-wide history from the Gateway.
-      await chromeToggle.click();
+      await footerToggle.click();
       const panel = page.locator("openclaw-custodian-panel");
       await panel.getByText("Channel repaired.").waitFor();
       const chatRequest = await gateway.waitForRequest("openclaw.chat");
@@ -122,13 +123,13 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       });
 
       // The same button closes it again.
-      await chromeToggle.click();
+      await footerToggle.click();
       await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
 
       // The command palette exposes the same toggle from anywhere. Its action
-      // dispatches the identical toggle event the chrome button uses (pinned by
+      // dispatches the identical toggle event the footer button uses (pinned by
       // the palette unit test), so this asserts the gated entry exists and
-      // reopens through the chrome path — the palette click-through composition
+      // reopens through the footer path — the palette click-through composition
       // proved timing-flaky on loaded CI runners without adding coverage.
       await page.locator(".shell-chrome-controls__search").click();
       await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
@@ -139,7 +140,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
         path: path.join(artifactDir, "03-palette-item.png"),
       });
       await page.keyboard.press("Escape");
-      await chromeToggle.click();
+      await footerToggle.click();
       await panel.getByText("Channel repaired.").waitFor();
 
       // The server-confirmed session id persists and is reused after a full reload.

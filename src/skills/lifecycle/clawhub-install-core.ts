@@ -8,11 +8,7 @@ import {
   normalizeClawHubSha256Integrity,
   type ClawHubDownloadResult,
 } from "../../infra/clawhub-artifacts.js";
-import {
-  ClawHubRequestError,
-  isDefaultClawHubBaseUrl,
-  resolveClawHubBaseUrl,
-} from "../../infra/clawhub-client.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
   type ClawHubTrustErrorCode,
   ensureClawHubPackageTrustAcknowledged,
@@ -41,6 +37,7 @@ import {
   installExtractedSkillRoot,
   resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
+import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import {
   formatClawHubSkillRef,
   normalizeGitHubCommitSegment,
@@ -188,32 +185,6 @@ export async function resolveInstallVersion(params: {
     throw new Error(`Skill "${params.slug}" has no installable version.`);
   }
   return { detail, version };
-}
-
-function formatClawHubSkillInstallError(error: unknown, slug: string): string {
-  if (!(error instanceof ClawHubRequestError)) {
-    return formatErrorMessage(error);
-  }
-  const skillPath = `/api/v1/skills/${encodeURIComponent(slug)}`;
-  if (
-    error.status === 404 &&
-    (error.requestPath.endsWith(skillPath) || error.requestPath.endsWith(`${skillPath}/install`))
-  ) {
-    return `Skill "${slug}" not found. Run \`openclaw skills list\` to see available skills.`;
-  }
-  if (error.status === 401) {
-    return `ClawHub authentication failed while installing skill "${slug}". Authenticate with ClawHub and try again.`;
-  }
-  if (error.status === 403) {
-    return `ClawHub denied access while installing skill "${slug}". Check your ClawHub access and try again.`;
-  }
-  if (error.status === 429) {
-    return `ClawHub rate limit reached while installing skill "${slug}". Wait and try again later.`;
-  }
-  if (error.status >= 500) {
-    return `ClawHub is temporarily unavailable while installing skill "${slug}". Try again later.`;
-  }
-  return `ClawHub could not install skill "${slug}". Check the skill reference and try again.`;
 }
 
 function normalizeGitHubSourcePath(raw: string): string {
@@ -713,6 +684,9 @@ export async function performClawHubSkillInstall(
       await archive.cleanup().catch(() => undefined);
     }
   } catch (err) {
-    return { ok: false, error: formatClawHubSkillInstallError(err, params.slug) };
+    return {
+      ok: false,
+      error: formatClawHubSkillRequestError(err, { slug: params.slug, operation: "install" }),
+    };
   }
 }

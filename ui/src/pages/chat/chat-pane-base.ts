@@ -60,7 +60,7 @@ import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
-import { resolveChatSnapshotKey, type ChatMessageCache } from "./session-message-cache.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
@@ -185,16 +185,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
-  protected readonly transcript = new ChatTranscriptController(this, {
-    read: (sessionKey, rowKey) => this.readTranscriptRowHeight(sessionKey, rowKey),
-    write: (sessionKey, rowKey, height) =>
-      this.writeTranscriptRowHeight(sessionKey, rowKey, height),
-  });
-  protected readonly taskSidebarTranscript = new ChatTranscriptController(this, {
-    read: (sessionKey, rowKey) => this.readTranscriptRowHeight(sessionKey, rowKey),
-    write: (sessionKey, rowKey, height) =>
-      this.writeTranscriptRowHeight(sessionKey, rowKey, height),
-  });
+  protected readonly transcript = new ChatTranscriptController(this);
+  protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
     sessionKey: () => this.state?.sessionKey,
@@ -219,21 +211,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
 
-  private transcriptSnapshotKey(sessionKey: string): string | null {
-    return this.state ? resolveChatSnapshotKey(this.state, { sessionKey }) : null;
-  }
-
-  private readTranscriptRowHeight(sessionKey: string, rowKey: string): number | undefined {
-    const snapshotKey = this.transcriptSnapshotKey(sessionKey);
-    return snapshotKey ? this.sessionSnapshotStore?.readRowHeight(snapshotKey, rowKey) : undefined;
-  }
-
-  private writeTranscriptRowHeight(sessionKey: string, rowKey: string, height: number): void {
-    const snapshotKey = this.transcriptSnapshotKey(sessionKey);
-    if (snapshotKey) {
-      this.sessionSnapshotStore?.recordRowHeight(snapshotKey, rowKey, height);
-    }
-  }
   @litState() protected headerEditing = false;
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;

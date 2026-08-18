@@ -1,9 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
-  SIDEBAR_NAV_ROUTES,
   serializeSidebarEntry,
-  type SidebarNavRoute,
+  type PersistedSidebarRoute,
 } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -43,7 +42,6 @@ type SessionOrganizerOperations = typeof import("./session-organizer-operations.
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
 type SessionGroupDefaultsDialogOpener =
   (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
-
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
@@ -184,7 +182,7 @@ export class SessionOrganizerController {
     await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
   }
 
-  startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
+  startSidebarRouteDrag(event: DragEvent, route: PersistedSidebarRoute) {
     if (!event.dataTransfer) {
       return;
     }
@@ -241,8 +239,9 @@ export class SessionOrganizerController {
 
   private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
     const route = readSidebarRouteDragData(dataTransfer);
-    if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
-      return serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute });
+    const routeEntry = parseSidebarEntry(route ? `route:${route}` : null);
+    if (routeEntry?.type === "route") {
+      return serializeSidebarEntry(routeEntry);
     }
     const dynamicEntry = parseSidebarEntry(route);
     if (dynamicEntry?.type === "workboard") {
@@ -363,10 +362,11 @@ export class SessionOrganizerController {
 
   handleSessionListDrop(event: DragEvent) {
     const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
+    const routeEntry = parseSidebarEntry(draggedNavigation ? `route:${draggedNavigation}` : null);
     const dynamicEntry = parseSidebarEntry(draggedNavigation);
     const entry =
-      draggedNavigation && SIDEBAR_NAV_ROUTES.includes(draggedNavigation as SidebarNavRoute)
-        ? ({ type: "route", route: draggedNavigation as SidebarNavRoute } as const)
+      routeEntry?.type === "route"
+        ? routeEntry
         : dynamicEntry?.type === "workboard"
           ? dynamicEntry
           : null;
@@ -529,6 +529,7 @@ export class SessionOrganizerController {
         group,
         defaults,
         listDirectory: (path) => this.host.listSessionGroupFolders(path),
+        inspectRepository: (path) => this.host.inspectSessionGroupRepository(path),
         submit: async (nextDefaults) => {
           const scope = this.host.sessionData.beginSessionMutation();
           if (!scope || !this.host.sessionGroupDefaults(group)) {

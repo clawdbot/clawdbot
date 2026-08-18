@@ -426,6 +426,28 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("auth");
   });
 
+  it("returns session_expired when every cooled profile has an expired session", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { session_expired: 1 },
+      },
+      "anthropic:backup": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { session_expired: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default", "anthropic:backup"],
+        now,
+      }),
+    ).toBe("session_expired");
+  });
+
   it("returns overloaded for active overloaded cooldown windows", () => {
     const now = Date.now();
     const store = makeStore({

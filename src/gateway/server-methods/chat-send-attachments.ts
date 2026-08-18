@@ -13,9 +13,10 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
-import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
+  discardPreparedInboundMedia,
   MediaOffloadError,
   type OffloadedRef,
   logAttachmentFailure,
@@ -59,13 +60,6 @@ function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolea
   // Oversized managed PDFs remain host-readable. A sandbox copy only hits the
   // 5 MB staging cap without making the attachment more available.
   return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
-}
-
-// Prepared inbound media has no transcript reference until the user turn
-// persists; abort/routing exits before that point must delete it here or the
-// files are orphaned forever (the inbound sweep is off unless attachments.ttlHours is set).
-export async function discardPreparedChatSendAttachments(refs: OffloadedRef[]): Promise<void> {
-  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
 }
 
 // Stage media before ACK so permanent client errors stay 4xx and retryable
@@ -173,9 +167,7 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir: sandbox.workspaceDir,
     };
   } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
+    await discardPreparedInboundMedia(params.offloadedRefs);
     if (err instanceof MediaOffloadError || err instanceof UnsupportedAttachmentError) {
       throw err;
     }

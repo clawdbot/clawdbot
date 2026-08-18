@@ -26,6 +26,7 @@ import type {
   ChatComposerPlusMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
+import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
 /** One shape for queued-row edit state and actions. */
@@ -118,7 +119,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
@@ -155,13 +155,7 @@ type ComposingDraft = {
   value: string;
 };
 
-type SkillMenuTarget = {
-  start: number;
-  end: number;
-  query: string;
-};
-
-export type ChatComposerState = {
+export type ChatComposerState = SkillMenuState & {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
@@ -169,13 +163,6 @@ export type ChatComposerState = {
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
   slashCommandRefreshPending: boolean;
-  skillMenuOpen: boolean;
-  skillMenuItems: SlashCommandDef[];
-  skillMenuIndex: number;
-  skillMenuTarget: SkillMenuTarget | null;
-  skillCommandRefreshPending: boolean;
-  skillCommandRefreshGeneration: number;
-  skillCommandRefreshTargetStart: number | null;
   composerComposing: boolean;
   composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;

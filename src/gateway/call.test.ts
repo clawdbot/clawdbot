@@ -1908,7 +1908,7 @@ describe("callGateway error details", () => {
     await expect(request).rejects.toBe(upgradeError);
   });
 
-  it.each(["ECONNREFUSED", "EHOSTUNREACH", "ETIMEDOUT"])(
+  it.each(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ETIMEDOUT"])(
     "renders %s connect failures as an actionable gateway-unreachable message",
     async (code) => {
       startMode = "silent";

@@ -27,6 +27,7 @@ extension OpenClawChatViewModel {
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
             if reconnected {
+                self.scheduleProgressCardFetch()
                 Task { [weak self] in await self?.refreshQuestions() }
                 Task { [weak self] in await self?.refreshSwarmCapability() }
             }
@@ -46,6 +47,8 @@ extension OpenClawChatViewModel {
             self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
+        case let .progressCardChanged(event):
+            self.handleProgressCardChanged(event)
         case let .task(task):
             self.handleTaskEvent(task)
         case let .questionRequested(question):
@@ -55,6 +58,7 @@ extension OpenClawChatViewModel {
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
         case .routeChanged:
+            self.clearProgressCard()
             self.swarmEnabled = false
             self.resetSwarmProgress()
             Task { [weak self] in await self?.refreshSwarmCapability() }
@@ -71,7 +75,6 @@ extension OpenClawChatViewModel {
             self.invalidateIncompleteLiveRunUsage()
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
-            self.clearPlan()
             let context = self.beginHistoryRequest()
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
@@ -201,7 +204,6 @@ extension OpenClawChatViewModel {
             if wasSelectedRun {
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                self.clearPlan(for: runID)
             }
             if self.liveUsageRunID == nil {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
@@ -499,9 +501,6 @@ extension OpenClawChatViewModel {
                     self.updateStreamingAssistantText(nil)
                     self.pendingToolCallsById = [:]
                 }
-                if let explicitRunID {
-                    self.clearPlan(for: explicitRunID)
-                }
                 self.appendFinalChatMessageIfPresent(chat)
                 let context = self.beginHistoryRequest()
                 Task { await self.refreshHistoryAfterRun(historyRequest: context) }
@@ -643,9 +642,6 @@ extension OpenClawChatViewModel {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
                 self.updateStreamingAssistantText(text)
             }
-        case "plan":
-            guard Self.lowercasedAgentEventString(evt.data["phase"]) == "update" else { return }
-            self.applyPlanSnapshot(runId: evt.runId, data: evt.data)
         case "tool":
             guard let phase = evt.data["phase"]?.value as? String else { return }
             guard let name = evt.data["name"]?.value as? String else { return }
@@ -747,7 +743,6 @@ extension OpenClawChatViewModel {
         }
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
-        self.clearPlan(for: evt.runId)
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
         Task { await self.refreshHistoryAfterRun(historyRequest: context) }
@@ -1396,7 +1391,6 @@ extension OpenClawChatViewModel {
     {
         let wasPending = self.pendingRuns.contains(runId)
         self.pendingRuns.remove(runId)
-        self.clearPlan(for: runId)
         self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
         self.pendingRunOwnerTasks[runId]?.cancel()
         self.pendingRunOwnerTasks[runId] = nil
@@ -1413,8 +1407,7 @@ extension OpenClawChatViewModel {
 
     func clearPendingRuns(
         reason: String?,
-        hapticEvent: OpenClawChatHaptics.Event? = nil,
-        preservePlan: Bool = false)
+        hapticEvent: OpenClawChatHaptics.Event? = nil)
     {
         let runIds = Array(pendingRuns)
         for runId in self.pendingRuns {
@@ -1424,9 +1417,6 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerTasks.removeAll()
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
-        if !preservePlan {
-            self.clearPlan()
-        }
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if !runIds.isEmpty, let hapticEvent {
             self.haptics.perform(hapticEvent)

@@ -3,8 +3,7 @@ export const SESSION_HOVERCARD_OPEN_DELAY_MS = 250;
 export function sessionLinkAnchorFromEvent(event: Event): HTMLAnchorElement | null {
   for (const candidate of event.composedPath()) {
     if (candidate instanceof HTMLAnchorElement) {
-      // Sidebar rows already expose session identity and must stay unobstructed navigation targets.
-      return candidate.matches(".sidebar-recent-session__link") ? null : candidate;
+      return candidate;
     }
     if (candidate === event.currentTarget) {
       break;

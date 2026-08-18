@@ -37,7 +37,8 @@ class FakeChildProcess extends EventEmitter {
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   realSpawn: undefined as undefined | typeof import("node:child_process").spawn,
-  getTailscaleDnsName: vi.fn(),
+  setupTailscaleExposureRoutes: vi.fn(),
+  cleanupTailscaleExposureRoute: vi.fn(),
   runCommand: vi.fn(),
 }));
 
@@ -51,7 +52,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 vi.mock("./webhook/tailscale.js", () => ({
-  getTailscaleDnsName: mocks.getTailscaleDnsName,
+  setupTailscaleExposureRoutes: mocks.setupTailscaleExposureRoutes,
+  cleanupTailscaleExposureRoute: mocks.cleanupTailscaleExposureRoute,
 }));
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
@@ -85,12 +87,20 @@ function startNgrokTunnel(config: {
   );
 }
 
-function startTailscaleTunnel(config: { mode: "serve" | "funnel"; port: number; path: string }) {
+function startTailscaleTunnel(config: {
+  mode: "serve" | "funnel";
+  port: number;
+  path: string;
+  tailscalePort?: number;
+  streamPaths?: Array<{ publicPath: string; localPath: string }>;
+}) {
   return requireTunnel(
     startTunnel({
       provider: config.mode === "serve" ? "tailscale-serve" : "tailscale-funnel",
       port: config.port,
       path: config.path,
+      tailscalePort: config.tailscalePort ?? 443,
+      streamPaths: config.streamPaths,
     }),
   );
 }
@@ -153,7 +163,10 @@ function commandResult(overrides: Record<string, unknown> = {}) {
 describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getTailscaleDnsName.mockReset();
+    mocks.setupTailscaleExposureRoutes.mockResolvedValue(
+      "https://host.tailnet.ts.net/voice/webhook",
+    );
+    mocks.cleanupTailscaleExposureRoute.mockResolvedValue(undefined);
     mocks.runCommand.mockResolvedValue(commandResult());
   });
 
@@ -337,59 +350,54 @@ describe("voice-call tunnels", () => {
     await tunnel.stop();
   });
 
-  it("starts Tailscale serve using the resolved tailnet DNS name", async () => {
-    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
+  it("routes Tailscale Funnel setup and cleanup through the shared exposure owner", async () => {
+    mocks.setupTailscaleExposureRoutes.mockResolvedValue(
+      "https://host.tailnet.ts.net:8443/voice/webhook",
+    );
     const tunnel = await startTailscaleTunnel({
-      mode: "serve",
-      port: 3334,
-      path: "voice/webhook",
-    });
-
-    expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net/voice/webhook");
-    expect(tunnel.provider).toBe("tailscale-serve");
-    expect(tunnel.stop).toBeTypeOf("function");
-    expect(mocks.runCommand).toHaveBeenCalledWith(
-      [
-        "tailscale",
-        "serve",
-        "--bg",
-        "--yes",
-        "--set-path",
-        "/voice/webhook",
-        "http://127.0.0.1:3334/voice/webhook",
-      ],
-      expect.objectContaining({ timeoutMs: 10_000 }),
-    );
-  });
-
-  it("drains and bounds Tailscale startup failure output", async () => {
-    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    mocks.runCommand.mockResolvedValueOnce(
-      commandResult({
-        code: 1,
-        stderr: `${"x".repeat(16_000)}-end`,
-        stderrTruncatedBytes: 4_000,
-      }),
-    );
-    const result = startTailscaleTunnel({
       mode: "funnel",
       port: 3334,
-      path: "/voice/webhook",
+      path: "voice/webhook",
+      tailscalePort: 8443,
+      streamPaths: [
+        {
+          publicPath: "voice/stream/realtime",
+          localPath: "voice/stream/realtime",
+        },
+      ],
     });
 
-    await expect(result).rejects.toThrow("Tailscale funnel failed with code 1");
-    await expect(result).rejects.toThrow("[output truncated]");
-    await expect(result).rejects.toThrow("-end");
+    expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net:8443/voice/webhook");
+    expect(tunnel.provider).toBe("tailscale-funnel");
+    expect(mocks.setupTailscaleExposureRoutes).toHaveBeenCalledWith({
+      mode: "funnel",
+      port: 8443,
+      routes: [
+        {
+          path: "/voice/webhook",
+          localUrl: "http://127.0.0.1:3334/voice/webhook",
+        },
+        {
+          path: "/voice/stream/realtime",
+          localUrl: "http://127.0.0.1:3334/voice/stream/realtime",
+        },
+      ],
+    });
+
+    await tunnel.stop();
+
+    expect(mocks.cleanupTailscaleExposureRoute.mock.calls).toEqual([
+      [{ mode: "funnel", port: 8443, path: "/voice/webhook" }],
+      [{ mode: "funnel", port: 8443, path: "/voice/stream/realtime" }],
+    ]);
   });
 
-  it("rejects Tailscale tunnel startup when the DNS name is unavailable", async () => {
-    mocks.getTailscaleDnsName.mockResolvedValue(null);
+  it("rejects when the shared Tailscale exposure owner cannot mount the routes", async () => {
+    mocks.setupTailscaleExposureRoutes.mockResolvedValue(null);
 
     await expect(
       startTailscaleTunnel({ mode: "funnel", port: 3334, path: "/hook" }),
-    ).rejects.toThrow("Could not get Tailscale DNS name");
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(mocks.runCommand).not.toHaveBeenCalled();
+    ).rejects.toThrow("Tailscale funnel failed");
   });
 
   it("dispatches tunnel providers from config", async () => {
@@ -402,18 +410,6 @@ describe("voice-call tunnels", () => {
     const tunnel = await result;
     expect(tunnel?.publicUrl).toBe("https://dispatch.ngrok.io/hook");
     expect(tunnel?.provider).toBe("ngrok");
-  });
-
-  it("handles wrapper errors on tailscale stop cleanup without crashing", async () => {
-    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
-    const tunnel = await startTailscaleTunnel({
-      mode: "serve",
-      port: 3334,
-      path: "/voice/stop",
-    });
-    mocks.runCommand.mockRejectedValueOnce(new Error("tailscale not found"));
-
-    await expect(tunnel.stop()).resolves.toBeUndefined();
   });
 
   it("rejects when ngrok stdout emits an error before the tunnel is ready", async () => {

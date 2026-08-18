@@ -133,6 +133,58 @@ async function connectCarrierStream(handler: RealtimeCallHandler) {
 }
 
 describe("RealtimeCallHandler lifecycle", () => {
+  it("warns and removes a stream token when the provider never connects", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { handler } = createCarrierLifecycleHarness(() => createBridge(vi.fn()));
+
+    try {
+      handler.issueStreamSession({
+        callId: "call-never-connected",
+        from: "+15550001111",
+        to: "+15550002222",
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("never connected"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("call-never-connected"));
+      expect(
+        (
+          handler as unknown as {
+            pendingStreamTokens: Map<string, unknown>;
+          }
+        ).pendingStreamTokens.size,
+      ).toBe(0);
+    } finally {
+      await handler.close();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not warn after the provider consumes a stream token", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { handler } = createCarrierLifecycleHarness(() => createBridge(vi.fn()));
+    const { token } = handler.issueStreamSession({ callId: "call-connected" });
+
+    try {
+      (
+        handler as unknown as {
+          consumeStreamToken(token: string): unknown;
+        }
+      ).consumeStreamToken(token);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await handler.close();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { closeOutcome: undefined, closeReason: "Failed to connect" },
     { closeOutcome: "completed" as const, closeReason: "Failed to connect" },

@@ -594,6 +594,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           if (event.event === "session.typing" && event.payload) {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
+          if (event.event === "session.message") {
+            this.clearTypingActorForSessionMessage(event.payload);
+          }
           handlePageGatewayEvent(state, event);
         }
       }),
@@ -709,7 +712,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.deferredSessionHydrationRequestVersion += 1;
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
-    this.taskSuggestions = [];
+    this.setTaskSuggestions([]);
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
     this.resetTaskSuggestionCloudProfiles();

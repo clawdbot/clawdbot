@@ -8,6 +8,7 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -21,6 +22,7 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
+  isPluginNativeMessagingTool,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -30,6 +32,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
+import { readToolResultDetails } from "../tool-result-error.js";
 import { closeClaudeSession } from "./claude-live-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
@@ -229,7 +232,14 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
     isError?: boolean;
   }) => {
-    if (!isDeliveredMessagingToolResult(params)) {
+    const deliveryFact = readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.result)?.messageDelivery,
+    );
+    const delivered = deliveryFact
+      ? deliveryFact.status === "settled" &&
+        (params.isError !== true || deliveryFact.partialDelivery)
+      : isPluginNativeMessagingTool(params.toolName) && isDeliveredMessagingToolResult(params);
+    if (!delivered) {
       return;
     }
     didSendViaMessagingTool = true;
@@ -244,6 +254,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         args: params.args,
         result: params.result,
         isError: params.isError,
+        deliveryConfirmed: true,
       });
     const sourceReplyFinal = deliveredCurrentSourceReply
       ? resolveMessageToolSourceReplyFinal(toolArgs)

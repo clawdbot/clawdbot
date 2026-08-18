@@ -91,6 +91,21 @@ state for these fields:
 - applicable grants and assurance evidence;
 - parent or child lineage when available.
 
+For a child started through `sessions_spawn`, the child owns a new context; it
+never reuses or mutates the parent context. The lineage projection links the
+parent context, execution, run, and agent when the exact private parent token
+was available. Its delegation reference covers the spawn relation plus the
+requester/controller and evaluated local/target policy inputs. Applicable
+grants and runtime assurance remain separate evidence categories. This reports
+the inputs that could narrow child authority; it does not claim that identity
+changed an allow or deny decision.
+
+If the private parent token was unavailable, the child remains inspectable but
+the missing parent context, execution, and run evidence is explicit. ACP spawn
+itself is observable. Actions performed wholly inside an external ACP runtime
+without a callback are reported as unsupported evidence, never inferred from
+task or transcript text.
+
 The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a
 channel run, the trusted active registered native plugin produces the remote
@@ -296,9 +311,10 @@ canonical session keys can themselves contain platform account or peer ids.
 Message records intentionally omit both.
 
 Execution identity contexts use the same installation-local key owner with a
-separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, and grant
-references exist only in a deeply frozen, in-process worker message capped at
-16 KiB and 16 entries in each grant/assurance array. The worker replaces them with keyed
+separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, grant,
+and child-delegation references exist only in bounded private admission
+carriers. The deeply frozen worker message is capped at 16 KiB and 16 entries
+in each bounded evidence array. The worker replaces raw references with keyed
 pseudonyms before persistence; they are never stored, exported, inspected, or
 logged. Configured agent ids plus context, execution, and run ids remain
 operator-visible.

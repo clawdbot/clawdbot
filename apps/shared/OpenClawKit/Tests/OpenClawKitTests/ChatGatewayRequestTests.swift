@@ -572,6 +572,22 @@ struct ChatGatewayPayloadCodecTests {
         #expect(summary.lastactivity == "Editing ChatView.swift")
         #expect(summary.diffstat?["added"]?.intValue == 8)
 
+        let progressCard = EventFrame(
+            type: "event",
+            event: "progressCard.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "revision": AnyCodable(7),
+            ]))
+        guard case let .progressCardChanged(event) = OpenClawChatGatewayPayloadCodec.event(
+            from: progressCard)
+        else {
+            Issue.record("expected progressCardChanged")
+            return
+        }
+        #expect(event.sessionkey == "agent:main:main")
+        #expect(event.revision.value as? Int == 7)
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)

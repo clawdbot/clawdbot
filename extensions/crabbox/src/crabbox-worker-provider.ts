@@ -23,6 +23,7 @@ import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   buildCrabboxWarmupArgs,
+  CRABBOX_WORKER_PROVIDER_ID,
   listCrabboxMachineOptions,
   nonEmptyString,
   operationLeaseId,
@@ -41,8 +42,6 @@ import {
 } from "./crabbox-worker-timeouts.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
-
-const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
 const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_ERROR_DETAIL_CHARS = 512;

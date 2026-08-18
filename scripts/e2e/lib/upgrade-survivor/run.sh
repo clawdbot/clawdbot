@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# Signal traps inherit the foreground command's redirections. Keep harness stdout separate so the
+# final summary location cannot corrupt a command artifact when the run is interrupted.
+exec 3>&1
 
 source scripts/lib/openclaw-e2e-instance.sh
 
@@ -38,7 +41,7 @@ export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
-if [ "$SCENARIO" = "configured-plugin-installs" ]; then
+if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then
   export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
   export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 fi
@@ -85,6 +88,9 @@ status_seconds=""
 healthz_seconds=""
 readyz_seconds=""
 update_restart_seconds=""
+migration_seconds=""
+idempotence_seconds=""
+run_completed="0"
 
 BASELINE_INSTALL_LOG="$ARTIFACT_ROOT/baseline-install.log"
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
@@ -197,6 +203,8 @@ write_summary() {
     SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     SUMMARY_START_SECONDS="$start_seconds" \
     SUMMARY_UPDATE_RESTART_SECONDS="$update_restart_seconds" \
+    SUMMARY_MIGRATION_SECONDS="$migration_seconds" \
+    SUMMARY_IDEMPOTENCE_SECONDS="$idempotence_seconds" \
     SUMMARY_HEALTHZ_SECONDS="$healthz_seconds" \
     SUMMARY_READYZ_SECONDS="$readyz_seconds" \
     SUMMARY_STATUS_SECONDS="$status_seconds" \
@@ -234,6 +242,8 @@ const summary = {
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
+    migrationSeconds: numberOrNull(process.env.SUMMARY_MIGRATION_SECONDS),
+    idempotenceSeconds: numberOrNull(process.env.SUMMARY_IDEMPOTENCE_SECONDS),
     healthzSeconds: numberOrNull(process.env.SUMMARY_HEALTHZ_SECONDS),
     readyzSeconds: numberOrNull(process.env.SUMMARY_READYZ_SECONDS),
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
@@ -281,24 +291,40 @@ on_error() {
   return "$status"
 }
 
+on_signal() {
+  local signal="$1"
+  local status="$2"
+  trap - HUP INT TERM
+  FAILURE_PHASE="${CURRENT_PHASE:-unknown}"
+  FAILURE_MESSAGE="phase ${FAILURE_PHASE} interrupted by ${signal}"
+  exit "$status"
+}
+
 on_exit() {
   local status="$1"
+  trap - ERR EXIT HUP INT TERM
   set +e
   cleanup
-  if [ "$status" -eq 0 ]; then
+  if [ "$status" -eq 0 ] && [ "$run_completed" = "1" ]; then
     write_summary passed ""
   else
+    if [ "$status" -eq 0 ]; then
+      status=1
+      FAILURE_MESSAGE="upgrade survivor exited before all phases completed"
+    fi
     [ -n "$FAILURE_PHASE" ] || FAILURE_PHASE="${CURRENT_PHASE:-unknown}"
     [ -n "$FAILURE_MESSAGE" ] || FAILURE_MESSAGE="upgrade survivor failed with status $status"
     write_summary failed "$FAILURE_MESSAGE"
   fi
-  echo "Upgrade survivor summary: $SUMMARY_JSON"
-  cat "$SUMMARY_JSON" 2>/dev/null || true
+  echo "Upgrade survivor summary: $SUMMARY_JSON" >&3
   exit "$status"
 }
 
 trap 'on_error $?' ERR
 trap 'on_exit $?' EXIT
+trap 'on_signal SIGHUP 129' HUP
+trap 'on_signal SIGINT 130' INT
+trap 'on_signal SIGTERM 143' TERM
 
 phase() {
   local name="$1"
@@ -357,7 +383,7 @@ plugin_deps_cleanup_plugin_dirs() {
 }
 
 configured_plugin_installs_enabled() {
-  [ "$SCENARIO" = "configured-plugin-installs" ]
+  [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]
 }
 
 source_only_plugin_shadow_enabled() {
@@ -1449,11 +1475,40 @@ assert_root_managed_vps_cli_usable() {
 }
 
 run_doctor() {
+  local started_at budget
+  started_at="$(date +%s)"
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1; then
     echo "openclaw doctor failed" >&2
     openclaw_e2e_print_log "$DOCTOR_LOG" >&2
     return 1
   fi
+  if [ "$SCENARIO" = "sqlite-volume" ]; then
+    migration_seconds=$(($(date +%s) - started_at))
+    budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS 120)"
+    echo "SQLite volume migration doctor completed in ${migration_seconds}s (budget ${budget}s)."
+    if [ "$migration_seconds" -gt "$budget" ]; then
+      echo "SQLite volume migration exceeded budget: ${migration_seconds}s > ${budget}s" >&2
+      return 1
+    fi
+  fi
+}
+
+assert_volume_idempotence() {
+  local started_at budget
+  started_at="$(date +%s)"
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >>"$DOCTOR_LOG" 2>&1; then
+    echo "openclaw idempotence doctor failed" >&2
+    openclaw_e2e_print_log "$DOCTOR_LOG" >&2
+    return 1
+  fi
+  idempotence_seconds=$(($(date +%s) - started_at))
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS 60)"
+  echo "SQLite volume idempotence doctor completed in ${idempotence_seconds}s (budget ${budget}s)."
+  if [ "$idempotence_seconds" -gt "$budget" ]; then
+    echo "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" >&2
+    return 1
+  fi
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 }
 
 validate_post_doctor_config() {
@@ -1601,6 +1656,9 @@ phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
 phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
+if [ "$SCENARIO" = "sqlite-volume" ]; then
+  phase seed-volume-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-volume
+fi
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
@@ -1611,7 +1669,7 @@ phase update-candidate update_candidate
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
   clawhub_security_mode="required"
   prepublish_package="@openclaw/whatsapp"
-  if [ "$SCENARIO" = "configured-plugin-installs" ]; then
+  if configured_plugin_installs_enabled; then
     prepublish_package="@openclaw/matrix"
   fi
   # 2026.6.35 predates the release-security endpoint. The trusted fixture still
@@ -1630,6 +1688,9 @@ phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_depend
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
+if [ "$SCENARIO" = "sqlite-volume" ]; then
+  phase assert-volume-idempotence assert_volume_idempotence
+fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
@@ -1637,4 +1698,5 @@ if [ "$LIVE_OPENAI" = "1" ]; then
   phase live-openai run_live_openai
 fi
 
-echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s updateRestart=${update_restart_seconds:-manual}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."
+run_completed="1"
+echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} updateRestartMode=${UPDATE_RESTART_MODE} migration=${migration_seconds:-n/a}s idempotence=${idempotence_seconds:-n/a}s startup=${start_seconds}s updateRestart=${update_restart_seconds:-manual}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."

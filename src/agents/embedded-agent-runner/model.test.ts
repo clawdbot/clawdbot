@@ -191,7 +191,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     const snapshot = {
+      agentDir: input.agentDir,
       ...(workspaceDir ? { workspaceDir } : {}),
+      activeProjectKeys: [],
+      config: input.config ?? {},
+      authModes: {},
+      metadataSnapshot: { plugins: [] },
+      allowGatewaySubagentBinding: false,
+      modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
       inlineProviderModels: preparedSnapshotState.inlineProviderModels,
       createStores: () => ({ authStorage, modelRegistry }),
@@ -1009,6 +1016,18 @@ describe("resolveModel", () => {
       makeMistralCatalogModel({ input: ["text"] }),
     );
 
+    const preparedModelRuntime = {
+      agentDir: "/tmp/agent",
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config: {},
+      authModes: {},
+      metadataSnapshot: { plugins: [] } as never,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    } satisfies PreparedModelRuntimeSnapshot;
     const result = await resolveModelAsync(
       "mistral",
       "mistral-medium-3-5",
@@ -1018,7 +1037,7 @@ describe("resolveModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: { mocked: true } as never,
         modelRegistry: { find: vi.fn(() => null) } as never,
-        preparedModelRuntime: {} as PreparedModelRuntimeSnapshot,
+        preparedModelRuntime,
         runtimeHooks: createRuntimeHooks(),
         skipAgentDiscovery: true,
       },
@@ -1594,7 +1613,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not use bundled static catalog rows unless the caller opts in", async () => {
+  it("does not read manifest or provider static rows when bundled fallback is disabled", async () => {
     const result = await resolveModelAsync(
       "mistral",
       "mistral-medium-3-5",
@@ -1609,6 +1628,7 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
     expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
@@ -3056,6 +3076,8 @@ describe("resolveModel", () => {
 
       expect(result.model).toBeUndefined();
       expect(result.error).toBe("Unknown model: azure-openai-responses/gpt-5.5");
+      expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+      expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     },
   );
 

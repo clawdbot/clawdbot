@@ -363,6 +363,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       workboardBoards: this.workboardBoards,
       enabledRouteIds: this.enabledRouteIds,
       workboardBoardsReady: this.workboardBoardsReady,
+      controlUiTabs: this.context?.gateway.snapshot.hello?.controlUiTabs,
     });
   }
 

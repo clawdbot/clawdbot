@@ -52,13 +52,19 @@ describe("listControlUiPluginTabs", () => {
 
   it("projects only tab descriptors", () => {
     activateDescriptors([
-      { pluginId: "logbook", descriptor: tabDescriptor() },
+      {
+        pluginId: "workboard",
+        descriptor: tabDescriptor({ placement: "route:workboard" }),
+      },
       { pluginId: "other", descriptor: tabDescriptor({ id: "run-panel", surface: "run" }) },
     ]);
 
     const tabs = listControlUiPluginTabs(["operator.admin"]);
     expect(tabs.map((tab) => tab.id)).toEqual(["logbook"]);
-    expect(expectDefined(tabs[0], "tabs[0] test invariant").pluginId).toBe("logbook");
+    expect(expectDefined(tabs[0], "tabs[0] test invariant")).toMatchObject({
+      placement: "route:workboard",
+      pluginId: "workboard",
+    });
   });
 
   it("hides tabs whose required scopes are not granted", () => {

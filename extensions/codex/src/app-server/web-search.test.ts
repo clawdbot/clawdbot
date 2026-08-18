@@ -50,6 +50,7 @@ describe("resolveCodexWebSearchPlan", () => {
         "tools.web_search.location.city": "Edmonton",
         "tools.web_search.location.timezone": "America/Edmonton",
       },
+      webFetchHostnameAllowlist: ["example.com", "*.example.com"],
     });
   });
 

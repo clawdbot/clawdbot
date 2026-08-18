@@ -3,13 +3,17 @@ import path from "node:path";
 // dispatch, and result details for spawned child sessions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../subagents/swarm/swarm-code-mode.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -233,6 +237,45 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { runtime: "subagent" as const, spawn: hoisted.spawnSubagentDirectMock },
+    { runtime: "acp" as const, spawn: hoisted.spawnAcpDirectMock },
+  ])(
+    "forwards the exact private parent token to the $runtime spawn owner",
+    async ({ runtime, spawn }) => {
+      if (runtime === "acp") {
+        registerAcpBackendForTest();
+      }
+      const parentToken = createExecutionIdentityAdmissionToken("parent-run", {
+        contextId: "parent-context",
+        executionId: "parent-execution",
+        now: 100,
+      });
+      const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance: createOperationalRunInstanceRef("parent-run"),
+          executionIdentityToken: parentToken,
+        },
+        async () =>
+          await tool.execute(`spawn-${runtime}`, {
+            task: "inspect child lineage",
+            runtime,
+            ...(runtime === "acp" ? { agentId: "codex" } : {}),
+          }),
+      );
+
+      const context = mockCallArg(spawn, 0, 1, `${runtime} spawn`);
+      expect(readParentExecutionIdentity(context)).toBe(parentToken);
+      expect(JSON.stringify(tool.parameters)).not.toContain("parentExecutionIdentityToken");
+      expect(JSON.stringify(result.details)).not.toContain("parent-context");
+      expect(JSON.stringify(result.details)).not.toContain("parent-execution");
+    },
+  );
 
   it.each([
     { label: "native", args: { task: "investigate", runtime: "subagent" } },

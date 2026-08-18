@@ -751,47 +751,79 @@ describe("chat typing status", () => {
       expectedText: "Ayaan, Liam, Maya, Zoe are typing…",
       expectedAvatars: 3,
     },
-  ])("renders $expectedText above the composer", ({ actors, expectedText, expectedAvatars }) => {
+  ])("renders $expectedText as a transcript row", ({ actors, expectedText, expectedAvatars }) => {
     const container = renderChatView({ typingActors: actors });
-    const indicator = container.querySelector(".agent-chat__typing-indicator--outside");
+    const row = container.querySelector('[data-virtual-row-key="presence:typing"]');
+    const indicator = row?.querySelector(".agent-chat__typing-indicator");
 
-    expect(indicator?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(
-      true,
-    );
     expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
-    expect(indicator?.querySelectorAll(".chat-author-avatar")).toHaveLength(expectedAvatars);
+    expect(indicator?.querySelectorAll(".chat-avatar")).toHaveLength(expectedAvatars);
     expect(
       indicator?.querySelector(".agent-chat__typing-avatars")?.getAttribute("aria-hidden"),
     ).toBe("true");
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("keeps queue and error state above the typing status", () => {
-    const container = renderChatView({
-      typingActors: [{ id: "ayaan", label: "Ayaan" }],
-      runError: { summary: "Gateway unavailable" },
-      queue: [{ id: "queued", text: "Try again", createdAt: 1 }],
+  it("keeps typing after every other transient transcript row", () => {
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
+      {
+        kind: "group",
+        key: "group:assistant:typing-order",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:typing-order",
+            message: { role: "assistant", content: "Done", timestamp: 1 },
+          },
+        ],
+        timestamp: 1,
+        isStreaming: false,
+      },
+      {
+        kind: "group",
+        key: "group:tool:typing-order",
+        role: "tool",
+        messages: [
+          {
+            key: "message:tool:typing-order",
+            message: { role: "tool", content: "Later tool result", timestamp: 2 },
+          },
+        ],
+        timestamp: 2,
+        isStreaming: false,
+      },
+    ]);
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
     });
-    const indicator = requireElement(
-      container,
-      ".agent-chat__typing-indicator--outside",
-      "typing status",
-    );
-
-    expect(indicator.previousElementSibling?.classList.contains("chat-run-error")).toBe(true);
-    expect(indicator.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(
-      true,
-    );
-  });
-
-  it("hides typing status with the model setup composer", () => {
     const container = renderChatView({
-      canSend: false,
-      modelSetupRequired: true,
+      messages: [{ role: "user", content: "Done?", timestamp: 1 }],
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
+      realtimeTalkConversation: [
+        { id: "voice", role: "assistant", text: "Listening", isStreaming: true },
+      ],
+      backgroundTasks: createBackgroundTasks({
+        collapsed: true,
+        tasks: [
+          {
+            id: "task-1",
+            taskId: "task-1",
+            status: "running",
+            agentId: "main",
+            createdAt: 1,
+            startedAt: 2,
+          },
+        ],
+      }),
     });
-
-    expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
+    const keys = [...container.querySelectorAll<HTMLElement>("[data-virtual-row-key]")].map(
+      (row) => row.dataset.virtualRowKey,
+    );
+    expect(keys).toContain("realtime-talk");
+    expect(keys).toContain("turn-recap");
+    expect(keys).toContain("background-tasks");
+    expect(keys.at(-1)).toBe("presence:typing");
   });
 });
 
@@ -5246,6 +5278,51 @@ describe("chat model controls", () => {
     ).toContain("Authentication failed. Review the provider credential or sign-in, then retry.");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("shows a successful empty catalog without authentication guidance", () => {
+    const { state } = createChatHeaderState({ models: [] });
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      onModelSetup,
+    });
+
+    expect(
+      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
+    ).toContain("No models available");
+    expect(container.textContent).not.toContain("Authentication failed");
+    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["offline", "Offline"],
+    ["error", "Couldn’t refresh models"],
+  ] as const)("gives %s precedence over a stale all-cold catalog", (status, expected) => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          available: false,
+        },
+      ],
+    });
+    const container = renderModelControls(state, {
+      modelCatalogState: {
+        hasSnapshot: true,
+        status,
+        ...(status === "error" ? { onRetry: vi.fn() } : {}),
+      },
+    });
+
+    expect(container.textContent).toContain(expected);
+    expect(container.textContent).not.toContain("Authentication failed");
+    expect(container.querySelector('[data-chat-model-setup="true"]')).toBeNull();
   });
 
   it("applies a model selection immediately", () => {
