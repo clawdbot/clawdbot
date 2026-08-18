@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { canCallGatewayMethod } from "../gateway-methods.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 import { clearConfigDraftTracking } from "./config-draft-model.ts";
 import {
@@ -146,7 +147,7 @@ export function createRuntimeConfigCapability(
   const refreshConnectionState = () => {
     const config = run(() => loadConfig(state));
     void trackLoad("config", config);
-    if (state.configSchemaVersion !== null && canCallConfigMethod("config.schema")) {
+    if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
       void trackLoad(
         "schema",
         run(() => loadConfigSchema(state)),
@@ -183,8 +184,21 @@ export function createRuntimeConfigCapability(
     }
     appliedRefresh.reconcile();
   };
+  // Schema reads fail open like operator-access: only a definitive denial
+  // (method advertised absent, or advertised scopes without read) skips the
+  // load, so legacy scope-less gateways keep schema-driven settings pages.
+  const canLoadConfigSchema = () => {
+    const snapshot = gateway.snapshot;
+    if (!snapshot.client || snapshot.phase !== "connected") {
+      return false;
+    }
+    if (isGatewayMethodAdvertised(snapshot, "config.schema") === false) {
+      return false;
+    }
+    return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+  };
   const ensureSchemaLoaded = () =>
-    state.configSchema || !canCallConfigMethod("config.schema")
+    state.configSchema || !canLoadConfigSchema()
       ? Promise.resolve()
       : loadOnce("schema", () => loadConfigSchema(state));
 

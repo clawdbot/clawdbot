@@ -119,6 +119,35 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
+  it("loads the schema for a legacy hello without scopes or an advertised method list", async () => {
+    const schema = {
+      schema: { type: "object" },
+      uiHints: {},
+      version: "schema-legacy",
+      generatedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "config.get"
+        ? { config: {}, hash: "hash-legacy", valid: true, issues: [] }
+        : method === "config.schema"
+          ? schema
+          : {},
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    publish(true, client, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator" },
+    } as GatewayHelloOk);
+    await runtimeConfig.ensureSchemaLoaded();
+
+    expect(request).toHaveBeenCalledWith("config.schema", {});
+    expect(runtimeConfig.state.configSchemaVersion).toBe("schema-legacy");
+    runtimeConfig.dispose();
+  });
+
   it.each([
     {
       label: "replacement without config.schema",
