@@ -5099,6 +5099,7 @@ export const en: TranslationMap = {
       truncated: "… truncated ({total} chars, showing first {shown}).",
     },
     codeBlock: {
+      languageFallback: "Code",
       jsonLines: "JSON · {count} lines",
       jsonBadge: "JSON",
       jsonArrayItem: "Array ({count} item)",

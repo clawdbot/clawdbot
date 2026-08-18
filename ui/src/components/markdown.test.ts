@@ -347,7 +347,7 @@ describe("toSanitizedMarkdownHtml", () => {
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector("p")?.textContent).toBe("text");
-      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("code");
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
       expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
       expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe(
         "indented code",
@@ -358,7 +358,7 @@ describe("toSanitizedMarkdownHtml", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
       const fragment = htmlFragment(html);
 
-      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("code");
+      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
       expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
       expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
     });
@@ -424,6 +424,7 @@ PY
       i18n.registerTranslation("pt-BR", {
         chat: {
           codeBlock: {
+            languageFallback: "Código",
             jsonLines: "JSON · {count} linhas",
           },
         },
@@ -432,6 +433,8 @@ PY
       try {
         const fragment = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
         expect(fragment.querySelector("summary")?.textContent).toContain("JSON · 41 linhas");
+        const unlabeled = htmlFragment(toSanitizedMarkdownHtml("```\nconteúdo\n```"));
+        expect(unlabeled.querySelector(".code-block-lang")?.textContent).toBe("Código");
       } finally {
         await i18n.setLocale("en");
       }

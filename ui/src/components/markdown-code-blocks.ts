@@ -147,7 +147,7 @@ function renderCodeElement(
 }
 
 function renderCodeBlockHeader(lang: string, copyButton: string): string {
-  const language = lang ? escapeMarkdownHtml(lang) : "code";
+  const language = escapeMarkdownHtml(lang || t("chat.codeBlock.languageFallback"));
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${copyButton}</div></div>`;
 }
 
