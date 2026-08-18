@@ -84,15 +84,19 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       if (!message || seenMessages.has(message)) {
         return;
       }
-      // Wrappers routinely embed the cause verbatim ("failed to parse: SyntaxError: X"
-      // with cause "X"), and errno errors carry a code already spelled out in the
-      // detail. Exact-match dedupe misses both, so drop anything the text already says.
-      if (formatted.includes(message)) {
+      formatted += ` | ${message}`;
+      seenMessages.add(message);
+    };
+    // Wrappers routinely embed the cause verbatim ("failed to parse X: <cause.message>"),
+    // which exact-match dedupe misses, so the whole sentence prints twice. Codes stay on
+    // their own: a trailing bare code is this formatter's convention even when the detail
+    // already names it.
+    const appendCauseErrorMessage = (message: string | undefined): void => {
+      if (message && formatted.includes(message)) {
         seenMessages.add(message);
         return;
       }
-      formatted += ` | ${message}`;
-      seenMessages.add(message);
+      appendCauseMessage(message);
     };
     if (options.includeCode) {
       const code = readProperty(value, "code");
@@ -103,7 +107,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        appendCauseMessage(cause.message);
+        appendCauseErrorMessage(cause.message);
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));

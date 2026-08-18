@@ -467,8 +467,7 @@ describe("backup commands", () => {
     expect(error).toBeInstanceOf(Error);
     const operatorMessage = `Backup archive creation failed: ${outputPath}. ${detail}: ${outputParent}. ${recovery}`;
     expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
-    // The errno detail already names the code, so it is not repeated as a bare suffix.
-    const debugMessage = `${operatorMessage} | ${code}: filesystem error, mkdir '${outputParent}'`;
+    const debugMessage = `${operatorMessage} | ${code}: filesystem error, mkdir '${outputParent}' | ${code}`;
     expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toBe(
       debugMessage,
     );
@@ -489,7 +488,7 @@ describe("backup commands", () => {
     const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`;
     expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
     expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toMatch(
-      /\| EEXIST: .*mkdir.*not-a-directory/u,
+      /\| EEXIST: .*mkdir.*\| EEXIST/u,
     );
   });
 

@@ -27,7 +27,7 @@ describe("formatErrorMessage", () => {
   });
 
   it("omits cause text the wrapper message already spells out", () => {
-    // Wrapper embeds the cause verbatim, as JSON5/parse wrappers do.
+    // Wrappers that embed the cause verbatim printed the whole sentence twice.
     const parseFailure = new SyntaxError("JSON5: invalid character 'j' at 1:7");
     const wrapped = new Error(`Failed to parse --file as JSON5: ${parseFailure.message}`, {
       cause: parseFailure,
@@ -36,14 +36,14 @@ describe("formatErrorMessage", () => {
       "Failed to parse --file as JSON5: JSON5: invalid character 'j' at 1:7",
     );
 
-    // errno detail already contains the bare code, so the code must not be appended again.
+    // Codes keep their own segment even when the detail already names them.
     const errno = Object.assign(
       new Error("ENOENT: no such file or directory, open '/tmp/missing.json'"),
       { code: "ENOENT" },
     );
     const notFound = new Error("--file not found: /tmp/missing.json.", { cause: errno });
     expect(format(notFound)).toBe(
-      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json'",
+      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json' | ENOENT",
     );
   });
 
