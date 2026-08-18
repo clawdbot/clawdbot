@@ -12,15 +12,17 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  type CodexHostTrajectoryRecorder,
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
 
 type CodexTrajectoryRecorder = NonNullable<ReturnType<typeof createCodexTrajectoryRecorder>>;
+type CodexTrajectoryFacade = NonNullable<
+  Parameters<typeof createCodexTrajectoryRecorder>[0]["trajectory"]
+>;
 
 let testWorkspace: TempWorkspaceSync;
 
@@ -44,14 +46,14 @@ function expectTrajectoryRecorder(
   return recorder;
 }
 
-function createMemoryHostTrajectoryRecorder(): {
+function createMemoryTrajectoryFacade(): {
   events: Array<{ type: string; data?: Record<string, unknown> }>;
-  recorder: CodexHostTrajectoryRecorder;
+  trajectory: CodexTrajectoryFacade;
 } {
   const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
   return {
     events,
-    recorder: {
+    trajectory: {
       recordEvent: (type, data) => events.push({ type, data }),
       flush: async () => undefined,
     },
@@ -67,7 +69,7 @@ function createMemoryBackedRecorder(params: {
   recorder: CodexTrajectoryRecorder;
 } {
   const sessionId = (params.attempt?.sessionId as string | undefined) ?? "session-1";
-  const host = createMemoryHostTrajectoryRecorder();
+  const host = createMemoryTrajectoryFacade();
   const recorder = createCodexTrajectoryRecorder({
     cwd: params.tmpDir,
     attempt: {
@@ -80,18 +82,18 @@ function createMemoryBackedRecorder(params: {
       model: { api: "responses" },
       ...params.attempt,
     } as never,
-    trajectoryRecorder: host.recorder,
+    trajectory: host.trajectory,
     tools: params.tools,
     env: {},
   });
   return { events: host.events, recorder: expectTrajectoryRecorder(recorder) };
 }
 
-function createSqliteHostTrajectoryRecorder(params: {
+function createSqliteTrajectoryFacade(params: {
   agentId: string;
   sessionId: string;
   storePath: string;
-}): CodexHostTrajectoryRecorder {
+}): CodexTrajectoryFacade {
   const events: SqliteTrajectoryRuntimeEventForTest[] = [];
   let seq = 0;
   return {
@@ -117,41 +119,18 @@ function createSqliteHostTrajectoryRecorder(params: {
 }
 
 describe("Codex trajectory recorder", () => {
-  it("warns once per session when the SQLite host recorder is unavailable", async () => {
-    // Import a fresh module instance so the process-wide dedupe set starts
-    // clean without a test-only reset export in production code.
-    vi.resetModules();
-    const { createCodexTrajectoryRecorder: createFreshRecorder } = await import("./trajectory.js");
-    const warn = vi.fn();
-    const makeRecorder = (sessionId: string) =>
-      createFreshRecorder({
+  it("returns null when the host trajectory facade is unavailable", () => {
+    expect(
+      createCodexTrajectoryRecorder({
         cwd: testWorkspace.dir,
         attempt: {
-          sessionFile: `agent:main:${sessionId}`,
-          sessionId,
+          sessionFile: "agent:main:session-1",
+          sessionId: "session-1",
           model: { api: "responses" },
         } as never,
         env: {},
-        warn,
-      });
-
-    expect(makeRecorder("session-1")).toBeNull();
-    // Retried attempts for the same session must not repeat the warn.
-    expect(makeRecorder("session-1")).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "codex trajectory capture requires the SQLite host recorder",
-      { sessionId: "session-1", reason: "sqlite-recorder-unavailable" },
-    );
-
-    // A later distinct session's recorder loss stays visible: the host can
-    // reject per-session (target-mapping conflicts), not only per-process.
-    expect(makeRecorder("session-2")).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenLastCalledWith(
-      "codex trajectory capture requires the SQLite host recorder",
-      { sessionId: "session-2", reason: "sqlite-recorder-unavailable" },
-    );
+      }),
+    ).toBeNull();
   });
 
   it("stores SQLite-backed captures for the canonical session-key target", async () => {
@@ -173,7 +152,7 @@ describe("Codex trajectory recorder", () => {
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
-      trajectoryRecorder: createSqliteHostTrajectoryRecorder({
+      trajectory: createSqliteTrajectoryFacade({
         agentId: "main",
         sessionId: "session-1",
         storePath,
@@ -239,8 +218,8 @@ describe("Codex trajectory recorder", () => {
     ]);
   });
 
-  it("honors explicit disablement without warning", () => {
-    const warn = vi.fn();
+  it("honors explicit disablement", () => {
+    const host = createMemoryTrajectoryFacade();
     const recorder = createCodexTrajectoryRecorder({
       cwd: testWorkspace.dir,
       attempt: {
@@ -249,11 +228,11 @@ describe("Codex trajectory recorder", () => {
         model: { api: "responses" },
       } as never,
       env: { OPENCLAW_TRAJECTORY: "0" },
-      warn,
+      trajectory: host.trajectory,
     });
 
     expect(recorder).toBeNull();
-    expect(warn).not.toHaveBeenCalled();
+    expect(host.events).toEqual([]);
   });
 
   it("preserves usage when truncating oversized model completion events", async () => {

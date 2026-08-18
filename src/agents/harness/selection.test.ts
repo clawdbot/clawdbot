@@ -1,7 +1,10 @@
 // Covers agent harness selection, fallback behavior, and compaction routing.
+import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -10,6 +13,10 @@ import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -157,6 +164,7 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+const trajectoryTempDirs = createTempDirTracker();
 let selectionAdmission: PreparedAgentRunAdmission;
 let selectionAdmittedRunContext: AdmittedRunContext;
 
@@ -218,6 +226,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  trajectoryTempDirs.cleanup();
   selectionAdmission.close();
   resetAgentRunRegistryForTest();
   clearAgentHarnesses();
@@ -691,6 +702,47 @@ describe("runAgentHarnessAttempt", () => {
 
     expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
     expect(handedOffRuntime).toBeUndefined();
+  });
+
+  it("persists plugin trajectory events through the selected harness host capability", async () => {
+    const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+    });
+    if (!trajectoryRecorder) {
+      throw new Error("Expected SQLite trajectory recorder");
+    }
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          const trajectory = attempt.hostCapabilities?.trajectory;
+          if (!trajectory) {
+            throw new Error("Expected host trajectory capability");
+          }
+          trajectory.recordEvent("plugin.selected");
+          await trajectory.flush();
+          return createAttemptResult("codex");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.sessionKey = sessionKey;
+    params.trajectoryRecorder = trajectoryRecorder;
+
+    await runAgentHarnessAttempt(params);
+
+    expect(await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath })).toEqual([
+      expect.objectContaining({ source: "runtime", type: "plugin.selected" }),
+    ]);
   });
 
   it.each(["heartbeat"] as const)(

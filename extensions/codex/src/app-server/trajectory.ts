@@ -19,10 +19,9 @@ type CodexTrajectoryInit = {
   cwd: string;
   developerInstructions?: string;
   prompt?: string;
-  trajectoryRecorder?: CodexHostTrajectoryRecorder | null;
+  trajectory?: NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]> | null;
   tools?: CodexDynamicToolSpec[];
   env?: NodeJS.ProcessEnv;
-  warn?: (message: string, fields: Record<string, unknown>) => void;
 };
 
 const SENSITIVE_FIELD_RE = /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
@@ -32,16 +31,6 @@ const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
-
-type CodexTrajectorySink = {
-  flush: () => Promise<void>;
-  write: (event: CodexTrajectoryEvent) => void;
-};
-
-export type CodexHostTrajectoryRecorder = {
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-};
 
 type CodexTrajectoryEvent = Record<string, unknown> & {
   data?: Record<string, unknown>;
@@ -108,26 +97,6 @@ function boundedTrajectoryEvent(event: Record<string, unknown>): CodexTrajectory
   return best;
 }
 
-function createCodexHostTrajectorySink(params: {
-  recorder: CodexHostTrajectoryRecorder;
-}): CodexTrajectorySink {
-  return {
-    write: (event) => {
-      params.recorder.recordEvent(event.type, event.data);
-    },
-    flush: async () => {
-      await params.recorder.flush();
-    },
-  };
-}
-
-// The host recorder can be absent per session (target-mapping conflicts), not
-// only per process, so dedupe the warn by session: repeated attempts for one
-// session stay quiet while a later distinct session still records its loss.
-// Bounded: cleared past the cap so a pathological session churn cannot grow it.
-const warnedRecorderUnavailableSessions = new Set<string>();
-const WARNED_RECORDER_SESSIONS_CAP = 64;
-
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
@@ -138,26 +107,10 @@ export function createCodexTrajectoryRecorder(
     return null;
   }
 
-  // The host owns SQLite target resolution and identity validation; it hands
-  // back a recorder only for a committed session row. Re-deriving that here
-  // from a session-file string silently drops every capture once the host
-  // stops emitting the legacy `sqlite:` marker.
-  if (!params.trajectoryRecorder) {
-    // Per-attempt repeats for one session bury real diagnostics; warn once per
-    // session so retries stay quiet but each newly affected session is visible.
-    if (!warnedRecorderUnavailableSessions.has(params.attempt.sessionId)) {
-      if (warnedRecorderUnavailableSessions.size >= WARNED_RECORDER_SESSIONS_CAP) {
-        warnedRecorderUnavailableSessions.clear();
-      }
-      warnedRecorderUnavailableSessions.add(params.attempt.sessionId);
-      params.warn?.("codex trajectory capture requires the SQLite host recorder", {
-        sessionId: params.attempt.sessionId,
-        reason: "sqlite-recorder-unavailable",
-      });
-    }
+  if (!params.trajectory) {
     return null;
   }
-  const sink = createCodexHostTrajectorySink({ recorder: params.trajectoryRecorder });
+  const trajectory = params.trajectory;
   let seq = 0;
   const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
 
@@ -182,10 +135,10 @@ export function createCodexTrajectoryRecorder(
         data: data ? sanitizeValue(data) : undefined,
       });
       if (event) {
-        sink.write(event);
+        trajectory.recordEvent(event.type, event.data);
       }
     },
-    flush: sink.flush,
+    flush: trajectory.flush,
   };
 }
 
