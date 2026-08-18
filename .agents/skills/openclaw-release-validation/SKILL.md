@@ -267,9 +267,24 @@ opening fails, report the error and continue. After opening it, print only:
 Testing worksheet: /absolute/path/to/worksheet.md
 ```
 
-Then briefly point out the five priority surfaces and tell the tester: **Edit
-the worksheet directly or tell me what to record. Reply exactly `finish
-validation` when you are done.**
+Then give this compact orientation, using the actual worksheet contents:
+
+- **What it is:** their private run record and the source for the final
+  release-feedback comment; it is not another task to complete.
+- **Priority and scorecard:** the five priority surfaces are the most important
+  release checks; their maturity score and label come from the live OpenClaw
+  maturity scorecard, where higher maturity carries a stronger regression
+  expectation. The remaining surfaces are optional coverage.
+- **How to use each surface:** **What changed** summarizes the release theme,
+  and **Recommended testing** gives a concrete manual exercise and pass
+  condition.
+- **How to leave feedback:** as they test, they should simply tell the agent
+  their notes and name the surface (for example, `Models: switching persisted
+  after restart`). The agent adds those notes to that surface's **Testing
+  notes** cell. They do not need to edit the file themselves.
+
+Finish by asking which surface they want to test first and reminding them to
+reply exactly `finish validation` when they are done.
 
 This worksheet is the only checklist and note store. If readiness is verified,
 continue to human-driven testing. If readiness is blocked, state that testing
