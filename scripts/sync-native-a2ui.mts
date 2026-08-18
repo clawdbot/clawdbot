@@ -234,6 +234,9 @@ async function withFreshBundleCheckSource(
       OPENCLAW_A2UI_BUNDLE_OUT: path.join(checkSourceDir, "a2ui.bundle.js"),
       OPENCLAW_A2UI_BUNDLE_HASH_FILE: path.join(tempDir, ".bundle.hash"),
     });
+    // Native node hosts still load the v0.8 page. The v0.9 bundle is board-only
+    // until native clients can select a renderer before applying their stream.
+    await fs.rm(path.join(checkSourceDir, "a2ui.bundle.js.v0.9.js"), { force: true });
     await run(checkSourceDir);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });

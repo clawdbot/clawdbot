@@ -29,34 +29,51 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("drains a nested combinator after its outer race wins", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const events: string[] = [];
+    const nestedStarted = createDeferred();
+    const nestedRelease = createDeferred();
     let nestedAborted = false;
     const never = pluginToolWithExecute(
       "fake_nested_race_never",
       "Never-settling nested race helper",
       async (_toolCallId, _input, signal) => {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              nestedAborted = true;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        events.push("nested:start");
+        nestedStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            nestedAborted = true;
+            nestedRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await nestedRelease.promise;
+        events.push("nested:done");
         return jsonResult({ winner: "nested" });
       },
     );
     const fast = pluginToolWithExecute(
       "fake_nested_race_fast",
       "Fast nested race helper",
-      async () => jsonResult({ winner: "fast" }),
+      async () => {
+        await nestedStarted.promise;
+        events.push("fast:win");
+        return jsonResult({ winner: "fast" });
+      },
+    );
+    const release = pluginToolWithExecute(
+      "fake_nested_race_release",
+      "Release nested race helper",
+      async () => {
+        events.push("nested:release");
+        nestedRelease.resolve();
+        return jsonResult({ released: true });
+      },
     );
     applyCodeModeCatalog({
-      tools: [...codeModeTools, never, fast],
+      tools: [...codeModeTools, never, fast, release],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -68,10 +85,12 @@ describe("Code Mode bridge settlement and cancellation", () => {
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-nested-combinator-race",
         {
-          code: `return await Promise.race([
-            Promise.all([tools.callValue("fake_nested_race_never", {})]),
-            tools.callValue("fake_nested_race_fast", {}),
-          ]);`,
+          code: `const value = await Promise.race([
+              Promise.all([tools.callValue("fake_nested_race_never", {})]),
+              tools.callValue("fake_nested_race_fast", {}),
+            ]);
+            void tools.callValue("fake_nested_race_release", {});
+            return value;`,
         },
       ),
     );
@@ -79,6 +98,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
     expect(never.execute).toHaveBeenCalledOnce();
     expect(fast.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual(["nested:start", "fast:win", "nested:release", "nested:done"]);
     expect(nestedAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
   });
@@ -134,33 +155,97 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("supports a guest timer between an action and its observation", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const input = pluginTool("fake_terminal_input", "Send terminal input");
+    const read = pluginTool("fake_terminal_read", "Read terminal output");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, input, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-timer-observation",
+        {
+          code: `
+            const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
+            await tools.callValue("fake_terminal_input", { data: "status\\n" });
+            clearTimeout(cancelled);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return await tools.callValue("fake_terminal_read", {});
+          `,
+        },
+      ),
+    );
+
+    expect(details, JSON.stringify(details)).toMatchObject({
+      status: "completed",
+      value: { name: "fake_terminal_read" },
+    });
+    expect(input.execute).toHaveBeenCalledOnce();
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it("keeps the actual winner when the later-started nested tool settles first", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const events: string[] = [];
+    const firstStarted = createDeferred();
+    const firstRelease = createDeferred();
     let firstAborted = false;
     const first = pluginToolWithExecute(
       "fake_first",
       "Earlier slow helper",
       async (_toolCallId, _input, signal) => {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              firstAborted = true;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        events.push("first:start");
+        firstStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            firstAborted = true;
+            firstRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await firstRelease.promise;
+        events.push("first:done");
         return jsonResult({ winner: "first" });
       },
     );
-    const second = pluginToolWithExecute("fake_second", "Later fast helper", async () =>
-      jsonResult({ winner: "second" }),
+    const second = pluginToolWithExecute("fake_second", "Later fast helper", async () => {
+      await firstStarted.promise;
+      events.push("second:win");
+      return jsonResult({ winner: "second" });
+    });
+    const release = pluginToolWithExecute(
+      "fake_first_release",
+      "Release earlier race helper",
+      async () => {
+        events.push("first:release");
+        firstRelease.resolve();
+        return jsonResult({ released: true });
+      },
     );
     applyCodeModeCatalog({
-      tools: [...codeModeTools, first, second],
+      tools: [...codeModeTools, first, second, release],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -172,10 +257,12 @@ describe("Code Mode bridge settlement and cancellation", () => {
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-later-winner",
         {
-          code: `return await Promise.race([
-            tools.callValue("fake_first", {}),
-            tools.callValue("fake_second", {}),
-          ]);`,
+          code: `const value = await Promise.race([
+              tools.callValue("fake_first", {}),
+              tools.callValue("fake_second", {}),
+            ]);
+            void tools.callValue("fake_first_release", {});
+            return value;`,
         },
       ),
     );
@@ -183,6 +270,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details).toMatchObject({ status: "completed", value: { winner: "second" } });
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual(["first:start", "second:win", "first:release", "first:done"]);
     expect(firstAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
   });
@@ -215,7 +304,9 @@ describe("Code Mode bridge settlement and cancellation", () => {
   ])(
     "drains a detached audit started $label before an awaited nested call",
     async ({ auditCode }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const events: string[] = [];
       let auditCompleted = false;
       let auditAborted = false;
       const auditStarted = createDeferred();
@@ -224,20 +315,38 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "fake_early_audit",
         "Early detached audit",
         async (_toolCallId, _input, signal) => {
+          events.push("audit:start");
           auditStarted.resolve();
-          signal?.addEventListener("abort", () => (auditAborted = true), { once: true });
+          signal?.addEventListener(
+            "abort",
+            () => {
+              auditAborted = true;
+              auditRelease.reject(new Error("aborted"));
+            },
+            { once: true },
+          );
           await auditRelease.promise;
+          events.push("audit:done");
           auditCompleted = true;
           return jsonResult({ recorded: true });
         },
       );
       const fast = pluginToolWithExecute("fake_awaited_fast", "Awaited fast helper", async () => {
         await auditStarted.promise;
-        setImmediate(() => auditRelease.resolve());
+        events.push("awaited:done");
         return jsonResult({ winner: "fast" });
       });
+      const release = pluginToolWithExecute(
+        "fake_early_audit_release",
+        "Release early detached audit",
+        async () => {
+          events.push("audit:release");
+          auditRelease.resolve();
+          return jsonResult({ released: true });
+        },
+      );
       applyCodeModeCatalog({
-        tools: [...codeModeTools, audit, fast],
+        tools: [...codeModeTools, audit, fast, release],
         config,
         sessionId: "session-code-mode",
         sessionKey: "agent:main:main",
@@ -250,7 +359,9 @@ describe("Code Mode bridge settlement and cancellation", () => {
           "code-call-early-detached-audit",
           {
             code: `${auditCode}
-            return await tools.callValue("fake_awaited_fast", {});`,
+            const value = await tools.callValue("fake_awaited_fast", {});
+            void tools.callValue("fake_early_audit_release", {});
+            return value;`,
           },
         ),
       );
@@ -258,6 +369,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
       expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
       expect(audit.execute).toHaveBeenCalledOnce();
       expect(fast.execute).toHaveBeenCalledOnce();
+      expect(release.execute).toHaveBeenCalledOnce();
+      expect(events).toEqual(["audit:start", "awaited:done", "audit:release", "audit:done"]);
       expect(auditCompleted).toBe(true);
       expect(auditAborted).toBe(false);
       expect(testing.activeRuns.size).toBe(0);
@@ -265,35 +378,54 @@ describe("Code Mode bridge settlement and cancellation", () => {
   );
 
   it("drains a race winner's detached audit and its slower race branch", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const events: string[] = [];
+    const loserStarted = createDeferred();
+    const loserRelease = createDeferred();
+    const auditStarted = createDeferred();
     let loserAborted = false;
-    const winner = pluginToolWithExecute("fake_race_winner", "Race winner", async () =>
-      jsonResult({ winner: "fast" }),
-    );
+    const winner = pluginToolWithExecute("fake_race_winner", "Race winner", async () => {
+      await loserStarted.promise;
+      events.push("winner:win");
+      return jsonResult({ winner: "fast" });
+    });
     const loser = pluginToolWithExecute(
       "fake_race_loser",
       "Race loser",
       async (_toolCallId, _input, signal) => {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              loserAborted = true;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        events.push("loser:start");
+        loserStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            loserAborted = true;
+            loserRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await loserRelease.promise;
+        events.push("loser:done");
         return jsonResult({ winner: "slow" });
       },
     );
-    const audit = pluginToolWithExecute("fake_race_audit", "Detached audit", async () =>
-      jsonResult({ recorded: true }),
+    const audit = pluginToolWithExecute("fake_race_audit", "Detached audit", async () => {
+      events.push("audit:done");
+      auditStarted.resolve();
+      return jsonResult({ recorded: true });
+    });
+    const release = pluginToolWithExecute(
+      "fake_race_loser_release",
+      "Release race loser",
+      async () => {
+        await auditStarted.promise;
+        events.push("loser:release");
+        loserRelease.resolve();
+        return jsonResult({ released: true });
+      },
     );
     applyCodeModeCatalog({
-      tools: [...codeModeTools, winner, loser, audit],
+      tools: [...codeModeTools, winner, loser, audit, release],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -305,13 +437,13 @@ describe("Code Mode bridge settlement and cancellation", () => {
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-race-detached-audit",
         {
-          code: `return Promise.race([
-            tools.callValue("fake_race_winner", {}),
-            tools.callValue("fake_race_loser", {}),
-          ]).then((value) => {
+          code: `const value = await Promise.race([
+              tools.callValue("fake_race_winner", {}),
+              tools.callValue("fake_race_loser", {}),
+            ]);
             void tools.callValue("fake_race_audit", {});
-            return value;
-          });`,
+            void tools.callValue("fake_race_loser_release", {});
+            return value;`,
         },
       ),
     );
@@ -320,6 +452,14 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(winner.execute).toHaveBeenCalledOnce();
     expect(loser.execute).toHaveBeenCalledOnce();
     expect(audit.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      "loser:start",
+      "winner:win",
+      "audit:done",
+      "loser:release",
+      "loser:done",
+    ]);
     expect(loserAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
   });
@@ -363,34 +503,49 @@ describe("Code Mode bridge settlement and cancellation", () => {
   it.each(["race", "any"] as const)(
     "preserves the Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const events: string[] = [];
+      const slowStarted = createDeferred();
+      const slowRelease = createDeferred();
       let slowAborted = false;
       let slowCompleted = false;
-      const fast = pluginToolWithExecute("fake_fast", "Fast helper", async () =>
-        jsonResult({ winner: "fast" }),
-      );
+      const fast = pluginToolWithExecute("fake_fast", "Fast helper", async () => {
+        await slowStarted.promise;
+        events.push("fast:win");
+        return jsonResult({ winner: "fast" });
+      });
       const slow = pluginToolWithExecute(
         "fake_slow",
         "Slow helper",
         async (_toolCallId, _input, signal) => {
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, 25);
-            signal?.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(timer);
-                slowAborted = true;
-                reject(new Error("aborted"));
-              },
-              { once: true },
-            );
-          });
+          events.push("slow:start");
+          slowStarted.resolve();
+          signal?.addEventListener(
+            "abort",
+            () => {
+              slowAborted = true;
+              slowRelease.reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+          await slowRelease.promise;
+          events.push("slow:done");
           slowCompleted = true;
           return jsonResult({ winner: "slow" });
         },
       );
+      const release = pluginToolWithExecute(
+        "fake_slow_release",
+        "Release slow helper",
+        async () => {
+          events.push("slow:release");
+          slowRelease.resolve();
+          return jsonResult({ released: true });
+        },
+      );
       applyCodeModeCatalog({
-        tools: [...codeModeTools, fast, slow],
+        tools: [...codeModeTools, fast, slow, release],
         config,
         sessionId: "session-code-mode",
         sessionKey: "agent:main:main",
@@ -402,10 +557,12 @@ describe("Code Mode bridge settlement and cancellation", () => {
         await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
           `code-call-${combinator}-fast`,
           {
-            code: `return await Promise.${combinator}([
-              tools.callValue("fake_fast", {}),
-              tools.callValue("fake_slow", {}),
-            ]);`,
+            code: `const value = await Promise.${combinator}([
+                tools.callValue("fake_slow", {}),
+                tools.callValue("fake_fast", {}),
+              ]);
+              void tools.callValue("fake_slow_release", {});
+              return value;`,
           },
         ),
       );
@@ -413,6 +570,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
       expect(details).toMatchObject({ status: "completed", value: { winner: "fast" } });
       expect(fast.execute).toHaveBeenCalledOnce();
       expect(slow.execute).toHaveBeenCalledOnce();
+      expect(release.execute).toHaveBeenCalledOnce();
+      expect(events).toEqual(["slow:start", "fast:win", "slow:release", "slow:done"]);
       expect(slowCompleted).toBe(true);
       expect(slowAborted).toBe(false);
       expect(testing.activeRuns.size).toBe(0);
@@ -420,34 +579,46 @@ describe("Code Mode bridge settlement and cancellation", () => {
   );
 
   it("preserves fail-fast Promise.all while draining the slower nested tool", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const events: string[] = [];
+    const slowStarted = createDeferred();
+    const slowRelease = createDeferred();
     let slowAborted = false;
     let slowCompleted = false;
     const failed = pluginToolWithExecute("fake_failed", "Failed helper", async () => {
+      events.push("failed:wait");
+      await slowStarted.promise;
+      events.push("failed:reject");
       throw new Error("fast failure");
     });
     const slow = pluginToolWithExecute(
       "fake_slow",
       "Slow helper",
       async (_toolCallId, _input, signal) => {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              slowAborted = true;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        events.push("slow:start");
+        slowStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            slowAborted = true;
+            slowRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await slowRelease.promise;
+        events.push("slow:done");
         slowCompleted = true;
         return jsonResult({ winner: "slow" });
       },
     );
+    const release = pluginToolWithExecute("fake_slow_release", "Release slow helper", async () => {
+      events.push("slow:release");
+      slowRelease.resolve();
+      return jsonResult({ released: true });
+    });
     applyCodeModeCatalog({
-      tools: [...codeModeTools, failed, slow],
+      tools: [...codeModeTools, failed, slow, release],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -466,6 +637,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
             ]);
             return "unexpected success";
           } catch (error) {
+            void tools.callValue("fake_slow_release", {});
             return error.message;
           }`,
         },
@@ -475,6 +647,14 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details).toMatchObject({ status: "completed", value: "fast failure" });
     expect(failed.execute).toHaveBeenCalledOnce();
     expect(slow.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      "failed:wait",
+      "slow:start",
+      "failed:reject",
+      "slow:release",
+      "slow:done",
+    ]);
     expect(slowCompleted).toBe(true);
     expect(slowAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);

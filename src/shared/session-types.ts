@@ -1,3 +1,8 @@
+import type {
+  SessionCreatedActor,
+  SessionsAssignOwnerParams,
+} from "../../packages/gateway-protocol/src/index.js";
+
 /** Agent identity fields returned by gateway session listing APIs. */
 type GatewayAgentIdentity = {
   name?: string;
@@ -17,6 +22,7 @@ type GatewayAgentModel = {
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
+  cloudPlacementSupported?: boolean;
   source:
     | "env"
     | "agent"
@@ -35,6 +41,10 @@ export type GatewayThinkingLevelOption = {
 };
 
 export type GatewayAgentKind = "agent" | "system";
+
+/** Assignable identity returned by the complete session-owner facet. */
+export type SessionOwnerFacetIdentity = SessionsAssignOwnerParams["owner"] &
+  Pick<SessionCreatedActor, "label" | "avatarUrl">;
 
 /** Per-session Control UI face preference carried by session list rows. */
 export type SessionBoardFace = "chat" | "dashboard";
@@ -64,8 +74,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   offset?: number;
   nextOffset?: number | null;
   hasMore?: boolean;
-  /** Complete creator facet for the filtered result, independent of pagination. */
-  creators?: Array<{ id: string; label?: string; avatarUrl?: string }>;
+  /** Complete owner facet for the filtered result, independent of pagination. */
+  owners?: SessionOwnerFacetIdentity[];
   defaults: TDefaults;
   sessions: TRow[];
 };

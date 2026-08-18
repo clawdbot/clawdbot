@@ -14,7 +14,10 @@ import type { ApplicationContext } from "./context.ts";
 type ShellRenderState = {
   runtime: ApplicationRuntime;
   activeSessionKey: string;
-  routeState: { routeId: RouteId };
+  routeState: {
+    routeId: RouteId;
+    location?: { hash: string; pathname: string; search: string };
+  };
   render: () => TemplateResult;
 };
 
@@ -51,8 +54,17 @@ describe("OpenClaw shell dock suppression", () => {
         connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
         connect: vi.fn(),
       },
-      agents: { state: { agentsList: null } },
-      agentSelection: { state: { selectedId: "main" } },
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }, { id: "research" }],
+          },
+        },
+      },
+      agentSelection: { state: { selectedId: "research" } },
       config: {
         current: { terminalEnabled: true, serverVersion: null, devGitBranch: null },
       },
@@ -87,18 +99,15 @@ describe("OpenClaw shell dock suppression", () => {
           updateAvailable: null,
           updateRunning: false,
           updateStatusBanner: null,
+          recordedUpdateAttempt: null,
           controlUiRefreshRequired: false,
           approvalQueue: [],
           approvalBusy: false,
           approvalErrors: new Map(),
           approvalNowMs: 0,
           devicePairSetupOpen: false,
-          devicePairSetupLoading: false,
-          devicePairSetupError: null,
-          devicePairSetup: null,
-          devicePairSetupAccess: "full",
+          devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,
-          deviceAuthMigration: { error: null },
         },
         runUpdate: vi.fn(),
       },
@@ -111,13 +120,22 @@ describe("OpenClaw shell dock suppression", () => {
     const container = document.createElement("div");
     const desktopAvailable = () =>
       (
-        container.querySelector("openclaw-desktop-panel") as HTMLElement & {
-          available: boolean;
-        }
-      ).available;
+        container.querySelector("openclaw-desktop-panel") as
+          | (HTMLElement & {
+              available: boolean;
+            })
+          | null
+      )?.available ?? false;
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("research");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
@@ -148,11 +166,38 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          suppressed: boolean;
+          sessionKey: string | null;
         }
-      ).suppressed,
-    ).toBe(false);
-    expect(desktopAvailable()).toBe(true);
+      ).sessionKey,
+    ).toBe("agent:main:main");
+    expect(container.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
+
+    shell.routeState = {
+      routeId: "new-session",
+      location: { pathname: "/new-session", search: "?agent=missing", hash: "" },
+    };
+    renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("research");
+
+    shell.routeState = {
+      routeId: "new-session",
+      location: { pathname: "/new-session", search: "?agent=main", hash: "" },
+    };
+    renderLit(shell.render(), container);
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          agentId: string | null;
+        }
+      ).agentId,
+    ).toBe("main");
 
     context.sessions.state.result!.sessions = [
       {
@@ -174,5 +219,15 @@ describe("OpenClaw shell dock suppression", () => {
     context.sessions.state.result = null;
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
+
+    // Collapsed-nav fallback: the Ask OpenClaw toggle joins the chrome strip
+    // only while the sidebar (its footer home) is hidden, and stays admin-gated.
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    context.navigation.snapshot.navCollapsed = true;
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).not.toBeNull();
+    context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   });
 });

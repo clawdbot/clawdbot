@@ -7,12 +7,7 @@ import {
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
-import {
-  isSessionMember,
-  resolveAllAgentSessionStoreTargetsSync,
-  type SessionEntry,
-} from "../config/sessions.js";
-import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
@@ -23,6 +18,7 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { resolveSessionGroupMutationTargetsByName } from "./session-group-mutation-targets.js";
 import {
   invalidateSessionSharingSnapshot,
   loadCachedSessionSharingSnapshot,
@@ -278,12 +274,15 @@ const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
   ["chat.send", "sessionKey"],
   ["message.action", "sessionKey"],
   ["plugins.sessionAction", "sessionKey"],
+  ["progressCard.get", "sessionKey"],
+  ["progressCard.put", "sessionKey"],
   ["send", "sessionKey"],
   ["session.discussion.open", "sessionKey"],
   ["sessions.abort", "key"],
   ["sessions.compaction.branch", "key"],
   ["sessions.compaction.restore", "key"],
   ["sessions.compact", "key"],
+  ["sessions.create", "key"],
   ["sessions.delete", "key"],
   ["sessions.dispatch", "key"],
   ["sessions.files.set", "sessionKey"],
@@ -308,6 +307,8 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "chat.abort",
   "chat.inject",
   "chat.send",
+  "progressCard.get",
+  "progressCard.put",
   "session.discussion.open",
   "sessions.abort",
   "sessions.branches.switch",
@@ -320,6 +321,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.fork",
   "sessions.groups.delete",
   "sessions.groups.rename",
+  "sessions.groups.update",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reclaim",
@@ -334,17 +336,9 @@ function resolveSessionGroupMutationTargets(params: {
   requestParams: unknown;
 }): SessionMutationTarget[] | undefined {
   const groupName = readStringParam(params.requestParams, "name");
-  if (!groupName) {
-    return undefined;
-  }
-  return resolveAllAgentSessionStoreTargetsSync(params.getCfg()).flatMap((storeTarget) =>
-    listSessionEntriesCore({
-      agentId: storeTarget.agentId,
-      storePath: storeTarget.storePath,
-    }).flatMap(({ sessionKey, entry }) =>
-      entry.category?.trim() === groupName ? [{ sessionKey, agentId: storeTarget.agentId }] : [],
-    ),
-  );
+  return groupName
+    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
+    : undefined;
 }
 
 function resolveApprovalSessionTarget(
@@ -393,7 +387,11 @@ function resolveSessionMutationTargets(params: {
         })
       : undefined;
   }
-  if (params.method === "sessions.groups.rename" || params.method === "sessions.groups.delete") {
+  if (
+    params.method === "sessions.groups.rename" ||
+    params.method === "sessions.groups.delete" ||
+    params.method === "sessions.groups.update"
+  ) {
     return resolveSessionGroupMutationTargets({
       getCfg: params.getCfg,
       requestParams: params.requestParams,

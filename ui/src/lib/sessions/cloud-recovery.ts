@@ -11,6 +11,8 @@ export type CloudSessionCreateParams = SessionCreateParams & {
   key?: string;
   agentId: string;
   message: "";
+  projectId?: string;
+  visibility?: "draft";
   worktree: true;
 };
 
@@ -20,6 +22,7 @@ export type CloudSessionRecovery = {
   message: string;
   attachments?: unknown[];
   profileId: string;
+  machineClass?: string;
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
@@ -30,6 +33,7 @@ export type CloudSessionRecovery = {
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
 const CLOUD_CREATE_STRING_FIELDS = [
+  "category",
   "model",
   "thinkingLevel",
   "worktreeBaseRef",
@@ -37,7 +41,17 @@ const CLOUD_CREATE_STRING_FIELDS = [
   "cwd",
   "execNode",
   "catalogId",
+  "projectId",
 ] as const;
+const CLOUD_CREATE_FIELDS = new Set<string>([
+  "key",
+  "agentId",
+  "message",
+  "worktree",
+  "incognito",
+  "visibility",
+  ...CLOUD_CREATE_STRING_FIELDS,
+]);
 
 export function parseCloudSessionCreateParams(
   value: unknown,
@@ -48,21 +62,16 @@ export function parseCloudSessionCreateParams(
     return null;
   }
   const record = value;
-  const allowed = new Set<string>([
-    "key",
-    "agentId",
-    "message",
-    "worktree",
-    "incognito",
-    ...CLOUD_CREATE_STRING_FIELDS,
-  ]);
   if (
-    Object.keys(record).some((key) => !allowed.has(key)) ||
+    Object.keys(record).some((key) => !CLOUD_CREATE_FIELDS.has(key)) ||
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
+    (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.projectId !== undefined &&
+      (record.cwd !== undefined || record.execNode !== undefined)) ||
     CLOUD_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )
@@ -104,6 +113,8 @@ function validateCloudSessionRecovery(
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !isNonEmptyString(value.profileId) ||
+    (value.machineClass !== undefined &&
+      (!isNonEmptyString(value.machineClass) || value.machineClass.length > 128)) ||
     !isNonEmptyString(value.agentId) ||
     !cloudSessionRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
     (value.phase !== "creating" && value.phase !== "dispatching" && value.phase !== "sending") ||

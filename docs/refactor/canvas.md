@@ -43,6 +43,9 @@ Done:
 - Moved Canvas host URL and scoped capability helpers into `extensions/canvas/src`.
 - Moved Canvas node command defaults out of hardcoded core lists and into plugin `nodeInvokePolicies`.
 - Added plugin-owned Canvas host config at `plugins.entries.canvas.config.host`.
+- Registered A2UI as a sandboxed board widget source kind through the generic
+  Plugin SDK content-kind seam. The capability-scoped A2UI asset route remains
+  available when the optional Canvas file host is disabled.
 - Moved Canvas and A2UI HTTP serving behind Canvas plugin HTTP route registration.
 - Added generic plugin WebSocket upgrade dispatch for plugin-owned HTTP routes.
 - Replaced Canvas-specific gateway host URL and node capability auth with generic hosted plugin surface and node capability helpers.

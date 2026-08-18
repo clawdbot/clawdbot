@@ -6,45 +6,6 @@
  * group config, then returns sender/route/command/activation projections plus
  * the ordered ingress graph.
  */
-export {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
-  readChannelIngressStoreAllowFromForDmPolicy,
-  resolveChannelMessageIngress,
-  resolveStableChannelMessageIngress,
-} from "../channels/message-access/index.js";
-export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
-export type {
-  AccessGroupMembershipFact,
-  ChannelIngressDecision,
-  ChannelIngressAccessGroupMembershipResolver,
-  ChannelIngressCommandPresetInput,
-  ChannelIngressConfigInput,
-  ChannelIngressEventInput,
-  ChannelIngressEventPresetInput,
-  ChannelIngressIdentityDescriptor,
-  ChannelIngressIdentityAlias,
-  ChannelIngressIdentityField,
-  ChannelIngressIdentitySubjectInput,
-  ChannelIngressIdentifierKind,
-  ChannelIngressPolicyInput,
-  ChannelIngressRouteAccess,
-  ChannelIngressRouteDescriptor,
-  ChannelIngressResolver,
-  ChannelIngressResolverMessageParams,
-  ChannelIngressStateInput,
-  ChannelIngressState,
-  ChannelMessageIngressCommandInput,
-  CreateChannelIngressResolverParams,
-  IngressReasonCode,
-  ResolvedChannelMessageIngress,
-  ResolveChannelMessageIngressParams,
-  ResolveStableChannelMessageIngressParams,
-  StableChannelIngressIdentityParams,
-} from "../channels/message-access/index.js";
-export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
-
 import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDrainOptions,
@@ -53,6 +14,47 @@ import {
   type ChannelIngressMonitorPayloadCodec,
   type CreateChannelIngressMonitorOptions,
 } from "../channels/message/ingress-monitor.js";
+export {
+  channelIngressRoutes,
+  createChannelIngressResolver,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "../channels/message-access/runtime.js";
+export { defineStableChannelIngressIdentity } from "../channels/message-access/runtime-identity.js";
+export { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
+export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
+export type {
+  ChannelIngressAccessGroupMembershipResolver,
+  ChannelIngressCommandPresetInput,
+  ChannelIngressConfigInput,
+  ChannelIngressContextBinding,
+  ChannelIngressEventPresetInput,
+  ChannelIngressIdentityDescriptor,
+  ChannelIngressIdentityAlias,
+  ChannelIngressIdentityField,
+  ChannelIngressIdentitySubjectInput,
+  ChannelIngressRouteAccess,
+  ChannelIngressRouteDescriptor,
+  ChannelIngressResolver,
+  ChannelIngressResolverMessageParams,
+  ChannelMessageIngressCommandInput,
+  CreateChannelIngressResolverParams,
+  ResolvedChannelMessageIngress,
+  ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
+  StableChannelIngressIdentityParams,
+} from "../channels/message-access/runtime-types.js";
+export type {
+  AccessGroupMembershipFact,
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
+  ChannelIngressIdentifierKind,
+  ChannelIngressPolicyInput,
+  ChannelIngressState,
+  ChannelIngressStateInput,
+  IngressReasonCode,
+} from "../channels/message-access/types.js";
+export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -147,22 +149,21 @@ export function fanInChannelIngressLifecycles(
       await lifecycle.onAdopted();
     }
   };
-  const abandonAll = async () => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
+  const fanOut = async (invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>) => {
+    await Promise.all(lifecycles.map(async (lifecycle) => await invoke(lifecycle)));
   };
-  const failAll = async (error: unknown) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
-  };
+  const abandonAll = () => fanOut((lifecycle) => lifecycle.onAbandoned());
+  const failAll = (error: unknown) =>
+    fanOut((lifecycle) =>
+      lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned(),
+    );
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
   // Omit aggregate cancellation unless every durable source supports it. Callers
   // can then use settle/abandon without an acknowledged-but-unsettled claim.
-  const cancelAll = async () => {
-    await Promise.all(
-      lifecycles.map(async (lifecycle) =>
-        lifecycle.onCancelled ? await lifecycle.onCancelled() : await lifecycle.onAbandoned(),
-      ),
+  const cancelAll = () =>
+    fanOut((lifecycle) =>
+      lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
     );
-  };
   return {
     lifecycle: {
       abortSignal:
@@ -208,10 +209,10 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
       }
     },
-    abandon: async (_error?: unknown) => {
+    abandon: async (error?: unknown) => {
       if (!handedOff) {
         handedOff = true;
-        await abandonAll();
+        await (error === undefined ? abandonAll() : failAll(error));
       }
     },
     // Source-compatible lifecycles predate onCancelled. Settle each source through

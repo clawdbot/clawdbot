@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   createGatewayKernel,
@@ -6,6 +7,7 @@ import {
 } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
+import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
@@ -27,20 +29,43 @@ export async function startGatewayServerCore(
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
     clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
+    sealAndJoinRegisteredSidecarStops,
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
     terminalSessions,
+    shutdownRuntime,
   } = gatewayKernel;
   try {
-    const transport = await createGatewayHttpTransport(gatewayKernel.createHttpTransportOptions());
+    const transport = await createGatewayHttpTransport({
+      ...gatewayKernel.createHttpTransportOptions(),
+      ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
+        ? {
+            prepareManagedTailscaleIngress: async (backend) => {
+              const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
+              const cleanup = await startGatewayTailscaleExposure({
+                tailscaleMode: gatewayKernel.tailscaleMode,
+                preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
+                port,
+                backend,
+                controlUiBasePath: gatewayKernel.controlUiBasePath,
+                logTailscale,
+              });
+              // The server close handle is not published until this callback settles.
+              // Startup failure therefore owns teardown before normal close can race it.
+              gatewayKernel.kernel.setTailscaleCleanup(cleanup);
+            },
+          }
+        : {}),
+    });
     gatewayKernel.transportBridge.attach(transport);
-    await finishGatewayStartup({
+    const startup = await finishGatewayStartup({
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
@@ -51,10 +76,10 @@ export async function startGatewayServerCore(
       logChannels,
       logCron,
       logReload,
-      logTailscale,
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
+    startupSettled = startup.startupSettled;
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -67,25 +92,37 @@ export async function startGatewayServerCore(
   const close = createCloseHandler();
 
   return {
+    startupSettled,
+    getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: async (optsLocal) => {
-      try {
-        await beginClosePrelude();
-        // Kill any live operator shells before the socket layer tears down.
-        terminalSessions.disposeAll();
-        await stopRegisteredGatewayLifetimeSidecars();
-        await stopRegisteredPostReadySidecars();
-        // Run gateway_stop plugin hook before shutdown
-        const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
-        await runGlobalGatewayStopSafely({
-          event: { reason: optsLocal?.reason ?? "gateway stopping" },
-          ctx: { port },
-          onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
-        });
-        await runClosePrelude();
-        await close(optsLocal);
-      } finally {
-        clearFallbackGatewayContextForServer.get()();
-      }
+      await runGatewayShutdownSteps({
+        steps: [
+          { name: "close prelude fence", run: beginClosePrelude },
+          // Kill any live operator shells before the socket layer tears down.
+          { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
+          { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
+          { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
+          {
+            name: "gateway_stop plugin hooks",
+            run: async () => {
+              await shutdownRuntime.runGlobalGatewayStopSafely({
+                event: { reason: optsLocal?.reason ?? "gateway stopping" },
+                ctx: { port },
+                onError: (error) =>
+                  log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
+              });
+            },
+          },
+          { name: "gateway close prelude", run: runClosePrelude },
+          { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
+          { name: "gateway close", run: () => close(optsLocal) },
+          {
+            name: "fallback gateway context",
+            run: () => clearFallbackGatewayContextForServer.get()(),
+          },
+        ],
+        onError: (message) => log.error(message),
+      });
     },
   };
 }

@@ -28,55 +28,19 @@ function client(overrides: Partial<GatewayClient>): GatewayClient {
 }
 
 describe("device management authz", () => {
-  it("binds a migration session to its signed device without admin power", () => {
-    expect(
-      resolveDeviceSessionAuthz(
-        client({
-          isControlUiDeviceAuthMigrationSession: true,
-          isControlUiDeviceAuthMigration: true,
-        }),
-      ),
-    ).toEqual({
-      callerDeviceId: "browser-1",
-      callerScopes: ["operator.admin", "operator.pairing"],
-      isAdminCaller: false,
-      isDeviceAuthMigrationCaller: true,
-      isDeviceAuthMigrationSession: true,
-    });
-  });
-
-  it("withholds device-management admin power from a device-less migration session", () => {
-    expect(
-      resolveDeviceSessionAuthz(
-        client({
-          isControlUiDeviceAuthMigrationSession: true,
-          connect: {
-            ...client({}).connect,
-            device: undefined,
-          },
-        }),
-      ),
-    ).toMatchObject({
-      callerDeviceId: null,
-      isAdminCaller: false,
-      isDeviceAuthMigrationCaller: false,
-      isDeviceAuthMigrationSession: true,
-    });
-  });
-
   it("keeps ordinary shared-auth device metadata untrusted", () => {
-    expect(resolveDeviceSessionAuthz(client({}))).toMatchObject({
+    expect(resolveDeviceSessionAuthz(client({}))).toEqual({
       callerDeviceId: null,
+      callerScopes: ["operator.admin", "operator.pairing"],
       isAdminCaller: true,
-      isDeviceAuthMigrationCaller: false,
     });
   });
 
   it("keeps device-token self-service behavior unchanged", () => {
-    expect(resolveDeviceSessionAuthz(client({ isDeviceTokenAuth: true }))).toMatchObject({
+    expect(resolveDeviceSessionAuthz(client({ isDeviceTokenAuth: true }))).toEqual({
       callerDeviceId: "browser-1",
+      callerScopes: ["operator.admin", "operator.pairing"],
       isAdminCaller: true,
-      isDeviceAuthMigrationCaller: false,
     });
   });
 });

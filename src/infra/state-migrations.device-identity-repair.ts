@@ -1,4 +1,4 @@
-// Doctor-only detection and replacement for invalid canonical device identity rows.
+// Owner-authorized detection and Doctor-only replacement for invalid device identity rows.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -25,16 +25,18 @@ function pathMayExist(filePath: string): boolean {
   }
 }
 
-/** Detect the exact retired paths and invalid canonical row only with Doctor authority. */
+/** Detect retired paths for an authorized importer; only Doctor may rotate invalid SQLite state. */
 export function detectLegacyDeviceIdentity(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
 }): LegacyDeviceIdentityDetection {
   const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
   const doctorAuthorized = params.doctorOnlyStateMigrations === true;
+  const importAuthorized = doctorAuthorized || params.allowLegacyDeviceIdentityImport === true;
   let hasInvalidCanonical = false;
   if (doctorAuthorized) {
     try {
@@ -51,7 +53,7 @@ export function detectLegacyDeviceIdentity(params: {
     claimPath,
     nativeClaimPath,
     hasLegacy:
-      doctorAuthorized &&
+      importAuthorized &&
       (pathMayExist(claimPath) || pathMayExist(nativeClaimPath) || pathMayExist(sourcePath)),
     hasInvalidCanonical,
   };

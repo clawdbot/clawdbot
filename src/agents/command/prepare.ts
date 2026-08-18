@@ -358,10 +358,45 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     const { getAcpSessionManager } = await loadAcpManagerRuntime();
     const acpManager = getAcpSessionManager();
     const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
+    let promptMessage = message;
+    if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
+      const {
+        expandExplicitSkillReferences,
+        hasSkillReferenceCandidate,
+        listSkillCommandsForWorkspace,
+        resolveEffectiveAgentSkillFilter,
+      } = await import("../../skills/discovery/chat-commands.runtime.js");
+      const hasExplicitSkillCandidate =
+        message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
+      if (hasExplicitSkillCandidate) {
+        const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
+        const commandParams = {
+          workspaceDir,
+          cfg,
+          agentId: sessionAgentId,
+          sessionEntry: sessionEntryRaw,
+          sessionKey,
+          ...(skillFilter ? { skillFilter } : {}),
+        };
+        const skillCommands = listSkillCommandsForWorkspace(commandParams);
+        const allSkillCommands = skillFilter
+          ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
+          : skillCommands;
+        const expansion = expandExplicitSkillReferences({
+          text: message,
+          skillCommands,
+          allSkillCommands,
+        });
+        if (expansion.error) {
+          throw new Error(expansion.error);
+        }
+        promptMessage = expansion.body;
+      }
+    }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(message, opts.internalEvents)
-        : prependInternalEventContext(message, opts.internalEvents);
+        ? resolveAcpPromptBody(promptMessage, opts.internalEvents)
+        : prependInternalEventContext(promptMessage, opts.internalEvents);
     const transcriptBody =
       opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 

@@ -29,7 +29,26 @@ export function reloadControlUiIfStale(identity: {
   return false;
 }
 
-export function controlUiVersionDiffersFrom(
+/** Exact artifact comparison when both sides expose it. Configured roots opt
+ * out explicitly; a missing source denotes a legacy gateway and keeps the
+ * package-version fallback used before build ids shipped. */
+export function controlUiBuildDiffersFrom(identity: {
+  version?: string | null;
+  buildId?: string | null;
+  controlUiBuildSource?: "bundled" | "configured";
+}): boolean {
+  if (identity.controlUiBuildSource === "configured") {
+    return false;
+  }
+  const controlUiBuildId = CONTROL_UI_BUILD_INFO.buildId?.trim();
+  const gatewayBuildId = identity.buildId?.trim();
+  if (controlUiBuildId && controlUiBuildId !== "dev" && gatewayBuildId) {
+    return controlUiBuildId !== gatewayBuildId;
+  }
+  return controlUiVersionDiffersFrom(identity.version ?? undefined);
+}
+
+function controlUiVersionDiffersFrom(
   gatewayVersion: string | undefined,
   gatewayCommit?: string,
 ): boolean {

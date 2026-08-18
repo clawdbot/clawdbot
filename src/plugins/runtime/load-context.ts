@@ -1,5 +1,4 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
-import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
 import {
@@ -11,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
+import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
 import { setCurrentPluginMetadataSnapshot } from "../current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
@@ -181,8 +181,11 @@ export function resolvePluginRuntimeLoadContext(
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
-  const rawWorkspaceDir =
-    options?.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(rawConfig, env);
+  const rawWorkspaceDir = resolvePluginControlPlaneWorkspace({
+    config: rawConfig,
+    env,
+    workspaceDir: options?.workspaceDir,
+  }).workspaceDir;
   const resolveMetadataSnapshot = (params: {
     config: OpenClawConfig;
     index?: PluginMetadataSnapshot["index"];
@@ -225,7 +228,11 @@ export function resolvePluginRuntimeLoadContext(
     snapshot: initialMetadataSnapshot,
   });
   const config = autoEnabled.config;
-  const workspaceDir = options?.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(config, env);
+  const workspaceDir = resolvePluginControlPlaneWorkspace({
+    config,
+    env,
+    workspaceDir: options?.workspaceDir,
+  }).workspaceDir;
   const metadataSnapshot =
     options?.manifestRegistry !== undefined
       ? undefined

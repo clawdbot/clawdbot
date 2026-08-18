@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPidAlive } from "../shared/pid-alive.js";
 
 export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "fork-no-output.sh");
@@ -20,15 +21,6 @@ export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   );
   await fs.chmod(scriptPath, 0o700);
   return scriptPath;
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function waitForPidToExit(pid: number, timeoutMs = 2000): Promise<boolean> {

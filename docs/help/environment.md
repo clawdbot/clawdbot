@@ -207,6 +207,8 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 }
 ```
 
+A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
+
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
 ## Secret refs vs `${ENV}` strings

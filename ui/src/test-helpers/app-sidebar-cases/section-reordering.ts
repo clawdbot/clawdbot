@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   catalogPage,
   createGatewayHarness,
@@ -8,6 +7,7 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -51,15 +51,10 @@ describe("AppSidebar section reordering", () => {
     const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
     if (options.withCatalog || options.scopes) {
       gateway.publish({
-        hello: {
-          ...(options.scopes ? { auth: { role: "operator", scopes: options.scopes } } : {}),
-          features: {
-            methods: [
-              ...(options.withCatalog ? ["sessions.catalog.list"] : []),
-              "sessions.groups.put",
-            ],
-          },
-        } as ApplicationGatewaySnapshot["hello"],
+        hello: gatewayHelloForMethods(
+          [...(options.withCatalog ? ["sessions.catalog.list"] : []), "sessions.groups.put"],
+          options.scopes,
+        ),
       });
     }
     const harness = createSessionsHarness("main", [
@@ -155,7 +150,7 @@ describe("AppSidebar section reordering", () => {
     expect(header.getAttribute("draggable")).toBe("false");
     expect(header.getAttribute("title")).toBeTruthy();
     expect(row?.getAttribute("draggable")).toBe("false");
-    expect(row?.getAttribute("title")).toBeTruthy();
+    expect(row?.hasAttribute("title")).toBe(false);
 
     const dataTransfer = createDataTransferStub();
     dispatchDragEvent(header, "dragstart", dataTransfer);
@@ -170,9 +165,9 @@ describe("AppSidebar section reordering", () => {
   });
 
   it("does not start a section drag from a header action button", async () => {
-    const { sidebar } = await mountWithGroups([]);
+    const { sidebar } = await mountWithGroups(["Alpha"]);
     const dataTransfer = createDataTransferStub();
-    const newSessionButton = groupHeader(sidebar, "ungrouped").querySelector(
+    const newSessionButton = groupHeader(sidebar, "category:Alpha").querySelector(
       ".sidebar-new-session",
     );
     if (!newSessionButton) {
@@ -180,7 +175,7 @@ describe("AppSidebar section reordering", () => {
     }
 
     newSessionButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    dispatchDragEvent(groupHeader(sidebar, "ungrouped"), "dragstart", dataTransfer);
+    dispatchDragEvent(groupHeader(sidebar, "category:Alpha"), "dragstart", dataTransfer);
 
     expect(dataTransfer.types).toEqual([]);
     expect(sidebar.sessionOrganizer.draggingSidebarSection).toBeNull();

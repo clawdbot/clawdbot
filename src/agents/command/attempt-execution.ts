@@ -25,7 +25,6 @@ import {
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -78,6 +77,7 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
+import { appendGitCoauthorContext } from "../git-coauthor-attribution.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
@@ -136,10 +136,6 @@ function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
-}
-
-function normalizeTranscriptMirrorText(value: string): string {
-  return value.trim().replace(/\s+/gu, " ");
 }
 
 const ACP_TRANSCRIPT_USAGE = {
@@ -213,7 +209,6 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  embeddedAssistantGapFill?: boolean;
   skipAssistantTurn?: boolean;
   assistant: {
     api: string;
@@ -374,19 +369,6 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async (
-        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
-      ) => {
-        if (!params.embeddedAssistantGapFill) {
-          return true;
-        }
-        const latest = await readTailAssistantTextFromSessionTranscript(context, {
-          excludeTranscriptOnlyOpenClawAssistant: true,
-        });
-        const normalizedReply = normalizeTranscriptMirrorText(replyText);
-        const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
-        return !normalizedLatest || normalizedLatest !== normalizedReply;
-      },
     });
   }
 
@@ -476,7 +458,6 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
   skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
@@ -484,8 +465,7 @@ export async function persistCliTurnTranscript(params: {
   const replyText = resolveCliTranscriptReplyText(result);
   const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = result.meta.agentMeta?.model?.trim() ?? "default";
-  const gapFill = params.embeddedAssistantGapFill ?? false;
-  const skipUserTurn = gapFill || requestedSkipUserTurn === true;
+  const skipUserTurn = requestedSkipUserTurn === true;
 
   return await persistTextTurnTranscript({
     ...transcript,
@@ -493,7 +473,6 @@ export async function persistCliTurnTranscript(params: {
     transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
     userMessage: skipUserTurn ? undefined : transcript.userMessage,
     finalText: replyText,
-    embeddedAssistantGapFill: gapFill,
     assistant: {
       api: "cli",
       provider,
@@ -509,6 +488,7 @@ export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
+  modelHasVision?: boolean;
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -844,6 +824,10 @@ export function runAgentAttempt(params: {
       params.opts.inputProvenance?.kind === "inter_session"
         ? cliEffectivePrompt
         : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
+    const cliModelPrompt = appendGitCoauthorContext(cliPrompt, params.opts.gitCoauthorAttribution);
+    const cliPersistencePrompt = params.opts.gitCoauthorAttribution
+      ? (cliTranscriptPrompt ?? cliPrompt)
+      : cliTranscriptPrompt;
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -941,9 +925,10 @@ export function runAgentAttempt(params: {
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
             config: params.cfg,
-            prompt: cliPrompt,
-            transcriptPrompt: cliTranscriptPrompt,
+            prompt: cliModelPrompt,
+            transcriptPrompt: cliPersistencePrompt,
             modelProvider: params.providerOverride,
+            modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
             model: params.modelOverride,
             thinkLevel: params.resolvedThinkLevel,
@@ -955,6 +940,7 @@ export function runAgentAttempt(params: {
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
+            cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
@@ -1133,6 +1119,13 @@ export function runAgentAttempt(params: {
     });
   }
 
+  const embeddedModelPrompt = appendGitCoauthorContext(
+    effectivePrompt,
+    params.opts.gitCoauthorAttribution,
+  );
+  const embeddedPersistencePrompt = params.opts.gitCoauthorAttribution
+    ? (continuationTranscriptBody ?? effectivePrompt)
+    : continuationTranscriptBody;
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
     preparedRunAdmission: params.preparedRunAdmission,
     sessionId: params.sessionId,
@@ -1163,13 +1156,15 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
+    permissionMode: params.sessionEntry?.permissionMode,
+    sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
-    prompt: effectivePrompt,
-    transcriptPrompt: continuationTranscriptBody,
+    prompt: embeddedModelPrompt,
+    transcriptPrompt: embeddedPersistencePrompt,
     // CLI-origin retries cannot rely on transcript replay: orphan-user repair
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -1178,6 +1173,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
+    modelHasVision: params.modelHasVision,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,

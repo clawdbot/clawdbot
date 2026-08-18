@@ -26,6 +26,11 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/regis
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -225,7 +230,12 @@ function firstStartAccountContext(
 
 function installTestRegistry(
   ...plugins: Array<
-    ChannelPlugin<TestAccount> | { plugin: ChannelPlugin<TestAccount>; origin: string }
+    | ChannelPlugin<TestAccount>
+    | {
+        plugin: ChannelPlugin<TestAccount>;
+        origin: string;
+        resolveChannelRuntime?: () => PluginRuntime["channel"];
+      }
   >
 ) {
   const registry = createEmptyPluginRegistry();
@@ -234,9 +244,12 @@ function installTestRegistry(
     registry.channels.push({
       pluginId: plugin.id,
       ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
+      ...(typeof candidate === "object" && "resolveChannelRuntime" in candidate
+        ? { resolveChannelRuntime: candidate.resolveChannelRuntime }
+        : {}),
       source: "test",
       plugin,
-    });
+    } as PluginRegistry["channels"][number]);
   }
   setActivePluginRegistry(registry);
 }
@@ -295,6 +308,7 @@ describe("server-channels auto restart", () => {
   let previousRegistry: PluginRegistry | null = null;
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     previousRegistry = getActivePluginRegistry();
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -315,8 +329,134 @@ describe("server-channels auto restart", () => {
     await flushMicrotasks();
     vi.clearAllTimers();
     vi.useRealTimers();
+    resetGatewayWorkAdmission();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+  });
+
+  it("keeps a channel task admitted after the starting request finishes", async () => {
+    const continueChannelTask = createDeferred();
+    const observedAdmission = createDeferred<boolean>();
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      await continueChannelTask.promise;
+      observedAdmission.resolve(isGatewaySubordinateWorkAdmissionClosed());
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const requestAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(requestAdmission).not.toBeNull();
+    if (!requestAdmission) {
+      return;
+    }
+
+    try {
+      await requestAdmission.run(async () => {
+        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+        await waitForImmediate();
+        await waitForMicrotaskCondition(
+          () => startAccount.mock.calls.length === 1,
+          "expected channel task to start",
+        );
+      });
+      requestAdmission.release();
+      continueChannelTask.resolve();
+
+      await expect(observedAdmission.promise).resolves.toBe(false);
+    } finally {
+      requestAdmission.release();
+      continueChannelTask.resolve();
+    }
+  });
+
+  it("keeps approval-bootstrap descendants admitted after the starting request finishes", async () => {
+    const continueApprovalDescendant = createDeferred();
+    const observedAdmission = createDeferred<boolean>();
+    hoisted.startChannelApprovalHandlerBootstrap.mockImplementation(async () => {
+      void Promise.resolve().then(async () => {
+        await continueApprovalDescendant.promise;
+        observedAdmission.resolve(isGatewaySubordinateWorkAdmissionClosed());
+      });
+      return async () => {};
+    });
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const requestAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(requestAdmission).not.toBeNull();
+    if (!requestAdmission) {
+      return;
+    }
+
+    try {
+      await requestAdmission.run(async () => {
+        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+        await waitForImmediate();
+        await waitForMicrotaskCondition(
+          () => startAccount.mock.calls.length === 1,
+          "expected channel task to start",
+        );
+      });
+      requestAdmission.release();
+      continueApprovalDescendant.resolve();
+
+      await expect(observedAdmission.promise).resolves.toBe(false);
+    } finally {
+      requestAdmission.release();
+      continueApprovalDescendant.resolve();
+    }
+  });
+
+  it("keeps automatic restarts admitted after the starting request finishes", async () => {
+    const finishFirstChannelTask = createDeferred();
+    const observedAdmission: boolean[] = [];
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      observedAdmission.push(isGatewaySubordinateWorkAdmissionClosed());
+      if (observedAdmission.length === 1) {
+        await finishFirstChannelTask.promise;
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const requestAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(requestAdmission).not.toBeNull();
+    if (!requestAdmission) {
+      return;
+    }
+
+    try {
+      await requestAdmission.run(async () => {
+        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+        await waitForImmediate();
+        await waitForMicrotaskCondition(
+          () => startAccount.mock.calls.length === 1,
+          "expected initial channel task to start",
+        );
+      });
+      requestAdmission.release();
+      finishFirstChannelTask.resolve();
+      await advanceTimersUntil(
+        () => startAccount.mock.calls.length === 2,
+        "expected channel task to restart",
+        { stepMs: 10, maxMs: 100 },
+      );
+
+      expect(observedAdmission).toEqual([false, false]);
+    } finally {
+      requestAdmission.release();
+      finishFirstChannelTask.resolve();
+    }
   });
 
   it("caps crash-loop restarts after max attempts", async () => {
@@ -2362,6 +2502,35 @@ describe("server-channels auto restart", () => {
     expect(typeof (ctx?.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound.run).toBe(
       "function",
     );
+  });
+
+  it("keeps the active registration runtime after an inactive prepared load", async () => {
+    const activeRuntime = {
+      ...createRuntimeChannel(),
+      marker: "active-registration",
+    } as PluginRuntime["channel"] & { marker: string };
+    const inactivePreparedRuntime = {
+      ...createRuntimeChannel(),
+      marker: "inactive-prepared",
+    } as PluginRuntime["channel"] & { marker: string };
+    const resolveChannelRuntime = vi.fn(() => inactivePreparedRuntime);
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
+
+    installTestRegistry({
+      plugin: createTestPlugin({ startAccount }),
+      origin: "bundled",
+      resolveChannelRuntime: () => activeRuntime,
+    });
+    const manager = createManager({ resolveChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+    const ctx = firstStartAccountContext(startAccount);
+    expect((ctx.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "active-registration",
+    );
+    expect(ctx.channelRuntime).not.toBe(activeRuntime);
   });
 
   it("keeps the full runtime path for non-bundled channels", async () => {

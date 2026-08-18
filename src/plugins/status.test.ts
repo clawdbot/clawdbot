@@ -2,14 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
   createInstalledPluginIndexSnapshot,
   createPluginLoadResult,
   createPluginRecord,
-  DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
   HOOK_ONLY_MESSAGE,
   REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
 } from "./status.test-fixtures.js";
@@ -125,6 +123,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => undefined,
   resolveDefaultAgentId: () => "default",
   tryResolveConfiguredAgentWorkspaceDir: () => undefined,
+  tryResolveSystemAgentWorkspaceDir: () => undefined,
 }));
 
 vi.mock("../agents/workspace.js", () => ({
@@ -850,74 +849,6 @@ describe("plugin status reports", () => {
 
     expect(buildPluginCompatibilitySnapshotNotices({ config: {} })).toStrictEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("warns external plugins off deprecated memory embedding provider registration", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "legacy-memory-provider",
-        name: "Legacy Memory Provider",
-        memoryEmbeddingProviderIds: ["legacy-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["legacy-memory-provider"] },
-      }),
-    );
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [`legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`],
-    });
-  });
-
-  it("warns when external plugins register memory embedding providers at runtime only", () => {
-    const runtimeProviderRegistration: PluginMemoryEmbeddingProviderRegistration = {
-      pluginId: "runtime-only-legacy-memory-provider",
-      pluginName: "Runtime Only Legacy Memory Provider",
-      provider: {
-        id: "runtime-only-legacy-memory-provider",
-        create: async () => ({ provider: null }),
-      },
-      source: "/tmp/runtime-only-legacy-memory-provider/index.ts",
-    };
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "runtime-only-legacy-memory-provider",
-          name: "Runtime Only Legacy Memory Provider",
-        }),
-      ],
-      memoryEmbeddingProviders: [runtimeProviderRegistration],
-    });
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "runtime-only-legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [
-        `runtime-only-legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`,
-      ],
-    });
-  });
-
-  it("does not surface bundled memory embedding migration debt as user warnings", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "bundled-memory-provider",
-        name: "Bundled Memory Provider",
-        origin: "bundled",
-        memoryEmbeddingProviderIds: ["bundled-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["bundled-memory-provider"] },
-      }),
-    );
-
-    expectNoCompatibilityWarnings();
   });
 
   it("warns external plugins when load diagnostics reference removed session file APIs", () => {

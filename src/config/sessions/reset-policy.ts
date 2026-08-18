@@ -1,6 +1,5 @@
 // Session reset policy resolves automatic freshness for direct, group, and thread sessions.
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
-import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
 type SessionStaleReason = Exclude<SessionResetMode, "none">;
@@ -22,6 +21,7 @@ export type SessionFreshness = {
 
 const DEFAULT_RESET_MODE: SessionResetMode = "none";
 const DEFAULT_RESET_AT_HOUR = 4;
+const DEFAULT_IDLE_MINUTES = 0;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 function resolveDailyResetAtMs(now: number, atHour: number): number {

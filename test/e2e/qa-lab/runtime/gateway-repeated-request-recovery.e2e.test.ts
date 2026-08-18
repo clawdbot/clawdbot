@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
@@ -55,6 +56,7 @@ const QUEUED_PROMPT =
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
 const PRODUCTION_RECOVERY_BOUND_MS = 360_000;
+const RECOVERY_PROGRESS_INTERVAL_MS = 60_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
@@ -83,11 +85,22 @@ async function waitForStability(
   timeoutMs: number,
 ): Promise<StabilityEvent[]> {
   const startedAt = Date.now();
+  let nextProgressAt = RECOVERY_PROGRESS_INTERVAL_MS;
   let latest: StabilityEvent[] = [];
   while (Date.now() - startedAt < timeoutMs) {
     latest = (await readStability(gateway, sinceSeq)).events ?? [];
     if (predicate(latest)) {
       return latest;
+    }
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= nextProgressAt) {
+      // Vitest suppresses test console output; write to the worker fd so the outer
+      // no-output watchdog can distinguish this production-length poll from a stalled worker.
+      writeSync(
+        2,
+        `[gateway-repeated-request-recovery] waiting for stability evidence (${elapsedMs}ms, ${latest.length} events)\n`,
+      );
+      nextProgressAt += RECOVERY_PROGRESS_INTERVAL_MS;
     }
     await sleep(1_000);
   }

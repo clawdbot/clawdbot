@@ -108,6 +108,10 @@ function normalizePreferredHeight(value: number | undefined): number | undefined
     : undefined;
 }
 
+export function isCanvasBoardWidgetName(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
+}
+
 function coerceCanvasPreview(
   record: Record<string, unknown> | undefined,
 ): CanvasPreview | undefined {
@@ -145,10 +149,9 @@ function coerceCanvasPreview(
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
   const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
-  const boardWidgetName =
-    requestedBoardWidgetName && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(requestedBoardWidgetName)
-      ? requestedBoardWidgetName
-      : undefined;
+  const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
+    ? requestedBoardWidgetName
+    : undefined;
   if (mcpAppViewId && viewId === mcpAppViewId) {
     return {
       kind: "canvas",

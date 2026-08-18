@@ -8,11 +8,8 @@ import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  getAgentScopedMediaLocalRoots,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -268,6 +265,7 @@ export async function handleQaInbound(params: {
   account: ResolvedQaChannelAccount;
   config: CoreConfig;
   message: QaBusMessage;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getQaChannelRuntime();
   const inbound = params.message;
@@ -314,6 +312,16 @@ export async function handleQaInbound(params: {
         target,
       })
     : undefined;
+  const nativeCommand = inbound.nativeCommand;
+  const commandTargets = nativeCommand
+    ? resolveNativeCommandSessionTargets({
+        agentId: route.agentId,
+        sessionPrefix: "qa-channel:slash",
+        userId: inbound.senderId,
+        targetSessionKey: route.sessionKey,
+      })
+    : undefined;
+  const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
   const access = await resolveStableChannelMessageIngress({
     channelId: params.channelId,
     accountId: params.account.accountId,
@@ -325,6 +333,12 @@ export async function handleQaInbound(params: {
       id: inbound.conversation.id,
       threadId: inbound.threadId,
       title: inbound.conversation.title,
+    },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey,
+      messageId: inbound.id,
+      inboundEventKind: "user_request",
     },
     mentionFacts: isGroup
       ? {
@@ -355,17 +369,7 @@ export async function handleQaInbound(params: {
     body: inbound.text,
   });
   const media = await resolveQaInboundMediaFacts(inbound.attachments);
-  const nativeCommand = inbound.nativeCommand;
-  const commandTargets = nativeCommand
-    ? resolveNativeCommandSessionTargets({
-        agentId: route.agentId,
-        sessionPrefix: "qa-channel:slash",
-        userId: inbound.senderId,
-        targetSessionKey: route.sessionKey,
-      })
-    : undefined;
-  const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channel: params.channelId,
     accountId: route.accountId ?? params.account.accountId,
     messageId: inbound.id,
@@ -400,6 +404,7 @@ export async function handleQaInbound(params: {
     },
     message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody: inbound.text },
     media,
+    channelIngress: access,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },

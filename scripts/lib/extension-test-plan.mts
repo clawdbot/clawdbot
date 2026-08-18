@@ -89,10 +89,36 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
+// A 34-file changed shard starved real-time watches and the no-output watchdog.
+// Keep serial, non-isolated Codex processes small enough for prompt output (#125768, #125839).
+const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 12;
+const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
+const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
 const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
+  [
+    "test/vitest/vitest.extension-codex.config.ts",
+    // This non-isolated fileParallelism:false lane accumulates every mocked module graph.
+    // At ~166 files, one worker exhausted its heap during teardown (#124413).
+    CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+  ],
   // The non-isolated Matrix suite intentionally shares module state within a process.
   // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
-  ["test/vitest/vitest.extension-matrix.config.ts", 40],
+  ["test/vitest/vitest.extension-matrix.config.ts", MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT],
+  [
+    "test/vitest/vitest.extension-telegram.config.ts",
+    // isolate:true re-evaluates the Telegram graph per file. A second file in
+    // the same process stayed silent past the 300s CI watchdog (observed 2026-08,
+    // changed-extensions-config-14/15 on #123528).
+    TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+  ],
+]);
+const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
+  // Bound Telegram CI jobs so isolate recycling stays inside one job instead
+  // of minting one runner per test file. Ten files keeps the worst job near
+  // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
+  // halving the ~42-job fanout a Telegram-touching diff produced at five.
+  ["test/vitest/vitest.extension-telegram.config.ts", TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT],
 ]);
 const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> = [
   [isActiveMemoryExtensionRoot, "test/vitest/vitest.extension-active-memory.config.ts"],
@@ -231,15 +257,17 @@ export function listExtensionTestFilesForRoots(roots: string[]) {
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Split an extension config's test files across bounded process lifetimes when required. */
-export function splitExtensionTestProcessTargets(config: string, targets: string[]) {
-  const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
-  const orderedTargets = [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
-  if (!maxFilesPerProcess || orderedTargets.length <= maxFilesPerProcess) {
+function uniqueSortedTargets(targets: string[]) {
+  return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
+  const orderedTargets = uniqueSortedTargets(targets);
+  if (orderedTargets.length <= maxFilesPerChunk) {
     return [orderedTargets];
   }
 
-  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerProcess);
+  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerChunk);
   const baseSize = Math.floor(orderedTargets.length / chunkCount);
   const remainder = orderedTargets.length % chunkCount;
   const chunks = [];
@@ -250,6 +278,28 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
     offset += chunkSize;
   }
   return chunks;
+}
+
+function resolveExtensionTestJobFileLimit(config: string) {
+  return (
+    EXTENSION_TEST_JOB_FILE_LIMITS.get(config) ?? EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config)
+  );
+}
+
+/** Split an extension config's test files across bounded process lifetimes when required. */
+export function splitExtensionTestProcessTargets(config: string, targets: string[]) {
+  const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
+  return maxFilesPerProcess
+    ? splitTargetsByFileLimit(targets, maxFilesPerProcess)
+    : [uniqueSortedTargets(targets)];
+}
+
+/** Split an extension config's test files across CI jobs without changing process lifetime. */
+export function splitExtensionTestJobTargets(config: string, targets: string[]) {
+  const maxFilesPerJob = resolveExtensionTestJobFileLimit(config);
+  return maxFilesPerJob
+    ? splitTargetsByFileLimit(targets, maxFilesPerJob)
+    : [uniqueSortedTargets(targets)];
 }
 
 /** Whether a Vitest invocation can safely be split into independent one-shot processes. */

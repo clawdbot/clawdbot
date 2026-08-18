@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -60,6 +61,84 @@ async function expandCompletedWorkGroups(page: import("playwright").Page) {
 }
 
 suite.define(() => {
+  it("keeps the final activity row anchored while its disclosure opens", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 600, width: 900 } });
+    const page = await context.newPage();
+    const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier prompt ${index + 1}: keep enough transcript above the active row to make the pane scroll.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
+    await installMockGateway(page, {
+      historyMessages: [
+        ...transcriptPrefix,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-anchor",
+              name: "bash",
+              arguments: { command: "pnpm test ui/src/pages/chat" },
+            },
+            {
+              type: "toolCall",
+              id: "call-anchor-read",
+              name: "read",
+              arguments: { path: "ui/src/pages/chat/components/chat-tool-cards.ts" },
+            },
+          ],
+          timestamp: 100,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-anchor",
+          toolName: "bash",
+          content: [{ type: "text", text: "All focused tests passed." }],
+          timestamp: 101,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-anchor-read",
+          toolName: "read",
+          content: [{ type: "text", text: "export function renderToolCard() {}" }],
+          timestamp: 102,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
+    await activity.waitFor();
+    await waitForChatScrollIdle(page);
+    expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
+    const virtualRow = page.locator(".chat-virtual-row").filter({ has: activity });
+    const rowTop = async () =>
+      virtualRow.evaluate((row) => {
+        const thread = row.closest<HTMLElement>(".chat-thread");
+        if (!thread) {
+          throw new Error("Expected activity row inside the chat thread");
+        }
+        return row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      });
+    const topBefore = await rowTop();
+
+    await activity.click();
+    await page.locator(".chat-activity-group__body:not([hidden])").waitFor();
+    await waitForChatScrollIdle(page);
+
+    expect(Math.abs((await rowTop()) - topBefore)).toBeLessThanOrEqual(2);
+    await captureToolActivityProof(page, "activity-disclosure-scroll-anchor");
+    await context.close();
+  });
+
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
@@ -92,25 +171,32 @@ suite.define(() => {
       "Tool output",
       "Tool output",
     ]);
-    // Each failure keeps only its per-call badge even when its turn later
-    // recovers; both row summaries otherwise render neutral.
+    // Collapsed rows stay neutral even when the call failed; the failure is
+    // recorded as the expanded body's outcome, with the reported exit code.
     const summaryClasses = await page
       .locator(".chat-tool-msg-summary")
       .evaluateAll((nodes) => nodes.map((node) => node.className));
     expect(summaryClasses).toHaveLength(2);
     expect(summaryClasses[0]).not.toContain("chat-tool-msg-summary--error");
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
-    expect(await page.locator(".chat-tool-row__badge").allTextContents()).toEqual([
-      "failed",
-      "failed",
-    ]);
+    await page.locator(".chat-tool-msg-summary").first().click();
+    await expect
+      .poll(() => page.locator(".chat-tool-card__outcome").first().textContent())
+      .toBe("Exit code 1");
     await context.close();
   });
 
   it("pairs a canonical parallel batch and renders per-file patch sections", async () => {
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       viewport: { height: 900, width: 1200 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1200 } } }
+        : {}),
     });
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -165,16 +251,42 @@ suite.define(() => {
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
     expect(await activity.textContent()).toContain("Read a file, edited a file, created a file");
+    const activityGeometry = await activity.evaluate((node) => {
+      const container = node.closest<HTMLElement>(".chat-activity-group");
+      const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
+      const chevron = node.querySelector<HTMLElement>(".chat-tool-row__chevron");
+      if (!container || !label || !chevron) {
+        throw new Error("Expected compact activity disclosure parts");
+      }
+      const containerRect = container.getBoundingClientRect();
+      const summaryRect = node.getBoundingClientRect();
+      const labelRect = label.getBoundingClientRect();
+      const chevronRect = chevron.getBoundingClientRect();
+      return {
+        containerWidth: containerRect.width,
+        summaryWidth: summaryRect.width,
+        chevronGap: chevronRect.left - labelRect.right,
+      };
+    });
+    expect(activityGeometry.summaryWidth).toBeLessThan(activityGeometry.containerWidth);
+    expect(activityGeometry.chevronGap).toBeLessThanOrEqual(8);
+    await activity.hover();
+    expect(await activity.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(
+      "rgba(0, 0, 0, 0)",
+    );
     if ((await activity.getAttribute("aria-expanded")) !== "true") {
       await activity.click();
     }
 
     const rows = page.locator(".chat-activity-group__body .chat-tool-msg-summary");
     expect(await rows.count()).toBe(2);
+    expect(await rows.locator(".chat-tool-row__chevron").count()).toBe(2);
     expect(await page.locator(".chat-tool-msg-summary__label", { hasText: "Tool" }).count()).toBe(
       0,
     );
-    await rows.first().click();
+    // File rows put the workspace link inside the row, so toggle from the icon
+    // edge instead of the row centre to avoid opening the linked file.
+    await rows.first().click({ position: { x: 4, y: 4 } });
     expect(await page.getByText("offset:", { exact: true }).count()).toBe(1);
     expect(await page.getByText("limit:", { exact: true }).count()).toBe(1);
     const patchRow = rows.filter({ hasText: "2 files" });
@@ -354,7 +466,8 @@ suite.define(() => {
     await card.waitFor();
     expect(await card.getByText("query:", { exact: true }).count()).toBe(1);
     expect(await card.getByText("example", { exact: true }).count()).toBe(1);
-    await card.getByText("Tool output", { exact: true }).waitFor();
+    // Plain output needs no "Tool output" header; the payload is the content.
+    expect(await card.getByText("Tool output", { exact: true }).count()).toBe(0);
     await card.getByText("Native result payload", { exact: true }).waitFor();
     await captureToolActivityProof(page, "native-result-before-call-expanded");
     await context.close();

@@ -2,10 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  createExtensionPluginSdkBoundaryChecker,
-  main as extensionPluginSdkMain,
-} from "../scripts/check-extension-plugin-sdk-boundary.mts";
+import { createExtensionPluginSdkBoundaryChecker } from "../scripts/check-extension-plugin-sdk-boundary.mts";
 import { main as sdkPackageMain } from "../scripts/check-sdk-package-extension-import-boundary.mts";
 import { main as srcExtensionMain } from "../scripts/check-src-extension-import-boundary.mts";
 import { createCapturedIo } from "./helpers/captured-io.js";
@@ -27,18 +24,6 @@ const boundaryInventoryCases: Array<{
   {
     name: "sdk/package extension import boundary",
     output: getJsonOutput(sdkPackageMain, ["--json"]),
-  },
-  {
-    name: "extension src outside plugin-sdk boundary",
-    output: getJsonOutput(extensionPluginSdkMain, ["--mode=src-outside-plugin-sdk", "--json"]),
-  },
-  {
-    name: "extension relative-outside-package boundary",
-    output: getJsonOutput(extensionPluginSdkMain, ["--mode=relative-outside-package", "--json"]),
-  },
-  {
-    name: "extension normalization-core bypass boundary",
-    output: getJsonOutput(extensionPluginSdkMain, ["--mode=normalization-core-bypass", "--json"]),
   },
 ];
 

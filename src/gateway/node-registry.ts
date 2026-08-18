@@ -13,11 +13,16 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -69,8 +74,8 @@ export type NodeSession = {
   declaredCommands: string[];
   sessionCommandsCeiling?: string[];
   commands: string[];
-  /** Exact node-local build admitted for worker session hosting. */
-  workerRuns?: WorkerAdmissionHandshake;
+  declaredComputerUse?: ComputerUseCapabilityDescriptor;
+  computerUse?: ComputerUseCapabilityDescriptor;
   declaredNodePluginTools: NodePluginToolDescriptor[];
   nodePluginTools: NodePluginToolDescriptor[];
   nodeSkills: NodeSkillDescriptor[];
@@ -131,6 +136,9 @@ const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const WEBSOCKET_OPEN_READY_STATE = 1;
 const SLOW_CONSUMER_CLOSE_CODE = 1008;
+const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
+const log = createSubsystemLogger("gateway/nodes");
+const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
 export type SerializedEventPayload = {
   readonly json: string;
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
@@ -458,6 +466,16 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    const computerUse =
+      connect.computerUse === undefined
+        ? undefined
+        : parseComputerUseCapabilityDescriptor(connect.computerUse);
+    const declaredComputerUseValue = (connect as { declaredComputerUse?: unknown })
+      .declaredComputerUse;
+    const declaredComputerUse =
+      declaredComputerUseValue === undefined
+        ? computerUse
+        : parseComputerUseCapabilityDescriptor(declaredComputerUseValue);
     // Session ceilings preserve protocol compatibility across later pairing
     // approvals while declared* retains the durable approval surface.
     const sessionCapsCeiling = Array.isArray(
@@ -484,7 +502,6 @@ export class NodeRegistry {
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
         : undefined;
-    const workerRuns = connect.workerRuns ? structuredClone(connect.workerRuns) : undefined;
     const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
     const nodePluginTools: NodePluginToolDescriptor[] = [];
     const nodeSkills: NodeSkillDescriptor[] = [];
@@ -510,7 +527,8 @@ export class NodeRegistry {
       declaredCommands,
       sessionCommandsCeiling,
       commands,
-      ...(workerRuns ? { workerRuns } : {}),
+      ...(declaredComputerUse ? { declaredComputerUse } : {}),
+      ...(computerUse ? { computerUse } : {}),
       declaredNodePluginTools,
       nodePluginTools,
       nodeSkills,
@@ -994,6 +1012,12 @@ export class NodeRegistry {
     const nextCommands = surface.commands.filter((command) => sessionCommandsCeiling.has(command));
     node.commands = nextCommands;
     (node.client.connect as { commands?: string[] }).commands = nextCommands;
+    const nextComputerUse = resolveEffectiveComputerUseDescriptor({
+      commands: nextCommands,
+      declared: node.declaredComputerUse,
+    });
+    node.computerUse = nextComputerUse;
+    node.client.connect.computerUse = nextComputerUse;
     this.replaceEffectiveNodePluginTools(node);
 
     if ("caps" in surface) {
@@ -1272,7 +1296,7 @@ export class NodeRegistry {
     if (!node) {
       return false;
     }
-    return this.sendEventRawInternal(node, event, payloadJSON);
+    return this.observeEventSend(node, event, this.sendEventRawInternal(node, event, payloadJSON));
   }
 
   /** Sends command-free events only to the exact authenticated pairing connection. */
@@ -1352,7 +1376,7 @@ export class NodeRegistry {
       }
       node = resolution.session;
     }
-    return this.sendEventRawInternal(node, event, payloadJSON);
+    return this.observeEventSend(node, event, this.sendEventRawInternal(node, event, payloadJSON));
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
@@ -1420,7 +1444,20 @@ export class NodeRegistry {
   }
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
-    return this.sendEventInternal(node, event, payload);
+    return this.observeEventSend(node, event, this.sendEventInternal(node, event, payload));
+  }
+
+  private observeEventSend(node: NodeSession, event: string, sent: boolean): boolean {
+    if (sent || this.nodesById.get(node.nodeId) !== node || node.client.invalidated === true) {
+      return sent;
+    }
+    const now = Date.now();
+    const lastLoggedAt = failedEventLogAtByNode.get(node);
+    if (lastLoggedAt === undefined || now - lastLoggedAt >= FAILED_EVENT_LOG_INTERVAL_MS) {
+      failedEventLogAtByNode.set(node, now);
+      log.warn("node event delivery failed", { nodeId: node.nodeId, event });
+    }
+    return sent;
   }
 
   private isNodeWebSocketOpen(node: NodeSession): boolean {

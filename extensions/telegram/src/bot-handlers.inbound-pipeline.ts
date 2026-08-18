@@ -21,8 +21,8 @@ import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   withResolvedTelegramForumFlag,
+  TelegramPairingStoreReadError,
 } from "./bot/helpers.js";
-import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -243,6 +243,7 @@ function createTelegramInboundHandlers(
         senderId: event.senderId,
         effectiveGroupAllow,
         effectiveDmAllow,
+        channelIngressResolver: gate.resolveChannelIngress,
         groupConfig: event.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
         topicConfig,
         sendOversizeWarning: event.sendOversizeWarning,

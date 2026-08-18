@@ -59,6 +59,7 @@ type ClaudeLiveActiveTool = {
 
 export type ClaudeLiveTurn = {
   backend: CliBackendConfig;
+  cwd: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
   diagnosticRefs: {
     runId: string;
@@ -559,6 +560,7 @@ export function createClaudeTurn(params: {
 }): ClaudeLiveTurn {
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
+    cwd: params.context.cwd ?? params.context.workspaceDir,
     parseJsonlEvent: params.context.backendResolved.parseJsonlEvent,
     diagnosticRefs: {
       runId: params.context.params.runId,

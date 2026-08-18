@@ -131,7 +131,6 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
 - MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
-- Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 
 This list is a roadmap guardrail, not a law of physics.

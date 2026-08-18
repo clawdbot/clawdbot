@@ -160,6 +160,14 @@ export async function checkGatewayHealth(params: {
       if (exporterSummary) {
         note(exporterSummary.lines.join("\n"), exporterSummary.title);
       }
+    } else {
+      note(
+        [
+          `Exporter diagnostics failed: ${sanitizeTerminalText(formatErrorMessage(exporterResult.reason))}`,
+          `Retry: ${formatCliCommand("openclaw gateway stability --type telemetry.exporter")}`,
+        ].join("\n"),
+        "Telemetry exporters",
+      );
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
@@ -190,15 +198,10 @@ export async function checkGatewayHealth(params: {
         return { healthOk, authenticated: false };
       }
     }
-    const message = String(err);
-    if (message.includes("gateway closed")) {
+    const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+    if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-      if (closedDiagnostic) {
-        note(closedDiagnostic, "Gateway");
-      } else {
-        note("Gateway not running.", "Gateway");
-      }
+      note(closedDiagnostic, "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));

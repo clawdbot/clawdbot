@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
-import { buildSidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
+import {
+  buildSidebarSessionNavigationState,
+  compareSidebarSessionRowsByMode,
+} from "./app-sidebar-session-navigation-logic.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -37,7 +40,7 @@ function projectSidebarSession(
     highlightCurrentSession: false,
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
-    outboxCountForSessionKey: () => 0,
+    outboxAttentionCountForSessionKey: () => 0,
     hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
@@ -57,6 +60,98 @@ function projectDraftOwnership(
   return projectSidebarSession(row, selfUserId).draftOwnedBySelf;
 }
 
+function sortSidebarRows(
+  rows: GatewaySessionRow[],
+  sortMode: "created" | "updated" | "people",
+  createdOrder: ReadonlyMap<string, number>,
+  owners?: SessionsListResult["owners"],
+) {
+  return rows.toSorted((a, b) =>
+    compareSidebarSessionRowsByMode({ a, b, sortMode, createdOrder, owners }),
+  );
+}
+
+describe("sidebar session sort modes", () => {
+  const row = (
+    key: string,
+    createdAt?: number,
+    updatedAt = 1,
+    ownerId?: string,
+  ): GatewaySessionRow => ({
+    key,
+    kind: "direct",
+    updatedAt,
+    createdAt,
+    createdActor: ownerId ? { type: "human", id: ownerId } : undefined,
+    owner: ownerId ? { actor: { type: "human", id: ownerId } } : undefined,
+  });
+
+  it("sorts timestamped sessions newest-first ahead of legacy sessions", () => {
+    const rows = [
+      row("old-stamped", 100),
+      row("legacy"),
+      row("new-stamped", 200),
+      row("invalid", Number.NaN),
+    ];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+
+    expect(sortSidebarRows(rows, "created", observed).map((entry) => entry.key)).toEqual([
+      "new-stamped",
+      "old-stamped",
+      "legacy",
+      "invalid",
+    ]);
+  });
+
+  it("falls back to stable observation order for equal or missing timestamps", () => {
+    const rows = [
+      row("missing-later"),
+      row("equal-later", 100),
+      row("equal-earlier", 100),
+      row("missing-earlier"),
+    ];
+    const observed = new Map([
+      ["equal-earlier", 0],
+      ["equal-later", 1],
+      ["missing-earlier", 2],
+      ["missing-later", 3],
+    ]);
+
+    expect(sortSidebarRows(rows, "created", observed).map((entry) => entry.key)).toEqual([
+      "equal-earlier",
+      "equal-later",
+      "missing-earlier",
+      "missing-later",
+    ]);
+  });
+
+  it("keeps owner ordering primary and creation time secondary in People mode", () => {
+    const rows = [
+      row("alex-old", 100, 1, "alex"),
+      row("sam-new", 300, 1, "sam"),
+      row("alex-new", 200, 1, "alex"),
+    ];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+
+    expect(
+      sortSidebarRows(rows, "people", observed, [
+        { type: "human", id: "alex", label: "Alex" },
+        { type: "human", id: "sam", label: "Sam" },
+      ]).map((entry) => entry.key),
+    ).toEqual(["alex-new", "alex-old", "sam-new"]);
+  });
+
+  it("leaves Updated mode ordered by activity", () => {
+    const rows = [row("created-new", 300, 100), row("updated-new", 100, 300)];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+
+    expect(sortSidebarRows(rows, "updated", observed).map((entry) => entry.key)).toEqual([
+      "updated-new",
+      "created-new",
+    ]);
+  });
+});
+
 describe("sidebar session live-run projection", () => {
   it("projects the durable last-message preview", () => {
     expect(
@@ -66,15 +161,20 @@ describe("sidebar session live-run projection", () => {
   });
 
   it.each([
-    ["legacy running status", { status: "running" }, true],
-    ["confirmed active run", { status: "running", hasActiveRun: true }, true],
-    ["stale running status", { status: "running", hasActiveRun: false }, false],
-    ["completed run with a stale active flag", { status: "done", hasActiveRun: true }, false],
-    ["failed run with a stale active flag", { status: "failed", hasActiveRun: true }, false],
-    ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false],
-  ] as const)("normalizes %s before publishing sidebar state", (_name, row, expected) => {
-    expect(projectSidebarSession(row).hasActiveRun).toBe(expected);
-  });
+    ["legacy running status", { status: "running" }, true, undefined],
+    ["confirmed active run", { status: "running", hasActiveRun: true }, true, true],
+    ["stale running status", { status: "running", hasActiveRun: false }, false, false],
+    ["completed run with a stale active flag", { status: "done", hasActiveRun: true }, false, true],
+    ["failed run with a stale active flag", { status: "failed", hasActiveRun: true }, false, true],
+    ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false, true],
+  ] as const)(
+    "normalizes %s without dropping Gateway liveness",
+    (_name, row, expected, gatewayHasActiveRun) => {
+      const projected = projectSidebarSession(row);
+      expect(projected.hasActiveRun).toBe(expected);
+      expect(projected.gatewayHasActiveRun).toBe(gatewayHasActiveRun);
+    },
+  );
 
   it("carries active cloud disk pressure into the existing sidebar badge model", () => {
     const projected = projectSidebarSession({
@@ -293,7 +393,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     highlightCurrentSession: true,
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
-    outboxCountForSessionKey: () => 0,
+    outboxAttentionCountForSessionKey: () => 0,
     hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,

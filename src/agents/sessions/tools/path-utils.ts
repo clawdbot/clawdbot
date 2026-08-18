@@ -73,7 +73,11 @@ export function getReadPathVariants(filePath: string): string[] {
     const curlyQuotes = spaced.replace(/['\u2018]/g, "\u2019");
     for (const quoted of [straightQuotes, curlyQuotes]) {
       variants.add(quoted.normalize("NFC"));
-      variants.add(quoted.normalize("NFD"));
+      // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
+      // makes one file look ambiguous. Other platforms can store both distinctly.
+      if (process.platform !== "darwin") {
+        variants.add(quoted.normalize("NFD"));
+      }
     }
   }
   variants.delete(filePath);

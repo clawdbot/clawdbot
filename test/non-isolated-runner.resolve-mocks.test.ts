@@ -3,17 +3,28 @@
 // invalidated) twice, while every caller's pass starts at or after its call so
 // previously queued ids are registered before the caller's fetch proceeds.
 import { describe, expect, it } from "vitest";
-import { serializeMockerResolveMocks } from "./non-isolated-runner.js";
+import { drainMockerResolveMocks, serializeMockerResolveMocks } from "./non-isolated-runner.js";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 // Mirrors BareModuleMocker.resolveMocks: snapshots the static queue's contents
 // at pass start, awaits its RPCs, then reassigns the static to [] so ids
 // pushed during the await land in the abandoned array.
 class FakeMocker {
   static pendingIds: unknown[] = [];
+  beforeFirstPass?: () => Promise<void>;
+  nextPassError?: Error;
   passes = 0;
   active = 0;
   maxConcurrentPasses = 0;
   processed: unknown[] = [];
+  resetObservations: Array<{ active: number; pendingIds: unknown[]; processed: unknown[] }> = [];
 
   async resolveMocks(): Promise<void> {
     if (FakeMocker.pendingIds.length === 0) {
@@ -23,13 +34,32 @@ class FakeMocker {
     this.maxConcurrentPasses = Math.max(this.maxConcurrentPasses, this.active);
     this.passes += 1;
     const snapshot = [...FakeMocker.pendingIds];
-    // Simulate the parallel resolveId RPC round-trips inside one pass.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1);
-    });
+    if (this.passes === 1 && this.beforeFirstPass) {
+      await this.beforeFirstPass();
+    } else {
+      // Simulate the parallel resolveId RPC round-trips inside one pass.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1);
+      });
+    }
+    const passError = this.nextPassError;
+    this.nextPassError = undefined;
+    if (passError) {
+      FakeMocker.pendingIds = [];
+      this.active -= 1;
+      throw passError;
+    }
     this.processed.push(...snapshot);
     FakeMocker.pendingIds = [];
     this.active -= 1;
+  }
+
+  reset(): void {
+    this.resetObservations.push({
+      active: this.active,
+      pendingIds: [...FakeMocker.pendingIds],
+      processed: [...this.processed],
+    });
   }
 }
 
@@ -93,5 +123,49 @@ describe("serializeMockerResolveMocks", () => {
     expect(mocker.passes).toBe(2);
     expect(mocker.processed).toEqual(["mock-a", "mock-b"]);
     expect(FakeMocker.pendingIds).toEqual([]);
+  });
+
+  it("drains every queued pass before cleanup resets the mocker", async () => {
+    FakeMocker.pendingIds = ["mock-a"];
+    const firstPassStarted = deferred();
+    const releaseFirstPass = deferred();
+    const mocker = new FakeMocker();
+    mocker.beforeFirstPass = async () => {
+      firstPassStarted.resolve();
+      await releaseFirstPass.promise;
+    };
+    serializeMockerResolveMocks(mocker);
+
+    const first = mocker.resolveMocks();
+    await firstPassStarted.promise;
+    const drain = drainMockerResolveMocks(mocker);
+    const drainState = Promise.race([drain.then(() => "settled"), Promise.resolve("pending")]);
+
+    expect(await drainState).toBe("pending");
+    FakeMocker.pendingIds.push("mock-late");
+    const second = mocker.resolveMocks();
+    releaseFirstPass.resolve();
+    await drain;
+    mocker.reset();
+
+    expect(mocker.resetObservations).toEqual([
+      { active: 0, pendingIds: [], processed: ["mock-a", "mock-late"] },
+    ]);
+    await Promise.all([first, second]);
+  });
+
+  it("keeps the internal drain usable after a caller-visible rejection", async () => {
+    FakeMocker.pendingIds = ["mock-a"];
+    const mocker = new FakeMocker();
+    mocker.nextPassError = new Error("synthetic resolution failure");
+    serializeMockerResolveMocks(mocker);
+
+    await expect(mocker.resolveMocks()).rejects.toThrow("synthetic resolution failure");
+    FakeMocker.pendingIds = ["mock-b"];
+    const recovered = mocker.resolveMocks();
+
+    await expect(drainMockerResolveMocks(mocker)).resolves.toBeUndefined();
+    await expect(recovered).resolves.toBeUndefined();
+    expect(mocker.passes).toBe(2);
   });
 });

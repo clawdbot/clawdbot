@@ -39,7 +39,7 @@ import {
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -1318,7 +1318,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
+  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
     "projects display-hidden assistant error text %j as a generic safe failure",
     (text) => {
       const result = projectRecentChatDisplayMessages([
@@ -2058,27 +2058,13 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
-    const rawVisibleText = "[[reply_to_current]]Visible answer.";
-    const projectedVisibleText = "Visible answer.";
-    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
-
-    const result = projectRecentChatDisplayMessages([
-      assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
-    ]);
-
-    expect(result).toEqual([assistantAudioAttachmentHistoryMessage(projectedVisibleText, 1)]);
-  });
-
   it("merges delayed TTS supplements before display truncation", () => {
     const projectedVisibleText = "Visible answer ".repeat(8).trim();
-    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
     const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
 
     const result = projectRecentChatDisplayMessages(
       [
-        assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
+        assistantHistoryMessage(projectedVisibleText, { timestamp: 1 }),
         ttsSupplementHistoryMessage({ textSha256 }, 2),
       ],
       { maxChars: 24 },
@@ -2609,16 +2595,24 @@ describe("exec approval handlers", () => {
 
   function getRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): { id: string; request: Record<string, unknown> } {
+  ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     if (!requested) {
       throw new Error("exec approval requested broadcast missing");
     }
-    const payload = requested.payload as { id?: unknown; request?: Record<string, unknown> };
+    const payload = requested.payload as {
+      approvalKind?: unknown;
+      id?: unknown;
+      request?: Record<string, unknown>;
+    };
+    if (payload.approvalKind !== "exec") {
+      throw new Error("exec approval requested kind missing");
+    }
     if (typeof payload.id !== "string" || payload.id.length === 0) {
       throw new Error("exec approval requested id missing");
     }
     return {
+      approvalKind: payload.approvalKind,
       id: payload.id,
       request: payload.request ?? {},
     };
@@ -2626,7 +2620,7 @@ describe("exec approval handlers", () => {
 
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): Promise<{ id: string; request: Record<string, unknown> }> {
+  ): Promise<{ approvalKind: "exec"; id: string; request: Record<string, unknown> }> {
     await waitForFast(
       () => {
         expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
@@ -2891,7 +2885,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
     await requestExecApproval({
       handlers,
@@ -2941,7 +2935,8 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
+      createChatAbortMarker();
     await requestPromise;
 
     const waitRespond = vi.fn();
@@ -3054,7 +3049,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(listRespond)).toBe(true);
     const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
     const approval = approvals.find((entry) => entry.id === "approval-list-1");
-    expectRecordFields(approval, { id: "approval-list-1" });
+    expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
     expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
     expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
 
@@ -3566,8 +3561,8 @@ describe("exec approval handlers", () => {
     const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
     void manager.register(pendingRecord, 2_000);
 
-    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
-    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+    expect(manager.lookupApprovalId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupApprovalId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
@@ -4761,7 +4756,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       });
       upsertDeliveryQueueEntry({
         queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");

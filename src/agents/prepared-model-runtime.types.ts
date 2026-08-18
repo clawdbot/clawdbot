@@ -5,7 +5,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -53,8 +53,10 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
    * Full inventory discovery is deliberately outside the startup publication boundary.
    */
   modelCatalog: ModelCatalogSnapshot;
+  /** Reads a completed full catalog without starting provider discovery. */
+  readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
-  loadFullModelCatalog?: () => Promise<ModelCatalogSnapshot>;
+  loadFullModelCatalog?: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
@@ -82,6 +84,8 @@ export type PreparedModelRuntimeInput = {
   agentDir: string;
   inheritedAuthDir?: string;
   workspaceDir?: string;
+  /** Admission-owned fact; plugin root changes require the normal reload/restart lifecycle. */
+  workspacePluginRootPresent?: boolean;
   preserveWorkspaceDirOnRefresh?: boolean;
   readOnly?: boolean;
   /** Load the exact runtime plugin generation for an isolated executable probe. */

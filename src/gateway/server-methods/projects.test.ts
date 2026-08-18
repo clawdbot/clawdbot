@@ -4,8 +4,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { beforeEach, expect, test, vi } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import {

@@ -8035,20 +8035,20 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已隐藏的密钥>"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已遮蔽的密鑰>"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segredo ocultado>"
           }
         },
         "de": {
@@ -8059,104 +8059,104 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secreto redactado>"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<編集済みのシークレット>"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<가려진 비밀 값>"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secret masqué>"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<गोपनीय जानकारी हटाई गई>"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<سر محجوب>"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segreto oscurato>"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<gizli bilgi çıkarıldı>"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<прихований секрет>"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<rahasia disunting>"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<sekret ukryty>"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<ข้อมูลลับถูกปกปิด>"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<bí mật đã được ẩn>"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<geheim geredigeerd>"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<رمز محرمانه حذف‌شده>"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<секрет скрыт>"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<dold hemlighet>"
           }
         }
       }
@@ -49097,6 +49097,142 @@
         }
       }
     },
+    "Could not install skill": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not install skill"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安装 Skill"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法安裝 Skill"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível instalar a skill"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skill konnte nicht installiert werden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo instalar la skill"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキルをインストールできませんでした"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skill을 설치할 수 없습니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'installer la compétence"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "स्किल इंस्टॉल नहीं हो सका"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر تثبيت المهارة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile installare la skill"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beceri yüklenemedi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося встановити навичку"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak dapat menginstal skill"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie można zainstalować umiejętności"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถติดตั้ง Skill ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể cài đặt kỹ năng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kan skill niet installeren"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "نصب مهارت ممکن نشد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось установить навык"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att installera skill"
+          }
+        }
+      }
+    },
     "Could not load automation": {
       "localizations": {
         "en": {
@@ -62885,8 +63021,8 @@
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Docs"
+            "state": "translated",
+            "value": "Documentation"
           }
         },
         "hi": {
@@ -74661,6 +74797,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Förgrena härifrån"
+          }
+        }
+      }
+    },
+    "Fork from last completed message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork from last completed message"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从上一条已完成的消息分叉"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "從最後完成的訊息分支"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bifurcar a partir da última mensagem concluída"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ab letzter abgeschlossener Nachricht verzweigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bifurcar desde el último mensaje completado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最後に完了したメッセージから分岐"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막으로 완료된 메시지에서 분기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dériver à partir du dernier message terminé"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अंतिम पूर्ण संदेश से फ़ोर्क करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التفريع من آخر رسالة مكتملة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ramifica dall'ultimo messaggio completato"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son tamamlanan mesajdan çatalla"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відгалузити від останнього завершеного повідомлення"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork dari pesan terakhir yang selesai"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozgałęź od ostatniej ukończonej wiadomości"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "แยกจากข้อความที่เสร็จสมบูรณ์ล่าสุด"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rẽ nhánh từ tin nhắn hoàn tất gần nhất"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vertakken vanaf laatst voltooide bericht"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "انشعاب از آخرین پیام تکمیل‌شده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответвить от последнего завершённого сообщения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Förgrena från senast slutförda meddelande"
           }
         }
       }
@@ -118589,6 +118861,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Inte fäst"
+          }
+        }
+      }
+    },
+    "Not scanned by ClawHub": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not scanned by ClawHub"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未经过 ClawHub 扫描"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未經 ClawHub 掃描"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não verificado pelo ClawHub"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht von ClawHub gescannt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No analizado por ClawHub"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub によるスキャン未実施"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub에서 검사하지 않음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non analysé par ClawHub"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub द्वारा स्कैन नहीं किया गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "غير مفحوص بواسطة ClawHub"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non analizzato da ClawHub"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ClawHub tarafından taranmadı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не перевірено ClawHub"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak dipindai oleh ClawHub"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nieprzeskanowane przez ClawHub"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ยังไม่ได้สแกนโดย ClawHub"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chưa được ClawHub quét"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niet gescand door ClawHub"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "توسط ClawHub اسکن نشده است"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не проверено ClawHub"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inte skannad av ClawHub"
           }
         }
       }
@@ -218563,8 +218971,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT License。"
           }
         },
         "zh-TW": {
@@ -218581,8 +218989,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT-Lizenz."
           }
         },
         "es": {
@@ -218599,8 +219007,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT 라이선스."
           }
         },
         "fr": {
@@ -218671,8 +219079,8 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — مجوز MIT."
           }
         },
         "ru": {

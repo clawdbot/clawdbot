@@ -8,6 +8,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
+  countFailedDeliveryQueueEntries,
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  terminalizePendingDeliveryQueueEntry,
+} from "../infra/delivery-queue-sqlite.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -19,6 +25,7 @@ import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
 import {
   findOpenClawStateDatabaseSchemaMigrationRequiredError,
@@ -671,6 +678,61 @@ function materializeCurrentStateDatabase(stateDir: string): string {
   return databasePath;
 }
 
+function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'worker_session_placements'",
+    )
+    .get() as { sql?: unknown } | undefined;
+  if (typeof row?.sql !== "string") {
+    throw new Error("missing worker_session_placements table SQL");
+  }
+  const v8LocalClaim = `(turn_claim_owner IS 'local' AND (\n      state IN ('local', 'requested', 'failed')\n      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')\n    ))`;
+  const v7Create = row.sql
+    .replace("CREATE TABLE worker_session_placements", "CREATE TABLE worker_session_placements_v7")
+    .replace(
+      "\n  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),",
+      "",
+    )
+    .replace(
+      v8LocalClaim,
+      `(turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))`,
+    )
+    .replace("\n      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')", "");
+  if (v7Create.includes("execution_mode")) {
+    throw new Error("failed to derive v7 worker placement schema");
+  }
+  const columns = (
+    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+      hidden: number;
+      name: string;
+    }>
+  )
+    .filter((column) => column.hidden === 0 && column.name !== "execution_mode")
+    .map((column) => `"${column.name}"`)
+    .join(", ");
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      ${v7Create};
+      INSERT INTO worker_session_placements_v7 (${columns})
+        SELECT ${columns} FROM worker_session_placements;
+      DROP TABLE worker_session_placements;
+      ALTER TABLE worker_session_placements_v7 RENAME TO worker_session_placements;
+      CREATE INDEX idx_worker_session_placements_session_key
+        ON worker_session_placements(agent_id, session_key);
+      CREATE INDEX idx_worker_session_placements_reconcile
+        ON worker_session_placements(updated_at_ms, session_id);
+      PRAGMA user_version = 7;
+      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
+      COMMIT;
+    `);
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
 function openMaterializedCurrentStateDatabase(): DatabaseSync {
   const databasePath = materializeCurrentStateDatabase(createTempStateDir());
   const { DatabaseSync } = requireNodeSqlite();
@@ -1095,12 +1157,10 @@ function runConcurrentSchemaProbe(params: {
     const coordinatorContracts =
       mode === "fresh"
         ? await Promise.all([
-            import(new URL("../config/paths.ts", moduleUrl).href),
             import(new URL("../infra/boundary-path.ts", moduleUrl).href),
             import(new URL("../infra/crypto-digest.ts", moduleUrl).href),
             import(new URL("../infra/sqlite-coordinator.ts", moduleUrl).href),
             import(new URL("./openclaw-state-db-contract.ts", moduleUrl).href),
-            import(new URL("./openclaw-state-db.paths.ts", moduleUrl).href),
           ])
         : undefined;
 
@@ -1164,18 +1224,20 @@ function runConcurrentSchemaProbe(params: {
         throw new Error("fresh initialization coordinator contracts are unavailable");
       }
       const [
-        { resolveGatewayLockDir },
         { resolvePathViaExistingAncestorSync },
         { sha256HexPrefixCore },
         { ensurePrivateSqliteCoordinatorDirectory },
         { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-        { resolveOpenClawStateDirForDatabasePath },
       ] = coordinatorContracts;
       const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-      const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
+      const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync("/tmp");
+      const suffix = typeof process.getuid === "function"
+        ? \`openclaw-state-locks-\${process.getuid()}\`
+        : "openclaw-state-locks";
       const coordinatorPath = path.join(
-        resolveGatewayLockDir(stateDir),
-        \`state-ownership.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
+        canonicalRuntimeDirectory,
+        suffix,
+        \`state-lifecycle.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
       );
       ensurePrivateSqliteCoordinatorDirectory(
         path.dirname(coordinatorPath),
@@ -1469,6 +1531,153 @@ describe("openclaw state database", () => {
   });
 
   it.each(["runtime open", "doctor repair"] as const)(
+    "migrates v7 worker placement claims through %s without losing rows",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy
+        .prepare(
+          `INSERT INTO worker_session_placements (
+             session_id, agent_id, session_key, state, transition_generation,
+             created_at_ms, updated_at_ms, state_changed_at_ms
+           ) VALUES (?, ?, ?, 'local', 3, 1, 2, 2)`,
+        )
+        .run("legacy-session", "main", "agent:main:legacy");
+      downgradeWorkerPlacementsToV7(legacy);
+      legacy.close();
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "worker-placement-execution-mode-v8",
+        path: databasePath,
+      });
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Migrated cloud worker placements to execution modes"],
+          warnings: [],
+        });
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        migrated.db
+          .prepare(
+            "SELECT session_id, transition_generation, execution_mode FROM worker_session_placements",
+          )
+          .get(),
+      ).toEqual({ session_id: "legacy-session", transition_generation: 3, execution_mode: null });
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).not.toContainEqual({
+        kind: "worker-placement-execution-mode-v8",
+        path: databasePath,
+      });
+    },
+  );
+
+  it("migrates v8 agent database registrations to state-relative paths", () => {
+    const stateDir = createTempStateDir();
+    const foreignStateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const inRootPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const dualInRootPath = path.join(stateDir, "agents", "dual", "agent", "openclaw-agent.sqlite");
+    const dualForeignPath = path.join(
+      foreignStateDir,
+      "agents",
+      "dual",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const copiedForeignPath = path.join(
+      foreignStateDir,
+      "agents",
+      "copied",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const copiedInRootPath = path.join(
+      stateDir,
+      "agents",
+      "copied",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const preservedDefaultPath = path.join(
+      foreignStateDir,
+      "agents",
+      "preserved",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const externalPath = path.join(foreignStateDir, "explicit", "external.sqlite");
+    fs.mkdirSync(path.dirname(dualInRootPath), { recursive: true });
+    fs.writeFileSync(dualInRootPath, "");
+    fs.mkdirSync(path.dirname(copiedInRootPath), { recursive: true });
+    fs.writeFileSync(copiedInRootPath, "");
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    const insert = legacy.prepare(
+      `INSERT INTO agent_databases (
+         agent_id, path, schema_version, last_seen_at, size_bytes
+       ) VALUES (?, ?, 17, 1, NULL)`,
+    );
+    insert.run("main", inRootPath);
+    insert.run("dual", dualInRootPath);
+    insert.run("dual", dualForeignPath);
+    insert.run("copied", copiedForeignPath);
+    insert.run("preserved", preservedDefaultPath);
+    insert.run("external", externalPath);
+    legacy.exec(`
+      PRAGMA user_version = 8;
+      UPDATE schema_meta SET schema_version = 8 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations({ env })).toContainEqual({
+      kind: "agent-databases-relative-paths-v9",
+      path: databasePath,
+    });
+    expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
+      changes: [
+        "Migrated agent database registry paths to state-relative storage (2 relativized, 1 re-anchored, 1 removed)",
+        `Re-anchored agent database registry path ${copiedForeignPath} to the current state directory`,
+        `Removed duplicate agent database registry path ${dualForeignPath}`,
+      ],
+      warnings: [],
+    });
+    const migrated = openOpenClawStateDatabase({ env });
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(9);
+    expect(
+      migrated.db.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all(),
+    ).toEqual([
+      {
+        agent_id: "copied",
+        path: path.join("agents", "copied", "agent", "openclaw-agent.sqlite"),
+      },
+      {
+        agent_id: "dual",
+        path: path.join("agents", "dual", "agent", "openclaw-agent.sqlite"),
+      },
+      { agent_id: "external", path: externalPath },
+      {
+        agent_id: "main",
+        path: path.join("agents", "main", "agent", "openclaw-agent.sqlite"),
+      },
+      { agent_id: "preserved", path: preservedDefaultPath },
+    ]);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "copied", path: copiedInRootPath }),
+      expect.objectContaining({ agentId: "dual", path: dualInRootPath }),
+      expect.objectContaining({ agentId: "external", path: externalPath }),
+      expect.objectContaining({ agentId: "main", path: inRootPath }),
+      expect.objectContaining({ agentId: "preserved", path: preservedDefaultPath }),
+    ]);
+  });
+
+  it.each(["runtime open", "doctor repair"] as const)(
     "retires v6 commitments through %s while preserving shared leases",
     (migrationPath) => {
       const stateDir = createTempStateDir();
@@ -1486,29 +1695,36 @@ describe("openclaw state database", () => {
 
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Retired shared state commitments table and indexes"],
+          changes: [
+            "Retired shared state commitments table and indexes",
+            "Migrated cloud worker placements to execution modes",
+          ],
           warnings: [],
         });
         const repaired = new DatabaseSync(databasePath, { readOnly: true });
         try {
-          expect(readSqliteNumberPragma(repaired, "user_version")).toBe(7);
+          expect(readSqliteNumberPragma(repaired, "user_version")).toBe(
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
           expect(
             repaired
               .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
               .get(),
-          ).toEqual({ schema_version: 7 });
+          ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
         } finally {
           repaired.close();
         }
       }
       const migrated = openOpenClawStateDatabase(options);
 
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(7);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 7 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
         expect(
           migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
@@ -1644,12 +1860,14 @@ describe("openclaw state database", () => {
         expect(result.changes).toContain("Retired shared state commitments table and indexes");
       }
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(7);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 7 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
         expect(
           migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
@@ -2180,6 +2398,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
@@ -2212,6 +2431,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
@@ -2832,6 +3052,36 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ).toEqual([{ task_id: "task-index-repair" }]);
     },
   );
+
+  it("appends the same-version plugin workspace column before schema validation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(`
+        ALTER TABLE installed_plugin_index DROP COLUMN workspace_dir;
+      `);
+      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    } finally {
+      shippedSchema.close();
+    }
+
+    const reopened = openOpenClawStateDatabase({ env });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(installed_plugin_index)")
+      .all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toContain("workspace_dir");
+    expect(() =>
+      assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
+    ).not.toThrow();
+  });
 
   it("installs same-version worker session tool tables before runtime schema validation", () => {
     const stateDir = createTempStateDir();
@@ -4194,6 +4444,48 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
+  it("keeps placement-owned target machine class absent during generic repair and open", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the\n" +
+        "  -- same shape as fresh databases; placement-move code validates its value.\n" +
+        "  target_machine_class TEXT,\n",
+      "",
+    );
+    const tableStart = previousSchema.indexOf(
+      "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
+    );
+    const tableEnd = previousSchema.indexOf("\n) STRICT;", tableStart);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP TABLE worker_session_placement_moves;
+      ${previousSchema.slice(tableStart, tableEnd + "\n) STRICT;".length)}
+    `);
+    legacyDb.close();
+
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+    const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const repairedColumns = repairedDb
+        .prepare("PRAGMA table_info(worker_session_placement_moves)")
+        .all() as Array<{ name?: string }>;
+      expect(repairedColumns.map((column) => column.name)).not.toContain("target_machine_class");
+    } finally {
+      repairedDb.close();
+    }
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_session_placement_moves)")
+      .all() as Array<{ name?: string }>;
+
+    expect(columns.map((column) => column.name)).not.toContain("target_machine_class");
+  });
+
   it("adds staged worker-result refs during the v5 state migration", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -5114,6 +5406,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         enqueued_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         failed_at INTEGER,
+        retry_count INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (queue_name, id)
       );
     `);
@@ -5138,6 +5431,240 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       10,
       10,
       null,
+    );
+    db.prepare(
+      `INSERT INTO delivery_queue_entries (
+          queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "outbound",
+      "delivery-invalid-integers",
+      "pending",
+      JSON.stringify({
+        id: "delivery-invalid-integers",
+        enqueuedAt: 11,
+        retryCount: 1.5,
+        lastAttemptAt: Number.MAX_SAFE_INTEGER + 1,
+        platformSendStartedAt: 2.5,
+      }),
+      11,
+      11,
+      null,
+    );
+    const boundedRetention = {
+      idPrefix: "cron-direct-delivery:v1:",
+      maxAgeMs: Number.MAX_SAFE_INTEGER,
+      maxEntries: 10,
+    };
+    const pendingBoundedRetention = {
+      idPrefix: "upgrade-bounded:v1:",
+      maxAgeMs: 86_400_000,
+      maxEntries: 2,
+    };
+    const insertPendingQueueRow = db.prepare(
+      `INSERT INTO delivery_queue_entries (
+          queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at
+        ) VALUES (?, ?, 'pending', ?, 20, 20, NULL)`,
+    );
+    const pendingEntries = [
+      {
+        queueName: "outbound",
+        id: "pending-failure-retention",
+        enqueuedAt: 20,
+        retryCount: 0,
+        failureRetention: "permanent",
+        payloads: [{ text: "keep until terminal transition" }],
+      },
+      {
+        queueName: "outbound",
+        id: "upgrade-bounded:v1:pending-completion-retention",
+        enqueuedAt: 20,
+        retryCount: 0,
+        completionRetention: pendingBoundedRetention,
+        payloads: [{ text: "private" }],
+      },
+      {
+        queueName: "outbound",
+        id: "pending-required-claim",
+        enqueuedAt: 20,
+        retryCount: 0,
+        requiresProducerClaim: true,
+        payloads: [{ text: "private" }],
+      },
+      {
+        queueName: "outbound",
+        id: "pending-producer-claim",
+        enqueuedAt: 20,
+        retryCount: 0,
+        producerClaimId: "claim-before-upgrade",
+        payloads: [{ text: "private" }],
+      },
+      {
+        queueName: "outbound-prepared-v1",
+        id: "pending-ambiguous-platform-send",
+        enqueuedAt: 20,
+        retryCount: 0,
+        platformSendAttemptId: "attempt-before-upgrade",
+        recoveryState: "unknown_after_send",
+        payloads: [{ text: "private ambiguous send" }],
+      },
+      {
+        queueName: "session",
+        id: "pending-session-available-at",
+        enqueuedAt: 20,
+        retryCount: 0,
+        availableAt: 30,
+        payloads: [{ text: "private claimed session" }],
+      },
+      {
+        queueName: "outbound-preparing-v1",
+        id: "pending-stable-preparation",
+        enqueuedAt: 20,
+        retryCount: 0,
+        payloads: [{ text: "private stable preparation" }],
+      },
+      {
+        queueName: "outbound-prepared-v1",
+        id: "pending-delivery-completion",
+        enqueuedAt: 20,
+        retryCount: 0,
+        deliveryCompletion: { kind: "conversation", operationId: "op-before-upgrade" },
+        payloads: [{ text: "private durable completion" }],
+      },
+    ];
+    for (const { queueName, ...entry } of pendingEntries) {
+      insertPendingQueueRow.run(queueName, entry.id, JSON.stringify(entry));
+    }
+    const insertQueueRow = db.prepare(
+      `INSERT INTO delivery_queue_entries (
+          queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at
+        ) VALUES (?, ?, 'failed', ?, ?, ?, ?)`,
+    );
+    insertQueueRow.run(
+      "outbound",
+      "rich-failure",
+      JSON.stringify({
+        id: "rich-failure",
+        enqueuedAt: 30,
+        retryCount: 2,
+        channel: "private-channel",
+        to: "private-target",
+        accountId: "private-account",
+        lastError: "raw provider error",
+        payloads: [{ text: "private payload", mediaUrl: "/private/media" }],
+      }),
+      30,
+      31,
+      32,
+    );
+    insertQueueRow.run("session", "malformed-failure", "{corrupt private bytes", 40, -1, -1);
+    insertQueueRow.run(
+      "session",
+      "minimal-failure",
+      JSON.stringify({ id: "minimal-failure", enqueuedAt: 50, failedAt: 52, retryCount: 1 }),
+      50,
+      51,
+      52,
+    );
+    insertQueueRow.run(
+      "outbound-prepared-v1",
+      "ambiguous-beta-failure",
+      JSON.stringify({
+        id: "ambiguous-beta-failure",
+        enqueuedAt: 53,
+        retryCount: 2,
+        platformSendAttemptId: "beta-attempt",
+        payloads: [{ text: "private ambiguous payload" }],
+      }),
+      53,
+      54,
+      55,
+    );
+    for (const [id, metadata, retryCount] of [
+      ["cron-direct-delivery:v1:canonical", { completionRetention: boundedRetention }, 3],
+      ["cron-direct-delivery:v1:failure", { failureRetention: boundedRetention }, 4],
+      [
+        "cron-direct-delivery:v1:terminal",
+        { terminalPolicy: { fence: { kind: "producer-bounded", ...boundedRetention } } },
+        5,
+      ],
+      ["terminal-permanent", { terminalPolicy: { fence: { kind: "permanent" } } }, 6],
+      ["terminal-none", { retainOnFailure: true, terminalPolicy: { fence: { kind: "none" } } }, 7],
+      ["legacy-none", { failureRetention: "none" }, 8],
+      ["delivery-completion", { deliveryCompletion: { kind: "conversation" } }, 9],
+      ["fractional-retry", { retainOnFailure: true }, 1.5],
+      ["negative-retry", { retainOnFailure: true }, -1],
+      ["unsafe-retry", { retainOnFailure: true }, Number.MAX_SAFE_INTEGER + 1],
+      ["string-retry", { retainOnFailure: true }, "7"],
+    ] as const) {
+      insertQueueRow.run(
+        "outbound",
+        id,
+        JSON.stringify({ id, enqueuedAt: 60, retryCount, ...metadata }),
+        60,
+        61,
+        62,
+      );
+    }
+    insertQueueRow.run(
+      "session",
+      "claimed-session-failure",
+      JSON.stringify({
+        id: "claimed-session-failure",
+        enqueuedAt: 60,
+        retryCount: 1,
+        availableAt: 70,
+      }),
+      60,
+      61,
+      62,
+    );
+    const unsafeTimestampRetention = {
+      idPrefix: "unsafe-timestamp:",
+      maxAgeMs: 86_400_000,
+      maxEntries: 1,
+    };
+    insertQueueRow.run(
+      "outbound",
+      "unsafe-timestamp:bounded",
+      JSON.stringify({
+        id: "unsafe-timestamp:bounded",
+        enqueuedAt: 60,
+        retryCount: 1,
+        completionRetention: unsafeTimestampRetention,
+      }),
+      60,
+      61,
+      62,
+    );
+    const backfillCapRetention = {
+      idPrefix: "backfill-cap:",
+      maxAgeMs: 86_400_000,
+      maxEntries: 1,
+    };
+    for (const [id, terminalAt] of [
+      ["backfill-cap:old", 70],
+      ["backfill-cap:new", 71],
+    ] as const) {
+      insertQueueRow.run(
+        "outbound",
+        id,
+        JSON.stringify({
+          id,
+          enqueuedAt: terminalAt,
+          retryCount: 0,
+          completionRetention: backfillCapRetention,
+        }),
+        terminalAt,
+        terminalAt,
+        terminalAt,
+      );
+    }
+    db.exec(
+      "UPDATE delivery_queue_entries SET retry_count = 9223372036854775807 WHERE id = 'unsafe-retry'",
+    );
+    db.exec(
+      "UPDATE delivery_queue_entries SET updated_at = 9223372036854775807, failed_at = 9223372036854775807 WHERE id = 'unsafe-timestamp:bounded'",
     );
     db.close();
 
@@ -5170,6 +5697,157 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       session_key: "agent:main:main",
       target: "chat-1",
     });
+    expect(
+      database.db
+        .prepare(
+          `SELECT retry_count, last_attempt_at, platform_send_started_at
+             FROM delivery_queue_entries
+            WHERE id = 'delivery-invalid-integers'`,
+        )
+        .get(),
+    ).toEqual({ retry_count: 0, last_attempt_at: null, platform_send_started_at: null });
+    expect(loadDeliveryQueueEntry("outbound", "pending-failure-retention", stateDir)).toMatchObject(
+      {
+        failureRetention: "permanent",
+        payloads: [{ text: "keep until terminal transition" }],
+      },
+    );
+    expect(
+      loadDeliveryQueueEntry(
+        "outbound",
+        "upgrade-bounded:v1:pending-completion-retention",
+        stateDir,
+      ),
+    ).toMatchObject({
+      completionRetention: pendingBoundedRetention,
+      payloads: [{ text: "private" }],
+    });
+    expect(
+      loadDeliveryQueueEntry("session", "pending-session-available-at", stateDir),
+    ).toMatchObject({
+      retainOnFailure: true,
+      availableAt: 30,
+      payloads: [{ text: "private claimed session" }],
+    });
+    expect(
+      loadDeliveryQueueEntry("outbound-preparing-v1", "pending-stable-preparation", stateDir),
+    ).toMatchObject({
+      retainOnFailure: true,
+      payloads: [{ text: "private stable preparation" }],
+    });
+    expect(
+      loadDeliveryQueueEntry("outbound-prepared-v1", "pending-delivery-completion", stateDir),
+    ).toMatchObject({
+      retainOnFailure: true,
+      deliveryCompletion: { kind: "conversation", operationId: "op-before-upgrade" },
+      payloads: [{ text: "private durable completion" }],
+    });
+    expect(
+      loadDeliveryQueueEntry("outbound-prepared-v1", "pending-ambiguous-platform-send", stateDir),
+    ).toMatchObject({
+      retainOnFailure: true,
+      platformSendAttemptId: "attempt-before-upgrade",
+      payloads: [{ text: "private ambiguous send" }],
+    });
+    const transientClaimIds = new Set(["pending-required-claim", "pending-producer-claim"]);
+    for (const { queueName, ...pending } of pendingEntries) {
+      const entry = loadDeliveryQueueEntry(queueName, pending.id, stateDir);
+      expect(entry).not.toBeNull();
+      expect(
+        terminalizePendingDeliveryQueueEntry({
+          queueName,
+          id: pending.id,
+          entry: entry!,
+          stateDir,
+        }),
+      ).toEqual({ status: "terminalized", retained: !transientClaimIds.has(pending.id) });
+    }
+    const failureRowsSql = `
+      SELECT id, entry_kind, session_key, channel, target, account_id, retry_count,
+             last_attempt_at, last_error, recovery_state, platform_send_started_at,
+             entry_json, enqueued_at, failed_at
+        FROM delivery_queue_entries
+       WHERE status = 'failed'
+       ORDER BY id`;
+    const failureRows = database.db.prepare(failureRowsSql).all() as Array<Record<string, unknown>>;
+    const boundedRetentions = new Map([
+      ["cron-direct-delivery:v1:canonical", boundedRetention],
+      ["cron-direct-delivery:v1:failure", boundedRetention],
+      ["cron-direct-delivery:v1:terminal", boundedRetention],
+      ["upgrade-bounded:v1:pending-completion-retention", pendingBoundedRetention],
+      ["unsafe-timestamp:bounded", unsafeTimestampRetention],
+      ["backfill-cap:new", backfillCapRetention],
+    ]);
+    const retryCounts = new Map<string, number>([
+      ["claimed-session-failure", 1],
+      ["cron-direct-delivery:v1:canonical", 3],
+      ["cron-direct-delivery:v1:failure", 4],
+      ["cron-direct-delivery:v1:terminal", 5],
+      ["delivery-completion", 9],
+      ["terminal-permanent", 6],
+      ["ambiguous-beta-failure", 2],
+      ["unsafe-timestamp:bounded", 1],
+    ]);
+    for (const row of failureRows) {
+      const id = String(row.id);
+      const retryCount = retryCounts.get(id) ?? 0;
+      const completionRetention = boundedRetentions.get(id) ?? "permanent";
+      const recoveryState = boundedRetentions.has(id) ? "completed_bounded" : "completed_permanent";
+      expect(row).toMatchObject({
+        entry_kind: null,
+        session_key: null,
+        channel: null,
+        target: null,
+        account_id: null,
+        retry_count: retryCount,
+        last_attempt_at: null,
+        last_error: null,
+        recovery_state: recoveryState,
+        platform_send_started_at: null,
+        enqueued_at: row.failed_at,
+      });
+      expect(Number.isSafeInteger(row.retry_count)).toBe(true);
+      expect(Number(row.retry_count)).toBeGreaterThanOrEqual(0);
+      expect(JSON.parse(String(row.entry_json))).toEqual({
+        id,
+        enqueuedAt: Number(row.failed_at),
+        failedAt: Number(row.failed_at),
+        retryCount,
+        completionRetention,
+        recoveryState,
+      });
+    }
+    expect(failureRows).toHaveLength(19);
+    for (const id of ["ambiguous-beta-failure", "malformed-failure", "unsafe-timestamp:bounded"]) {
+      expect(failureRows.some((row) => row.id === id)).toBe(true);
+    }
+    const malformedRow = failureRows.find((row) => row.id === "malformed-failure");
+    expect(Number(malformedRow?.failed_at)).toBeGreaterThan(0);
+    expect(String(malformedRow?.entry_json)).not.toContain("private bytes");
+    for (const id of [
+      "legacy-none",
+      "minimal-failure",
+      "pending-producer-claim",
+      "pending-required-claim",
+      "rich-failure",
+      "terminal-none",
+      "backfill-cap:old",
+    ]) {
+      expect(failureRows.some((row) => row.id === id)).toBe(false);
+    }
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+
+    closeOpenClawStateDatabaseForTest();
+    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    expect(reopened.db.prepare(failureRowsSql).all()).toEqual(failureRows);
+    expect(getDeliveryQueueEntryStatus("outbound", "unsafe-timestamp:bounded", stateDir)).toBe(
+      "failed",
+    );
+    expect(
+      countFailedDeliveryQueueEntries(stateDir).some(
+        ({ queueName, count }) => queueName === "outbound" && count > 0,
+      ),
+    ).toBe(true);
   });
 
   it("configures durable SQLite connection pragmas", () => {

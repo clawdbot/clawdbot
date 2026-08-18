@@ -2,6 +2,7 @@
  * Settles prompt dispatch, stream cleanup, and result projection.
  * It may assume stream runtime preparation and session state are ready.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -9,7 +10,9 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { SessionManager } from "../../sessions/index.js";
 import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
@@ -31,6 +34,7 @@ import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import { buildPromptImageFailureNotice } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
@@ -53,6 +57,9 @@ type PreparedStreamRuntime = {
   stream: ReturnType<typeof prepareEmbeddedAttemptStream>;
   timeout: ReturnType<typeof prepareEmbeddedAttemptTimeout>;
 };
+
+const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
+const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
 
 type StreamCleanupInput = {
   attempt: EmbeddedRunAttemptParams;
@@ -107,7 +114,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
 
 export async function runEmbeddedAttemptSettledPhase(
   input: EmbeddedAttemptExecutionPhaseInput & {
-    getRepairedRejectedThinkingReplay: () => boolean;
+    getRepairedRejectedProviderReplay: () => boolean;
     preparedStreamRuntime: PreparedStreamRuntime;
   },
 ): Promise<EmbeddedRunAttemptWithReceiptEvidence> {
@@ -237,6 +244,7 @@ export async function runEmbeddedAttemptSettledPhase(
         toolResultPromptProjectionState,
       },
       execution: {
+        mediaOwnerAgentId: input.setup.sessionAgentId,
         effectiveFsWorkspaceOnly: input.setup.effectiveFsWorkspaceOnly,
         effectiveWorkspace: input.setup.effectiveWorkspace,
         sandbox: input.setup.sandbox,
@@ -372,8 +380,10 @@ export async function runEmbeddedAttemptSettledPhase(
     }
     let settledStream: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>;
     try {
-      if (input.getRepairedRejectedThinkingReplay() && !rewoundBeforeAgentFinalizeRevision) {
-        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+      if (input.getRepairedRejectedProviderReplay() && !rewoundBeforeAgentFinalizeRevision) {
+        activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+          sessionManager.buildSessionContext().messages,
+        );
       }
       const settleTerminal = readTerminal();
       const streamSettleState = {
@@ -432,7 +442,9 @@ export async function runEmbeddedAttemptSettledPhase(
         await input.sessionLock.withOwnedTranscriptWrite(() => {
           // Settlement classifies the completed attempt from its original
           // in-memory messages. Later work always sees the rewound branch.
-          activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+          activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+            sessionManager.buildSessionContext().messages,
+          );
         });
       }
     }
@@ -501,6 +513,43 @@ export async function runEmbeddedAttemptSettledPhase(
         compactionOccurredThisAttempt: settledStream.compactionOccurredThisAttempt,
       },
     });
+    if (
+      sessionRuntimeState.currentTurnImageFailureCount > 0 &&
+      !activeSession.messages.some(
+        (message) =>
+          message.role === "custom" &&
+          message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
+          asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
+          asOptionalRecord(message.details)?.runId === attempt.runId,
+      )
+    ) {
+      const note = {
+        role: "custom" as const,
+        customType: FAILED_PROMPT_MEDIA_NOTE_TYPE,
+        content: buildPromptImageFailureNotice(sessionRuntimeState.currentTurnImageFailureCount),
+        display: true,
+        details: {
+          source: FAILED_PROMPT_MEDIA_NOTE_SOURCE,
+          runId: attempt.runId,
+          failedMediaCount: sessionRuntimeState.currentTurnImageFailureCount,
+        },
+        timestamp: Date.now(),
+      };
+      await input.sessionLock.withOwnedTranscriptWrite(() => {
+        const target = sessionManager.getSessionTarget();
+        if (target) {
+          SessionManager.appendMessageToTranscript(
+            target,
+            note,
+            attempt.config ? { config: attempt.config } : undefined,
+          );
+        } else {
+          sessionManager.appendMessage(note);
+        }
+        activeSession.agent.state.messages = [...activeSession.messages, note];
+      });
+      messagesSnapshot = [...messagesSnapshot, note];
+    }
     sessionIdUsed = afterTurn.sessionIdUsed;
     sessionFileUsed = afterTurn.sessionFileUsed;
   } finally {
@@ -540,6 +589,7 @@ export async function runEmbeddedAttemptSettledPhase(
       promptCache: sessionRuntimeState.promptCache,
       contextBudgetStatus,
       yieldDetected: input.lifecycle.readYieldState().yieldDetected,
+      yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
     },
     clientToolCallSlots,

@@ -1,6 +1,8 @@
 /**
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -14,6 +16,7 @@ import {
   type AgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { getMediaDir } from "../media/store.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -31,7 +34,6 @@ import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connect
 import {
   agentCommandMock,
   installGatewayTestHooks,
-  agentDiscoveryMock,
   rpcReq,
   testState,
   writeSessionStore,
@@ -44,14 +46,21 @@ const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-sessi
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
-const TEXT_ONLY_AGENT_MODEL = {
+type GatewayModelFixture = {
+  id: string;
+  name: string;
+  provider: string;
+  input: Array<"text" | "image">;
+};
+
+const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
   id: "deepseek-v4-flash",
   name: "DeepSeek V4 Flash",
   provider: "ollama-cloud",
   input: ["text"],
 };
 
-const VISION_AGENT_MODEL = {
+const VISION_AGENT_MODEL: GatewayModelFixture = {
   id: "gemma4:31b",
   name: "Gemma 4 31B",
   provider: "ollama-cloud",
@@ -105,17 +114,36 @@ async function runMainAgentDeliveryWithSession(params: {
   }
 }
 
-async function setGatewayModelCatalogForTest(
-  models: typeof agentDiscoveryMock.models,
-): Promise<void> {
+async function setGatewayModelCatalogForTest(models: GatewayModelFixture[]): Promise<void> {
   testState.sessionStorePath = gatewaySuite.sessionStorePath;
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = models;
   await resetPreparedModelCatalogStateForTest();
   const [
     { refreshPreparedModelRuntimeSnapshots },
-    { clearRuntimeConfigSnapshot, getRuntimeConfig },
+    { clearRuntimeConfigSnapshot, getRuntimeConfig, writeConfigFile },
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
+  await writeConfigFile({
+    models: {
+      providers: Object.fromEntries(
+        [...new Set(models.map((model) => model.provider))].map((provider) => [
+          provider,
+          {
+            baseUrl: `https://${provider}.example.test/v1`,
+            models: models
+              .filter((model) => model.provider === provider)
+              .map((model) => ({
+                id: model.id,
+                name: model.name,
+                input: model.input,
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              })),
+          },
+        ]),
+      ),
+    },
+  });
   clearRuntimeConfigSnapshot();
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
@@ -133,6 +161,18 @@ const offloadedImageAttachment = () => ({
     "base64",
   ),
 });
+
+async function listInboundMedia(): Promise<Set<string>> {
+  const entries = await fs.readdir(path.join(getMediaDir(), "inbound")).catch(() => []);
+  return new Set(entries);
+}
+
+async function expectNoNewInboundMedia(before: Set<string>): Promise<void> {
+  await vi.waitFor(async () => {
+    const after = await listInboundMedia();
+    expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
+  });
+}
 
 async function runAgentImageRequest(params: {
   idempotencyKey: string;
@@ -563,13 +603,16 @@ describe("gateway server agent", () => {
   );
 
   test("agent rejects unknown reply channel", async () => {
+    const inboundBefore = await listInboundMedia();
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
       replyChannel: "unknown-channel",
+      attachments: [offloadedImageAttachment()],
       idempotencyKey: "idem-agent-reply-unknown",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("unknown channel");
+    await expectNoNewInboundMedia(inboundBefore);
 
     const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
@@ -716,6 +759,9 @@ describe("gateway server agent", () => {
     expect(media?.[0]?.path).toMatch(/\/media\/inbound\//);
     expect(media?.[0]?.url).toMatch(/^media:\/\/inbound\//);
     expect(call.message).toBe(`what is in the image?\n[media attached: ${media?.[0]?.url}]`);
+    await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
+      isFile: expect.any(Function),
+    });
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
@@ -743,6 +789,8 @@ describe("gateway server agent", () => {
   test("agent errors when delivery requested and no last channel exists", async () => {
     testState.allowFrom = ["+1555"];
     try {
+      testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+      await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
       await setTestSessionStore({
         entries: {
           main: {
@@ -751,17 +799,21 @@ describe("gateway server agent", () => {
           },
         },
       });
+      const inboundBefore = await listInboundMedia();
       const res = await rpcReq(gatewaySuite.ws, "agent", {
         message: "hi",
         sessionKey: "main",
         deliver: true,
         bestEffortDeliver: false,
+        attachments: [offloadedImageAttachment()],
         idempotencyKey: "idem-agent-missing-provider",
       });
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("INVALID_REQUEST");
       expect(res.error?.message).toContain("Channel is required");
+      expect(res.error?.message).not.toMatch(/^Error:/u);
       expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+      await expectNoNewInboundMedia(inboundBefore);
     } finally {
       testState.allowFrom = undefined;
     }

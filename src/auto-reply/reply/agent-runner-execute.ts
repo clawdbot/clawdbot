@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
+import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveProfileParticipantIdFromSessionCreation } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -27,6 +29,7 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -42,7 +45,6 @@ type SessionResetOptions = {
 
 type ExecutePreparedReplyAgentRunInput = Pick<
   RunReplyAgentParams,
-  | "agentCfgContextTokens"
   | "blockReplyChunking"
   | "blockStreamingEnabled"
   | "commandBody"
@@ -105,7 +107,6 @@ export async function executePreparedReplyAgentRun(
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,
-    agentCfgContextTokens,
     applyReplyToMode,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
     blockReplyChunking,
@@ -196,7 +197,6 @@ export async function executePreparedReplyAgentRun(
       sessionCtx,
       opts,
       defaultModel,
-      agentCfgContextTokens,
       resolvedVerboseLevel,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -227,7 +227,6 @@ export async function executePreparedReplyAgentRun(
         followupRun,
         promptForEstimate: followupRun.prompt,
         defaultModel,
-        agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
@@ -279,7 +278,6 @@ export async function executePreparedReplyAgentRun(
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     toolProgressDetail,
   });
   setRunFollowupTurn(runFollowupTurn);
@@ -360,8 +358,18 @@ export async function executePreparedReplyAgentRun(
         return { ...hookResult, reply: hookReply };
       },
     },
-    () =>
-      traceAgentPhase("reply.run_agent_turn", () =>
+    () => {
+      const gitCoauthorAttribution = prepareGitCoauthorAttribution({
+        agentId: followupRun.run.agentId,
+        config: cfg,
+        currentProfileId: resolveProfileParticipantIdFromSessionCreation(
+          sessionCtx.SessionCreation,
+        ),
+        sessionKey,
+        storePath,
+      });
+      const agentTurnOpts = gitCoauthorAttribution ? { ...opts, gitCoauthorAttribution } : opts;
+      return traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           commandBody,
           transcriptCommandBody,
@@ -369,7 +377,7 @@ export async function executePreparedReplyAgentRun(
           sessionCtx,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
-          opts,
+          opts: agentTurnOpts,
           typingSignals,
           blockReplyPipeline,
           blockStreamingEnabled,
@@ -391,15 +399,25 @@ export async function executePreparedReplyAgentRun(
           replyMediaContext,
           isRestartRecoveryArmed,
         }),
-      ),
+      );
+    },
   );
+  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(
     resolveReplyOperationRunState(opts),
-    runOutcome.outcome.kind === "settled" ? runOutcome.outcome.status : "failed",
+    operationSuperseded
+      ? "superseded"
+      : runOutcome.outcome.kind === "settled"
+        ? runOutcome.outcome.status
+        : "failed",
+    replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 
+  if (operationSuperseded) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (runOutcome.outcome.kind !== "settled") {
     if (runOutcome.outcome.kind === "rejected" && !replyOperation.result) {
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
@@ -415,7 +433,6 @@ export async function executePreparedReplyAgentRun(
     activeIsNewSession,
     activeSessionEntry,
     activeSessionStore,
-    agentCfgContextTokens,
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,

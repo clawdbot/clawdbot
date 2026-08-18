@@ -1,12 +1,11 @@
-/**
- * Client-side execution engine for slash commands.
- * Calls gateway RPC methods and returns formatted results.
- */
-
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+/**
+ * Client-side execution engine for slash commands.
+ * Calls gateway RPC methods and returns formatted results.
+ */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -36,9 +35,9 @@ import {
   resolveCurrentThinkingLevel,
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -220,7 +219,7 @@ async function executeCompact(
     });
     const result = await context.sessions.compact(sessionKey, options);
     if (result?.ok !== true) {
-      const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
+      const reason = typeof result?.reason === "string" ? formatUiExternalText(result.reason) : "";
       return {
         content: reason
           ? t("chat.commandResults.compaction.failedWithReason", { reason })
@@ -246,7 +245,7 @@ async function executeCompact(
     if (typeof result?.reason === "string" && result.reason.trim()) {
       return {
         content: t("chat.commandResults.compaction.skippedWithReason", {
-          reason: result.reason,
+          reason: formatUiExternalText(result.reason),
         }),
         action: "refresh",
       };
@@ -254,7 +253,7 @@ async function executeCompact(
     return { content: t("chat.commandResults.compaction.skipped"), action: "refresh" };
   } catch (err) {
     return {
-      content: t("chat.commandResults.compaction.failedWithReason", { reason: String(err) }),
+      content: t("chat.commandResults.compaction.failedWithReason", { reason: formatUiError(err) }),
       failed: true,
     };
   }
@@ -267,11 +266,12 @@ async function executeModel(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const agentId = resolveSelectedAgentId(sessionKey, context);
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -296,7 +296,7 @@ async function executeModel(
       return { content: lines.join("\n") };
     } catch (err) {
       return {
-        content: t("chat.commandResults.model.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.model.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -306,7 +306,7 @@ async function executeModel(
     const requestedModel = args.trim();
     const resolvedModelCatalog = modelCatalog
       ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, { allowFailure: true });
+      : loadModelCatalog(client, agentId, { allowFailure: true });
     let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
@@ -349,7 +349,7 @@ async function executeModel(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.model.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.model.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -380,7 +380,7 @@ async function executeThink(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.thinking.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.thinking.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -397,7 +397,7 @@ async function executeThink(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.thinking.resetFailed", { error: String(err) }),
+        content: t("chat.commandResults.thinking.resetFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -431,7 +431,7 @@ async function executeThink(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.thinking.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.thinking.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -458,7 +458,7 @@ async function executeVerbose(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.verbose.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.verbose.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -481,7 +481,7 @@ async function executeVerbose(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.verbose.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.verbose.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -512,7 +512,7 @@ async function executeFast(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.fast.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.fast.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -529,7 +529,7 @@ async function executeFast(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.fast.resetFailed", { error: String(err) }),
+        content: t("chat.commandResults.fast.resetFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -555,7 +555,7 @@ async function executeFast(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.fast.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.fast.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -614,7 +614,7 @@ async function executeUsage(
     return { content: lines.join("\n") };
   } catch (err) {
     return {
-      content: t("chat.commandResults.usage.failed", { error: String(err) }),
+      content: t("chat.commandResults.usage.failed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -640,7 +640,7 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
     return { content: lines.join("\n") };
   } catch (err) {
     return {
-      content: t("chat.commandResults.agents.failed", { error: String(err) }),
+      content: t("chat.commandResults.agents.failed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -776,9 +776,10 @@ async function loadThinkingCommandState(
   sessionKey: string,
 ) {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const agentId = resolveSelectedAgentId(sessionKey, context);
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
@@ -789,10 +790,15 @@ async function loadThinkingCommandState(
 
 async function loadModelCatalog(
   client: GatewayBrowserClient,
+  agentId: string | undefined,
   opts?: { allowFailure?: boolean },
 ): Promise<ModelCatalogEntry[]> {
+  if (!agentId) {
+    return [];
+  }
   try {
     const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
+      agentId,
       view: "configured",
     });
     return result?.models ?? [];
@@ -804,10 +810,10 @@ async function loadModelCatalog(
   }
 }
 
-async function resolveSteerTarget(
+function resolveCommandMessage(
   sessionKey: string,
   args: string,
-): Promise<{ key: string; message: string } | { error: string }> {
+): { key: string; message: string } | { error: string } {
   const trimmed = args.trim();
   if (!trimmed) {
     return { error: "empty" };
@@ -816,12 +822,6 @@ async function resolveSteerTarget(
     key: sessionKey,
     message: trimmed,
   };
-}
-
-function isActiveSteerSession(
-  session: GatewaySessionRow | undefined,
-): session is GatewaySessionRow & { activeRunIds: [string] } {
-  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -864,19 +864,10 @@ async function executeSteer(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? t("chat.commandResults.steer.usage") : resolved.error,
-      };
-    }
-    const sessions =
-      context.sessionsResult ??
-      (await listSessions(context, selectedGlobalScope(sessionKey, context)));
-    const targetSession = resolveCurrentSession(sessions, resolved.key);
-    if (!isActiveSteerSession(targetSession)) {
-      return {
-        content: t("chat.commandResults.steer.noActiveRun"),
       };
     }
     assertCurrentSlashCommand(context);
@@ -887,10 +878,6 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
-        expectedRunId: targetSession.activeRunIds[0],
-        ...(targetSession.activeLeafEntryId !== undefined
-          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
-          : {}),
         idempotencyKey: generateUUID(),
       }),
     );
@@ -905,7 +892,7 @@ async function executeSteer(
     return result;
   } catch (err) {
     return {
-      content: t("chat.commandResults.steer.requestFailed", { error: String(err) }),
+      content: t("chat.commandResults.steer.requestFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -919,7 +906,7 @@ async function executeRedirect(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(sessionKey, args);
+    const resolved = resolveCommandMessage(sessionKey, args);
     if ("error" in resolved) {
       return {
         content:
@@ -944,7 +931,7 @@ async function executeRedirect(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.redirect.requestFailed", { error: String(err) }),
+      content: t("chat.commandResults.redirect.requestFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }

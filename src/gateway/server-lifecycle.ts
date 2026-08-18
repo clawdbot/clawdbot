@@ -4,16 +4,11 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  onEffectiveOperatorDevicePaired,
-  type EffectiveOperatorDeviceIdentity,
-} from "../infra/device-pairing.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   recordRemoteNodeInfo,
   removeRemoteNodeInfo,
@@ -29,11 +24,11 @@ import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  type GatewayCloseOptions,
-  shouldRetainControlUiDeviceAuthMigrationSession,
-} from "./server-public.js";
+import type { GatewayCloseOptions } from "./server-public.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
+import { runGatewayShutdownSteps } from "./server-shutdown.js";
+import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import {
   getHealthVersion,
   incrementPresenceVersion,
@@ -51,27 +46,14 @@ export async function prepareGatewayLifecycle(params: {
   log: GatewayLogger;
   logCron: GatewayLogger;
   diagnosticsEnabled: boolean;
-  loadGatewayCloseModule: () => Promise<typeof import("./server-close.runtime.js")>;
-  closeMcpLoopbackServerOnDemand: () => Promise<void>;
-  stopTaskRegistryMaintenanceOnDemand: () => Promise<void>;
+  shutdownRuntime: GatewayShutdownRuntime;
 }) {
-  const {
-    runtime,
-    port,
-    log,
-    logCron,
-    diagnosticsEnabled,
-    loadGatewayCloseModule,
-    closeMcpLoopbackServerOnDemand,
-    stopTaskRegistryMaintenanceOnDemand,
-  } = params;
+  const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
   const {
     minimalTestGateway,
-    controlUiDeviceAuthMigration,
-    completeControlUiDeviceAuthMigration,
-    workerGatewayEndpoint,
     transportBridge,
     sessionMessageSubscribers,
+    isConnectionActive,
     clients,
     broadcast,
     cfgAtStart,
@@ -103,53 +85,8 @@ export async function prepareGatewayLifecycle(params: {
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     bindDeviceNodeControl,
+    workerPlacementRuntime,
   } = runtime;
-  const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
-    device: EffectiveOperatorDeviceIdentity,
-  ) => {
-    if (
-      !controlUiDeviceAuthMigration.pending ||
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.pairing"],
-        allowedScopes: device.scopes,
-      })
-    ) {
-      return;
-    }
-    const normalizedDeviceId = device.deviceId.trim();
-    // Close the process-local grace immediately after approval. The durable
-    // receipt prevents stale legacy config from reopening it.
-    controlUiDeviceAuthMigration.pending = false;
-    for (const client of clients) {
-      if (!client.isControlUiDeviceAuthMigrationSession) {
-        continue;
-      }
-      if (
-        client.isControlUiDeviceAuthMigration &&
-        shouldRetainControlUiDeviceAuthMigrationSession({
-          sessionDevice: client.connect.device,
-          approvedDevice: device,
-        })
-      ) {
-        // Retention is bound to the approved key as well as its derived id.
-        // Keep only that identity long enough to receive the approval response.
-        continue;
-      }
-      client.invalidated = true;
-      client.invalidatedReason = "device-auth-migration-completed";
-      client.socket.close(4001, "device auth migration completed");
-    }
-    try {
-      completeControlUiDeviceAuthMigration(normalizedDeviceId, { env: process.env });
-    } catch (error) {
-      log.warn(`failed to persist Control UI device-auth migration completion: ${String(error)}`);
-    }
-  };
-  const unsubscribeEffectiveOperatorPairing = onEffectiveOperatorDevicePaired(
-    completeControlUiDeviceAuthMigrationForEffectiveOperator,
-  );
-  workerGatewayEndpoint.resolve = transportBridge.getWorkerIngressEndpoint;
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
     sessionKey,
@@ -181,6 +118,9 @@ export async function prepareGatewayLifecycle(params: {
     listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    onRunnerInventoryChanged: (nodeId) => {
+      void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
+    },
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
@@ -311,12 +251,13 @@ export async function prepareGatewayLifecycle(params: {
     },
     setPostAttachHandles: (handles: {
       stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
-      tailscaleCleanup: typeof runtimeState.tailscaleCleanup;
       pluginServices: typeof runtimeState.pluginServices;
     }) => {
       runtimeState.stopGatewayUpdateCheck = handles.stopGatewayUpdateCheck;
-      runtimeState.tailscaleCleanup = handles.tailscaleCleanup;
       runtimeState.pluginServices = handles.pluginServices;
+    },
+    setTailscaleCleanup: (cleanup: typeof runtimeState.tailscaleCleanup) => {
+      runtimeState.tailscaleCleanup = cleanup;
     },
     setPluginServices: (pluginServices: typeof runtimeState.pluginServices) => {
       runtimeState.pluginServices = pluginServices;
@@ -383,8 +324,10 @@ export async function prepareGatewayLifecycle(params: {
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     broadcastToConnIds,
+    isConnectionActive,
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
+    isConnectionActive,
     onReplace: (connId, sessionKeys) => {
       const client = [...clients].find((candidate) => candidate.connId === connId);
       if (!client?.presenceKey) {
@@ -445,6 +388,8 @@ export async function prepareGatewayLifecycle(params: {
   };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    postReadySidecarStopOwner.beginClose();
+    gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
@@ -452,7 +397,6 @@ export async function prepareGatewayLifecycle(params: {
     runtimeState.stopGatewayUpdateCheck();
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
-    unsubscribeEffectiveOperatorPairing();
     kernel.setDispatchReady(false);
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
@@ -481,8 +425,7 @@ export async function prepareGatewayLifecycle(params: {
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
-    const { runGatewayClosePrelude } = await loadGatewayCloseModule();
-    await runGatewayClosePrelude({
+    await shutdownRuntime.runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
       clearSkillsRefreshTimer: () => {
         if (!runtimeState?.skillsRefreshTimer) {
@@ -503,7 +446,7 @@ export async function prepareGatewayLifecycle(params: {
         await monitor?.waitForIdle();
       },
       stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
-      closeMcpServer: closeMcpLoopbackServerOnDemand,
+      closeMcpServer: shutdownRuntime.closeMcpLoopbackServer,
     });
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
@@ -517,38 +460,47 @@ export async function prepareGatewayLifecycle(params: {
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
-  const stopRegisteredPostReadySidecars = async () => {
-    const postReadySidecars = runtimeState.postReadySidecars;
-    runtimeState.postReadySidecars = [];
-    for (const postReadySidecar of postReadySidecars) {
-      await postReadySidecar.stop();
-    }
-  };
-  const stopRegisteredGatewayLifetimeSidecars = async () => {
-    const gatewayLifetimeSidecars = runtimeState.gatewayLifetimeSidecars;
-    runtimeState.gatewayLifetimeSidecars = [];
-    for (const gatewayLifetimeSidecar of gatewayLifetimeSidecars) {
-      await gatewayLifetimeSidecar.stop();
+  const postReadySidecarStopOwner = createGatewaySidecarStopOwner({
+    getRegistered: () => runtimeState.postReadySidecars,
+    setRegistered: (sidecars) => {
+      runtimeState.postReadySidecars = sidecars;
+    },
+  });
+  const gatewayLifetimeSidecarStopOwner = createGatewaySidecarStopOwner({
+    getRegistered: () => runtimeState.gatewayLifetimeSidecars,
+    setRegistered: (sidecars) => {
+      runtimeState.gatewayLifetimeSidecars = sidecars;
+    },
+  });
+  const stopRegisteredPostReadySidecars = postReadySidecarStopOwner.stop;
+  const stopRegisteredGatewayLifetimeSidecars = gatewayLifetimeSidecarStopOwner.stop;
+  const sealAndJoinRegisteredSidecarStops = async () => {
+    const results = await Promise.allSettled([
+      postReadySidecarStopOwner.sealAndJoin(),
+      gatewayLifetimeSidecarStopOwner.sealAndJoin(),
+    ]);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) {
+      throw failure.reason;
     }
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
-    const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
-      await loadGatewayCloseModule();
     const transport = transportBridge.current();
     await transport?.portalService.closeAll();
-    await createGatewayCloseHandler({
+    await shutdownRuntime.createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,
-      postReadySidecars: runtimeState.postReadySidecars,
       cron: runtimeState.cronState.cron,
       heartbeatRunner: runtimeState.heartbeatRunner,
       updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-      stopTaskRegistryMaintenance: stopTaskRegistryMaintenanceOnDemand,
+      stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
       nodePresenceTimers,
       broadcast,
       tickInterval: runtimeState.tickInterval,
@@ -580,9 +532,7 @@ export async function prepareGatewayLifecycle(params: {
         if (sessionKeys.size === 0 && sessionIds.size === 0) {
           return;
         }
-        const { markRestartAbortedMainSessions } =
-          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
-        await markRestartAbortedMainSessions({
+        await shutdownRuntime.markRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
           sessionKeys,
           sessionIds,
@@ -601,20 +551,31 @@ export async function prepareGatewayLifecycle(params: {
             httpServers: transport.httpServers,
           }
         : {}),
-      drainActiveSessionsForShutdown,
+      drainActiveSessionsForShutdown: shutdownRuntime.drainActiveSessionsForShutdown,
+      disposeAllBundleLspRuntimes: shutdownRuntime.disposeAllBundleLspRuntimes,
+      drainRetainedOpenAiEmbeddingProviders: shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
+      stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
+      disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
+      closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
     })(optsValue);
   };
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
-    try {
-      await beginClosePrelude();
-      await stopRegisteredGatewayLifetimeSidecars();
-      await stopRegisteredPostReadySidecars();
-      await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
-    } finally {
-      clearFallbackGatewayContextForServer();
-    }
+    await runGatewayShutdownSteps({
+      steps: [
+        { name: "close prelude fence", run: beginClosePrelude },
+        { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
+        { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
+        { name: "gateway close prelude", run: runClosePrelude },
+        { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
+        {
+          name: "gateway close",
+          run: () => createCloseHandler()({ reason: "gateway startup failed" }),
+        },
+        { name: "fallback gateway context", run: clearFallbackGatewayContextForServer },
+      ],
+      onError: (message) => log.error(message),
+    });
   };
 
   const diagnosticHeartbeatResident = residentRegistry.register({
@@ -650,8 +611,6 @@ export async function prepareGatewayLifecycle(params: {
 
   return {
     ...runtime,
-    completeControlUiDeviceAuthMigrationForEffectiveOperator,
-    unsubscribeEffectiveOperatorPairing,
     subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,
@@ -672,6 +631,7 @@ export async function prepareGatewayLifecycle(params: {
     unavailableGatewayMethods,
     kernel,
     pluginHostServices,
+    shutdownRuntime,
     lifecycle,
     postReadyState,
     cronReconciliation,
@@ -685,6 +645,9 @@ export async function prepareGatewayLifecycle(params: {
     refreshGatewayHealthSnapshotWithRuntime,
     stopRegisteredPostReadySidecars,
     stopRegisteredGatewayLifetimeSidecars,
+    registerPostReadySidecars: postReadySidecarStopOwner.publish,
+    registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
+    sealAndJoinRegisteredSidecarStops,
     createCloseHandler,
     clearFallbackGatewayContextForServer: {
       get: () => clearFallbackGatewayContextForServer,

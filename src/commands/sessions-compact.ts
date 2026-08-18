@@ -7,6 +7,7 @@
  * (transport error or an `ok:false` payload) so automation never mistakes a
  * silent no-op for success.
  */
+import { rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -28,7 +29,6 @@ type SessionsCompactResult = {
   compacted?: boolean;
   reason?: string;
   kept?: number;
-  archived?: string;
   result?: {
     tokensBefore?: number;
     tokensAfter?: number;
@@ -94,6 +94,7 @@ export async function sessionsCompactCommand(
       defaultTimeoutMs: 10_000,
     })) as SessionsCompactResult;
   } catch (err) {
+    rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (opts.json) {
       writeRuntimeJson(runtime, { ok: false, key: opts.key, error: message });
@@ -125,7 +126,4 @@ export async function sessionsCompactCommand(
   }
 
   runtime.log(describeCompaction(result ?? {}, opts.key));
-  if (result?.archived) {
-    runtime.log(`Archived transcript: ${result.archived}`);
-  }
 }

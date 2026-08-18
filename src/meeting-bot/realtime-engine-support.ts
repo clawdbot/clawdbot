@@ -41,6 +41,7 @@ type MeetingRealtimeLifecycleHandlersParams = {
 
 type MeetingRealtimeProviderSelectionConfig = {
   realtime: {
+    agentId?: string;
     provider?: string;
     transcriptionProvider?: string;
     voiceProvider?: string;
@@ -73,6 +74,7 @@ export function resolveMeetingRealtimeProvider(params: {
     configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
+    agentId: params.config.realtime.agentId,
     providers: params.providers,
     defaultModel: params.config.realtime.model,
     noRegisteredProviderMessage: "No configured realtime voice provider registered",

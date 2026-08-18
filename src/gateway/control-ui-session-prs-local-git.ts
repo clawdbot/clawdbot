@@ -36,9 +36,9 @@ type LocalGitCacheEntry<T> = { expiresAt: number; promise: Promise<T> };
 
 function createLocalGitCache<T>() {
   const entries = new Map<string, LocalGitCacheEntry<T>>();
-  return (key: string, load: () => Promise<T>): Promise<T> => {
+  return (key: string, refresh: boolean, load: () => Promise<T>): Promise<T> => {
     const cached = entries.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (!refresh && cached && cached.expiresAt > Date.now()) {
       entries.delete(key);
       entries.set(key, cached);
       return cached.promise;
@@ -59,8 +59,9 @@ const cachedBranchFacts = createLocalGitCache<SessionPullRequestBranchFacts | un
 export function resolveCachedGitContext(
   root: string,
   deps: SessionPullRequestLocalGitDeps,
+  refresh = false,
 ): Promise<SessionPullRequestGitContext | null> {
-  return cachedGitContext(root, async () => {
+  return cachedGitContext(root, refresh, async () => {
     const output = deps.gitOutput ?? gitOutput;
     const branch = await output(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
     if (!branch || branch === "HEAD") {
@@ -84,7 +85,8 @@ export function resolveCachedSessionBranchFacts(
   context: SessionPullRequestGitContext & { root: string },
   mergedHeads: readonly MergedPullHead[],
   load: () => Promise<SessionPullRequestBranchFacts | undefined>,
+  refresh = false,
 ): Promise<SessionPullRequestBranchFacts | undefined> {
   const landingKey = JSON.stringify([context.defaultBranch ?? null, mergedHeads]);
-  return cachedBranchFacts(`${context.root}\0${context.branch}\0${landingKey}`, load);
+  return cachedBranchFacts(`${context.root}\0${context.branch}\0${landingKey}`, refresh, load);
 }

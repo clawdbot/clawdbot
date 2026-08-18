@@ -36,7 +36,10 @@ import {
   buildSessionListRowContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import {
+  buildGatewaySessionRow as buildGatewaySessionRowOwner,
+  projectSessionActor,
+} from "./session-utils-row.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -218,6 +221,29 @@ function setTestActivePluginRegistry(
 }
 
 describe("gateway session utils", () => {
+  test("projects configured agent identity while tolerating legacy session-key actor ids", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "roboclaw", identity: { name: "Roboclaw", avatar: "avatar.png" } }],
+      },
+      gateway: { controlUi: { basePath: "/control" } },
+    } as OpenClawConfig;
+
+    expect(projectSessionActor({ type: "agent", id: "roboclaw" }, new Map(), cfg)).toEqual({
+      type: "agent",
+      id: "roboclaw",
+      label: "Roboclaw",
+      avatarUrl: "/control/avatar/roboclaw",
+    });
+    expect(
+      projectSessionActor(
+        { type: "agent", id: "agent:roboclaw:discord:channel:123" },
+        new Map(),
+        cfg,
+      ),
+    ).toEqual({ type: "agent", id: "agent:roboclaw:discord:channel:123" });
+  });
+
   beforeEach(() => {
     // Real artifact loading belongs to its owner tests; session projections only need the contract.
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
@@ -1091,6 +1117,407 @@ describe("gateway session utils", () => {
     expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
   });
 
+  test.each([true, false])(
+    "projects current context for a stale different-runtime producer (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "stale-openclaw",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test.each([true, false])(
+    "projects current Codex context when producer provenance is missing (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "missing-provenance",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          contextTokens: 272_000,
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test.each([true, false])(
+    "projects a changed explicit cap for the same runtime and model (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "stale-cap",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test.each([true, false])(
+    "projects an authored contextWindow cap below matching runtime telemetry (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 128_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "authored-window-cap",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(128_000);
+    },
+  );
+
+  test.each([true, false])(
+    "clamps an authored effective cap to a smaller authored contextWindow (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  contextTokens: 1_000_000,
+                  contextWindow: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "authored-effective-above-native",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          contextTokens: 272_000,
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.contextTokens).toBe(128_000);
+    },
+  );
+
+  test.each([true, false])(
+    "keeps matching runtime telemetry below a higher authored contextWindow (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "runtime-window-below-native-cap",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(272_000);
+    },
+  );
+
+  test.each([
+    {
+      name: "a locked Codex session under OpenClaw config",
+      configuredRuntime: "openclaw",
+      expectedRuntime: "codex",
+      entry: {
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        modelSelectionLocked: true,
+      },
+    },
+    {
+      name: "locked legacy telemetry without harness provenance",
+      configuredRuntime: "openclaw",
+      expectedRuntime: "openclaw",
+      entry: {
+        contextTokens: 1_000_000,
+        modelSelectionLocked: true,
+      },
+    },
+  ])("preserves $name", ({ configuredRuntime, entry, expectedRuntime }) => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: configuredRuntime } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextWindow: 272_000 }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "native-window",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        ...entry,
+      } as SessionEntry,
+    });
+
+    expect(row.agentRuntime?.id).toBe(expectedRuntime);
+    expect(row.contextTokens).toBe(1_000_000);
+  });
+
+  test.each([true, false])(
+    "does not reuse stale transcript context after an OpenClaw to Codex change (lightweight=%s)",
+    async (lightweightListRow) => {
+      await withStateDirEnv("session-utils-stale-transcript-context-", async ({ stateDir }) => {
+        const sessionId = "stale-transcript-context";
+        const sessionKey = "agent:main:main";
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const entry = {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "openclaw",
+        } as SessionEntry;
+        await seedSessionEntries(storePath, { [sessionKey]: entry });
+        appendTranscriptMessages({
+          sessionId,
+          sessionKey,
+          storePath,
+          messages: [
+            {
+              role: "assistant",
+              content: "old OpenClaw turn",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: 1, output: 1 },
+            },
+          ],
+        });
+        const cfg = {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                models: [
+                  { id: "gpt-5.5", contextWindow: 272_000 },
+                  { id: "gpt-5.6-sol", contextWindow: 1_000_000 },
+                ],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const row = buildGatewaySessionRow({
+          cfg,
+          storePath,
+          store: { [sessionKey]: entry },
+          key: sessionKey,
+          entry,
+          lightweightListRow,
+        });
+
+        expect(row.agentRuntime?.id).toBe("codex");
+        expect(row.model).toBe("gpt-5.6-sol");
+        expect(row.contextTokens).toBe(1_000_000);
+      });
+    },
+  );
+
+  test.each(["resolved", "runtime-configured"] as const)(
+    "invalidates a persisted %s cap after the cap is removed",
+    (contextTokensSource) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      for (const lightweightListRow of [true, false]) {
+        const row = buildGatewaySessionRow({
+          cfg,
+          storePath: "",
+          store: {},
+          key: "agent:main:main",
+          entry: {
+            sessionId: "removed-cap",
+            modelProvider: "openai",
+            model: "gpt-5.6-sol",
+            agentHarnessId: "codex",
+            contextTokens: 272_000,
+            contextTokensSource,
+          } as SessionEntry,
+          lightweightListRow,
+        });
+
+        expect(row.contextTokens).toBe(1_000_000);
+      }
+    },
+  );
+
   test.each(["xhigh", "max"] as const)(
     "preserves catalog-less persisted %s in session change projections",
     (thinkingLevel) => {
@@ -1714,6 +2141,40 @@ describe("gateway session utils", () => {
     expect(row.execCwd).toBe("/Users/peter/Projects/openclaw");
   });
 
+  test("buildGatewaySessionRow projects the session root only for an explicit permission mode", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const ordinaryEntry: SessionEntry = {
+      sessionId: "ordinary",
+      sessionRoot: "/workspace/private",
+      updatedAt: 1,
+    };
+    const ordinaryRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:ordinary": ordinaryEntry },
+      key: "agent:main:ordinary",
+      entry: ordinaryEntry,
+    });
+    expect(ordinaryRow).not.toHaveProperty("sessionRoot");
+
+    const permissionEntry: SessionEntry = {
+      ...ordinaryEntry,
+      permissionMode: "workspace",
+      sessionId: "permission",
+    };
+    const permissionRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:permission": permissionEntry },
+      key: "agent:main:permission",
+      entry: permissionEntry,
+    });
+    expect(permissionRow).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/private",
+    });
+  });
+
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry: SessionEntry = {
@@ -2232,6 +2693,45 @@ describe("gateway session utils", () => {
       expect(target.storePath).toBe(path.resolve(retiredStorePath));
       expect(target.store).toHaveProperty("agent:retired-agent:other");
       expect(target.store).not.toHaveProperty("agent:retired-agent:main");
+    });
+  });
+
+  test("resolveGatewaySessionStoreTarget finds a retired agent's row under another configured agent's template root", async () => {
+    await withStateDirEnv("session-utils-retired-cross-root-", async ({ tempRoot }) => {
+      const storesRoot = path.join(tempRoot, "stores");
+      const retiredStorePath = path.join(
+        storesRoot,
+        "work",
+        "agents",
+        "old",
+        "sessions",
+        "sessions.json",
+      );
+      await seedSessionEntries(retiredStorePath, {
+        "agent:old:main": { sessionId: "sess-retired-cross-root", updatedAt: 1 },
+      });
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(
+            storesRoot,
+            "{agentId}",
+            "agents",
+            "{agentId}",
+            "sessions",
+            "sessions.json",
+          ),
+        },
+        agents: { list: [{ id: "ops", default: true }, { id: "work" }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: "agent:old:main",
+      });
+
+      expect(target.storePath).toBe(path.resolve(retiredStorePath));
+      expect(target.store["agent:old:main"]?.sessionId).toBe("sess-retired-cross-root");
     });
   });
 
@@ -2805,6 +3305,7 @@ describe("gateway session utils", () => {
     });
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
+      cloudPlacementSupported: false,
       source: "implicit",
     });
   });
@@ -2912,6 +3413,7 @@ describe("gateway session utils", () => {
     });
     expect(result.agents[0]?.agentRuntime).toEqual({
       id: "codex",
+      cloudPlacementSupported: false,
       source: "provider",
     });
   });
@@ -3615,6 +4117,7 @@ describe("deriveSessionTitle", () => {
 describe("resolveGatewayModelSupportsImages", () => {
   const createModelCatalogSnapshot = (params: {
     agentId?: string;
+    catalogComplete?: boolean;
     config?: OpenClawConfig;
     entries?: GatewayModelCatalogSnapshot["entries"];
     staticEntries?: GatewayModelCatalogSnapshot["staticEntries"];
@@ -3622,23 +4125,95 @@ describe("resolveGatewayModelSupportsImages", () => {
     agentId: params.agentId ?? "main",
     agentDir: "/tmp/gateway-model-capability-agent",
     workspaceDir: "/tmp/gateway-model-capability-workspace",
+    catalogComplete: params.catalogComplete ?? false,
     config: params.config ?? {},
     entries: params.entries ?? [],
     routeVariants: [],
     ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
   });
 
-  test("uses same-agent provider-static image capabilities missing from the visible catalog", async () => {
+  test("uses prepared Sol capabilities without starting full catalog discovery", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => []);
-    const loadGatewayModelCatalogSnapshot = vi.fn(async () =>
+    const preparedSnapshot = createModelCatalogSnapshot({
+      agentId: "qa",
+      staticEntries: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          input: ["text", "image"],
+        },
+      ],
+    });
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) => {
+      if (params?.readOnly !== true) {
+        throw new Error("full catalog discovery must not start during attachment admission");
+      }
+      return preparedSnapshot;
+    });
+
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.6-sol",
+        provider: "openai",
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot,
+      }),
+    ).resolves.toBe(true);
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("falls back to live discovery for models absent from the prepared catalog", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
       createModelCatalogSnapshot({
         agentId: "qa",
-        staticEntries: [
+        entries: params?.readOnly
+          ? []
+          : [
+              {
+                id: "vendor/runtime-vision-model",
+                name: "Runtime Vision Model",
+                provider: "openrouter",
+                input: ["text", "image"],
+              },
+            ],
+      }),
+    );
+
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/runtime-vision-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot,
+      }),
+    ).resolves.toBe(true);
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
+      agentId: "qa",
+      readOnly: false,
+    });
+  });
+
+  test("falls back to live discovery for provisional prepared text-only metadata", async () => {
+    const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) =>
+      createModelCatalogSnapshot({
+        agentId: "qa",
+        entries: [
           {
-            id: "gpt-5.4",
-            name: "GPT-5.4",
-            provider: "openai",
-            input: ["text", "image"],
+            id: "vendor/runtime-vision-model",
+            name: "Runtime Vision Model",
+            provider: "openrouter",
+            input: params?.readOnly ? ["text"] : ["text", "image"],
           },
         ],
       }),
@@ -3647,17 +4222,75 @@ describe("resolveGatewayModelSupportsImages", () => {
     await expect(
       resolveGatewayModelSupportsImages({
         agentId: "qa",
-        model: "gpt-5.4",
-        provider: "openai",
-        loadGatewayModelCatalog,
+        model: "vendor/runtime-vision-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
         loadGatewayModelCatalogSnapshot,
       }),
     ).resolves.toBe(true);
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(1, {
+      agentId: "qa",
+      readOnly: true,
+    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenNthCalledWith(2, {
       agentId: "qa",
       readOnly: false,
     });
-    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("does not restart discovery for authoritative text-only metadata from a full owner", async () => {
+    const catalogReadModes: Array<boolean | undefined> = [];
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/runtime-text-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          catalogReadModes.push(params?.readOnly);
+          if (params?.readOnly !== true) {
+            throw new Error("full catalog discovery must not restart for a complete owner");
+          }
+          return createModelCatalogSnapshot({
+            agentId: "qa",
+            catalogComplete: true,
+            entries: [
+              {
+                id: "vendor/runtime-text-model",
+                name: "Runtime Text Model",
+                provider: "openrouter",
+                input: ["text"],
+              },
+            ],
+          });
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(catalogReadModes).toEqual([true]);
+  });
+
+  test("does not restart discovery when a full owner authoritatively omits the model", async () => {
+    const catalogReadModes: Array<boolean | undefined> = [];
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "vendor/missing-model",
+        provider: "openrouter",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          catalogReadModes.push(params?.readOnly);
+          if (params?.readOnly !== true) {
+            throw new Error("full catalog discovery must not restart for a complete owner");
+          }
+          return createModelCatalogSnapshot({
+            agentId: "qa",
+            catalogComplete: true,
+            entries: [],
+          });
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(catalogReadModes).toEqual([true]);
   });
 
   test("repairs a stale visible text-only row with same-agent provider-static vision", async () => {
@@ -3732,14 +4365,16 @@ describe("resolveGatewayModelSupportsImages", () => {
   });
 
   test("does not override an explicitly configured text-only model with provider-static vision", async () => {
+    const catalogReadModes: Array<boolean | undefined> = [];
     await expect(
       resolveGatewayModelSupportsImages({
         agentId: "qa",
         model: "gpt-5.4",
         provider: "openai",
         loadGatewayModelCatalog: async () => [],
-        loadGatewayModelCatalogSnapshot: async () =>
-          createModelCatalogSnapshot({
+        loadGatewayModelCatalogSnapshot: async (params) => {
+          catalogReadModes.push(params?.readOnly);
+          return createModelCatalogSnapshot({
             agentId: "qa",
             config: {
               models: {
@@ -3779,9 +4414,11 @@ describe("resolveGatewayModelSupportsImages", () => {
                 input: ["text", "image"],
               },
             ],
-          }),
+          });
+        },
       }),
     ).resolves.toBe(false);
+    expect(catalogReadModes).toEqual([true]);
   });
 
   test("does not borrow provider-static image capabilities across configured routes", async () => {

@@ -202,7 +202,7 @@ function startPendingOutboundDeliveryRecovery(params: {
         return;
       }
       const { drainPendingDeliveriesCore, recoverPendingDeliveries } =
-        await import("../infra/outbound/delivery-queue.js");
+        await import("../infra/outbound/delivery-queue-recovery.js");
       const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
       if (stopped) {
         return;

@@ -31,15 +31,21 @@ function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettings
   };
 }
 
-/**
- * Search only the `memory.*` children surfaced by the dedicated Memory page.
- */
-function visibleMemorySchema(sectionSchema: JsonSchema): JsonSchema {
+// Curated pages render only a subset of their section's schema; search must
+// promise exactly what the destination page can edit, or the result is a
+// dead-end (e.g. update.checkOnStart matched search but was editable nowhere).
+const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
+  memory: memoryVisibleSchemaKeys,
+  updates: () => ["channel", "auto"],
+};
+
+function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
+  const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
   const properties = sectionSchema.properties;
-  if (!properties) {
+  if (!visibleKeys || !properties) {
     return sectionSchema;
   }
-  const visible = new Set(memoryVisibleSchemaKeys());
+  const visible = new Set(visibleKeys());
   return {
     ...sectionSchema,
     properties: Object.fromEntries(
@@ -78,8 +84,7 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
-    const sectionSchema =
-      routeId === "memory" ? visibleMemorySchema(rawSectionSchema) : rawSectionSchema;
+    const sectionSchema = visibleSectionSchema(routeId, rawSectionSchema);
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,

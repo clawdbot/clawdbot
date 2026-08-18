@@ -25,7 +25,6 @@ describe("Codex native hook relay config", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
       hookTimeoutSec: 7,
-      loopDetectionPreToolUseRelay: true,
     });
 
     expect(config).toEqual({
@@ -132,7 +131,6 @@ describe("Codex native hook relay config", () => {
       buildCodexNativeHookRelayConfig({
         relay: createRelay(),
         events: ["permission_request"],
-        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -168,7 +166,6 @@ describe("Codex native hook relay config", () => {
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
         events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
-        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -201,50 +198,13 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it("keeps selected no-policy PreToolUse installed with an unavailable no-op marker", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
-        events: ["pre_tool_use"],
-        loopDetectionPreToolUseRelay: true,
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PreToolUse": [
-        {
-          hooks: [
-            {
-              type: "command",
-              command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 9000",
-              timeout: 10,
-              async: false,
-              statusMessage: "OpenClaw native hook relay",
-            },
-          ],
-        },
-      ],
-      "hooks.state": {
-        "/<session-flags>/config.toml:pre_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-        "<session-flags>/config.toml:pre_tool_use:0:0": {
-          enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        },
-      },
+  it("clears selected PreToolUse when the relay has no local work", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
+      events: ["pre_tool_use"],
     });
-  });
 
-  it("clears selected inactive PreToolUse when Codex loop relay installation is disabled", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
-        events: ["pre_tool_use"],
-        loopDetectionPreToolUseRelay: false,
-      }),
-    ).toEqual({
+    expect(config).toEqual({
       "features.hooks": true,
       "hooks.PreToolUse": [],
       "hooks.state": {},
@@ -257,7 +217,6 @@ describe("Codex native hook relay config", () => {
         relay: createRelay(),
         events: ["permission_request"],
         clearOmittedEvents: true,
-        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -301,7 +260,6 @@ describe("Codex native hook relay config", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
       events: ["pre_tool_use", "post_tool_use"],
-      loopDetectionPreToolUseRelay: true,
     });
 
     expect((config["hooks.PreToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
@@ -331,7 +289,6 @@ describe("Codex native hook relay config", () => {
         },
       }),
       events: ["pre_tool_use", "post_tool_use"],
-      loopDetectionPreToolUseRelay: false,
     });
 
     expect(config["hooks.PreToolUse"]).toEqual([
@@ -347,7 +304,6 @@ describe("Codex native hook relay config", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay({ matchers: { pre_tool_use: ["deploy"] } }),
       events: ["pre_tool_use"],
-      loopDetectionPreToolUseRelay: false,
     });
 
     expect(config["hooks.PreToolUse"]).toEqual([
@@ -360,7 +316,6 @@ describe("Codex native hook relay config", () => {
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ matchers: { pre_tool_use: [] } }),
         events: ["pre_tool_use"],
-        loopDetectionPreToolUseRelay: false,
       }),
     ).toThrow("Codex native hook matcher requires at least one tool name");
   });

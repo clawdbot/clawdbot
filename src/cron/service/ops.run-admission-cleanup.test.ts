@@ -344,6 +344,67 @@ describe("cron service run admission cleanup", () => {
     }
   });
 
+  it("terminalizes the receipt when a disable fences a still-queued reservation", async () => {
+    vi.useRealTimers();
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:05.000Z");
+    const job = createDueIsolatedJob({
+      id: "queued-disable-before-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    // Saturate admission so the timer's reservation persists but execution
+    // parks as a waiter — the pre-activation window a disable can race.
+    const releaseBlockers = createDeferred();
+    const blockers = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
+      runWithCronAdmission(state, async () => {
+        await releaseBlockers.promise;
+      }),
+    );
+
+    const timer = onTimer(state);
+    await vi.waitFor(async () => {
+      const queuedAtMs = (await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs;
+      if (queuedAtMs !== dueAt) {
+        throw new Error("reservation not persisted yet");
+      }
+    });
+
+    // Operator disables while the run is queued: the durable marker is wiped,
+    // so the executor's fence branch must terminalize the running receipt.
+    await update(state, job.id, { enabled: false });
+    releaseBlockers.resolve();
+    await Promise.all(blockers);
+    await timer;
+
+    expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC, receipt_id DESC LIMIT 1",
+      )
+      .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
+    expect(receipt?.status).toBe("skipped");
+
+    // The job must stay claimable: a leaked running receipt would self-fence
+    // every later reservation into the foreign-receipt monitor forever.
+    await update(state, job.id, { enabled: true });
+    await expect(run(state, job.id, "force")).resolves.toMatchObject({ ok: true, ran: true });
+  });
+
   it("releases immediate and queued admission slots in FIFO order after failures", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const releaseFirst = createDeferred();

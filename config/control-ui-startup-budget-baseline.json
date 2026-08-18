@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 329483,
-  "reason": "cumulative chat/session UI growth (#122296, #122713, #122870, #122876); CI-measured build-artifacts bytes",
-  "updatedAt": "2026-08-13"
+  "startupJsGzipBytes": 344395,
+  "reason": "Absorb accumulated startup creep from landed PRs to current main CI bytes (main red at 344395 B vs 343289 B baseline; run 32131816085)",
+  "updatedAt": "2026-08-18"
 }

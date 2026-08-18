@@ -16,7 +16,11 @@ import {
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
@@ -55,7 +59,7 @@ type HookSessionPolicyResolved = {
   allowedSessionKeyPrefixes?: string[];
 };
 
-type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
+export type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
 
 /** Resolve and validate hook config, returning null when hooks are disabled. */
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
@@ -222,17 +226,45 @@ export function normalizeHookHeaders(req: IncomingMessage) {
   return headers;
 }
 
+function normalizeHookPayloadAgentId(raw: unknown): Result<string | undefined, string> {
+  if (raw === undefined) {
+    return { ok: true, value: undefined };
+  }
+  const agentId = typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
+  return agentId
+    ? { ok: true, value: agentId }
+    : { ok: false, error: "agentId must be a non-empty string" };
+}
+
 /** Validate a hook wake payload. */
 export function normalizeWakePayload(
   payload: Record<string, unknown>,
-): Result<{ text: string; mode: "now" | "next-heartbeat"; agentId?: string }, string> {
+): Result<
+  { text: string; mode: "now" | "next-heartbeat"; agentId?: string; sessionKey?: string },
+  string
+> {
   const normalizedText = normalizeOptionalString(payload.text) ?? "";
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  const agentId = normalizeOptionalString(payload.agentId);
-  return { ok: true, value: { text: normalizedText, mode, ...(agentId ? { agentId } : {}) } };
+  const agentId = normalizeHookPayloadAgentId(payload.agentId);
+  if (!agentId.ok) {
+    return agentId;
+  }
+  const sessionKey = normalizeOptionalString(payload.sessionKey);
+  if (payload.sessionKey !== undefined && !sessionKey) {
+    return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
+  return {
+    ok: true,
+    value: {
+      text: normalizedText,
+      mode,
+      ...(agentId.value ? { agentId: agentId.value } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
+    },
+  };
 }
 
 type HookAgentPayload = {
@@ -411,8 +443,21 @@ export function resolveHookIdempotencyKey(params: {
   );
 }
 
-/** Resolve an optional hook target agent id to a known configured agent. */
-export function resolveHookTargetAgentId(
+export type HookTargetAgentResolution =
+  | { ok: true; selectedAgentId?: string; effectiveAgentId: string }
+  | { ok: false; code: "unknown-agent"; agentId: string; error: string }
+  | { ok: false; code: "agent-required"; error: string }
+  | {
+      ok: false;
+      code: "owner-conflict";
+      agentId: string;
+      ownerAgentId: string;
+      error: string;
+    }
+  | { ok: false; code: "owner-retired"; ownerAgentId: string; error: string };
+
+/** Resolve an optional config-mapped target to a known agent or the configured default. */
+function resolveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
 ): string | undefined {
@@ -421,53 +466,92 @@ export function resolveHookTargetAgentId(
     return undefined;
   }
   const normalized = normalizeAgentId(raw);
-  if (hooksConfig.agentPolicy.knownAgentIds.has(normalized)) {
-    return normalized;
-  }
-  return hooksConfig.agentPolicy.defaultAgentId;
+  return hooksConfig.agentPolicy.knownAgentIds.has(normalized)
+    ? normalized
+    : hooksConfig.agentPolicy.defaultAgentId;
 }
 
-/** Resolve the effective hook target agent, falling back to the hook default. */
+/** Resolve request or config-mapped agent selection against durable session ownership. */
 export function resolveEffectiveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
-): string | undefined {
-  const resolvedAgentId =
-    resolveHookTargetAgentId(hooksConfig, agentId) ?? hooksConfig.agentPolicy.defaultAgentId;
+  source: "request" | "mapping",
+): HookTargetAgentResolution {
+  const raw = normalizeOptionalString(agentId);
+  let selectedAgentId =
+    source === "mapping" ? resolveHookTargetAgentId(hooksConfig, agentId) : undefined;
+  if (source === "request" && raw) {
+    const normalized = normalizeAgentIdStrict(raw);
+    if (!normalized.ok) {
+      return {
+        ok: false,
+        code: "unknown-agent",
+        agentId: raw,
+        error: `unknown agentId "${raw}"`,
+      };
+    }
+    if (hooksConfig.agentPolicy.knownAgentIds.has(normalized.value)) {
+      selectedAgentId = normalized.value;
+    } else {
+      return {
+        ok: false,
+        code: "unknown-agent",
+        agentId: normalized.value,
+        error: `unknown agentId "${normalized.value}"`,
+      };
+    }
+  }
+  const resolvedAgentId = selectedAgentId ?? hooksConfig.agentPolicy.defaultAgentId;
   const persistedOwner = hooksConfig.agentPolicy.globalSessionStoreOwner;
   if (persistedOwner.kind === "retired") {
-    return undefined;
+    return {
+      ok: false,
+      code: "owner-retired",
+      ownerAgentId: persistedOwner.agentId,
+      error: `global session-store owner "${persistedOwner.agentId}" is no longer configured; restore that agent or update agents.defaults.sessionStore.agentId`,
+    };
   }
   if (
     persistedOwner.kind === "configured" &&
     resolvedAgentId &&
     resolvedAgentId !== persistedOwner.agentId
   ) {
-    return undefined;
+    return {
+      ok: false,
+      code: "owner-conflict",
+      agentId: resolvedAgentId,
+      ownerAgentId: persistedOwner.agentId,
+      error: `agentId "${resolvedAgentId}" conflicts with global session-store owner "${persistedOwner.agentId}"; use agentId "${persistedOwner.agentId}" or update agents.defaults.sessionStore.agentId`,
+    };
   }
-  return persistedOwner.kind === "configured" ? persistedOwner.agentId : resolvedAgentId;
+  const effectiveAgentId =
+    persistedOwner.kind === "configured" ? persistedOwner.agentId : resolvedAgentId;
+  if (!effectiveAgentId) {
+    return { ok: false, code: "agent-required", error: getHookAgentSelectionError() };
+  }
+  return {
+    ok: true,
+    ...(selectedAgentId ? { selectedAgentId } : {}),
+    effectiveAgentId,
+  };
 }
 
 /** Check the hook agent allowlist against the effective target agent. */
 export function isHookAgentAllowed(
   hooksConfig: HooksConfigResolved,
-  agentId: string | undefined,
+  effectiveAgentId: string,
 ): boolean {
   const allowed = hooksConfig.agentPolicy.allowedAgentIds;
   if (allowed === undefined) {
     return true;
   }
-  // Omitted agentId still dispatches to the default agent downstream, so the
-  // allowlist must authorize that effective target before dispatch.
-  const effectiveAgentId = resolveEffectiveHookTargetAgentId(hooksConfig, agentId);
-  return effectiveAgentId !== undefined && allowed.has(effectiveAgentId);
+  return allowed.has(effectiveAgentId);
 }
 
 /** Error message for hook agent allowlist failures. */
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
 
-export const getHookAgentSelectionError = () =>
-  "agentId is required when multiple agents are configured";
+const getHookAgentSelectionError = () => "agentId is required when multiple agents are configured";
 const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for externally supplied hook payload values; set hooks.allowRequestSessionKey=true to enable";
 /** Error message for hook session-key prefix allowlist failures. */
@@ -566,8 +650,10 @@ export function normalizeAgentPayload(
   }
   const nameRaw = payload.name;
   const name = normalizeOptionalString(nameRaw) ?? "Hook";
-  const agentIdRaw = payload.agentId;
-  const agentId = normalizeOptionalString(agentIdRaw);
+  const agentId = normalizeHookPayloadAgentId(payload.agentId);
+  if (!agentId.ok) {
+    return agentId;
+  }
   const idempotencyKey = resolveOptionalHookIdempotencyKey(payload.idempotencyKey);
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
@@ -607,7 +693,7 @@ export function normalizeAgentPayload(
     value: {
       message,
       name,
-      agentId,
+      agentId: agentId.value,
       idempotencyKey,
       wakeMode,
       sessionKey,

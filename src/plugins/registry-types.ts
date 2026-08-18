@@ -1,5 +1,5 @@
 /** Shared registration types that make up the in-memory plugin registry. */
-import type { AgentHarness } from "../agents/harness/types.js";
+import type { AgentHarness, AgentHarnessNativeCompaction } from "../agents/harness/types.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -11,6 +11,7 @@ import type {
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
+import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -43,7 +44,6 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type {
   ContextEngineRegistration,
   MemoryCorpusSupplementRegistration,
-  MemoryEmbeddingProviderAdapter,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
   MemoryPromptSupplementRegistration,
@@ -152,6 +152,8 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Exact record-bound runtime resolver captured when the active plugin registered the channel. */
+  resolveChannelRuntime?: () => PluginRuntime["channel"];
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
   source: string;
@@ -205,6 +207,12 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
   handler: GatewayRequestHandlers[string];
 };
 
+export type PluginBoardWidgetContentKindRegistration = {
+  pluginId: string;
+  pluginKind: string;
+  definition: PluginBoardWidgetContentKind;
+};
+
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -251,8 +259,6 @@ type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFet
 type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
 type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
-type PluginMemoryEmbeddingProviderRegistration =
-  PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
 type PluginCodexAppServerExtensionFactoryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -280,6 +286,7 @@ type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
   harness: AgentHarness;
+  nativeCompaction?: AgentHarnessNativeCompaction;
   source: string;
   rootDir?: string;
 };
@@ -492,7 +499,6 @@ export type PluginRecord = {
   webSearchProviderIds: string[];
   migrationProviderIds: string[];
   contextEngineIds?: string[];
-  memoryEmbeddingProviderIds: string[];
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];
@@ -538,7 +544,6 @@ export type PluginRegistry = {
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
-  memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];
@@ -554,6 +559,7 @@ export type PluginRegistry = {
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
   dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
+  boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];

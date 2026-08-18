@@ -5,6 +5,8 @@ import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
@@ -158,6 +160,7 @@ export class BoardWidgetFrameLifecycle {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
       this.visibilityListening = true;
     }
+    installWidgetThemeObserver();
   }
 
   disconnect(): void {
@@ -249,6 +252,7 @@ export class BoardWidgetFrameLifecycle {
               this.refreshFailedFrame(widget);
             }
           }}
+          @load=${(event: Event) => this.postTheme(event)}
         ></iframe>
       `;
     }
@@ -310,7 +314,7 @@ export class BoardWidgetFrameLifecycle {
     }
     this.frameRefreshAttempts += 1;
     void refreshFrame(widget.name).catch((error: unknown) => {
-      this.setError(error instanceof Error ? error.message : String(error));
+      this.setError(formatUiError(error));
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
       this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
@@ -351,6 +355,13 @@ export class BoardWidgetFrameLifecycle {
           this.refreshFailedFrame(widget);
         }
       });
+  }
+
+  private postTheme(event: Event): void {
+    const frame = event.currentTarget;
+    if (frame instanceof HTMLIFrameElement) {
+      postWidgetTheme(frame, this.sandboxOrigin || "*");
+    }
   }
 
   private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
@@ -406,7 +417,7 @@ export class BoardWidgetFrameLifecycle {
         this.setError("");
       },
       onError: (error) => {
-        this.setError(error instanceof Error ? error.message : String(error));
+        this.setError(formatUiError(error));
       },
     };
   }
@@ -488,5 +499,8 @@ export class BoardWidgetFrameLifecycle {
       this.sandboxHost.update(options);
     }
     this.sandboxHost.handleMessage(event);
+    if (event.data?.type === "openclaw:widget-bridge-ready") {
+      postWidgetTheme(frame, this.sandboxOrigin);
+    }
   };
 }

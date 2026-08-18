@@ -206,6 +206,8 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
 /// Ephemeral, script-hardened WKWebView for a self-contained Control UI page.
 struct AuthenticatedControlUIWebView: UIViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
+
     let url: URL
     let authScript: String?
     let tls: GatewayTLSParams?
@@ -227,6 +229,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        self.applyAppearance(to: webView)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = true
         webView.backgroundColor = .black
@@ -245,8 +248,13 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         return webView
     }
 
-    func updateUIView(_: WKWebView, context _: Context) {
+    func updateUIView(_ webView: WKWebView, context _: Context) {
+        self.applyAppearance(to: webView)
         // Connection changes recreate the view via `.id`; unrelated SwiftUI passes must not reload it.
+    }
+
+    private func applyAppearance(to webView: WKWebView) {
+        webView.overrideUserInterfaceStyle = self.colorScheme == .dark ? .dark : .light
     }
 
     static func dismantleUIView(

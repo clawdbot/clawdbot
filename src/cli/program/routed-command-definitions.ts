@@ -99,6 +99,7 @@ export const routedCommandDefinitions = {
             deep: args.deep,
             all: args.all,
             usage: args.usage,
+            ...(args.agent !== undefined ? { agent: args.agent } : {}),
             timeoutMs: args.timeoutMs,
           },
           defaultRuntime,

@@ -1,6 +1,7 @@
 // Stateful Vitest project inventory helpers run in the isolated unit-fast lane.
 import { globSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 
 type VitestTestConfig = {
@@ -34,7 +35,10 @@ async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
   process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
   delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
   try {
-    const mod = (await import(path.resolve(process.cwd(), configPath))) as Record<string, unknown>;
+    const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
+    // Focused runs may have cached a CLI-narrowed default config before the audit clears argv.
+    configUrl.searchParams.set("openclaw-vitest-ownership-audit", "1");
+    const mod = (await import(configUrl.href)) as Record<string, unknown>;
     return findVitestConfigFactory(mod)?.(process.env) ?? ((mod.default ?? {}) as VitestConfig);
   } finally {
     process.argv = previousArgv;

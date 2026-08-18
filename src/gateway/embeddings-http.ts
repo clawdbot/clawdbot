@@ -6,7 +6,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { drainRetainedLocalEmbeddingWorkerClients } from "../../packages/memory-host-sdk/src/host/embeddings-worker.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
@@ -130,7 +129,6 @@ async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void
   if (closeFailed) {
     throw firstError;
   }
-  await drainRetainedLocalEmbeddingWorkerClients();
 }
 
 function retainEmbeddingProviderForRetirement(

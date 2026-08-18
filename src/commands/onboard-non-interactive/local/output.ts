@@ -4,6 +4,7 @@
  * JSON success/failure payloads and human-readable gateway health diagnostics
  * are kept here so local and remote setup report failures consistently.
  */
+import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
@@ -11,7 +12,8 @@ import type { OnboardOptions } from "../../onboard-types.js";
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
-    loaded: boolean;
+    loaded: boolean | null;
+    loadState: GatewayServiceLoadState;
     loadedText: string;
     runtimeStatus?: string;
     state?: string;
@@ -44,6 +46,7 @@ export function logNonInteractiveOnboardingJson(params: {
     bind: string;
     authMode: string;
     tailscaleMode: string;
+    reachable?: boolean;
   };
   installDaemon?: boolean;
   daemonInstall?: {
@@ -99,7 +102,7 @@ function hasConnectionRefusedDetail(detail: string): boolean {
   return /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
 }
 
-function classifyGatewayHealthFailure(params: {
+export function classifyGatewayHealthFailure(params: {
   detail?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }): GatewayHealthFailureClassification | undefined {
@@ -120,7 +123,10 @@ function classifyGatewayHealthFailure(params: {
   ) {
     return "module-missing";
   }
-  if (params.diagnostics?.service?.loaded === false && hasConnectionRefusedDetail(detail)) {
+  if (
+    params.diagnostics?.service?.loadState.status === "not-loaded" &&
+    hasConnectionRefusedDetail(detail)
+  ) {
     return "service-missing";
   }
   const runtimeStatus = params.diagnostics?.service?.runtimeStatus;
@@ -183,6 +189,7 @@ export function logNonInteractiveOnboardingFailure(params: {
   };
   daemonRuntime?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
+  informational?: boolean;
 }) {
   const classification = classifyGatewayHealthFailure({
     detail: params.detail,
@@ -191,6 +198,12 @@ export function logNonInteractiveOnboardingFailure(params: {
   const recoveryHint = recoveryHintForGatewayHealthFailure(classification);
   const hints = [...(recoveryHint ? [recoveryHint] : []), ...(params.hints?.filter(Boolean) ?? [])];
   const gatewayRuntime = formatGatewayRuntimeSummary(params.diagnostics);
+  const service = params.diagnostics?.service;
+  const serviceLoadText = service
+    ? service.loadState.status === "loaded"
+      ? service.loadedText
+      : service.loadState.status.replace("-", " ")
+    : undefined;
 
   if (params.opts.json) {
     writeRuntimeJson(params.runtime, {
@@ -214,9 +227,7 @@ export function logNonInteractiveOnboardingFailure(params: {
     params.message,
     classification ? `Classification: ${classification}` : undefined,
     params.detail ? `Last probe: ${params.detail}` : undefined,
-    params.diagnostics?.service
-      ? `Service: ${params.diagnostics.service.label} (${params.diagnostics.service.loaded ? params.diagnostics.service.loadedText : "not loaded"})`
-      : undefined,
+    service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     params.diagnostics?.lastGatewayError
       ? `Last gateway error: ${params.diagnostics.lastGatewayError}`
@@ -229,5 +240,9 @@ export function logNonInteractiveOnboardingFailure(params: {
     .filter(Boolean)
     .join("\n");
 
-  params.runtime.error(lines);
+  if (params.informational) {
+    params.runtime.log(lines);
+  } else {
+    params.runtime.error(lines);
+  }
 }

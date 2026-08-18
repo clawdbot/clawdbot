@@ -1,9 +1,7 @@
 /**
  * Installs bundled plugin registration contract cases used across provider tests.
  */
-import { describePluginRegistrationContract } from "./plugin-registration-contract.js";
-
-type PluginRegistrationContractParams = Parameters<typeof describePluginRegistrationContract>[0];
+import type { PluginRegistrationContractParams } from "./plugin-registration-contract.js";
 
 export const pluginRegistrationContractCases = {
   alibaba: {

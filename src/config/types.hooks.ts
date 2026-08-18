@@ -1,4 +1,5 @@
 // Defines hook configuration matching and command types.
+import type { InstallRecordBase } from "./types.installs.js";
 export type HookMappingMatch = {
   path?: string;
   source?: string;
@@ -103,7 +104,7 @@ export type HooksConfig = {
    */
   defaultSessionKey?: string;
   /**
-   * Allow `sessionKey` from external `/hooks/agent` request payloads.
+   * Allow `sessionKey` from external `/hooks/agent` and `/hooks/wake` request payloads.
    * Default: false.
    */
   allowRequestSessionKey?: boolean;
@@ -125,4 +126,3 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
-import type { InstallRecordBase } from "./types.installs.js";

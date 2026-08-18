@@ -1,16 +1,13 @@
-/**
- * Tests cron-aware deferred follow-up guidance in exec/process descriptions.
- * Protects the model-facing text selected after tool filtering.
- */
+/** Tests model-facing descriptions selected from the final authorized tool set. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
-import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 function findToolDescription(toolName: string, includeCron: boolean) {
-  const tools = applyDeferredFollowupToolDescriptions([
+  const tools = applyToolAvailabilityDescriptions([
     { name: "exec", description: "exec base" },
     { name: "process", description: "process base" },
     ...(includeCron ? [{ name: "cron", description: "cron base" }] : []),
@@ -22,7 +19,7 @@ function findToolDescription(toolName: string, includeCron: boolean) {
   };
 }
 
-describe("createOpenClawCodingTools deferred follow-up guidance", () => {
+describe("createOpenClawCodingTools availability guidance", () => {
   it("keeps cron-specific guidance when cron survives filtering", () => {
     const exec = findToolDescription("exec", true);
     const process = findToolDescription("process", true);
@@ -57,7 +54,7 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
     setPluginToolMeta(processTool, { pluginId: "example", optional: false });
     setChannelAgentToolMeta(processTool as never, { channelId: "example-channel" });
 
-    const [updated] = applyDeferredFollowupToolDescriptions([processTool]);
+    const [updated] = applyToolAvailabilityDescriptions([processTool]);
 
     expect(updated).not.toBe(processTool);
     expect(getPluginToolMeta(expectDefined(updated, "updated test invariant"))).toEqual({
@@ -67,5 +64,23 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
     expect(getChannelAgentToolMeta(updated as never)).toEqual({
       channelId: "example-channel",
     });
+  });
+
+  it("mentions sessions_spawn only when it survives tool filtering", () => {
+    const withoutSpawn = applyToolAvailabilityDescriptions([
+      { name: "agents_list", description: "base" },
+      { name: "agents_wait", description: "base" },
+    ] as AnyAgentTool[]);
+    const withSpawn = applyToolAvailabilityDescriptions([
+      ...withoutSpawn,
+      { name: "sessions_spawn", description: "spawn" },
+    ] as AnyAgentTool[]);
+
+    for (const tool of withoutSpawn) {
+      expect(tool.description).not.toContain("sessions_spawn");
+    }
+    for (const tool of withSpawn.filter((entry) => entry.name !== "sessions_spawn")) {
+      expect(tool.description).toContain("sessions_spawn");
+    }
   });
 });

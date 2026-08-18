@@ -13,12 +13,18 @@ import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
+import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
 import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
+import {
+  createVitestUnhandledErrorDetector,
+  stripVitestAnsi,
+  writeVitestUnhandledErrorSummary,
+} from "./lib/vitest-unhandled-errors.mts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   createVitestProcessCompletion,
@@ -47,8 +53,6 @@ type VitestOutputTarget = {
   write(chunk: string): unknown;
 };
 
-const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
-const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
 /** Default watchdog timeout for Vitest runs that stop producing output. */
 const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
@@ -633,10 +637,7 @@ export function resolveVitestSpawnParams(
  * Filters known noisy Vitest stderr lines after stripping ANSI escapes.
  */
 export function shouldSuppressVitestStderrLine(line: string): boolean {
-  const normalizedLine = line
-    .split(ANSI_CSI_PREFIX)
-    .map((segment, index) => (index === 0 ? segment : segment.replace(ANSI_CSI_SUFFIX_RE, "")))
-    .join("");
+  const normalizedLine = stripVitestAnsi(line);
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => normalizedLine.includes(pattern));
 }
 
@@ -699,6 +700,22 @@ function isOwnedAgentDirectoryTarget(arg: string, cwd: string, fsImpl: VitestPat
   );
 }
 
+function isOwnedExtensionRootTarget(arg: string, cwd: string, fsImpl: VitestPathFs): boolean {
+  const relative = toRepoRelativeArg(arg, cwd).replace(/\/+$/u, "");
+  const [root, extensionId, ...remainder] = relative.split("/");
+  if (
+    root !== "extensions" ||
+    !extensionId ||
+    remainder.length > 0 ||
+    !isExplicitDirectoryTargetArg(arg, cwd, fsImpl)
+  ) {
+    return false;
+  }
+  // Extension roots delegate so the bounded planner owns process lifetime (#124413).
+  // Raw Vitest would run the workspace config as one process.
+  return resolveExtensionTestConfig(relative).length > 0;
+}
+
 function isExplicitProjectRouterTargetArg(
   arg: string,
   cwd = process.cwd(),
@@ -715,7 +732,9 @@ function isExplicitProjectRouterTargetArg(
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
   return fsImpl.existsSync(filePath)
-    ? isDelegableBroadProjectRouterTarget(arg, cwd) || isOwnedAgentDirectoryTarget(arg, cwd, fsImpl)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd) ||
+        isOwnedAgentDirectoryTarget(arg, cwd, fsImpl) ||
+        isOwnedExtensionRootTarget(arg, cwd, fsImpl)
     : path.extname(arg) === "" &&
         /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }
@@ -1166,12 +1185,20 @@ function forwardVitestOutput(
   stream: VitestOutputStream | null,
   target: VitestOutputTarget,
   shouldSuppressLine: (line: string) => boolean = () => false,
-): void {
+  observeLine: (line: string) => void = () => {},
+): Promise<void> {
   if (!stream) {
-    return;
+    return Promise.resolve();
   }
 
   let buffered = "";
+  const forwardLine = (line: string) => {
+    if (shouldSuppressLine(line)) {
+      return;
+    }
+    observeLine(line);
+    target.write(line);
+  };
   stream.setEncoding("utf8");
   stream.on("data", (chunk) => {
     buffered += chunk;
@@ -1182,15 +1209,16 @@ function forwardVitestOutput(
       }
       const line = buffered.slice(0, newlineIndex + 1);
       buffered = buffered.slice(newlineIndex + 1);
-      if (!shouldSuppressLine(line)) {
-        target.write(line);
-      }
+      forwardLine(line);
     }
   });
-  stream.on("end", () => {
-    if (buffered.length > 0 && !shouldSuppressLine(buffered)) {
-      target.write(buffered);
-    }
+  return new Promise((resolve) => {
+    stream.on("end", () => {
+      if (buffered.length > 0) {
+        forwardLine(buffered);
+      }
+      resolve();
+    });
   });
 }
 
@@ -1247,18 +1275,35 @@ export function spawnWatchedVitestProcess({
       });
     },
   });
-  forwardVitestOutput(child.stdout, process.stdout);
-  forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
+  const unhandledErrors = createVitestUnhandledErrorDetector();
+  const forwardedOutput = Promise.all([
+    forwardVitestOutput(child.stdout, process.stdout, undefined, unhandledErrors.observe),
+    forwardVitestOutput(
+      child.stderr,
+      process.stderr,
+      shouldSuppressVitestStderrLine,
+      unhandledErrors.observe,
+    ),
+  ]);
 
   const teardown = () => {
     teardownChildCleanup();
     teardownNoOutputWatchdog();
   };
-  const completion = createVitestProcessCompletion({
-    child,
-    detached: spawnParams.detached === true,
-  })
-    .then(({ code, signal }) => ({ code, signal: normalizeNodeSignal(signal) }))
+  const completion = Promise.all([
+    createVitestProcessCompletion({
+      child,
+      detached: spawnParams.detached === true,
+    }),
+    forwardedOutput,
+  ])
+    .then(([{ code, signal }]) => {
+      const result = unhandledErrors.finish();
+      if (result) {
+        writeVitestUnhandledErrorSummary(result, env);
+      }
+      return { code, signal: normalizeNodeSignal(signal) };
+    })
     .finally(teardown);
 
   return {

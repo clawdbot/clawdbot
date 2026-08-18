@@ -32,7 +32,7 @@ function mount(
     canSet: true,
     canDelete: true,
     dialogMode: null,
-    draft: { name: "", value: "", kind: "env" },
+    draft: { name: "", value: "", kind: "env", allowedHosts: "" },
     formError: null,
     bulkOpen: false,
     bulkRaw: "",
@@ -46,6 +46,7 @@ function mount(
     onCloseDialog: noop,
     onDraftNameChange: noop,
     onDraftValueChange: noop,
+    onDraftAllowedHostsChange: noop,
     onDraftSecretChange: noop,
     onSubmitDraft: noop,
     onOpenBulk: noop,
@@ -70,6 +71,7 @@ describe("secrets store view", () => {
       createdAtMs: 1,
       updatedAtMs: 2,
       updatedBy: "Operator",
+      allowedHosts: ["api.example.com"],
     } as unknown as SecretStoreEntry;
     const env: SecretStoreEntry = {
       name: "SERVICE_URL",
@@ -86,6 +88,23 @@ describe("secrets store view", () => {
     expect(container.innerHTML).not.toContain("must-never-render");
     expect(container.textContent).toContain("••••••••");
     expect(container.textContent).toContain("https://service.test");
+    expect(container.textContent).toContain("api.example.com");
+  });
+
+  it("shows the allowed-host field for secret add and edit dialogs", () => {
+    const container = mount([], {
+      dialogMode: "edit",
+      draft: {
+        name: "SERVICE_API_KEY",
+        value: "replacement",
+        kind: "secret",
+        allowedHosts: "api.example.com",
+      },
+    });
+
+    const field = container.querySelector<HTMLTextAreaElement>('textarea[name="allowed-hosts"]');
+    expect(field?.value).toBe("api.example.com");
+    expect(container.textContent).toContain("Exact hostnames only");
   });
 
   it("hides mutation controls when the gateway does not advertise them", () => {

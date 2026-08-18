@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -36,6 +36,7 @@ const HIDDEN_WEB_CHROME_HOSTS = [
 ] as const;
 const MANUAL_UPGRADE_GUIDANCE =
   "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.";
+const BANNER_MODULE_ROUTE = /device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u;
 
 type BoundingBox = { x: number; y: number; width: number; height: number };
 
@@ -77,6 +78,39 @@ async function createContext(): Promise<BrowserContext> {
   return context;
 }
 
+async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
+  // content-visibility, grid transitions, and lazy styles can defer layout beyond
+  // a fixed rAF pair. Measure the owning geometry until two frames agree.
+  await page.evaluate(
+    async ({ maxFrames, selector: targetSelector }) => {
+      let previousGeometry: string | undefined;
+      let stableFrames = 0;
+      for (let frame = 0; frame < maxFrames; frame += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
+        if (elements.length === 0) {
+          throw new Error(`No layout elements matched ${targetSelector}`);
+        }
+        const geometry = JSON.stringify(
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height];
+          }),
+        );
+        stableFrames = geometry === previousGeometry ? stableFrames + 1 : 1;
+        if (stableFrames >= 2) {
+          return;
+        }
+        previousGeometry = geometry;
+      }
+      throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
+    },
+    { maxFrames: 60, selector },
+  );
+}
+
 describeControlUiE2e("Control UI live device scope upgrade", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -107,10 +141,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       releaseBannerModule = resolve;
     });
     let heldBannerModule = false;
-    await page.route(/device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u, async (route) => {
+    let bannerModuleRouteSettled: Promise<void> | undefined;
+    await page.route(BANNER_MODULE_ROUTE, async (route) => {
       if (!heldBannerModule) {
         heldBannerModule = true;
-        void bannerModuleRelease.then(() => route.continue());
+        bannerModuleRouteSettled = bannerModuleRelease.then(() => route.continue());
+        await bannerModuleRouteSettled;
         return;
       }
       await route.continue();
@@ -133,6 +169,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       await captureProof(page, "limited.png");
     } finally {
       releaseBannerModule();
+      await bannerModuleRouteSettled;
     }
     await navigation;
     await page.getByRole("button", { name: "Request admin" }).waitFor();
@@ -192,6 +229,48 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "approved.png");
   });
 
+  it("collapses the limited-access banner into a persistent status chip", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Collapse limited access banner" }).click();
+
+    const statusChip = page.getByRole("button", { name: "Show limited access details" });
+    await statusChip.waitFor();
+    expect(await statusChip.getAttribute("aria-expanded")).toBe("false");
+    await waitForLayoutSettled(page, ".content, .scope-upgrade-chip-row");
+    const chipInset = await statusChip.evaluate((chip) => {
+      const content = document.querySelector<HTMLElement>(".content");
+      if (!content) {
+        throw new Error("Missing content around limited-access status chip");
+      }
+      const contentBox = content.getBoundingClientRect();
+      const chipBox = chip.getBoundingClientRect();
+      return {
+        right: contentBox.right - chipBox.right,
+        top: chipBox.top - contentBox.top,
+      };
+    });
+    await captureProof(page, "collapsed.png");
+    expect(chipInset).toEqual({ right: 20, top: 8 });
+    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
+      0,
+    );
+
+    await page.reload();
+    await statusChip.waitFor();
+    expect(await page.getByText("This browser has limited access.", { exact: true }).count()).toBe(
+      0,
+    );
+
+    await statusChip.click();
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
+  });
+
   it.each(SCOPE_UPGRADE_METHODS)(
     "shows manual repair guidance when %s is not advertised",
     async (missingMethod) => {
@@ -207,8 +286,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       });
 
       await page.goto(`${server.baseUrl}chat`);
-      const guidance = page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
+      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
+      await scopeUpgradeCallout.waitFor();
+      const guidance = scopeUpgradeCallout.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
       await guidance.waitFor();
+      await waitForLayoutSettled(
+        page,
+        "openclaw-device-scope-upgrade-banner .callout, .shell-chrome-controls",
+      );
 
       const guidanceBox = await guidance.boundingBox();
       const chromeControls = page.locator(".shell-chrome-controls__button");
@@ -229,6 +314,8 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
 
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+      await page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await page.getByRole("button", { name: "Show limited access details" }).waitFor();
     },
   );
 
@@ -269,21 +356,24 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       }
       await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
-      // Poll the geometry invariant: one-shot boundingBox reads can catch the
-      // nav-collapse transition mid-flight and report a stale callout offset.
-      await expect
-        .poll(async () => {
-          const contentBox = await page.locator(".content").boundingBox();
-          const calloutBox = await page.locator("openclaw-update-banner .callout").boundingBox();
-          if (!contentBox || !calloutBox) {
-            return Number.NaN;
-          }
-          const contentInset = await page
-            .locator(".content")
-            .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
-          return calloutBox.x - contentBox.x - contentInset;
-        })
-        .toBe(0);
+      const scopeUpgradeCallout = page.locator("openclaw-device-scope-upgrade-banner .callout");
+      await scopeUpgradeCallout.waitFor();
+      await waitForLayoutSettled(page, ".content, openclaw-device-scope-upgrade-banner .callout");
+      const calloutInsetDelta = await page.evaluate(() => {
+        const content = document.querySelector<HTMLElement>(".content");
+        const callout = document.querySelector<HTMLElement>(
+          "openclaw-device-scope-upgrade-banner .callout",
+        );
+        if (!content || !callout) {
+          throw new Error("Missing content or scope-upgrade callout after layout settled");
+        }
+        return (
+          callout.getBoundingClientRect().x -
+          content.getBoundingClientRect().x -
+          Number.parseFloat(getComputedStyle(content).paddingLeft)
+        );
+      });
+      expect(calloutInsetDelta).toBe(0);
     },
   );
 
@@ -308,26 +398,70 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   it("keeps manual repair guidance when the banner module fails to load", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    await page.route(/device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u, (route) =>
-      route.abort("failed"),
-    );
+    let bannerModuleRejected = false;
+    const rejectBannerModule = async (route: Route) => {
+      // A network abort intentionally starts whole-document stale-chunk recovery,
+      // which is a different contract and can reload while this test tears down.
+      // Fail module evaluation instead so only the optional-banner fallback owns it.
+      await route.fulfill({
+        body: 'throw new Error("device scope banner module failed to evaluate");',
+        contentType: "application/javascript",
+        status: 200,
+      });
+      bannerModuleRejected = true;
+    };
+    await page.route(BANNER_MODULE_ROUTE, rejectBannerModule);
     await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      const navigation = page.goto(`${server.baseUrl}chat`);
+      await expect.poll(() => bannerModuleRejected).toBe(true);
+      await navigation;
       await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
 
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
     } finally {
+      // A failed dynamic import can be retried by a later shell render. Remove
+      // the route before closing so teardown cannot race a fresh intercepted request.
+      await page.unroute(BANNER_MODULE_ROUTE, rejectBannerModule);
       await page.close({ runBeforeUnload: false });
     }
   });
 
-  it("shows manual repair guidance without a signed browser device", async () => {
+  it("offers the admin upgrade without crypto.subtle", async () => {
     const context = await createContext();
     const page = await context.newPage();
     await page.addInitScript(() => {
       Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": { requestId: "upgrade-insecure" },
+      },
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    // Pure-JS Ed25519 signs the device connect on insecure contexts, so the
+    // explicit upgrade path stays available instead of manual-only guidance.
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+  });
+
+  it("shows manual repair guidance when the browser cannot mint a device identity", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      // Without a WebCrypto RNG the identity mint fails and the client
+      // degrades to a device-less connect that cannot sign upgrade requests.
+      Object.defineProperty(globalThis.crypto, "subtle", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(globalThis.crypto, "getRandomValues", {
         configurable: true,
         value: undefined,
       });

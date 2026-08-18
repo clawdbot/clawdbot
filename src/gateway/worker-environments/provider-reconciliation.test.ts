@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -67,6 +68,70 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
+  it("destroys a persisted SSH lease after its provider becomes worker-turn-only", async () => {
+    const environmentId = "worker-stale-ssh-transport";
+    support.seedBootstrapping(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        inspect,
+        destroy,
+      }),
+    );
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: "worker-turn providers must return a node lease",
+    });
+  });
+
+  it("reconciles one exact environment without sweeping its siblings", async () => {
+    support.seedReady("worker-target");
+    support.seedReady("worker-sibling");
+    const inspected: string[] = [];
+    const workerService = support.createService(
+      support.createProvider({
+        inspect: async (lease) => {
+          inspected.push(lease.leaseId);
+          return { status: "active" };
+        },
+      }),
+    );
+
+    await workerService.reconcileEnvironment("worker-target");
+
+    expect(inspected).toEqual(["lease:worker-target"]);
+  });
+
+  it("targeted reconciliation revokes a disappeared worker credential", async () => {
+    const environmentId = "worker-revoked";
+    support.seedReady(environmentId);
+    const workerService = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "unknown" }) }),
+    );
+    const admitted = await workerService.admitWorker(support.admissionFor(environmentId));
+    if (!admitted.ok) {
+      throw new Error("fixture worker admission failed");
+    }
+
+    await workerService.reconcileEnvironment(environmentId);
+
+    expect(support.testState.store.get(environmentId)?.state).toBe("orphaned");
+    expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
+  });
+
   it("skips an active lease whose durable receipt matches the lifecycle bundle", async () => {
     support.seedReady("worker-current");
 
@@ -129,10 +194,49 @@ describe("worker environment service", () => {
       profile: { region: "test" },
     });
     expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "destroyed",
-      leaseId: `lease:${environmentId}`,
+      state: "failed",
+      leaseId: null,
       attachedSessionIds: [],
-      lastError: null,
+      lastError: STALE_WORKER_BUILD_REASON,
+    });
+  });
+
+  it("retires a node environment whose installed Gateway bundle is stale", async () => {
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      provisionBeforeInstallation: true,
+      provision: async () => ({
+        leaseId: "device-lease-stale",
+        node: { deviceId: "device-1" },
+        sharedHost: true,
+      }),
+      inspect: async () => ({ status: "active", sharedHost: true }),
+      destroy,
+    });
+    const workerService = support.createService(provider, {
+      ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+    });
+    const environment = await workerService.create("development", "request-stale-node-bundle");
+    await workerService.attachSession({
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      sessionId: "session-stale-node-bundle",
+    });
+    support.testState.stateDb.db
+      .prepare(
+        "UPDATE worker_environments SET bootstrap_bundle_hash = ?, bootstrap_install_kind = 'local' WHERE environment_id = ?",
+      )
+      .run("b".repeat(64), environment.environmentId);
+
+    await workerService.reconcileOnce();
+
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      attachedSessionIds: [],
+      lastError: STALE_WORKER_BUILD_REASON,
     });
   });
 

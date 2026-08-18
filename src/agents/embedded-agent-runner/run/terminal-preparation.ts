@@ -96,12 +96,21 @@ export function prepareEmbeddedRunTerminal(input: {
   // Attempt normalization already folded every attempt (terminal included)
   // into the accumulator, so read it directly instead of re-adding the attempt.
   const runAssistantTurns = input.usageAccumulator.assistantTurns;
+  const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
     provider: reportedModelRef.provider,
     model: reportedModelRef.model,
-    contextTokens: attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens,
+    contextTokens,
+    ...(contextTokens !== undefined
+      ? {
+          contextTokensSource:
+            attempt.contextTokens !== undefined
+              ? (attempt.contextTokensSource ?? "resolved")
+              : "resolved",
+        }
+      : {}),
     agentHarnessId: attempt.agentHarnessId,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,
@@ -178,6 +187,7 @@ export function prepareEmbeddedRunTerminal(input: {
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     lastToolError: attempt.lastToolError,
+    lastToolRecovery: attempt.lastToolRecovery,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",

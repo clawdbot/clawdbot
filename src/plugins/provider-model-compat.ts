@@ -2,7 +2,7 @@
 import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
 import { resolveOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
-import { getModelProviderMetadataOwners } from "../agents/provider-request-config.js";
+import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import "../llm/ai-transport-host.js";
 import type { Model } from "../llm/types.js";
@@ -91,7 +91,7 @@ export function normalizeModelCompat(
     return model;
   }
   const resolvedProviderMetadataOwners =
-    providerMetadataOwners ?? getModelProviderMetadataOwners(model);
+    providerMetadataOwners ?? getModelProviderRequestRouteFacts(model)?.providerMetadataOwners;
   const resolved = resolveOpenAICompletionsCompat(model, (input) =>
     resolveProviderRequestCapabilities({
       ...input,

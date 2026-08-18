@@ -296,13 +296,24 @@ describe("iMessage monitor last-route updates", () => {
   function createInboundMessage(
     message: Pick<IMessagePayload, "id" | "guid" | "text"> &
       Partial<
-        Pick<IMessagePayload, "chat_id" | "sender" | "is_from_me" | "is_group" | "created_at">
+        Pick<
+          IMessagePayload,
+          | "chat_id"
+          | "chat_guid"
+          | "chat_identifier"
+          | "sender"
+          | "is_from_me"
+          | "is_group"
+          | "created_at"
+        >
       >,
   ): IMessagePayload {
     return {
       id: message.id,
       guid: message.guid,
       chat_id: message.chat_id ?? 123,
+      chat_guid: message.chat_guid,
+      chat_identifier: message.chat_identifier,
       sender: message.sender ?? DEFAULT_SENDER,
       is_from_me: message.is_from_me ?? false,
       text: message.text,
@@ -310,6 +321,167 @@ describe("iMessage monitor last-route updates", () => {
       created_at: message.created_at ?? new Date().toISOString(),
     };
   }
+
+  it.each([
+    {
+      label: "SMS chat with service unset",
+      configuredService: undefined,
+      chatGuid: "SMS;-;+15550001111",
+      expectedService: "sms",
+    },
+    {
+      label: "SMS chat with service auto",
+      configuredService: "auto",
+      chatGuid: "SMS;-;+15550001111",
+      expectedService: "sms",
+    },
+    {
+      label: "iMessage chat with service unset",
+      configuredService: undefined,
+      chatGuid: "iMessage;-;+15550001111",
+      expectedService: "imessage",
+    },
+    {
+      label: "explicit SMS override for an iMessage chat",
+      configuredService: "sms",
+      chatGuid: "iMessage;-;+15550001111",
+      expectedService: "sms",
+    },
+    {
+      label: "explicit iMessage override for an SMS chat",
+      configuredService: "imessage",
+      chatGuid: "SMS;-;+15550001111",
+      expectedService: "imessage",
+    },
+    {
+      label: "unknown direct chat service",
+      configuredService: undefined,
+      chatGuid: "any;-;+15550001111",
+      expectedService: "auto",
+    },
+    {
+      label: "absent direct chat GUID",
+      configuredService: undefined,
+      chatGuid: undefined,
+      expectedService: "auto",
+    },
+  ] as const)(
+    "preserves the inbound direct service through early typing, final delivery, and last-route ($label)",
+    async ({ label, configuredService, chatGuid, expectedService }) => {
+      setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
+      const stateDir = createTestStateDir(
+        `openclaw-imsg-direct-route-${label.replaceAll(" ", "-")}-`,
+      );
+      const configuredStore = path.join(stateDir, "sessions.json");
+      const storePath = resolveStorePath(configuredStore, { agentId: "main" });
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver(
+          { text: "reply over the originating service" },
+          {
+            kind: "final",
+          },
+        );
+        return EMPTY_DISPATCH_RESULT;
+      });
+      const client = await runMessageCase({
+        auxiliaryRequests: {
+          read: { ok: true },
+          send: { guid: "sms-reply-guid" },
+          typing: { ok: true },
+        },
+        message: createInboundMessage({
+          id: 101,
+          guid: `direct-route-${expectedService}-${label}`,
+          chat_guid: chatGuid,
+          chat_identifier: "+15550001111",
+          text: "reply to this direct chat",
+        }),
+        monitor: {
+          imessage: configuredService ? { service: configuredService } : {},
+          session: { dmScope: "per-channel-peer", store: configuredStore },
+        },
+      });
+      const auxiliaryClient = client.auxiliaryClient!;
+
+      await vi.waitFor(() => {
+        expect(auxiliaryClient.request).toHaveBeenCalledWith(
+          "typing",
+          expect.objectContaining({ service: expectedService, to: DEFAULT_SENDER, typing: true }),
+          expect.any(Object),
+        );
+      });
+      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { to: DEFAULT_SENDER };
+      expect(auxiliaryClient.request).toHaveBeenCalledWith(
+        "read",
+        expect.objectContaining(expectedReadTarget),
+        expect.any(Object),
+      );
+      expect(auxiliaryClient.request).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({
+          service: expectedService,
+          text: "reply over the originating service",
+          to: DEFAULT_SENDER,
+        }),
+        expect.any(Object),
+      );
+      const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
+      expect(dispatchParams?.ctx).toMatchObject({
+        From: `${expectedService}:${DEFAULT_SENDER}`,
+        To: `${expectedService}:${DEFAULT_SENDER}`,
+      });
+      await vi.waitFor(() => {
+        expect(
+          getSessionEntry({
+            storePath,
+            sessionKey: `agent:main:imessage:direct:${DEFAULT_SENDER}`,
+          }),
+        ).toMatchObject({
+          delivery: {
+            context: { channel: "imessage", to: `${expectedService}:${DEFAULT_SENDER}` },
+            route: { target: { to: `${expectedService}:${DEFAULT_SENDER}` } },
+          },
+        });
+      });
+    },
+  );
+
+  it("keeps group chat_id routing unchanged through final delivery", async () => {
+    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      await params.dispatcherOptions.deliver({ text: "group reply" }, { kind: "final" });
+      return EMPTY_DISPATCH_RESULT;
+    });
+    const client = await runMessageCase({
+      auxiliaryRequests: {
+        read: { ok: true },
+        send: { guid: "group-reply-guid" },
+        typing: { ok: true },
+      },
+      message: createInboundMessage({
+        id: 103,
+        guid: "group-route-guid",
+        chat_id: 456,
+        chat_guid: "iMessage;+;chat456",
+        is_group: true,
+        text: "reply to this group",
+      }),
+      monitor: { allowlist: false, imessage: { groupPolicy: "open" } },
+    });
+    const auxiliaryClient = client.auxiliaryClient!;
+
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 456, service: "auto", text: "group reply" }),
+      expect.any(Object),
+    );
+    const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
+    expect(dispatchParams?.ctx).toMatchObject({
+      ChatType: "group",
+      From: "imessage:group:456",
+      To: "chat_id:456",
+    });
+  });
 
   function createAnchorlessDirectPair(id: number, text: string, isFromMe: boolean) {
     return {
@@ -845,13 +1017,13 @@ describe("iMessage monitor last-route updates", () => {
           kind: "external",
           context: {
             channel: "imessage",
-            to: "imessage:+15550001111",
+            to: "auto:+15550001111",
             accountId: "default",
           },
           route: {
             channel: "imessage",
             accountId: "default",
-            target: { to: "imessage:+15550001111" },
+            target: { to: "auto:+15550001111" },
           },
         },
       });

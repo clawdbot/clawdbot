@@ -1,56 +1,36 @@
-// Verifies backup archives by validating their manifest, payload entries, and hardlink targets.
+// Verifies backup archives, including payload paths and hardlink/symbolic-link targets.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import {
+  assertArchiveSymbolicLinkTarget,
+  isArchivePathWithin,
+  normalizeArchivePath,
+  normalizeArchiveRoot,
+} from "../infra/backup-archive-path-policy.js";
 import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { isRecord, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
+import {
+  type BackupManifest,
+  isRootBackupManifestEntry,
+  parseBackupManifest,
+  verifyBackupManifestEntries,
+} from "./backup-verify-manifest.js";
 
-const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 const SQLITE_SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
-
-type BackupManifestAsset = {
-  kind: string;
-  sourcePath: string;
-  archivePath: string;
-};
-
-type BackupManifest = {
-  schemaVersion: number;
-  createdAt: string;
-  archiveRoot: string;
-  runtimeVersion: string;
-  platform: string;
-  nodeVersion: string;
-  options?: {
-    includeWorkspace?: boolean;
-  };
-  paths?: {
-    stateDir?: string;
-    configPath?: string;
-    oauthDir?: string;
-    workspaceDirs?: string[];
-  };
-  assets: BackupManifestAsset[];
-  skipped?: Array<{
-    kind?: string;
-    sourcePath?: string;
-    reason?: string;
-    coveredBy?: string;
-  }>;
-};
 
 type BackupVerifyOptions = {
   archive: string;
@@ -65,6 +45,7 @@ type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  symlinkCount: number;
 };
 
 type ArchiveEntry = {
@@ -87,126 +68,18 @@ type SqliteSnapshotEntry = NormalizedArchiveEntry & {
 
 type ExpectedSqliteRole = "agent" | "global";
 
-function stripTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/u, "");
-}
-
-function normalizeArchivePath(entryPath: string, label: string): string {
-  const trimmed = stripTrailingSlashes(entryPath.trim());
-  if (!trimmed) {
-    throw new Error(`${label} is empty.`);
-  }
-  if (trimmed.startsWith("/") || WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE.test(trimmed)) {
-    throw new Error(`${label} must be relative: ${entryPath}`);
-  }
-  if (trimmed.includes("\\")) {
-    throw new Error(`${label} must use forward slashes: ${entryPath}`);
-  }
-  if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
-    throw new Error(`${label} contains path traversal segments: ${entryPath}`);
-  }
-
-  const normalized = stripTrailingSlashes(path.posix.normalize(trimmed));
-  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`${label} resolves outside the archive root: ${entryPath}`);
-  }
-  return normalized;
-}
-
-function normalizeArchiveRoot(rootName: string): string {
-  const normalized = normalizeArchivePath(rootName, "Backup manifest archiveRoot");
-  if (normalized.includes("/")) {
-    throw new Error(`Backup manifest archiveRoot must be a single path segment: ${rootName}`);
-  }
-  return normalized;
-}
-
-function isArchivePathWithin(child: string, parent: string): boolean {
-  const relative = path.posix.relative(parent, child);
-  return relative === "" || (!relative.startsWith("../") && relative !== "..");
-}
-
-function parseManifest(raw: string): BackupManifest {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error("Backup manifest is not valid JSON.", { cause: err });
-  }
-
-  if (!isRecord(parsed)) {
-    throw new Error("Backup manifest must be an object.");
-  }
-  if (parsed.schemaVersion !== 1) {
-    throw new Error(`Unsupported backup manifest schemaVersion: ${String(parsed.schemaVersion)}`);
-  }
-  if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
-    throw new Error("Backup manifest is missing archiveRoot.");
-  }
-  if (typeof parsed.createdAt !== "string" || !parsed.createdAt.trim()) {
-    throw new Error("Backup manifest is missing createdAt.");
-  }
-  if (!Array.isArray(parsed.assets)) {
-    throw new Error("Backup manifest is missing assets.");
-  }
-
-  const assets: BackupManifestAsset[] = [];
-  for (const asset of parsed.assets) {
-    if (!isRecord(asset)) {
-      throw new Error("Backup manifest contains a non-object asset.");
-    }
-    if (typeof asset.kind !== "string" || !asset.kind.trim()) {
-      throw new Error("Backup manifest asset is missing kind.");
-    }
-    if (typeof asset.sourcePath !== "string" || !asset.sourcePath.trim()) {
-      throw new Error("Backup manifest asset is missing sourcePath.");
-    }
-    if (typeof asset.archivePath !== "string" || !asset.archivePath.trim()) {
-      throw new Error("Backup manifest asset is missing archivePath.");
-    }
-    assets.push({
-      kind: asset.kind,
-      sourcePath: asset.sourcePath,
-      archivePath: asset.archivePath,
-    });
-  }
-
-  return {
-    schemaVersion: 1,
-    archiveRoot: parsed.archiveRoot,
-    createdAt: parsed.createdAt,
-    runtimeVersion:
-      typeof parsed.runtimeVersion === "string" && parsed.runtimeVersion.trim()
-        ? parsed.runtimeVersion
-        : "unknown",
-    platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
-    nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
-    options: isRecord(parsed.options)
-      ? { includeWorkspace: parsed.options.includeWorkspace as boolean | undefined }
-      : undefined,
-    paths: isRecord(parsed.paths)
-      ? {
-          stateDir: readStringValue(parsed.paths.stateDir),
-          configPath: readStringValue(parsed.paths.configPath),
-          oauthDir: readStringValue(parsed.paths.oauthDir),
-          workspaceDirs: Array.isArray(parsed.paths.workspaceDirs)
-            ? parsed.paths.workspaceDirs.filter(
-                (entry): entry is string => typeof entry === "string",
-              )
-            : undefined,
-        }
-      : undefined,
-    assets,
-    skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
-  };
-}
-
-async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
+async function listArchiveEntries(archivePath: string) {
   const entries: ArchiveEntry[] = [];
+  let invalidReason: string | undefined;
   await tar.t({
     file: archivePath,
     gzip: true,
     maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+    onwarn: (code, message) => {
+      if (code === "TAR_BAD_ARCHIVE" && invalidReason === undefined) {
+        invalidReason = formatErrorMessage(message);
+      }
+    },
     onReadEntry: (entry) => {
       entries.push({
         path: entry.path,
@@ -216,7 +89,7 @@ async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> 
       });
     },
   });
-  return entries;
+  return { entries, invalidReason };
 }
 
 async function extractManifest(params: {
@@ -246,43 +119,6 @@ async function extractManifest(params: {
     throw content;
   }
   return content.toString("utf8");
-}
-
-function isRootManifestEntry(entryPath: string): boolean {
-  const parts = entryPath.split("/");
-  return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
-}
-
-function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
-  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
-  const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
-  const normalizedEntries = [...entries];
-  const normalizedEntrySet = new Set(normalizedEntries);
-
-  if (!normalizedEntrySet.has(manifestEntryPath)) {
-    throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
-  }
-
-  for (const entry of normalizedEntries) {
-    if (!isArchivePathWithin(entry, archiveRoot)) {
-      throw new Error(`Archive entry is outside the declared archive root: ${entry}`);
-    }
-  }
-
-  const payloadRoot = path.posix.join(archiveRoot, "payload");
-  for (const asset of manifest.assets) {
-    const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
-    if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
-      throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
-    }
-    const exact = normalizedEntrySet.has(assetArchivePath);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
-    );
-    if (!exact && !nested) {
-      throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
-    }
-  }
 }
 
 function verifyHardlinkTargetsAgainstArchiveRoot(
@@ -319,6 +155,7 @@ function formatResult(result: BackupVerifyResult): string {
     `Runtime version: ${result.runtimeVersion}`,
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
+    `Symbolic links checked: ${result.symlinkCount}`,
   ].join("\n");
 }
 
@@ -709,13 +546,39 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-/** Verify a backup archive and return its normalized, integrity-checked inventory. */
-export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
-  const archivePath = resolveUserPath(archive);
-  const rawEntries = await listArchiveEntries(archivePath);
-  if (rawEntries.length === 0) {
-    throw new Error("Backup archive is empty.");
+async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupVerifyResult> {
+  let archiveStat;
+  try {
+    archiveStat = await fs.stat(archivePath);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new Error(
+        "Archive does not exist. Check the path and run `openclaw backup verify <archive>` again.",
+        { cause: error },
+      );
+    }
+    throw new Error(
+      `Archive could not be inspected. ${formatErrorMessage(error)} Check the path and file permissions, then try again.`,
+      { cause: error },
+    );
   }
+  if (!archiveStat.isFile()) {
+    throw new Error(
+      "Archive must be a regular file. Choose a backup archive created by `openclaw backup create` and try again.",
+    );
+  }
+
+  const listing = await listArchiveEntries(archivePath).catch((error: unknown) => {
+    throw new Error(
+      `Archive could not be read or parsed. ${formatErrorMessage(error)} Check the file permissions and archive integrity, then try again.`,
+    );
+  });
+  if (listing.invalidReason) {
+    throw new Error(
+      `Archive is not a valid OpenClaw backup. ${listing.invalidReason.replace(/[.!?]*$/u, ".")} Choose another archive or create a new one with \`openclaw backup create\`.`,
+    );
+  }
+  const rawEntries = listing.entries;
 
   const entries = rawEntries.map((entry) => ({
     raw: entry.path,
@@ -732,9 +595,12 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
         `Archive hardlink target for ${entry.path}`,
       ),
     }));
+  const symbolicLinks = rawEntries
+    .filter((entry) => entry.type === "SymbolicLink")
+    .map((entry) => ({ entryPath: entry.path, linkpath: entry.linkpath }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
-  const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
+  const manifestMatches = entries.filter((entry) => isRootBackupManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
   }
@@ -754,13 +620,16 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
   }
 
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
-  const manifest = parseManifest(manifestRaw);
-  verifyManifestAgainstEntries(manifest, normalizedEntrySet);
+  const manifest = parseBackupManifest(manifestRaw);
+  verifyBackupManifestEntries(manifest, normalizedEntrySet);
   verifyHardlinkTargetsAgainstArchiveRoot(
     hardlinkTargets,
     manifest.archiveRoot,
     normalizedEntrySet,
   );
+  for (const link of symbolicLinks) {
+    assertArchiveSymbolicLinkTarget({ ...link, archiveRoot: manifest.archiveRoot });
+  }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
 
   const result: BackupVerifyResult = {
@@ -771,9 +640,19 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
+    symlinkCount: symbolicLinks.length,
   };
 
   return result;
+}
+
+/** Verify a backup archive and return its normalized, integrity-checked inventory. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  const archivePath = resolveUserPath(archive);
+  return await verifyResolvedBackupArchive(archivePath).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : formatErrorMessage(error);
+    throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
+  });
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
@@ -794,4 +673,3 @@ export async function backupVerifyCommand(
 export const testApi = {
   assertSqliteExtractionBudget,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

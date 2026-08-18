@@ -423,6 +423,22 @@ describe("resolveSystemNodeInfo", () => {
     });
   });
 
+  it.each(["24.15.0-rc.1", "25.9.1-nightly.20260714", "garbage24.15.0suffix"])(
+    "does not persist a non-release system Node version %s",
+    async (version) => {
+      mockNodePathPresent(darwinNode);
+      const execFile = vi.fn().mockResolvedValue(nodeRuntime(version));
+
+      const result = await resolveSystemNodeInfo({
+        env: {},
+        platform: "darwin",
+        execFile,
+      });
+
+      expect(result).toMatchObject({ version, supported: false });
+    },
+  );
+
   it("returns undefined when system node is missing", async () => {
     fsMocks.access.mockRejectedValue(new Error("missing"));
     const execFile = vi.fn();

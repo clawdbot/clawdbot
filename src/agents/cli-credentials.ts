@@ -14,6 +14,11 @@ import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
+import {
+  CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS,
+  hasClaudeCliKeychainItem,
+  readClaudeCliKeychainPayload,
+} from "./cli-credentials.claude-keychain.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
@@ -24,7 +29,6 @@ const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
 const CODEX_CLI_FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
-const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 type CachedValue<T> = {
   value: T | null;
   readAt: number;
@@ -172,11 +176,11 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexHomePath(codexHome?: string) {
-  const configured = codexHome ?? process.env.CODEX_HOME;
+export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessEnv = process.env) {
+  const configured = codexHome ?? env.CODEX_HOME;
   // External CLI state belongs to the OS user, not OpenClaw's relocatable
   // home. Otherwise an isolated OPENCLAW_HOME hides an already logged-in CLI.
-  const home = resolveOsHomeRelativePath(configured || "~/.codex");
+  const home = resolveOsHomeRelativePath(configured || "~/.codex", { env });
   try {
     return fs.realpathSync.native(home);
   } catch {
@@ -270,7 +274,7 @@ function resolveCodexKeychainParams(options?: {
   return {
     platform: options?.platform ?? process.platform,
     execSyncImpl: options?.execSync ?? execSync,
-    codexHome: resolveCodexHomePath(options?.codexHome),
+    codexHome: resolveCodexCliHomePath(options?.codexHome),
   };
 }
 
@@ -460,22 +464,6 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
   };
 }
 
-function readClaudeCliKeychainCredentials(
-  execSyncImpl: ExecSyncFn = execSync,
-): ClaudeCliCredential | null {
-  try {
-    const result = execSyncImpl(
-      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    const data = JSON.parse(result.trim());
-    return parseClaudeCliOauthCredential(data?.claudeAiOauth);
-  } catch {
-    return null;
-  }
-}
-
 function readClaudeCliUserApiKeyHelperCredential(homeDir?: string): ClaudeCliCredential | null {
   const raw = loadJsonFileThroughSymlink(resolveClaudeCliUserSettingsPath(homeDir));
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -526,6 +514,8 @@ function withClaudeAccountEmail(
 /** Reads Claude CLI credentials in Claude Code's credential precedence order. */
 function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
+  tryKeychainWithoutPrompt?: boolean;
+  onStoredCredentialUnreadable?: () => void;
   platform?: NodeJS.Platform;
   homeDir?: string;
   execSync?: ExecSyncFn;
@@ -536,8 +526,15 @@ function readClaudeCliCredentials(options?: {
   }
 
   const platform = options?.platform ?? process.platform;
-  if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
-    const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
+  const tryKeychain =
+    platform === "darwin" &&
+    (options?.allowKeychainPrompt !== false || options?.tryKeychainWithoutPrompt === true);
+  if (tryKeychain) {
+    const keychainPayload = readClaudeCliKeychainPayload(
+      options?.execSync,
+      options?.tryKeychainWithoutPrompt ? CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS : undefined,
+    );
+    const keychainCreds = parseClaudeCliOauthCredential(keychainPayload?.claudeAiOauth);
     if (keychainCreds) {
       log.info("read anthropic credentials from claude cli keychain", {
         type: keychainCreds.type,
@@ -548,31 +545,52 @@ function readClaudeCliCredentials(options?: {
 
   const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFileThroughSymlink(credPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
+  const fileCredential =
+    raw && typeof raw === "object"
+      ? withClaudeAccountEmail(
+          parseClaudeCliOauthCredential((raw as Record<string, unknown>).claudeAiOauth),
+          options?.homeDir,
+        )
+      : null;
+  if (fileCredential) {
+    return fileCredential;
   }
-
-  const data = raw as Record<string, unknown>;
-  return withClaudeAccountEmail(
-    parseClaudeCliOauthCredential(data.claudeAiOauth),
-    options?.homeDir,
-  );
+  if (
+    options?.tryKeychainWithoutPrompt &&
+    (fs.existsSync(credPath) ||
+      (platform === "darwin" && hasClaudeCliKeychainItem(options.execSync)))
+  ) {
+    options.onStoredCredentialUnreadable?.();
+  }
+  return null;
 }
 
-/** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
-export function readClaudeCliCredentialsCached(options?: {
+type ClaudeCliCredentialReadOptions = {
   allowKeychainPrompt?: boolean;
+  tryKeychainWithoutPrompt?: boolean;
+  onStoredCredentialUnreadable?: () => void;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   homeDir?: string;
   execSync?: ExecSyncFn;
-}): ClaudeCliCredential | null {
+};
+
+/** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
+export function readClaudeCliCredentialsCached(
+  options?: ClaudeCliCredentialReadOptions,
+): ClaudeCliCredential | null {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
   const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const settingsPath = resolveClaudeCliUserSettingsPath(options?.homeDir);
   const keychainIntent =
-    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
+    platform !== "darwin"
+      ? "file"
+      : options?.tryKeychainWithoutPrompt
+        ? "keychain-bounded"
+        : options?.allowKeychainPrompt !== false
+          ? "keychain"
+          : "file";
   return readCachedCliCredential({
     ttlMs,
     cache: claudeCliCache,
@@ -580,6 +598,8 @@ export function readClaudeCliCredentialsCached(options?: {
     read: () =>
       readClaudeCliCredentials({
         allowKeychainPrompt: options?.allowKeychainPrompt,
+        tryKeychainWithoutPrompt: options?.tryKeychainWithoutPrompt,
+        onStoredCredentialUnreadable: options?.onStoredCredentialUnreadable,
         platform,
         homeDir: options?.homeDir,
         execSync: options?.execSync,
@@ -683,7 +703,7 @@ function readCodexCliCredentials(options?: {
     }
   }
 
-  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const authPath = path.join(resolveCodexCliHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFileThroughSymlink(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -707,7 +727,7 @@ export function readCodexCliCredentialsCached(options?: {
 }): CodexCliCredential | null {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
-  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const authPath = path.join(resolveCodexCliHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({

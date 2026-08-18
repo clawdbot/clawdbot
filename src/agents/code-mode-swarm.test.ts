@@ -285,6 +285,41 @@ describe("Code Mode swarm guest", () => {
     }
   });
 
+  it.each([
+    { name: "blank result", schemaError: undefined },
+    { name: "schema error", schemaError: "structured output was invalid" },
+  ])("prefers an authoritative execution error over $name", async ({ schemaError }) => {
+    const first = await workerExec('return await agents.run("Fail after output");', true);
+    expectWaiting(first);
+    const second = await workerResume(first, [
+      { id: first.pendingRequests[0]!.id, ok: true, value: { runId: "collector-4" } },
+    ]);
+    expectWaiting(second);
+
+    const failed = await workerResume(second, [
+      {
+        id: second.pendingRequests[0]!.id,
+        ok: true,
+        value: {
+          runId: "collector-4",
+          status: "failed",
+          result: "",
+          structured: { partial: true },
+          error: "provider failed after tool output",
+          ...(schemaError ? { schemaError } : {}),
+        },
+      },
+    ]);
+
+    expect(failed).toMatchObject({ status: "failed", code: "internal_error" });
+    if (failed.status === "failed") {
+      expect(failed.error).toContain(
+        "SwarmAgentError: Swarm agent collector-4 failed: provider failed after tool output",
+      );
+      expect(failed.error).not.toContain("structured output was invalid");
+    }
+  });
+
   it("sends phase and log as fire-and-forget swarm notes", async () => {
     const first = await workerExec('phase("Plan"); log("Working"); return "ok";', true);
     expectWaiting(first);

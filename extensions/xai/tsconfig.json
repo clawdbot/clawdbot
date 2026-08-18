@@ -125,6 +125,9 @@
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
+      "openclaw/plugin-sdk/native-hook-relay-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/native-hook-relay-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/codex-session-transcript-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
       ],
@@ -349,9 +352,6 @@
       ],
       "openclaw/plugin-sdk/video-generation-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/video-generation-core": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-core.d.ts"
       ],
       "openclaw/plugin-sdk/realtime-transcription": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription.d.ts"

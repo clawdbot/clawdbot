@@ -155,7 +155,8 @@ that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
 A connected limited Control UI can file that same pending request through its
-**Request admin** banner without attempting a broader reconnect. The request is
+**Request admin** banner without attempting a broader reconnect. The banner can
+collapse into a persistent **Limited access** chip that reopens the action. The request is
 bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,
@@ -197,10 +198,10 @@ can approve, reject, rotate, revoke, or remove only its own device entry.
 
 ## Node pairing approvals
 
-Legacy `node.pair.*` methods use a separate Gateway-owned node pairing store.
-WS nodes use device pairing (`role: node`) instead, but the same approval
-vocabulary applies. See [Gateway pairing](/gateway/pairing) for how the two
-stores relate.
+`node.pair.*` capability approvals are stored on the paired device record in
+the shared SQLite pairing store. Gateways migrate any remaining entries from
+the retired standalone `nodes/paired.json` store into those records once at
+startup. See [Gateway pairing](/gateway/pairing) for details.
 
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:

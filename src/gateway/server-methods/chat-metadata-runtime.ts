@@ -6,8 +6,8 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
-  getPreparedModelCatalogOwnerSnapshot,
-  type LoadPreparedModelCatalogParams,
+  getPublishedPreparedModelCatalogOwnerSnapshot,
+  type GetPublishedPreparedModelCatalogOwnerParams,
 } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
@@ -78,7 +78,7 @@ type ChatMetadataRuntimeDeps = {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
   getPreparedOwner: (
-    params: LoadPreparedModelCatalogParams,
+    params: GetPublishedPreparedModelCatalogOwnerParams,
   ) => PreparedModelRuntimeSnapshot | undefined;
   getPreparedAuthStore: (
     agentDir?: string,
@@ -125,18 +125,9 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
   const config = deps.getConfig();
   const agents = listAgentIds(config).map((rawAgentId): PreparedAgentFacts => {
     const agentId = normalizeAgentId(rawAgentId);
-    const owner =
-      deps.getPreparedOwner({
-        agentId,
-        config,
-        readOnly: true,
-        allowGatewaySubagentBinding: true,
-      }) ??
-      deps.getPreparedOwner({
-        agentId,
-        config,
-        readOnly: true,
-      });
+    // Metadata follows the published lifecycle owner while its replacement gate owns turnover;
+    // display-only config publications must not make that still-current owner disappear.
+    const owner = deps.getPreparedOwner({ agentId, config });
     if (!owner) {
       throw new ChatMetadataSnapshotUnavailableError(
         `prepared chat metadata owner is unavailable for agent "${agentId}"`,
@@ -285,7 +276,7 @@ export function createGatewayChatMetadataRuntime(params: {
   const deps: ChatMetadataRuntimeDeps = {
     getConfig: params.getConfig,
     getContext: params.getContext,
-    getPreparedOwner: getPreparedModelCatalogOwnerSnapshot,
+    getPreparedOwner: getPublishedPreparedModelCatalogOwnerSnapshot,
     getPreparedAuthStore: getPreparedRuntimeAuthProfileStoreSnapshot,
     getAuthStoreRevision: getRuntimeAuthProfileStoreSnapshotRevision,
     getSkillsVersion: getSkillsSnapshotVersion,

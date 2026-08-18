@@ -380,12 +380,16 @@ public enum OpenClawChatGatewayRequests {
 
     public static func forkSession(
         parentSessionKey: String,
-        agentID: String?) -> OpenClawChatGatewayRequest
+        agentID: String?,
+        fromLastCompleted: Bool = false) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
             "parentSessionKey": AnyCodable(parentSessionKey),
             "fork": AnyCodable(true),
         ]
+        if fromLastCompleted {
+            params["forkFrom"] = AnyCodable("last-completed")
+        }
         self.add(agentID, to: &params, key: "agentId")
         return OpenClawChatGatewayRequest(
             method: "sessions.create",
@@ -525,6 +529,13 @@ public enum OpenClawChatGatewayRequests {
             method: "chat.history",
             params: params,
             timeoutMs: timeoutMs.map(Double.init) ?? self.defaultTimeoutMs)
+    }
+
+    public static func progressCardGet(sessionKey: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "progressCard.get",
+            params: ["sessionKey": AnyCodable(sessionKey)],
+            timeoutMs: self.defaultTimeoutMs)
     }
 
     public static func commandsList(

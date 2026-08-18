@@ -60,8 +60,15 @@ export type SkillUsagePath = {
   skillSource: SkillTelemetrySource;
 };
 
+export type ExplicitSkillSelection = {
+  name: string;
+  path: string;
+};
+
 export type SkillCommandSpec = {
   name: string;
+  /** Human-readable skill title for display surfaces. */
+  displayName?: string;
   /** Canonical SKILL.md path for file-scoped usage accounting. */
   skillFile?: string;
   skillName: string;
@@ -136,6 +143,11 @@ export type SkillSnapshot = {
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
+  /** Present only when a session merges skills from distinct agent and execution roots. */
+  skillRoots?: {
+    agentWorkspaceDir: string;
+    executionSkillsDir: string;
+  };
   version?: number;
   promptFormatVersion?: number;
 };

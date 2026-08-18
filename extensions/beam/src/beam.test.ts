@@ -280,7 +280,7 @@ describe("Beam session catalog", () => {
     });
     const catalog = createBeamSessionCatalog(store);
 
-    const [host] = await catalog.list({ limitPerHost: 1 });
+    const [host] = await catalog.list({ agentId: "main", limitPerHost: 1 });
     expect(host).toBeDefined();
     if (!host) {
       throw new Error("Beam catalog did not return its gateway host");
@@ -296,6 +296,7 @@ describe("Beam session catalog", () => {
     expect(host.nextCursor).toBe("1");
 
     const transcript = await catalog.read({
+      agentId: "main",
       hostId: "gateway",
       threadId: "0123456789abcdef0123456789abcdef",
       limit: 1,
@@ -307,6 +308,7 @@ describe("Beam session catalog", () => {
     expect(transcript.nextCursor).toEqual(expect.any(String));
 
     const older = await catalog.read({
+      agentId: "main",
       hostId: "gateway",
       threadId: "0123456789abcdef0123456789abcdef",
       limit: 1,
@@ -332,6 +334,7 @@ describe("Beam session catalog", () => {
 
     await expect(
       catalog.read({
+        agentId: "main",
         hostId: "gateway",
         threadId: "0123456789abcdef0123456789abcdef",
         limit: 1,

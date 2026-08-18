@@ -1,12 +1,16 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  resolveSessionWorkStartError,
+} from "../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -277,7 +281,7 @@ async function agentCommandInternal(
       }
 
       let currentRunDeliveryPrepared = false;
-      const prepareDeliveryForRun = async (candidateSessionEntry?: SessionEntry) => {
+      const prepareDeliveryForRun = async (candidateSessionEntry?: InternalSessionEntry) => {
         if (currentRunDeliveryPrepared || opts.deliver !== true) {
           return;
         }
@@ -335,7 +339,7 @@ async function agentCommandInternal(
             ? runId
             : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const next: SessionEntry = {
+        const next: InternalSessionEntry = {
           ...entry,
           sessionId,
           updatedAt: now,
@@ -386,6 +390,9 @@ async function agentCommandInternal(
             sessionStore[sessionKey] = sessionEntry;
           }
         } catch (error) {
+          if (isSessionWorkStartInvalidatedError(error)) {
+            throw error;
+          }
           log.warn(
             `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
           );
@@ -436,6 +443,10 @@ async function agentCommandInternal(
             lifecycleGeneration,
             runId,
             workspaceDir,
+            executionSkillsDir: path.join(
+              sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
+              "skills",
+            ),
             isNewSession,
             isSubagentLaneTurn,
             suppressVisibleSessionEffects,
@@ -550,7 +561,7 @@ async function agentCommandInternal(
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryRunId === runId) {
-          const next: SessionEntry = {
+          const next: InternalSessionEntry = {
             ...entry,
             ...buildRestartRecoveryClaimCleanupPatch({
               entry,
@@ -591,6 +602,7 @@ async function agentCommandWithAdmissionIngress(
     opts,
     runtime,
     deps,
+    operatorAuthority: admissionIngress.kind === "local-cli",
     run: async (prepared, resolvedDeps) =>
       await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
   });

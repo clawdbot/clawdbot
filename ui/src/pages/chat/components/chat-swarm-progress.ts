@@ -50,6 +50,9 @@ function swarmStatusLabel(status: SwarmDotStatus): string {
 }
 
 function swarmDotStatus(row: GatewaySessionRow): SwarmDotStatus | null {
+  if (row.status === "queued") {
+    return "queued";
+  }
   if (row.status === "running" || row.hasActiveRun === true) {
     return "running";
   }

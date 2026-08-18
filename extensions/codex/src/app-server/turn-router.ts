@@ -1,5 +1,6 @@
 /** Keyed routing for all turn traffic on one shared Codex app-server client. */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CodexAppServerClient } from "./client.js";
 import { redactCodexEventKind } from "./event-projector-diagnostics.js";
 import {
@@ -75,7 +76,7 @@ type CodexNativeTurnCompletionWatch = {
   cancel: () => void;
 };
 
-type Deferred = { promise: Promise<void>; resolve: () => void };
+type Deferred = ReturnType<typeof createDeferred<void>>;
 type PendingNotification = {
   notification: CodexServerNotification;
   receivedAtMs: number;
@@ -143,8 +144,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     const route: Route = {
       threadId,
       controller: new AbortController(),
-      ended: deferred(),
-      activated: deferred(),
+      ended: createDeferred<void>(),
+      activated: createDeferred<void>(),
       gate: "open",
       pending: [],
       notificationTail: Promise.resolve(),
@@ -196,10 +197,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (this.routes.get(threadId)?.completedNativeTurnIds.delete(turnId)) {
       return { completion: Promise.resolve(true), cancel: () => {} };
     }
-    let settle!: (completed: boolean) => void;
-    const completion = new Promise<boolean>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: completion, resolve: settle } = createDeferred<boolean>();
     const watchers =
       this.nativeTurnCompletionWatchers.get(threadId) ?? new Set<NativeTurnCompletionWatcher>();
     this.nativeTurnCompletionWatchers.set(threadId, watchers);
@@ -281,7 +279,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (route.observedNativeTurn?.completed) {
       route.observedNativeTurn = undefined;
     }
-    route.binding = deferred();
+    route.binding = createDeferred<void>();
   }
 
   private async cancelTurn(route: Route): Promise<void> {
@@ -587,14 +585,6 @@ async function waitForPromiseOrAbort(
   } finally {
     removeAbort?.();
   }
-}
-
-function deferred(): Deferred {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function abortReason(signal: AbortSignal): Error {

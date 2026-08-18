@@ -1,12 +1,13 @@
 /**
- * `openclaw browser extension` CLI: install the unpacked Chrome extension,
- * register its native bootstrap host, and retain advanced manual pairing.
+ * `openclaw browser extension` CLI: register the Store and development extension
+ * native bootstrap host, and retain advanced manual pairing.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import {
   browserExtensionStatus,
+  FOUNDATION_CHROME_WEB_STORE_URL,
   installChromeExtensionBootstrap,
   normalizeExtensionInstallWaitMs,
   resolveChromeExtensionLoadPath,
@@ -160,11 +161,11 @@ export function registerBrowserExtensionCommands(
 
   extension
     .command("install")
-    .description("Install the stable extension copy and register its native bootstrap host")
+    .description("Register the native bootstrap host for Store and development installs")
     .option("--json", "Print a machine-readable status report")
     .option(
       "--wait-ms <ms>",
-      "How long to wait after pre-registration for Chrome to verify the unpacked extension",
+      "How long to wait after pre-registration for Chrome to verify the extension",
       String(30_000),
     )
     .action(async (opts) => {
@@ -175,7 +176,7 @@ export function registerBrowserExtensionCommands(
           const bundledDir = resolveChromeExtensionDir(pluginRoot);
           if (opts.json !== true) {
             defaultRuntime.log(
-              info("Preparing the OpenClaw Chrome extension. Keep Chrome running…"),
+              info("Preparing the OpenClaw Chrome native bootstrap. Keep Chrome running…"),
             );
           }
           const status = await installChromeExtensionBootstrap({
@@ -196,10 +197,10 @@ export function registerBrowserExtensionCommands(
                 ? theme.warn(
                     status.platformSupport === "manual_required"
                       ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
-                      : "Automatic setup was not verified. Keep Chrome running, rerun install, and use Load unpacked only after the command says native bootstrap is ready. If this extension already attempted setup before the host existed, restart Chrome once before retrying.",
+                      : `Automatic setup was not verified. Run install before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}. Use Load unpacked only as a development fallback after pre-registration. If this extension already attempted setup before the host existed, restart Chrome once before retrying.`,
                   )
                 : info(
-                    `Native host and deterministic extension identity verified for ${status.discovered.length} profile registration(s). The extension connects automatically.`,
+                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). The extension connects automatically.`,
                   ),
             );
           }
@@ -230,8 +231,9 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.log(
           [
             `Extension copy: ${status.installedCopy.owned ? "installed" : "bundled fallback"}`,
+            `Store:          ${status.storeDiscovered.length > 0 ? status.storeDiscovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "not detected"}`,
+            `Development:    ${status.discovered.length > 0 ? status.discovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "none detected"}`,
             `Load unpacked:  ${status.installedCopy.owned ? status.installedCopy.path : status.bundledPath}`,
-            `Chrome IDs:     ${status.discovered.length > 0 ? status.discovered.map((entry) => `${entry.extensionId} (${entry.browser}/${entry.profile})`).join(", ") : "none detected"}`,
             `Native hosts:   ${status.registrations.filter((entry) => entry.state === "owned").length} owned`,
             `Setup:          ${status.manualSetupRequired ? "manual action required" : "automatic bootstrap ready"}`,
           ].join("\n"),

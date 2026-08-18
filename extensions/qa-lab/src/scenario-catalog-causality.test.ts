@@ -27,77 +27,163 @@ describe("qa scenario catalog causality", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
-    const gatewayRestart = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
-    const gatewayRestartFlow = gatewayRestart.execution.flow;
-    const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
-    const gatewayRestartActions = gatewayRestartFlow?.steps[0]?.actions ?? [];
-    const recoveryPollIndex = gatewayRestartActions.findIndex(
+    const liveMultiRestart = requireFlowScenario(readQaScenarioById("gateway-restart-multi-live"));
+    const liveMultiRestartFlow = liveMultiRestart.execution.flow;
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestartFlow);
+    const liveMultiRestartPrompt =
+      typeof liveMultiRestart.execution.config?.prompt === "string"
+        ? liveMultiRestart.execution.config.prompt
+        : "";
+    const liveMultiRestartActions = liveMultiRestartFlow?.steps[1]?.actions ?? [];
+    const checkpointLoop = liveMultiRestartActions.find(
+      (action): action is { forEach?: { actions?: unknown[] } } =>
+        typeof action === "object" && action !== null && "forEach" in action,
+    );
+    const checkpointActions = checkpointLoop?.forEach?.actions ?? [];
+    const checkpointTranscriptIndex = checkpointActions.findIndex(
       (action) =>
         (action as { call?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === "settledRecovery",
+        (action as { saveAs?: string }).saveAs === "checkpointTranscript",
     );
-    const outboundIndex = gatewayRestartActions.findIndex(
+    const checkpointStoreIndex = checkpointActions.findIndex(
+      (action) =>
+        (action as { call?: string }).call === "readRawQaSessionStore" &&
+        (action as { saveAs?: string }).saveAs === "checkpointStore",
+    );
+    const checkpointPersistenceAssertIndex = checkpointActions.findIndex((action) => {
+      const expression = readFlowAssertExpression(action);
+      return (
+        expression.includes("checkpointEntry") &&
+        expression.includes("checkpointTranscript.userMessageCount >= 1") &&
+        expression.includes("checkpointTranscript.eventCursor > 0") &&
+        expression.includes("checkpointTranscript.probeTextEndLine ?? 0") &&
+        expression.includes("restartRecoveryDeliveryContext?.channel === 'qa-channel'") &&
+        expression.includes("restartRecoveryDeliveryContext.to === `dm:${conversationId}`")
+      );
+    });
+    const checkpointRestartIndex = checkpointActions.findIndex(
+      (action) => (action as { call?: string }).call === "restartGatewayWithConfigPatch",
+    );
+    const finalOutboundIndex = liveMultiRestartActions.findIndex(
       (action) =>
         (action as { call?: string }).call === "waitForOutboundMessage" &&
         (action as { saveAs?: string }).saveAs === "outbound",
     );
-    const preOutboundRecoveryAssertIndex = gatewayRestartActions.findIndex((action) =>
-      readFlowAssertExpression(action).includes(
-        "restartRecoveryRequestsBeforeOutbound.length === 1",
-      ),
+    const outboundCountIndex = liveMultiRestartActions.findIndex(
+      (action) => (action as { set?: string }).set === "outboundCountAfterDelivery",
     );
-    const preOutboundHeartbeatAssertIndex = gatewayRestartActions.findIndex((action) =>
-      readFlowAssertExpression(action).includes(
-        "!String(restartRecoveryRequestsBeforeOutbound[0].prompt ?? '').includes('[OpenClaw heartbeat poll]')",
-      ),
+    const quietWindowIndex = liveMultiRestartActions.findIndex(
+      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
     );
-    const settledRequestsIndex = gatewayRestartActions.findIndex(
-      (action) => (action as { set?: string }).set === "settledRecoveryRequests",
+    const finalCardinalityAssertIndex = liveMultiRestartActions.findIndex((action) =>
+      readFlowAssertExpression(action).includes("finalMatches.length === 1"),
     );
-    const settledDedupeAssertIndex = gatewayRestartActions.findIndex((action) =>
-      readFlowAssertExpression(action).includes("settledRestartRecoveryRequests.length === 1"),
-    );
-    const recoveryPoll = gatewayRestartActions[recoveryPollIndex] as
-      | { args?: Array<{ lambda?: { expr?: string } }> }
-      | undefined;
-    const recoveryPollExpr = recoveryPoll?.args?.[0]?.lambda?.expr ?? "";
-    expect(gatewayRestart.execution.retryCount).toBe(0);
-    expect(JSON.stringify(gatewayRestart.gatewayConfigPatch)).toContain(
+    expect(liveMultiRestart.execution.retryCount).toBe(0);
+    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
       '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
-    expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
-    expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
-    expect(gatewayRestartContract).toContain("restartRecoveryDeliveryContext");
-    expect(gatewayRestartContract).toContain("sendInbound");
-    expect(gatewayRestartContract).not.toContain("startAgentRun");
-    expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
-    expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
-    expect(gatewayRestartContract).toContain("restartNotices.length === 0");
-    expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
-    expect(recoveryPollIndex).toBeGreaterThanOrEqual(0);
-    expect(recoveryPollExpr).toContain(
-      "String(request.prompt ?? '').includes('Your previous turn was interrupted by a gateway restart')",
+    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("checkpoint");
+    expect(liveMultiRestartContract).toContain("restarts=3");
+    for (const fixturePath of [
+      "restart-audit/components.md",
+      "restart-audit/risks.md",
+      "restart-audit/deployments.md",
+      "restart-audit/controls.md",
+      "restart-audit/recommendation.md",
+    ]) {
+      expect(liveMultiRestartPrompt).toContain(fixturePath);
+    }
+    expect(liveMultiRestartPrompt).toContain("your only work in this turn is the next checkpoint");
+    expect(liveMultiRestartPrompt).toContain(
+      "Make exactly one `exec` call with `restartSafe: true`",
     );
-    expect(recoveryPollExpr).toContain(
-      "String(request.allInputText ?? '').includes(config.interruptedMarker)",
+    expect(liveMultiRestartPrompt).toContain(
+      "expired, or aborted `wait` result after restart is expected",
     );
-    expect(recoveryPollExpr).toContain("restartRecoveryRequests.length >= 1");
-    expect(recoveryPollExpr).toContain(
-      "String(transcript.finalText ?? '').includes(config.interruptedMarker)",
+    expect(liveMultiRestartPrompt).toContain("`CHECKPOINT-N` is internal tool output");
+    expect(liveMultiRestartPrompt).toContain(
+      "Do not send any assistant text before the final audit report",
     );
-    expect(preOutboundRecoveryAssertIndex).toBeGreaterThan(recoveryPollIndex);
-    expect(preOutboundHeartbeatAssertIndex).toBeGreaterThan(preOutboundRecoveryAssertIndex);
-    expect(outboundIndex).toBeGreaterThan(preOutboundHeartbeatAssertIndex);
-    expect(settledRequestsIndex).toBeGreaterThan(outboundIndex);
-    expect(settledDedupeAssertIndex).toBeGreaterThan(settledRequestsIndex);
+    expect(liveMultiRestartPrompt).toContain("Do not read the `restart-audit/` directory path");
+    expect(liveMultiRestartContract).toContain("sendInbound");
+    expect(liveMultiRestartContract).not.toContain("startAgentRun");
+    expect(liveMultiRestartContract).toContain("id: `dm:${conversationId}`");
+    expect(liveMultiRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(liveMultiRestartContract).toContain('"saveAs":"inbound"');
+    expect(liveMultiRestartContract).toContain("probeText: config.finalMarker");
+    expect(liveMultiRestartContract).toContain("completedToolCallCounts.wait ?? 0) < checkpoint");
+    expect(checkpointTranscriptIndex).toBeGreaterThanOrEqual(0);
+    expect(checkpointStoreIndex).toBeGreaterThan(checkpointTranscriptIndex);
+    expect(checkpointPersistenceAssertIndex).toBeGreaterThan(checkpointStoreIndex);
+    expect(checkpointRestartIndex).toBeGreaterThan(checkpointPersistenceAssertIndex);
+    expect(finalOutboundIndex).toBeGreaterThanOrEqual(0);
+    expect(outboundCountIndex).toBeGreaterThan(finalOutboundIndex);
+    expect(quietWindowIndex).toBeGreaterThan(outboundCountIndex);
+    expect(liveMultiRestartActions[quietWindowIndex]).toMatchObject({
+      waitForNoOutbound: {
+        quietMs: 3000,
+        sinceIndex: { ref: "outboundCountAfterDelivery" },
+      },
+    });
+    expect(finalCardinalityAssertIndex).toBeGreaterThan(quietWindowIndex);
     expect(
-      gatewayRestartActions.some((action) => (action as { call?: string }).call === "sleep"),
+      liveMultiRestartActions.some((action) => (action as { call?: string }).call === "sleep"),
     ).toBe(false);
-    expect(gatewayRestartContract).toContain("recoveryPromptHeartbeat=false");
-    expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("id: `dm:${conversationId}`");
-    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
-    expect(gatewayRestart.gatewayConfigPatch).toMatchObject({
+    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      requiredProvider: "openai",
+      requiredModel: "gpt-5.4",
+    });
+  });
+
+  it("keeps the deterministic restart proof on one inbound turn across three lifecycles", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("gateway-restart-inflight-run"));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const contract = JSON.stringify(scenario.execution.flow);
+    const checkpointLoop = actions.find(
+      (action): action is { forEach: { items: unknown[]; actions: unknown[] } } =>
+        typeof action === "object" && action !== null && "forEach" in action,
+    );
+    const checkpointActions = checkpointLoop?.forEach.actions ?? [];
+    const pendingWaitIndex = checkpointActions.findIndex(
+      (action) =>
+        (action as { call?: string; saveAs?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === "checkpointTranscript",
+    );
+    const checkpointStoreIndex = checkpointActions.findIndex(
+      (action) =>
+        (action as { call?: string; saveAs?: string }).call === "readRawQaSessionStore" &&
+        (action as { saveAs?: string }).saveAs === "checkpointStore",
+    );
+    const checkpointPersistenceIndex = checkpointActions.findIndex((action) => {
+      const expression = readFlowAssertExpression(action);
+      return (
+        expression.includes("checkpointTranscript.userMessageCount >= 1") &&
+        expression.includes("checkpointTranscript.probeTextEndLine ?? 0") &&
+        expression.includes("restartRecoveryDeliveryContext?.channel === 'qa-channel'") &&
+        expression.includes("restartRecoveryDeliveryContext.to === `dm:${conversationId}`")
+      );
+    });
+    const restartIndex = checkpointActions.findIndex(
+      (action) => (action as { call?: string }).call === "restartGatewayWithConfigPatch",
+    );
+    const outboundIndex = actions.findIndex(
+      (action) =>
+        (action as { call?: string; saveAs?: string }).call === "waitForOutboundMessage" &&
+        (action as { saveAs?: string }).saveAs === "outbound",
+    );
+    const quietWindowIndex = actions.findIndex(
+      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
+    );
+
+    expect(scenario.execution).toMatchObject({
+      retryCount: 0,
+      suiteIsolation: "isolated",
+    });
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      logging: { audit: { executionIdentity: true } },
       plugins: {
         slots: { memory: "none" },
         entries: {
@@ -105,22 +191,53 @@ describe("qa scenario catalog causality", () => {
           "memory-core": { enabled: false },
         },
       },
+      tools: {
+        alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"],
+      },
     });
-    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
-    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
-    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
-      '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
+    expect(checkpointLoop?.forEach.items).toEqual([1, 2, 3]);
+    expect(contract.match(/"sendInbound"/gu)).toHaveLength(1);
+    expect(contract).not.toContain("startAgentRun");
+    expect(contract).not.toContain("chat.send");
+    expect(contract).toContain("completedToolCallCounts.wait ?? 0) < checkpoint");
+    expect(contract).toContain("probeText: config.promptMarker");
+    expect(pendingWaitIndex).toBeGreaterThanOrEqual(0);
+    expect(checkpointStoreIndex).toBeGreaterThan(pendingWaitIndex);
+    expect(checkpointPersistenceIndex).toBeGreaterThan(checkpointStoreIndex);
+    expect(restartIndex).toBeGreaterThan(checkpointPersistenceIndex);
+    expect(contract).toContain("checkpointEntry.restartRecoveryDeliveryRunId");
+    expect(contract).toContain("checkpointEntry.restartRecoveryRuns?.find");
+    expect(contract).toContain("currentDeliveryFence.lifecycleGeneration");
+    expect(contract).toContain("runQaCli(env, ['audit', '--run', auditAnchorRunId");
+    expect(contract).toContain("capturedAuditAnchorInspection.identity.context");
+    expect(contract).toContain("postDeliveryAuditAnchorInspection.identity.context");
+    expect(contract).toContain(
+      "JSON.stringify(postDeliveryAuditAnchorIdentity) === JSON.stringify(auditAnchorIdentity)",
     );
-    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
-    expect(liveMultiRestartContract).toContain("checkpoint");
-    expect(liveMultiRestartContract).toContain("restarts=3");
-    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
-    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
-    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
-      requiredProviderMode: "live-frontier",
-      requiredProvider: "openai",
-      requiredModel: "gpt-5.4",
+    expect(contract).toContain("checkpointDeliveryRunIds.length === 3");
+    expect(contract).toContain("checkpointDeliveryRunIds[2] !== checkpointDeliveryRunIds[1]");
+    expect(contract).toContain("auditAnchorIdentity !== null");
+    expect(contract).not.toContain("finalInterruptedRunId");
+    expect(contract).not.toContain("auditedIdentities");
+    expect(contract).not.toContain("inspectQaRestartRecoveryIdentity");
+    expect(contract).not.toContain("mainRestartRecovery?.executionIdentity");
+    expect(contract).toContain("assistantToolCallCounts.exec ?? 0) === 3");
+    expect(contract).toContain("assistantToolCallCounts.wait ?? 0) >= 3");
+    expect(contract).toContain("recoveryDispatches === 3 && retainedPolicies === 3");
+    expect(contract).toContain("finalMatches.length === 1");
+    expect(contract).toContain("restartNotices.length === 0");
+    expect(contract).toContain("unsafeVisible=false");
+    expect(contract).toContain("!recoveryLogs.includes('unsafe-probe-executed')");
+    expect(restartIndex).toBeGreaterThan(checkpointPersistenceIndex);
+    expect(outboundIndex).toBeGreaterThanOrEqual(0);
+    expect(quietWindowIndex).toBeGreaterThan(outboundIndex);
+    expect(actions[quietWindowIndex]).toMatchObject({
+      waitForNoOutbound: {
+        quietMs: 3000,
+        sinceIndex: { ref: "outboundCountAfterDelivery" },
+      },
     });
+    expect(actions.some((action) => (action as { call?: string }).call === "sleep")).toBe(false);
   });
 
   it("scopes prompt diagnostics to requests after each scenario cursor", () => {

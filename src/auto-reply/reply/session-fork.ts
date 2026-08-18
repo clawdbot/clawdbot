@@ -5,6 +5,7 @@ import {
   resolveSessionParentForkDecision,
   type SessionParentForkDecision,
   type ParentForkedSessionTranscript,
+  type ForkSessionFromParentTranscriptResult,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,6 +41,7 @@ type ForkSessionFromParentParams = {
   config?: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
+  forkFrom?: "last-completed";
 
   /** Cross-agent forks land the child transcript in the target agent's store. */
   targetStorePath?: string;
@@ -121,9 +123,26 @@ export async function forkSessionFromParent(
     parentSessionKey: params.parentSessionKey,
     sessionKey: params.sessionKey,
     storePath,
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
     ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
   });
   return fork.status === "created" ? fork.transcript : null;
+}
+
+export async function forkSessionFromParentWithDecision(
+  params: ForkSessionFromParentParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  assertParentSessionForkAllowed(params.parentEntry);
+  return await forkSessionFromParentTranscript({
+    agentId: params.agentId,
+    enforceTokenLimit: true,
+    parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
+    sessionKey: params.sessionKey,
+    storePath: resolveParentForkStorePath(params),
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
+    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
+  });
 }
 
 function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonly string[] }): {

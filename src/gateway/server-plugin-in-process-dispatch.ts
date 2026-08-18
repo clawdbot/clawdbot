@@ -4,6 +4,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
@@ -11,7 +12,12 @@ import {
 } from "./server-in-process-dispatch.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayAgentRunTaskOwner,
+  GatewayRequestContext,
+  GatewayRequestOptions,
+  TrustedAgentToolCaller,
+} from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import {
   createSyntheticPluginRuntimeClient,
@@ -29,7 +35,8 @@ const loadInternalAgentTurnFacade = createLazyRuntimeModule(
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
-  agentRunTracking?: "plugin_subagent";
+  agentToolCaller?: TrustedAgentToolCaller;
+  agentRunTracking?: GatewayAgentRunTaskOwner;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
@@ -80,8 +87,9 @@ function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  const syntheticClient = createSyntheticPluginRuntimeClient({
+  const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    agentToolCaller: options?.agentToolCaller,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
@@ -97,6 +105,13 @@ function resolveInProcessGatewayDispatch(
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
+  const agentRuntimeIdentity = readInProcessAgentRuntimeIdentity(options);
+  const syntheticClient = agentRuntimeIdentity
+    ? {
+        ...baseSyntheticClient,
+        internal: { ...baseSyntheticClient.internal, agentRuntimeIdentity },
+      }
+    : baseSyntheticClient;
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
     pluginRuntimeOwnerId ||

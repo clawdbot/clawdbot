@@ -584,7 +584,11 @@ async function executeSessionPatchMutations(params: {
 
   const category = params.patch.category;
   if (patched && typeof category === "string" && category.trim()) {
-    ensureSessionGroupRegistered(category);
+    // A first-use category is a group-catalog mutation: clients reload the
+    // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
+    if (ensureSessionGroupRegistered(category)) {
+      emitSessionsChanged(params.context, { reason: "groups" });
+    }
   }
   if (callerCanManageCron && archivedSessionKeys.size > 0) {
     try {

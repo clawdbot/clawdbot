@@ -11,7 +11,7 @@ import {
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly sessionCreatedOrder: Map<string, number>;
-  sessionRowsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>["sessions"]>;
+  sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
@@ -19,6 +19,16 @@ type SidebarSessionListOwner = {
   expandedAgentId(): string;
   requestSessionDataUpdate(): void;
 };
+
+function filteredSidebarSessionQuery(agentId: string, archivedFilter: SidebarSessionStatusFilter) {
+  return {
+    agentId,
+    archivedFilter,
+    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    includeDerivedTitles: true,
+    includeLastMessage: true,
+  } as const;
+}
 
 export function publishSidebarSessionList(
   owner: SidebarSessionListOwner,
@@ -32,7 +42,7 @@ export function publishSidebarSessionList(
     }
   }
   if (snapshot.result && snapshot.agentId) {
-    owner.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
   }
 }
 
@@ -43,7 +53,7 @@ export function subscribeFilteredSidebarSessions(
   archivedFilter: Exclude<SidebarSessionStatusFilter, "active">,
   isCurrent: () => boolean,
 ): () => void {
-  const scope = { agentId, archivedFilter };
+  const scope = filteredSidebarSessionQuery(agentId, archivedFilter);
   const apply = (snapshot: SessionListSnapshot) => {
     if (!isCurrent()) {
       return;
@@ -85,11 +95,7 @@ export function refreshSidebarSessionList(
     return Promise.resolve();
   }
   return owner.context.sessions.refreshList({
-    agentId,
-    archivedFilter,
-    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-    includeDerivedTitles: true,
-    includeLastMessage: true,
+    ...filteredSidebarSessionQuery(agentId, archivedFilter),
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

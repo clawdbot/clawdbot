@@ -53,13 +53,15 @@ export function createCanvasHttpRouteHandler(params: {
 
   return {
     async handleHttpRequest(req, res) {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      if (url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`)) {
+        return handleA2uiHttpRequest(req, res, {
+          liveReload: isCanvasHostEnabled(params.config) ? getHostConfig().liveReload : false,
+        });
+      }
       const handler = await loadHostHandler();
       if (!handler) {
         return false;
-      }
-      const url = new URL(req.url ?? "/", "http://localhost");
-      if (url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`)) {
-        return handleA2uiHttpRequest(req, res, { liveReload: getHostConfig().liveReload });
       }
       return handler.handleHttpRequest(req, res);
     },

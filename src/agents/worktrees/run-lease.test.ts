@@ -103,6 +103,30 @@ describe("worktree run lease", () => {
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
   });
 
+  it("rejects admission when the linked Git admin directory is missing", async () => {
+    const created = await createSessionWorktree();
+    const knownFile = path.join(created.path, "README.md");
+    const gitAdminDir = await git(created.path, "rev-parse", "--absolute-git-dir");
+    const displacedGitAdminDir = path.join(root, "git-admin-aside");
+    await fs.rename(gitAdminDir, displacedGitAdminDir);
+
+    try {
+      const acquisition = acquireWorktreeRunLease(created.id, { env });
+      await expect(acquisition).rejects.toThrow(
+        `managed worktree is unusable because its Git removal guard could not be acquired: ${created.path}`,
+      );
+      await expect(acquisition).rejects.toMatchObject({ cause: expect.any(Error) });
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+      expect(await fs.readFile(knownFile, "utf8")).toBe("base\n");
+    } finally {
+      await fs.rename(displacedGitAdminDir, gitAdminDir);
+    }
+
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
   it("resolves the worktree id for a nested workspace path with no session binding", async () => {
     const created = await createSessionWorktree();
     const nested = path.join(created.path, "workspace");

@@ -1,5 +1,4 @@
 import { request } from "node:http";
-import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
@@ -25,17 +24,6 @@ async function getStatus(host: string, port: number, path: string): Promise<numb
     });
     req.once("error", reject);
     req.end();
-  });
-}
-
-async function expectConnectionRefused(port: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const socket = net.connect({ host: "127.0.0.1", port });
-    socket.once("connect", () => {
-      socket.destroy();
-      reject(new Error(`listener ${port} remained open`));
-    });
-    socket.once("error", () => resolve());
   });
 }
 
@@ -78,17 +66,25 @@ describe("gateway portal service", () => {
   it("closes idempotently and closes every portal on shutdown", async () => {
     const { service, httpServers } = makeService(["127.0.0.1"]);
     const first = await service.open({ targetPort: 3000 });
+    const firstServer = httpServers.at(-1);
     const second = await service.open({ targetPort: 4000 });
+    const secondServer = httpServers.at(-1);
+    expect(firstServer).toBeDefined();
+    expect(secondServer).toBeDefined();
 
     await service.close(first.id);
     await service.close(first.id);
     expect(service.list().map((entry) => entry.id)).toEqual([second.id]);
-    await expectConnectionRefused(first.listenPort);
+    // A closed ephemeral port can be reassigned immediately to a parallel test.
+    // Assert the owned Server instead of probing whichever listener now owns its port.
+    expect(firstServer?.listening).toBe(false);
+    expect(firstServer?.address()).toBeNull();
 
     await service.closeAll();
     expect(service.list()).toEqual([]);
     expect(httpServers).toEqual([]);
-    await expectConnectionRefused(second.listenPort);
+    expect(secondServer?.listening).toBe(false);
+    expect(secondServer?.address()).toBeNull();
   });
 
   it("removes every registered listener after a partial bind failure", async () => {

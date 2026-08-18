@@ -26,6 +26,7 @@ export interface AiProviderRequestPolicyInput {
   transport?: "stream" | "websocket" | "http" | "media-understanding";
   modelId?: string | null;
   compat?: unknown;
+  model?: object;
 }
 
 /** Context shared by plugin-owned provider stream hooks. */
@@ -157,8 +158,6 @@ export interface AiTransportHost {
   plugin: AiTransportPluginHost;
   /** Builds provider-owned Copilot compatibility headers for one message turn. */
   buildCopilotDynamicHeaders(messages: Context["messages"]): Record<string, string>;
-  /** Resolves endpoint classification without importing core provider registries. */
-  resolveProviderEndpointClass(baseUrl?: string): string;
   /** Resolves provider capability flags used by payload compatibility policy. */
   resolveProviderRequestCapabilities(
     input: AiProviderRequestPolicyInput,
@@ -171,6 +170,7 @@ export interface AiTransportHost {
     providerHeaders?: Record<string, string>;
     callerHeaders?: Record<string, string>;
     precedence?: "caller-wins" | "defaults-win";
+    model?: object;
   }): Record<string, string> | undefined;
   /** Returns the host-configured request timeout attached to a model. */
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
@@ -242,7 +242,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
     },
   },
   buildCopilotDynamicHeaders: () => ({}),
-  resolveProviderEndpointClass: () => "default",
   resolveProviderRequestCapabilities: () => ({
     endpointClass: "default",
     knownProviderFamily: "",

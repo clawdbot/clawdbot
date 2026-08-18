@@ -35,19 +35,12 @@ import {
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
-import { maybeNotifyIsolatedAgentSetupTimeoutWithRecovery } from "./timer-notifications.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import {
   createCompletedCronRunOutcomeDrain,
   finalizeCompletedCronRunOutcomes,
 } from "./timer-outcome-finalization.js";
 import { collectRunnableJobs } from "./timer-runnable.js";
-
-export function maybeNotifyIsolatedAgentSetupTimeout(
-  state: CronServiceState,
-  result: Parameters<typeof maybeNotifyIsolatedAgentSetupTimeoutWithRecovery>[1],
-): boolean {
-  return maybeNotifyIsolatedAgentSetupTimeoutWithRecovery(state, result, () => armTimer(state));
-}
 
 /** Arms the cron timer for the next wake or a maintenance recheck. */
 export function armTimer(state: CronServiceState) {
@@ -61,10 +54,6 @@ export function armTimer(state: CronServiceState) {
   }
   if (!state.deps.cronEnabled) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
-    return;
-  }
-  if (state.restartRecoveryPending) {
-    state.deps.log.warn({}, "cron: armTimer skipped - restart recovery pending");
     return;
   }
   const nextAt = nextWakeAtMs(state);
@@ -155,10 +144,6 @@ async function onAdmittedTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused) {
     return;
   }
-  if (state.restartRecoveryPending) {
-    state.deps.log.warn({}, "cron: timer tick skipped - restart recovery pending");
-    return;
-  }
   if (state.running) {
     // Re-arm the timer so the scheduler keeps ticking even when a job is
     // still executing.  Without this, a long-running job (e.g. an agentTurn
@@ -173,28 +158,15 @@ async function onAdmittedTimer(state: CronServiceState) {
     armRunningRecheckTimer(state);
     return;
   }
-  let sessionReaperDefaultAgentId: string | undefined;
   state.running = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
   try {
-    const hasSessionReaperStore = Boolean(
-      state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
-    );
-    sessionReaperDefaultAgentId = hasSessionReaperStore
-      ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
-      : undefined;
-    if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
-      throw new Error("Cron session reaper requires the prepared configured default agent id.");
-    }
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (state.stopped || state.restartRecoveryPending) {
-        state.deps.log.warn(
-          { stopped: state.stopped, restartRecoveryPending: state.restartRecoveryPending },
-          "cron: due job reservation skipped - scheduler unavailable",
-        );
+      if (state.stopped) {
+        state.deps.log.warn({}, "cron: due job reservation skipped - scheduler unavailable");
         return [];
       }
       // Timer-owned liveness reconciliation is bounded to durable non-terminal markers.
@@ -243,7 +215,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
     let stopAdmittingDueJobs = false;
-    const hasSetupTimeoutRecoveryHandler = state.deps.onIsolatedAgentSetupTimeout !== undefined;
     const releaseUnclaimedDueJobReservationsWithRetry = async () => {
       const reservations = dueJobs
         .filter((_, index) => !claimedIndexes.has(index))
@@ -269,7 +240,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       completedResults = await pMap(
         dueJobs,
         async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
-          if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
+          if (stopAdmittingDueJobs || state.stopped) {
             stopAdmittingDueJobs = true;
             return pMapSkip;
           }
@@ -345,9 +316,9 @@ async function onAdmittedTimer(state: CronServiceState) {
                   return false;
                 }
                 if (
-                  hasSetupTimeoutRecoveryHandler &&
                   finalizedResults.length > 0 &&
-                  !setupTimeoutNotified
+                  !setupTimeoutNotified &&
+                  maybeNotifyIsolatedAgentSetupTimeout(state, result)
                 ) {
                   setupTimeoutNotified = true;
                   stopAdmittingDueJobs = true;
@@ -356,7 +327,6 @@ async function onAdmittedTimer(state: CronServiceState) {
                   } catch (err) {
                     reservationReleaseError = err;
                   }
-                  maybeNotifyIsolatedAgentSetupTimeout(state, result);
                 }
                 return true;
               },
@@ -441,47 +411,58 @@ async function onAdmittedTimer(state: CronServiceState) {
     try {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.
-      if (sessionReaperDefaultAgentId) {
-        const defaultAgentId = sessionReaperDefaultAgentId;
-        const storeTargets = new Map<string, { agentId: string; storePath: string }>();
-        const addStoreTarget = (agentId: string, storePath: string) => {
-          storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
+      if (state.deps.resolveSessionStorePath || state.deps.sessionStorePath) {
+        const configuredDefaultAgentId = (
+          state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId
+        )?.trim();
+        const defaultAgentId = configuredDefaultAgentId
+          ? normalizeAgentId(configuredDefaultAgentId)
+          : undefined;
+        const reaperAgentIds = new Set(
+          (state.deps.resolveSessionStoreAgentIds?.() ?? []).map(normalizeAgentId),
+        );
+        const resolveJobAgentId = (job: CronJob): string | undefined => {
+          if (typeof job.agentId === "string" && job.agentId.trim()) {
+            return normalizeAgentId(job.agentId);
+          }
+          try {
+            return resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
+          } catch {
+            // An ownerless legacy job needs a configured default for cleanup.
+            // Other prepared owners remain valid reaper targets without one.
+            return undefined;
+          }
         };
-        const resolveJobAgentId = (job: CronJob) =>
-          typeof job.agentId === "string" && job.agentId.trim()
-            ? normalizeAgentId(job.agentId)
-            : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
-        const configuredAgentIds = state.deps.resolveSessionStoreAgentIds?.() ?? [];
-        if (state.deps.resolveSessionStorePath) {
-          for (const agentId of configuredAgentIds) {
-            const normalizedAgentId = normalizeAgentId(agentId);
-            addStoreTarget(
-              normalizedAgentId,
-              state.deps.resolveSessionStorePath(normalizedAgentId),
-            );
+        for (const job of state.store?.jobs ?? []) {
+          const agentId = resolveJobAgentId(job);
+          if (agentId) {
+            reaperAgentIds.add(agentId);
           }
-          for (const job of state.store?.jobs ?? []) {
-            const agentId = resolveJobAgentId(job);
-            addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
-          }
-          addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
-        } else if (state.deps.sessionStorePath) {
-          for (const agentId of configuredAgentIds) {
-            addStoreTarget(normalizeAgentId(agentId), state.deps.sessionStorePath);
-          }
-          for (const job of state.store?.jobs ?? []) {
-            addStoreTarget(resolveJobAgentId(job), state.deps.sessionStorePath);
-          }
-          addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
+        }
+        if (defaultAgentId) {
+          reaperAgentIds.add(defaultAgentId);
         }
 
-        if (storeTargets.size > 0) {
+        if (reaperAgentIds.size > 0) {
           const nowMs = state.deps.nowMs();
-          for (const { agentId, storePath } of storeTargets.values()) {
+          for (const agentId of reaperAgentIds) {
+            if (state.deps.isAgentAvailable?.(agentId) === false) {
+              if (!state.reportedUnavailableReaperAgentIds.has(agentId)) {
+                state.reportedUnavailableReaperAgentIds.add(agentId);
+                state.deps.log.debug({ agentId }, "cron-reaper: skipped unavailable agent");
+              }
+              continue;
+            }
+            state.reportedUnavailableReaperAgentIds.delete(agentId);
+            const storePath = state.deps.resolveSessionStorePath
+              ? state.deps.resolveSessionStorePath(agentId)
+              : state.deps.sessionStorePath;
+            if (!storePath) {
+              continue;
+            }
             try {
               await sweepCronRunSessions({
                 agentId,
-                defaultAgentId,
                 cronConfig: state.deps.cronConfig,
                 sessionStorePath: storePath,
                 nowMs,

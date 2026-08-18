@@ -7,7 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
@@ -15,7 +15,6 @@ import type {
   SystemAgentConfiguredRoute,
   SystemAgentConfiguredRouteDeps,
 } from "./inference-route.js";
-import { createSystemAgentModelSelectionUpdater } from "./setup-apply.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
@@ -40,9 +39,10 @@ import {
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
-type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectDefaultInferenceRoute>>;
+type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;
 
 export type SetupInferenceActivationPersistenceState = {
   committedConfig: OpenClawConfig | undefined;
@@ -101,15 +101,18 @@ export async function persistActivatedSetupInference(input: {
   } = input;
   let committedConfig: OpenClawConfig | undefined;
   let { codexInstallOwnership } = state;
-  const projectRoute = (config: OpenClawConfig) => projectDefaultInferenceRoute(config, routeDeps);
+  const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
+  const projectRoute = (config: OpenClawConfig) =>
+    projectInferenceRoute(config, requestedAgentId, routeDeps);
   const resolveRoute = (config: OpenClawConfig) =>
-    resolveSystemAgentConfiguredRouteFromConfig(config, undefined, routeDeps);
+    resolveSystemAgentConfiguredRouteFromConfig(config, requestedAgentId, routeDeps);
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
   const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
         model: plan.persistModelRef,
+        ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       })
@@ -241,7 +244,11 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(latestRuntime, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(
+              latestRuntime,
+              stagedRoute.modelLabel,
+              requestedAgentId,
+            ),
             baselineTargetModelMetadata,
           )
         ) {
@@ -267,7 +274,7 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel, requestedAgentId),
             sourceTargetModelMetadata,
           )
         ) {

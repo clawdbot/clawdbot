@@ -741,7 +741,7 @@ export async function startQaGatewayChild(params: {
     const runningEnv = env;
     const throwActiveChildFailure = () => throwQaGatewayChildFailure(activeGetChildFailure, logs);
 
-    const spawnReplacementGatewayChild = async () => {
+    const spawnReplacementGatewayChildOnce = async () => {
       const spawnedReplacement = await spawnGatewayProcess(runningEnv);
       const nextChild = spawnedReplacement.child;
       const nextIdentity = spawnedReplacement.identity;
@@ -820,6 +820,32 @@ export async function startQaGatewayChild(params: {
           },
         });
         throw error;
+      }
+    };
+
+    const spawnReplacementGatewayChild = async () => {
+      const replacementLogMark = output.mark();
+      try {
+        return await spawnReplacementGatewayChildOnce();
+      } catch (error) {
+        const details = [
+          redactQaGatewayDebugText(output.readSince(replacementLogMark)),
+          formatErrorMessage(error),
+        ].join("\n");
+        const retry = resolveQaGatewayStartupRetry({
+          attempt: 1,
+          details,
+          migrationConvergenceRestartUsed: false,
+        });
+        if (retry?.kind !== "migration-convergence-restart") {
+          throw error;
+        }
+        const retryBuffer = Buffer.from(
+          "[qa-lab] replacement gateway completed plugin migration convergence; restarting once with the same state, config, and port\n",
+        );
+        output.push("internal", retryBuffer);
+        stdoutLog.write(retryBuffer);
+        return await spawnReplacementGatewayChildOnce();
       }
     };
 

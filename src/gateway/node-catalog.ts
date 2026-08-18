@@ -226,8 +226,21 @@ function buildEffectiveKnownNode(entry: {
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
   sessionHost: boolean;
+  workerSlots?: NodeListNode["workerSlots"];
+  workerBundle?: NodeListNode["workerBundle"];
+  issues?: NodeListNode["issues"];
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
+  const {
+    nodeId,
+    devicePairing,
+    nodePairing,
+    pendingNodePairing,
+    live,
+    sessionHost,
+    workerSlots,
+    workerBundle,
+    issues,
+  } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   const lastConnectedAtMs = maxDefinedTimestamp(
     nodePairing?.lastConnectedAtMs,
@@ -295,7 +308,11 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
+    computerUse: live?.computerUse,
     sessionHost,
+    ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
+    ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
+    ...(issues?.length ? { issues: [...issues] } : {}),
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
@@ -345,6 +362,9 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
+  workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
+  issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -398,6 +418,9 @@ export function createKnownNodeCatalog(params: {
         pendingNodePairing,
         live,
         sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
+        workerSlots: params.workerSlotsByNodeId?.get(nodeId),
+        workerBundle: params.workerBundleByNodeId?.get(nodeId),
+        issues: params.issuesByNodeId?.get(nodeId),
       }),
     });
   }

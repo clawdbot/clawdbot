@@ -118,6 +118,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
   tryResolveConfiguredAgentWorkspaceDir: () => "/workspace",
+  tryResolveSystemAgentWorkspaceDir: () => "/workspace",
 }));
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
@@ -539,8 +540,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
   function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
-      memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
-      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
+      embeddingProviders: [...providerIds, ...(options.embeddingProviderIds ?? [])].map((id) => ({
+        provider: { id },
+      })),
     } as never;
   }
 

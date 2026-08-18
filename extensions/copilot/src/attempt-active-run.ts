@@ -7,8 +7,7 @@ import {
 import type { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
-import type { attachEventBridge } from "./event-bridge.js";
-import type { SessionLike } from "./event-bridge.js";
+import type { attachEventBridge, SessionLike } from "./event-bridge.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 
 const DEFAULT_STEERING_DELIVERY_TIMEOUT_MS = 120_000;
@@ -25,13 +24,33 @@ export function registerCopilotActiveRun(params: {
   transcriptJournal: AttemptTranscriptJournal;
   userInputBridge: CopilotUserInputBridge;
 }) {
-  const cancelGatewayQuestionBestEffort = (resolvedBy: string) => {
-    void cancelPendingAgentQuestionForSession({
+  const cancelPendingUserInput = (resolvedBy: string) =>
+    cancelPendingAgentQuestionForSession({
       sessionKey: params.input.sessionKey ?? params.input.sessionId,
       resolvedBy,
-    }).catch((error: unknown) => {
+    });
+  const cancelGatewayQuestionBestEffort = (resolvedBy: string) => {
+    void cancelPendingUserInput(resolvedBy).catch((error: unknown) => {
       embeddedAgentLog.warn("failed to cancel copilot gateway question during shutdown", { error });
     });
+  };
+  const claimPendingUserInputAnswer = async (
+    text: string,
+    options?: CopilotQueueMessageOptions,
+  ) => {
+    if (options?.isInboundUserMessage !== true || options.images?.length) {
+      return false;
+    }
+    const claimed = await claimPendingAgentQuestionAnswer({
+      sessionKey: params.input.sessionKey ?? params.input.sessionId,
+      text,
+      persist: options.userTurnTranscriptRecorder
+        ? async () => {
+            await options.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    });
+    return claimed;
   };
   const queueMessage = async (text: string, options?: CopilotQueueMessageOptions) => {
     let acceptanceReported = false;
@@ -46,18 +65,7 @@ export function registerCopilotActiveRun(params: {
     };
     let messageId: string;
     try {
-      if (
-        options?.isInboundUserMessage === true &&
-        (await claimPendingAgentQuestionAnswer({
-          sessionKey: params.input.sessionKey ?? params.input.sessionId,
-          text,
-          persist: options.userTurnTranscriptRecorder
-            ? async () => {
-                await options.userTurnTranscriptRecorder?.persistApproved();
-              }
-            : undefined,
-        }))
-      ) {
+      if (await claimPendingUserInputAnswer(text, options)) {
         reportAcceptance(true);
         return undefined;
       }
@@ -94,6 +102,9 @@ export function registerCopilotActiveRun(params: {
   const activeRunHandle = {
     kind: "embedded" as const,
     runId: params.input.runId,
+    toolAuthorityFingerprint: params.input.toolAuthorityFingerprint,
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
     queueMessage,
     messageInjection: {
       isAvailable: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),

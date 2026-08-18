@@ -13,6 +13,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
+  describeSessionLinkRule,
   describeSessionsSearchTool,
   SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
@@ -49,6 +50,8 @@ const SESSIONS_SEARCH_MAX_SESSION_KEYS = 200;
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
+const SESSIONS_SEARCH_INDEXING_WARNING =
+  "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
@@ -73,7 +76,13 @@ const SessionsSearchOutputSchema = Type.Union([
   Type.Object(
     {
       results: Type.Array(SessionsSearchHitSchema),
+      sessionLinkRule: Type.Optional(
+        Type.String({
+          description: "How to build Control UI URLs for sessionKey values in this result.",
+        }),
+      ),
       indexing: Type.Optional(Type.Literal(true)),
+      warning: Type.Optional(Type.String()),
       truncated: Type.Optional(Type.Literal(true)),
     },
     { additionalProperties: false },
@@ -336,13 +345,14 @@ export function createSessionsSearchTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   return {
     label: "Sessions Search",
     name: "sessions_search",
     displaySummary: SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSearchTool(),
+    description: describeSessionsSearchTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsSearchToolSchema,
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
@@ -362,10 +372,11 @@ export function createSessionsSearchTool(opts?: {
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
       const requestedSessionKey = readToolStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.agentId,
           sandboxed: opts?.sandboxed,
         });
       const requesterAgentId = resolveSessionAgentId({
@@ -446,6 +457,7 @@ export function createSessionsSearchTool(opts?: {
         defaultAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility,
         a2aPolicy,
       });
@@ -458,9 +470,9 @@ export function createSessionsSearchTool(opts?: {
         const access = await resolveSessionToolAccess({
           action: "history",
           displayAction: "search",
-          defaultAgentId,
           requesterAgentId,
           requesterSessionKey: effectiveRequesterKey,
+          mainSessionKey,
           authorizationTargetSessionKey,
           targetAgentId: agentId,
           targetSessionKey: key,
@@ -588,7 +600,10 @@ export function createSessionsSearchTool(opts?: {
       const capped = capSearchHits(limited);
       return jsonResult({
         results: capped.items,
-        ...(indexing ? { indexing: true } : {}),
+        ...(opts?.sessionLinkBase
+          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+          : {}),
+        ...(indexing ? { indexing: true, warning: SESSIONS_SEARCH_INDEXING_WARNING } : {}),
         ...(backendTruncated || visibleHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),

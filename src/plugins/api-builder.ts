@@ -67,6 +67,7 @@ type BuildPluginApiParams = {
       | "registerTrustedToolPolicy"
       | "registerToolMetadata"
       | "registerControlUiDescriptor"
+      | "registerBoardWidgetContentKind"
       | "registerRuntimeLifecycle"
       | "registerAgentEventSubscription"
       | "emitAgentEvent"
@@ -83,7 +84,6 @@ type BuildPluginApiParams = {
       | "registerMemoryPromptSupplement"
       | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
-      | "registerMemoryEmbeddingProvider"
       | "on"
     >
   >;
@@ -152,6 +152,8 @@ const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"
 const noopRegisterTrustedToolPolicy: OpenClawPluginApi["registerTrustedToolPolicy"] = () => {};
 const noopRegisterToolMetadata: OpenClawPluginApi["registerToolMetadata"] = () => {};
 const noopRegisterControlUiDescriptor: OpenClawPluginApi["registerControlUiDescriptor"] = () => {};
+const noopRegisterBoardWidgetContentKind: OpenClawPluginApi["registerBoardWidgetContentKind"] =
+  () => {};
 const noopRegisterRuntimeLifecycle: OpenClawPluginApi["registerRuntimeLifecycle"] = () => {};
 const noopRegisterAgentEventSubscription: OpenClawPluginApi["registerAgentEventSubscription"] =
   () => {};
@@ -179,8 +181,6 @@ const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromp
 const noopRegisterMemoryPromptPreparation: OpenClawPluginApi["registerMemoryPromptPreparation"] =
   () => {};
 const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpusSupplement"] =
-  () => {};
-const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
@@ -269,6 +269,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerToolMetadata: handlers.registerToolMetadata ?? noopRegisterToolMetadata,
     registerControlUiDescriptor:
       handlers.registerControlUiDescriptor ?? noopRegisterControlUiDescriptor,
+    registerBoardWidgetContentKind:
+      handlers.registerBoardWidgetContentKind ?? noopRegisterBoardWidgetContentKind,
     registerRuntimeLifecycle: handlers.registerRuntimeLifecycle ?? noopRegisterRuntimeLifecycle,
     registerAgentEventSubscription:
       handlers.registerAgentEventSubscription ?? noopRegisterAgentEventSubscription,
@@ -292,8 +294,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryPromptPreparation ?? noopRegisterMemoryPromptPreparation,
     registerMemoryCorpusSupplement:
       handlers.registerMemoryCorpusSupplement ?? noopRegisterMemoryCorpusSupplement,
-    registerMemoryEmbeddingProvider:
-      handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };

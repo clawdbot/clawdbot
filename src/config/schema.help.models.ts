@@ -20,10 +20,6 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
-  "models.providers.*.contextWindow":
-    "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
-  "models.providers.*.contextTokens":
-    "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
   "models.providers.*.maxTokens":
     "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
   "models.providers.*.timeoutSeconds":

@@ -14,6 +14,7 @@ import type {
   WorkboardStatus,
 } from "../../lib/workboard/index.ts";
 import {
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -75,12 +76,12 @@ type UpdatingElement = HTMLElement & {
 };
 
 async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
-  await page.locator("openclaw-app").evaluate(async (element, shouldRequestUpdate) => {
-    const app = element as UpdatingElement;
+  await page.locator("openclaw-workboard-page").evaluate(async (element, shouldRequestUpdate) => {
+    const workboardPage = element as UpdatingElement;
     if (shouldRequestUpdate) {
-      app.requestUpdate?.();
+      workboardPage.requestUpdate?.();
     }
-    await app.updateComplete;
+    await workboardPage.updateComplete;
   }, requestUpdate);
 }
 
@@ -302,7 +303,7 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
       viewport,
     });
     page = await context.newPage();
-    page.setDefaultTimeout(10_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     return { context, page, rawVideoDir };
   } catch (error) {
     await page?.close().catch(() => {});
@@ -407,6 +408,21 @@ suite.define(() => {
         .locator(".workboard-toolbar__filters .workboard-select")
         .nth(1);
       const priorityCombobox = prioritySelect.getByRole("combobox");
+      const directRoutePickerStyles = await prioritySelect.evaluate((select) => {
+        const label = select.querySelector(".picker-select__label");
+        const copy = select.querySelector(".picker-select__copy");
+        if (!label || !copy) {
+          throw new Error("Workboard picker style probe did not render");
+        }
+        return {
+          copyDisplay: getComputedStyle(copy).display,
+          labelFontWeight: getComputedStyle(label).fontWeight,
+        };
+      });
+      expect(directRoutePickerStyles).toEqual({
+        copyDisplay: "grid",
+        labelFontWeight: "650",
+      });
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
@@ -566,8 +582,8 @@ suite.define(() => {
       });
       await captureScreenshot(writable.page, artifacts, "07-moved-running");
 
-      await writableGateway.deferNext("workboard.cards.update");
-      const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const updateBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.update"))
+        .length;
       const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
       await writableGateway.deferNext("sessions.list");
       await writableGateway.emitGatewayEvent("sessions.changed", {
@@ -587,17 +603,23 @@ suite.define(() => {
           sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
         ]),
       );
-      const syncRequest = await waitForNextRequest(
-        writableGateway,
-        "workboard.cards.update",
-        syncBefore,
+      await writable.page.waitForTimeout(250);
+      expect(await writableGateway.getRequests("workboard.cards.update")).toHaveLength(
+        updateBeforeLifecycle,
       );
-      expect(requestParams(syncRequest)).toMatchObject({ id: runningCard.id });
-      expect(requireRecord(requestParams(syncRequest).patch)).toMatchObject({
-        metadata: { lifecycleStatusSourceUpdatedAt: baseTime + 4 },
-        status: "review",
+
+      const listBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writableGateway.deferNext("workboard.cards.list");
+      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+        epoch: "workboard-e2e",
+        revision: 1,
       });
-      await writableGateway.resolveDeferred("workboard.cards.update", { card: reviewedCard });
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLifecycle);
+      await writableGateway.resolveDeferred(
+        "workboard.cards.list",
+        cardsListResponse([reviewedCard]),
+      );
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
       await reviewedCardSurface.getByRole("button", { name: "View details", exact: true }).click();
@@ -617,7 +639,7 @@ suite.define(() => {
       await writableGateway.deferNext("workboard.cards.list");
       await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
-        revision: 1,
+        revision: 2,
       });
       await writable.page.waitForTimeout(250);
       expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(

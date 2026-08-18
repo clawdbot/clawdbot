@@ -10,6 +10,7 @@ import { ExitError } from "../runtime.js";
 import {
   makeStartupConvergenceResult,
   stateCheckpointOptions,
+  startupCheckpointOptions,
   type StartupConvergenceResult,
   type StartupSmokeFailure,
   type StateMigrationResult,
@@ -54,6 +55,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
       warnings: [],
     }),
   ),
+);
+const migrateLegacyConfigMachineState = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
 );
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
@@ -123,7 +127,9 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
-const pluginMigrationFingerprint = vi.hoisted(() => vi.fn(() => "plugin-migrations"));
+const pluginMigrationFingerprint = vi.hoisted(() =>
+  vi.fn((_allowCurrentPluginMetadata?: boolean) => "plugin-migrations"),
+);
 type ConfigSnapshotWithPluginMetadataFixture = {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   pluginMetadataSnapshot?: {
@@ -137,9 +143,11 @@ const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
     (options?: {
       allowCurrentPluginMetadata?: boolean;
     }) => Promise<ConfigSnapshotWithPluginMetadataFixture>
-  >(async () => ({
+  >(async (options) => ({
     snapshot: await readConfigFileSnapshot(),
-    pluginMetadataSnapshot: { configFingerprint: pluginMigrationFingerprint() },
+    pluginMetadataSnapshot: {
+      configFingerprint: pluginMigrationFingerprint(options?.allowCurrentPluginMetadata),
+    },
   })),
 );
 const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
@@ -175,6 +183,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyConfigMachineState,
   migrateLegacyMediaPersistence,
 }));
 
@@ -653,11 +662,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.7.2-beta.7";
 
     try {
-      await runDoctorConfigPreflight({
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStartupMigrationCheckpoint: true,
-      });
+      await runDoctorConfigPreflight(startupCheckpointOptions);
     } finally {
       if (previousHostVersion === undefined) {
         delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
@@ -673,21 +678,17 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("refuses startup when plugin migration inputs change during convergence", async () => {
+  it("refuses startup when fresh plugin migration inputs change during convergence", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
-    pluginMigrationFingerprint
-      .mockReturnValueOnce("plugin-migrations-before")
-      .mockReturnValueOnce("plugin-migrations-before")
-      .mockReturnValueOnce("plugin-migrations-before")
-      .mockReturnValueOnce("plugin-migrations-after");
+    pluginMigrationFingerprint.mockImplementation((allowCurrentPluginMetadata) =>
+      runPostCorePluginConvergence.mock.calls.length > 0 && allowCurrentPluginMetadata === false
+        ? "plugin-migrations-after"
+        : "plugin-migrations-before",
+    );
 
-    await expect(
-      runDoctorConfigPreflight({
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStartupMigrationCheckpoint: true,
-      }),
-    ).rejects.toThrow("plugin migration inputs changed during startup convergence");
+    await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
+      "plugin migration inputs changed during startup convergence",
+    );
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
       env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
@@ -700,8 +701,13 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("records the startup migration checkpoint when state migrations only leave notices", async () => {
+  it("records the authoritative startup checkpoint after notices and runtime replacement", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
+    pluginMigrationFingerprint.mockImplementation((allowCurrentPluginMetadata) =>
+      runPostCorePluginConvergence.mock.calls.length > 0 && allowCurrentPluginMetadata !== false
+        ? "plugin-migrations-runtime-current"
+        : "plugin-migrations",
+    );
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: true,
       skipped: false,
@@ -710,11 +716,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       notices: ["Left reviewed residue in place."],
     });
 
-    await runDoctorConfigPreflight({
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-      requireStartupMigrationCheckpoint: true,
-    });
+    await runDoctorConfigPreflight(startupCheckpointOptions);
 
     const pinnedEnv = acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env;
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({

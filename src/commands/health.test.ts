@@ -164,7 +164,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("outputs JSON from gateway", async () => {
+  it("renders the gateway session path identically in JSON and text", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -198,6 +198,13 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+
+    runtime.log.mockClear();
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
   });
 
   it("prints the gateway probe duration in text output", async () => {
@@ -212,6 +219,42 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("shows every agent when an explicit fleet has no default owner", async () => {
+    const sessions = (agentId: string) => ({
+      path: `/tmp/${agentId}/sessions.json`,
+      count: 0,
+      recent: [],
+    });
+    const snapshot = {
+      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      defaultAgentId: undefined,
+      agents: [
+        { ...createMainAgentSummary(sessions("alpha")), agentId: "alpha", isDefault: false },
+        { ...createMainAgentSummary(sessions("beta")), agentId: "beta", isDefault: false },
+      ],
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      {
+        json: false,
+        timeoutMs: 1000,
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+      },
+      runtime as never,
+    );
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Session store (alpha): /tmp/alpha/sessions.json");
+    expect(output).toContain("Session store (beta): /tmp/beta/sessions.json");
+    expect(output).not.toContain("(default)");
   });
 
   it("prints persistent event-loop degradation duration in text output", async () => {
@@ -393,6 +436,7 @@ describe("healthCommand", () => {
     expect(gatewayRequest.token).toBe("setup-token");
     expect(gatewayRequest.password).toBe("setup-password");
     expect(gatewayRequest.ignoreEnvUrlOverride).toBe(true);
+    expect(gatewayRequest.sharedStateMode).toBe("read-only");
   });
 
   it("outputs JSON for gateway transport failures in JSON mode", async () => {

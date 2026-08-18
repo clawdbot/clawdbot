@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "desktop source panel",
@@ -43,6 +45,7 @@ const workerDesktopEnvironment = {
 } as const;
 
 async function openPalette(page: import("playwright").Page) {
+  await waitForControlUiGatewayReady(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });
@@ -156,7 +159,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const panel = page.locator("openclaw-desktop-panel");
+      const panel = await openDesktopPanel(page);
       await installDesktopClientFake(panel);
       const requestCount = (await gateway.getRequests()).length;
 
@@ -321,7 +324,11 @@ suite.define(() => {
           "environments.list": { environments: [] },
         },
       });
-      const panel = await openDesktopPanel(page);
+      await page.goto(`${suite.server.baseUrl}activity`);
+      await openPalette(page);
+      await page.getByRole("option", { name: "Desktop", exact: true }).click();
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.locator("section[aria-label='Desktop']").waitFor();
       await panel.getByRole("button", { name: "Dock to right", exact: true }).click();
       const bottom = await panel.evaluate((element) => {
         document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "40px");
@@ -645,9 +652,11 @@ suite.define(() => {
       await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
       await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
 
+      // Pin past the first launch so a slow runner can't return it stale.
+      const launchesBeforeRetry = (await gateway.getRequests("desktop.launch")).length;
       await gateway.deferNext("desktop.launch");
       await browserButton.click();
-      await gateway.waitForRequest("desktop.launch");
+      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeRetry });
       await gateway.rejectDeferred("desktop.launch", {
         message: "worker desktop app launch unavailable; try again",
       });
@@ -739,91 +748,23 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      // Route desktop observe sockets to an in-page RFB 3.8 server (security
-      // None) so the production DesktopClient drives the real noVNC client.
-      await page.evaluate(() => {
-        const GatewaySocket = window.WebSocket;
-        class FakeRfbSocket extends EventTarget {
-          binaryType = "arraybuffer";
-          protocol = "";
-          readyState = 0;
-          onerror: ((event: Event) => void) | null = null;
-          onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null = null;
-          onopen: ((event: Event) => void) | null = null;
-          onclose: ((event: CloseEvent) => void) | null = null;
-          private handshake = 0;
-          constructor() {
-            super();
-            setTimeout(() => {
-              if (this.readyState !== 0) {
-                return;
-              }
-              this.readyState = 1;
-              this.onopen?.(new Event("open"));
-              this.deliver(new TextEncoder().encode("RFB 003.008\n"));
-            }, 0);
-          }
-          private deliver(bytes: Uint8Array<ArrayBuffer>): void {
-            setTimeout(() => {
-              if (this.readyState === 1) {
-                this.onmessage?.(new MessageEvent("message", { data: bytes.buffer }));
-              }
-            }, 0);
-          }
-          send(): void {
-            // Handshake replies are fixed-size, so respond by stage instead of
-            // parsing: version -> security types, choice -> ok, init -> ServerInit.
-            this.handshake += 1;
-            if (this.handshake === 1) {
-              this.deliver(new Uint8Array([1, 1]));
-            } else if (this.handshake === 2) {
-              this.deliver(new Uint8Array([0, 0, 0, 0]));
-            } else if (this.handshake === 3) {
-              const name = new TextEncoder().encode("fake-desktop");
-              const init = new Uint8Array(24 + name.length);
-              const view = new DataView(init.buffer);
-              view.setUint16(0, 800);
-              view.setUint16(2, 600);
-              init.set([32, 24, 0, 1], 4);
-              view.setUint16(8, 255);
-              view.setUint16(10, 255);
-              view.setUint16(12, 255);
-              init.set([16, 8, 0], 14);
-              view.setUint32(20, name.length);
-              init.set(name, 24);
-              this.deliver(init);
-            }
-          }
-          close(code = 1000, reason = ""): void {
-            if (this.readyState === 3) {
-              return;
-            }
-            this.readyState = 3;
-            const event = new CloseEvent("close", { code, reason });
-            this.onclose?.(event);
-            this.dispatchEvent(new CloseEvent("close", { code, reason }));
-          }
-        }
-        const RoutedSocket = function (url: string, protocols?: string | string[]) {
-          return url.includes("/desktop/observe")
-            ? new FakeRfbSocket()
-            : new GatewaySocket(url, protocols);
-        };
-        RoutedSocket.prototype = GatewaySocket.prototype;
-        Object.assign(RoutedSocket, {
-          CONNECTING: 0,
-          OPEN: 1,
-          CLOSING: 2,
-          CLOSED: 3,
-        });
-        window.WebSocket = RoutedSocket as unknown as typeof WebSocket;
-      });
+      await page.goto(`${suite.server.baseUrl}activity`);
+      // The production DesktopClient still owns noVNC; only the RFB endpoint
+      // is scripted here so this CI test remains deterministic.
+      await installScriptedRfbServer(page);
 
       await openDirectDesktop(page, "worker-desktop-1");
       const panel = page.locator("openclaw-desktop-panel");
       await panel.locator("section[aria-label='Desktop']").waitFor();
-      await panel.locator(".desktop-surface canvas").waitFor();
+      const canvas = panel.locator(".desktop-surface canvas");
+      await canvas.waitFor();
+      const canvasHandle = await canvas.elementHandle();
+      await panel.getByRole("button", { name: "Enter fullscreen", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+      expect(await canvas.evaluate((element, original) => element === original, canvasHandle)).toBe(
+        true,
+      );
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
 
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       await takeControl.waitFor();
@@ -838,6 +779,9 @@ suite.define(() => {
       });
       await panel.locator(".desktop-surface canvas").waitFor();
       expect(await takeControl.count()).toBe(0);
+      expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+      await panel.getByRole("button", { name: "Exit fullscreen", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
     });
   });
 

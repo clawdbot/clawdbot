@@ -315,10 +315,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Goal",
       detailKeys: ["status"],
     },
-    update_plan: {
+    progress_card: {
       emoji: "🗺️",
-      title: "Update Plan",
-      detailKeys: ["explanation", "plan.0.step"],
+      title: "Progress Card",
+      detailKeys: ["plan.0.step", "markdown"],
     },
     ask_user: {
       emoji: "❓",
@@ -523,9 +523,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Apply Patch",
       detailKeys: [],
     },
+    // Historical transcripts retain the old name. This display-only entry
+    // preserves their presentation without restoring a runtime tool alias.
     image: {
       emoji: "🖼️",
       title: "Image",
+      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
+    },
+    view_image: {
+      emoji: "🖼️",
+      title: "View Image",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
     },
     image_generate: {
@@ -583,7 +590,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
-    sessions_yield: { emoji: "⏸️", title: "Yield", detailKeys: ["message"] },
+    sessions_yield: { emoji: "⏸️", title: "Yield" },
     tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
   },
 };

@@ -10,7 +10,10 @@ import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/se
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromWaitResult,
+  classifyAgentRunTerminalOutcome,
+} from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import {
@@ -340,23 +343,23 @@ export function applySubagentWaitOutcome(params: {
   const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
   // Capture/announcement callers can pass raw wait snapshots that bypass the
-  // primary normalizers, so preserve the shared timeout/cancel precedence here.
-  if (terminalOutcome?.status === "timeout") {
-    outcome = { status: "timeout" };
-  } else if (
-    terminalOutcome?.reason === "aborted" ||
-    terminalOutcome?.reason === "cancelled" ||
-    terminalOutcome?.reason === "superseded"
-  ) {
-    outcome = { status: "error", error: "subagent run terminated" };
-  } else if (
-    terminalOutcome?.reason === "blocked" ||
-    terminalOutcome?.reason === "abandoned" ||
-    terminalOutcome?.reason === "failed"
-  ) {
-    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
-  } else if (terminalOutcome?.reason === "completed") {
-    outcome = { status: "ok" };
+  // primary normalizers, so apply the canonical classification here instead
+  // of re-enumerating reason groups.
+  if (terminalOutcome) {
+    switch (classifyAgentRunTerminalOutcome(terminalOutcome)) {
+      case "timeout":
+        outcome = { status: "timeout" };
+        break;
+      case "cancellation":
+        outcome = { status: "error", error: "subagent run terminated" };
+        break;
+      case "failure":
+        outcome = { status: "error", error: terminalOutcome.error ?? waitError };
+        break;
+      case "success":
+        outcome = { status: "ok" };
+        break;
+    }
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;

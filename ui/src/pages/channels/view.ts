@@ -24,6 +24,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
@@ -38,7 +39,10 @@ export function renderChannels(props: ChannelsProps) {
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
-  const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+  const partialWarnings =
+    props.snapshot?.warnings
+      ?.filter((warning) => warning.trim())
+      .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
 

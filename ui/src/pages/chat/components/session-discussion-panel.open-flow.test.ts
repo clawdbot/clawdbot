@@ -12,6 +12,13 @@ import {
 
 afterEach(resetDiscussionPanelTestState);
 
+async function emptyStateText(panel: HTMLElement): Promise<string> {
+  const empty = panel.querySelector("openclaw-panel-empty-state");
+  expect(empty).not.toBeNull();
+  await empty!.updateComplete;
+  return empty!.shadowRoot?.textContent ?? "";
+}
+
 describe("session discussion panel", () => {
   it("shows the opening affordance while auto-open is in flight", async () => {
     const openDiscussion = vi
@@ -37,8 +44,8 @@ describe("session discussion panel", () => {
       canOpen: false,
     });
 
-    await vi.waitFor(() => {
-      expect(panel.textContent).toContain("Operator write access is required");
+    await vi.waitFor(async () => {
+      expect(await emptyStateText(panel)).toContain("Operator write access is required");
     });
     expect(openDiscussion).not.toHaveBeenCalled();
     expect(panel.querySelector("button")).toBeNull();
@@ -54,8 +61,8 @@ describe("session discussion panel", () => {
       openDiscussion,
       canOpen: false,
     });
-    await vi.waitFor(() => {
-      expect(panel.textContent).toContain("Operator write access is required");
+    await vi.waitFor(async () => {
+      expect(await emptyStateText(panel)).toContain("Operator write access is required");
     });
     expect(openDiscussion).not.toHaveBeenCalled();
 
@@ -185,8 +192,8 @@ describe("session discussion panel", () => {
       openDiscussion: vi.fn(),
     });
 
-    await vi.waitFor(() => {
-      expect(panel.textContent).toContain("cannot be embedded");
+    await vi.waitFor(async () => {
+      expect(await emptyStateText(panel)).toContain("cannot be embedded");
     });
     expect(panel.querySelector("iframe")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();

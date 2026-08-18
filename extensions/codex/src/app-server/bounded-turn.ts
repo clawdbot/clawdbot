@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
@@ -45,7 +46,7 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
@@ -249,7 +250,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRestrictedToolSurfaceHasNoManagedHooks(client, abortController.signal);
+      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        client,
+        { restrictedToolSurface: true },
+        abortController.signal,
+      );
     }
     const threadConfig = buildCodexRuntimeThreadConfig(
       resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
@@ -514,10 +519,7 @@ function createCodexBoundedTurnCollector(
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
   const assistantItemOrder: string[] = [];
-  let resolveCompletion: (() => void) | undefined;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
-  });
+  const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
 
   const rememberAssistantText = (itemId: string, text: string) => {
     if (!text) {
@@ -566,7 +568,7 @@ function createCodexBoundedTurnCollector(
     if (notification.method === "turn/completed") {
       completedTurn =
         readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
-      resolveCompletion?.();
+      resolveCompletion();
       return;
     }
     if (notification.method === "error") {
@@ -576,7 +578,7 @@ function createCodexBoundedTurnCollector(
       promptError =
         readCodexErrorNotification(notification.params)?.error.message ??
         `codex app-server ${taskLabel} turn failed`;
-      resolveCompletion?.();
+      resolveCompletion();
     }
   };
 

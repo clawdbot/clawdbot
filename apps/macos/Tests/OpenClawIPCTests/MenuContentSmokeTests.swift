@@ -86,6 +86,42 @@ struct MenuContentSmokeTests {
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
     }
 
+    @Test func `application termination waits for Peekaboo Bridge shutdown`() async {
+        let delegate = AppDelegate()
+        let cleanupStarted = AsyncStream<Void>.makeStream()
+        let cleanupRelease = AsyncStream<Void>.makeStream()
+        let deadlineRelease = AsyncStream<Void>.makeStream()
+        var startedIterator = cleanupStarted.stream.makeAsyncIterator()
+        var replies: [Bool] = []
+        delegate.nodeTerminationCleanup = {}
+        delegate.peekabooBridgeTerminationCleanup = {
+            cleanupStarted.continuation.yield()
+            for await _ in cleanupRelease.stream {
+                return
+            }
+        }
+        delegate.waitForTerminationCleanupDeadline = {
+            for await _ in deadlineRelease.stream {
+                return
+            }
+        }
+        delegate.applicationTerminationReply = { _, allow in
+            replies.append(allow)
+        }
+
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        _ = await startedIterator.next()
+        #expect(replies.isEmpty)
+
+        cleanupRelease.continuation.yield()
+        cleanupRelease.continuation.finish()
+        while replies.isEmpty {
+            await Task.yield()
+        }
+        #expect(replies == [true])
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
+    }
+
     @Test func `application termination deadline does not await stalled cleanup`() async {
         let delegate = AppDelegate()
         let cleanup = CancellationIgnoringTerminationCleanup()
@@ -119,83 +155,6 @@ struct MenuContentSmokeTests {
             await Task.yield()
         }
         #expect(replies == [true])
-    }
-
-    @Test func `connected configured gateway with inference opens dashboard instead of onboarding`() {
-        for mode in [AppState.ConnectionMode.local, .remote] {
-            let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
-                connectionMode: mode,
-                onboardingSeen: false,
-                systemAgentResumePending: false,
-                gatewayConnected: true,
-                configuredInferenceModel: " openai/gpt-5.5 ")
-
-            #expect(shouldOpen)
-        }
-    }
-
-    @Test func `connected configured gateway without inference keeps onboarding`() {
-        for model in [String?.none, "", "   "] {
-            let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
-                connectionMode: .remote,
-                onboardingSeen: false,
-                systemAgentResumePending: false,
-                gatewayConnected: true,
-                configuredInferenceModel: model)
-
-            #expect(!shouldOpen)
-        }
-    }
-
-    @Test func `disconnected configured gateway keeps onboarding recovery`() {
-        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
-            connectionMode: .remote,
-            onboardingSeen: false,
-            systemAgentResumePending: false,
-            gatewayConnected: false,
-            configuredInferenceModel: "openai/gpt-5.5")
-
-        #expect(!shouldOpen)
-    }
-
-    @Test func `stored connection mode without a pending handoff still opens dashboard`() {
-        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
-            connectionMode: .local,
-            onboardingSeen: false,
-            systemAgentResumePending: false,
-            gatewayConnected: true,
-            configuredInferenceModel: "openai/gpt-5.5")
-
-        #expect(shouldOpen)
-    }
-
-    @Test func `pending OpenClaw handoff survives relaunch and keeps onboarding`() {
-        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
-            connectionMode: .local,
-            onboardingSeen: false,
-            systemAgentResumePending: true,
-            gatewayConnected: true,
-            configuredInferenceModel: "openai/gpt-5.5")
-
-        #expect(!shouldOpen)
-    }
-
-    @Test func `first run inference result rejects selected gateway drift`() {
-        #expect(!AppDelegate.isCurrentFirstRunInferenceProbe(
-            expectedConnectionMode: .remote,
-            currentConnectionMode: .remote,
-            expectedRouteIdentity: "remote:id:gateway-a",
-            currentRouteIdentity: "remote:id:gateway-b",
-            gatewayRouteIsCurrent: true))
-    }
-
-    @Test func `first run inference result accepts matching selected gateway and route`() {
-        #expect(AppDelegate.isCurrentFirstRunInferenceProbe(
-            expectedConnectionMode: .remote,
-            currentConnectionMode: .remote,
-            expectedRouteIdentity: "remote:id:gateway-a",
-            currentRouteIdentity: "remote:id:gateway-a",
-            gatewayRouteIsCurrent: true))
     }
 
     @Test func `delayed first run presentation is cancelled by later completion`() {

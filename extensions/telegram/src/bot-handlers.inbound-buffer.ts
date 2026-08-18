@@ -10,7 +10,10 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
-import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
+import type {
+  TelegramAmbientTranscriptWatermark,
+  TelegramChannelIngressResolver,
+} from "./bot-message-context.types.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import {
   buildTelegramThreadParams,
@@ -37,6 +40,7 @@ export type TelegramDebounceEntry = {
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
+  channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
 type TextFragmentEntry = {
@@ -47,6 +51,7 @@ type TextFragmentEntry = {
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
   spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
+  channelIngressResolvers: TelegramChannelIngressResolver[];
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -62,6 +67,7 @@ type TelegramTextFragmentInput = {
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  channelIngressResolver: TelegramChannelIngressResolver;
 };
 
 interface TelegramInboundBuffers {
@@ -163,6 +169,7 @@ export function createTelegramInboundBuffers({
                   last.promptContextAmbientWatermark,
                 ),
                 ...spooledReplayOptions(participants),
+                channelIngressResolvers: last.channelIngressResolvers,
               },
               dispatchDedupeClaims: last.dispatchDedupeClaims,
               spooledReplayParticipants: participants,
@@ -205,7 +212,7 @@ export function createTelegramInboundBuffers({
               ),
               receivedAtMs: first.receivedAtMs,
               ingressBuffer: "inbound-debounce",
-              inboundDebounceMessages: entries.map((entry) => entry.msg),
+              bufferedMessages: entries.map((entry) => entry.msg),
               ...promptContextBoundaryOptions(
                 latestPromptContextMinTimestampMs(
                   ...entries.map((entry) => entry.promptContextMinTimestampMs),
@@ -215,6 +222,7 @@ export function createTelegramInboundBuffers({
                 ),
               ),
               ...spooledReplayOptions(participants),
+              channelIngressResolvers: entries.flatMap((entry) => entry.channelIngressResolvers),
             },
             dispatchDedupeClaims: mergeDispatchDedupeClaims(
               ...entries.map((entry) => entry.dispatchDedupeClaims),
@@ -287,6 +295,7 @@ export function createTelegramInboundBuffers({
   const flushTextFragments = async (entry: TextFragmentEntry) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+      const bufferedMessages = entry.messages.map((bufferedMessage) => bufferedMessage.msg);
       const first = entry.messages[0];
       const last = entry.messages.at(-1);
       if (!first || !last) {
@@ -294,10 +303,7 @@ export function createTelegramInboundBuffers({
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
-      const combinedTextParts = joinTelegramTextParts(
-        entry.messages.map((bufferedMessage) => bufferedMessage.msg),
-        "",
-      );
+      const combinedTextParts = joinTelegramTextParts(bufferedMessages, "");
       const combinedText = combinedTextParts.text;
       if (!combinedText.trim()) {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
@@ -317,16 +323,16 @@ export function createTelegramInboundBuffers({
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           messageIdOverride: String(last.msg.message_id),
-          ambientTranscriptBody: formatTelegramAmbientTranscriptBody(
-            entry.messages.map((bufferedMessage) => bufferedMessage.msg),
-          ),
+          ambientTranscriptBody: formatTelegramAmbientTranscriptBody(bufferedMessages),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "text-fragment",
+          bufferedMessages,
           ...promptContextBoundaryOptions(
             entry.promptContextMinTimestampMs,
             entry.promptContextAmbientWatermark,
           ),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
+          channelIngressResolvers: entry.channelIngressResolvers,
         },
         dispatchDedupeClaims: entry.dispatchDedupeClaims,
         spooledReplayParticipants: entry.spooledReplayParticipants,
@@ -356,11 +362,13 @@ export function createTelegramInboundBuffers({
   };
   const handleTextFragment = async (params: TelegramTextFragmentInput): Promise<boolean> => {
     const text = typeof params.msg.text === "string" ? params.msg.text : undefined;
-    const isCommandLike = (text ?? "").trim().startsWith("/");
+    const isCommand = getTelegramTextParts(params.msg).entities.some(
+      (entity) => entity.type === "bot_command" && entity.offset === 0,
+    );
     const senderId = params.msg.from?.id != null ? String(params.msg.from.id) : "unknown";
     const threadId = params.resolvedThreadId ?? params.dmThreadId;
     const key = `text:${params.chatId}:${threadId ?? "main"}:${senderId}`;
-    if (text && !isCommandLike && !params.isAbortControlMessage) {
+    if (text && !isCommand && !params.isAbortControlMessage) {
       const nowMs = Date.now();
       const existing = textBuffer.get(key);
       if (existing) {
@@ -393,6 +401,7 @@ export function createTelegramInboundBuffers({
             existing.dispatchDedupeClaims,
             params.dispatchDedupeClaims,
           );
+          existing.channelIngressResolvers.push(params.channelIngressResolver);
           scheduleTextFlush(existing);
           return true;
         }
@@ -410,6 +419,7 @@ export function createTelegramInboundBuffers({
           messages: [{ msg: params.msg, ctx: params.ctx, receivedAtMs: nowMs }],
           dispatchDedupeClaims: params.dispatchDedupeClaims,
           spooledReplayParticipants: participant ? [participant] : [],
+          channelIngressResolvers: [params.channelIngressResolver],
           ...promptContextBoundaryOptions(
             params.promptContextMinTimestampMs,
             params.promptContextAmbientWatermark,

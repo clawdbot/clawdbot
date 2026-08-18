@@ -1,7 +1,13 @@
-import "./prepared-model-runtime.test-harness.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
@@ -16,10 +22,6 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
-import {
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -603,11 +605,8 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(credentialFree).not.toBe(await prepareModelRuntimeSnapshot({ config, agentDir }));
-    expect(mocks.discoverAuthStorage).toHaveBeenNthCalledWith(
-      2,
-      agentDir,
-      expect.objectContaining({ readOnly: true, skipCredentials: true }),
-    );
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+    expect(getPreparedModelRuntimeAuthStore(credentialFree)).toEqual({ version: 1, profiles: {} });
   });
 
   it("reuses one lifecycle-owned snapshot without rediscovering files", async () => {
@@ -898,7 +897,7 @@ describe("prepared model runtime snapshots", () => {
     const skippedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig);
-    let finishLatestBuild!: () => void;
+    let finishLatestBuild: (() => void) | undefined;
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(
       async () =>
         await new Promise<{ agentDir: string; wrote: boolean }>((resolve) => {
@@ -929,7 +928,8 @@ describe("prepared model runtime snapshots", () => {
         Promise.resolve("pending"),
       ]),
     ).resolves.toBe("pending");
-    finishLatestBuild();
+    await vi.waitFor(() => expect(finishLatestBuild).toEqual(expect.any(Function)));
+    finishLatestBuild?.();
     await latest;
     await expect(read).resolves.toMatchObject({ config: latestConfig });
   });

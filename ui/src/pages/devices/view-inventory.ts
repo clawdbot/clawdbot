@@ -192,6 +192,13 @@ function entryWarnStatuses(
       </span>`,
     );
   }
+  if (entry.node?.workerBundle?.status === "missing") {
+    statuses.push(
+      html`<span title=${t("devices.inventory.workerMissingTitle")}>
+        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.workerMissing") })}
+      </span>`,
+    );
+  }
   if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
     statuses.push(
       html`<span title=${t("devices.inventory.manualWakeTitle")}>
@@ -224,6 +231,17 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
   }
   if (entry.version) {
     parts.push(entry.version);
+  }
+  if (entry.node?.workerBundle?.status === "installed") {
+    parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
+  }
+  if (entry.node?.workerSlots) {
+    parts.push(
+      t("devices.inventory.workerSlots", {
+        available: String(entry.node.workerSlots.available),
+        total: String(entry.node.workerSlots.total),
+      }),
+    );
   }
   if (entry.connected && entry.presence?.lastInputSeconds != null) {
     parts.push(formatInputRecency(entry.presence.lastInputSeconds));
@@ -277,7 +295,9 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
       ${tokens.length > 0
         ? html`
             <div class="muted">${t("devices.inventory.tokens")}</div>
-            ${tokens.map((token) => renderTokenRow(entry.id, token, props))}
+            ${tokens.map((token) =>
+              renderTokenRow({ id: entry.id, name: entry.name }, token, props),
+            )}
           `
         : nothing}
       ${renderCapabilityLine(t("devices.inventory.capabilities"), caps)}
@@ -293,7 +313,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
       ? entry.node.pendingRequestId
       : undefined;
   const connectionStatus = entry.connected
-    ? renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })
+    ? nothing
     : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
     <div class="settings-row device-entry">
@@ -370,7 +390,6 @@ function renderPresenceRow(
           : nothing}
       </div>
       <div class="settings-row__control">
-        ${renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })}
         ${gateway
           ? renderSettingsStatus({ kind: "accent", label: t("devices.inventory.gateway") })
           : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.unpaired") })}
@@ -379,7 +398,11 @@ function renderPresenceRow(
   `;
 }
 
-function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, props: DevicesProps) {
+function renderTokenRow(
+  device: { id: string; name: string },
+  tokenSummary: DeviceTokenSummary,
+  props: DevicesProps,
+) {
   const status = tokenSummary.revokedAtMs
     ? t("devices.inventory.revoked")
     : t("devices.inventory.active");
@@ -393,7 +416,7 @@ function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, prop
       <span class="device-entry__token-actions">
         <button
           class="btn btn--sm"
-          @click=${() => props.onDeviceRotate(deviceId, tokenSummary.role, tokenSummary.scopes)}
+          @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
         >
           ${t("devices.inventory.rotate")}
         </button>
@@ -402,7 +425,7 @@ function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, prop
           : html`
               <button
                 class="btn btn--sm danger"
-                @click=${() => props.onDeviceRevoke(deviceId, tokenSummary.role)}
+                @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
               >
                 ${t("devices.inventory.revoke")}
               </button>

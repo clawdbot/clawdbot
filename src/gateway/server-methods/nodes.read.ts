@@ -11,13 +11,27 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { parseNodeRunnerInventoryDeclaration } from "../../infra/node-runner-inventory.js";
+import {
+  formatNodeRunnerUpdateRequired,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
+  parseNodeRunnerInventoryDeclaration,
+} from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
-import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  collectNodeWorkerCapacityByNodeId,
+  isNodeRunnerSessionHost,
+  updateNodeRunnerInventory,
+} from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -76,25 +90,52 @@ function currentSessionHostNodeIds(params: {
   );
 }
 
-function listNodesForClient(params: {
+async function listNodesForClient(params: {
   client: GatewayClient | null;
+  context: GatewayRequestContext;
+  nodeId?: string;
   pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
   pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
   pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
   connectedNodes: readonly NodeSession[];
-  localNodeId: string | null;
-  nodeRegistry: GatewayRequestContext["nodeRegistry"];
-}): NodeListNode[] {
-  const sessionHostNodeIds = currentSessionHostNodeIds(params);
+}): Promise<NodeListNode[]> {
+  const sessionHostNodeIds = currentSessionHostNodeIds({
+    connectedNodes: params.connectedNodes,
+    nodeRegistry: params.context.nodeRegistry,
+  });
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
+  const workerSlotsByNodeId = collectNodeWorkerCapacityByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
     pairedNodes: params.pairedNodes,
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
     sessionHostNodeIds,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+    issuesByNodeId,
   });
-  const nodes = listKnownNodes(catalog).map((node) =>
-    node.nodeId === params.localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
+  const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
+    params.context.logGateway.warn(
+      `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
+    );
+    return null;
+  });
+  const catalogNodes = params.nodeId
+    ? [getKnownNode(catalog, params.nodeId)].filter(isVisibleNode)
+    : listKnownNodes(catalog);
+  const nodes = catalogNodes.map((node) =>
+    node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
   );
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
     return nodes;
@@ -250,20 +291,13 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       const devicePairing = await listDevicePairing();
       const nodePairing = projectNodePairing(devicePairing.paired);
       const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
-      const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
-        context.logGateway.warn(
-          `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
-        );
-        return null;
-      });
-      const nodes = listNodesForClient({
+      const nodes = await listNodesForClient({
         client,
+        context,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
         connectedNodes,
-        localNodeId,
-        nodeRegistry: context.nodeRegistry,
       });
       const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId
@@ -291,23 +325,16 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       const devicePairing = await listDevicePairing();
       const nodePairing = projectNodePairing(devicePairing.paired);
       const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
-      const catalog = createKnownNodeCatalog({
+      const nodes = await listNodesForClient({
+        client,
+        context,
+        nodeId: id,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
         connectedNodes,
-        sessionHostNodeIds: currentSessionHostNodeIds({
-          connectedNodes,
-          nodeRegistry: context.nodeRegistry,
-        }),
       });
-      const catalogNode = getKnownNode(catalog, id);
-      const node =
-        catalogNode && nodeInvokePolicy.canReadPendingNodePairing(client)
-          ? catalogNode
-          : catalogNode
-            ? safeNodeReadProjection(catalogNode, nodeReadCallerDeviceId(client))
-            : null;
+      const node = nodes[0];
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
@@ -403,6 +430,23 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       : null;
     if (!nodeId || !updated) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    if (
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] ===
+        NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          formatNodeRunnerUpdateRequired(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        ),
+      );
       return;
     }
     respond(true, { nodeId }, undefined);

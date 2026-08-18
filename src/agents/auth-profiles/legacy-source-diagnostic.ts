@@ -4,6 +4,7 @@ import { resolveOAuthDir } from "../../config/paths.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 const AUTH_PROFILE_MIGRATION_REQUIRED_CODE = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
@@ -29,8 +30,13 @@ function resolveAuthProfileOwnerPath(agentDir?: string): string {
   return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
 }
 
-function resolveAgentDir(agentDir?: string): string {
-  return path.dirname(resolveAuthProfileOwnerPath(agentDir));
+function resolveLegacySourceAgentDir(
+  agentDir: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return agentDir
+    ? path.dirname(resolveAuthProfileOwnerPath(agentDir))
+    : resolveSharedMainAuthAgentDir(env);
 }
 
 /** Detects retired auth files by name only; runtime code must never read their contents. */
@@ -38,13 +44,13 @@ export function listLegacyAuthProfileSources(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): LegacyAuthProfileSource[] {
-  const agentDir = resolveAgentDir(params.agentDir);
+  const agentDir = resolveLegacySourceAgentDir(params.agentDir, params.env);
   const candidates: LegacyAuthProfileSource[] = [
     { kind: "auth-profiles", path: path.join(agentDir, "auth-profiles.json") },
     { kind: "auth-state", path: path.join(agentDir, "auth-state.json") },
     { kind: "legacy-auth", path: path.join(agentDir, "auth.json") },
   ];
-  const sharedMainDir = path.dirname(resolveSharedAuthStorePath(params.env));
+  const sharedMainDir = resolveSharedMainAuthAgentDir(params.env);
   if (path.resolve(agentDir) === path.resolve(sharedMainDir)) {
     candidates.push({ kind: "legacy-oauth", path: resolveLegacyOAuthPath(params.env) });
   }
@@ -98,7 +104,7 @@ function listStartupLegacyAuthProfileSources(params: {
   sources: LegacyAuthProfileSource[];
   credentialSources: LegacyAuthProfileSource[];
 }> {
-  const sharedMainDir = path.dirname(resolveSharedAuthStorePath(params.env));
+  const sharedMainDir = resolveSharedMainAuthAgentDir(params.env);
   return [...new Set([...params.agentDirs, sharedMainDir])].map((agentDir) => {
     const sources = listLegacyAuthProfileSources({ agentDir, env: params.env });
     return { agentDir, sources, credentialSources: sources.filter(isCredentialSource) };

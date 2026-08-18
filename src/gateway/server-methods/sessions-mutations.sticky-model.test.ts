@@ -130,12 +130,16 @@ function client(scopes: string[]): GatewayClient {
   };
 }
 
-async function patchSession(params: Record<string, unknown>, scopes = ["operator.admin"]) {
+async function patchSession(
+  params: Record<string, unknown>,
+  scopes = ["operator.admin"],
+  requestContext = context(),
+) {
   const responses: Parameters<RespondFn>[] = [];
   await sessionMutationHandlers["sessions.patch"]?.({
     params,
     client: client(scopes),
-    context: context(),
+    context: requestContext,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   } as never);
   expect(responses).toHaveLength(1);
@@ -183,6 +187,47 @@ describe("sessions.patch sticky model persistence", () => {
       await vi.waitFor(() => expect(effects.mutateConfigFileWithRetry).toHaveBeenCalledOnce());
     },
   );
+
+  it("emits a groups invalidation when a patch first registers a category", async () => {
+    const sessionKey = "agent:main:dm:category-groups";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "session-category-groups", updatedAt: 1 },
+    );
+    const broadcast = vi.fn();
+    const subscribedContext = {
+      ...context(),
+      broadcastToConnIds: broadcast,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-groups"]),
+    } as unknown as GatewayRequestContext;
+
+    const first = await patchSession(
+      { key: sessionKey, category: "Fresh Category" },
+      ["operator.admin"],
+      subscribedContext,
+    );
+    expect(first[0]).toBe(true);
+    const groupsEvents = broadcast.mock.calls.filter(
+      (call) =>
+        call[0] === "sessions.changed" && (call[1] as { reason?: string }).reason === "groups",
+    );
+    expect(groupsEvents).toHaveLength(1);
+
+    // Re-assigning an already-registered category is not a catalog mutation.
+    broadcast.mockClear();
+    const second = await patchSession(
+      { key: sessionKey, category: "Fresh Category" },
+      ["operator.admin"],
+      subscribedContext,
+    );
+    expect(second[0]).toBe(true);
+    expect(
+      broadcast.mock.calls.filter(
+        (call) =>
+          call[0] === "sessions.changed" && (call[1] as { reason?: string }).reason === "groups",
+      ),
+    ).toHaveLength(0);
+  });
 
   it("keeps a write-scoped model switch session-only without persisting the configured default", async () => {
     const sessionKey = "agent:main:dm:non-admin";

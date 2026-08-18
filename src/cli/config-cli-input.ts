@@ -12,7 +12,6 @@ import {
   type SecretRefSource,
 } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { hasErrnoCode } from "../infra/errors.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -162,11 +161,11 @@ function parseProviderEnvEntries(
   for (const entry of entries) {
     const separator = entry.indexOf("=");
     if (separator <= 0) {
-      throw new Error(`--provider-env expects KEY=VALUE entries (received: "${entry}").`);
+      throw new Error("--provider-env expects KEY=*** entries.");
     }
     const key = entry.slice(0, separator).trim();
     if (!key) {
-      throw new Error(`--provider-env key must not be empty (received: "${entry}").`);
+      throw new Error("--provider-env key must not be empty.");
     }
     env[key] = entry.slice(separator + 1);
   }
@@ -515,14 +514,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
   if (stdin) {
     raw = await readStdinText();
   } else {
-    try {
-      raw = readConfigMutationFileSync(file as string, "--file");
-    } catch (err) {
-      if (hasErrnoCode(err, "ENOENT")) {
-        throw new Error(`--file not found: ${file}`, { cause: err });
-      }
-      throw err;
-    }
+    raw = readConfigMutationFileSync(file as string, "--file");
   }
   try {
     return JSON5.parse(raw);

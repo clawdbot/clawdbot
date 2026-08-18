@@ -38,7 +38,72 @@ suite.define(() => {
     }
   });
 
+  it("shows advertised machines and treats the catalog default as no override", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": { nodes: [] },
+        "environments.list": {
+          environments: [],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                {
+                  id: "standard",
+                  label: "Standard",
+                  description: "Balanced capacity",
+                  default: true,
+                },
+                { id: "fast", label: "Fast", description: "More compute" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-where-trigger");
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Cloud · aws" }).click();
+
+      await trigger.click();
+      await place.getByText("Machine", { exact: true }).waitFor();
+      const standard = place.locator('[data-value="machine:standard"]');
+      const fast = place.locator('[data-value="machine:fast"]');
+      await expect.poll(() => standard.getAttribute("aria-pressed")).toBe("true");
+      await expect.poll(() => standard.textContent()).toContain("Balanced capacity");
+      await expect.poll(() => standard.textContent()).toContain("Default");
+      await expect.poll(() => fast.textContent()).toContain("More compute");
+
+      await fast.click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await captureUiProof(page, "picker-cloud-machine-fast.png");
+
+      await standard.click();
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("refreshes destinations from gateway events while the picker stays open", async () => {
+    const updateIssue = {
+      code: "update-required",
+      action: "update-and-reconnect",
+      updateCommand: "openclaw update",
+      headlessReconnectCommand: "openclaw node restart",
+    };
     const lifecycleNowMs = Date.now();
     const disconnectedAtMs = lifecycleNowMs - 2 * 60_000;
     const connectedAtMs = disconnectedAtMs - 3 * 60_000;
@@ -70,6 +135,7 @@ suite.define(() => {
             },
           ],
         },
+        "sessions.create": { key: "agent:main:picker-refresh" },
         "environments.list": {
           environments: [
             { id: "gateway", type: "local", status: "available" },
@@ -241,6 +307,51 @@ suite.define(() => {
       await place.getByRole("button", { name: "Cloud · aws" }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
       await captureUiProof(page, "picker-after-live-regroup.png");
+
+      await newMac.click();
+      await expect.poll(() => trigger.getAttribute("data-exec-node")).toBe("new-mac");
+      const outdatedNodeRequests = (await gateway.getRequests("node.list")).length;
+      await gateway.setMethodResponse("node.list", {
+        nodes: [
+          {
+            nodeId: "existing-mac",
+            displayName: "Existing Mac",
+            connected: true,
+            commands: ["system.run"],
+          },
+          {
+            nodeId: "new-mac",
+            displayName: "New Mac",
+            connected: true,
+            commands: ["system.run"],
+            issues: [updateIssue],
+          },
+        ],
+      });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [
+          { id: "gateway", type: "local", status: "available" },
+          { id: "node:existing-mac", type: "node", status: "available" },
+          {
+            id: "node:new-mac",
+            type: "node",
+            status: "available",
+            issues: [updateIssue],
+          },
+        ],
+        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+      });
+      await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "new-mac" });
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBeGreaterThan(outdatedNodeRequests);
+      await expect.poll(() => trigger.getAttribute("data-exec-node")).toBeNull();
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+
+      await page.locator(".new-session-page__message").fill("use an eligible place");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("execNode");
     } finally {
       await context.close();
     }

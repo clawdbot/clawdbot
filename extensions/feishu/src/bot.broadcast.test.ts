@@ -1,4 +1,5 @@
 // Feishu tests cover bot.broadcast plugin behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
@@ -8,6 +9,33 @@ import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { setFeishuRuntime } from "./runtime.js";
+
+const failedFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 1,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: false,
+} as const;
 
 const {
   builtInboundContextCalls,
@@ -134,6 +162,7 @@ describe("broadcast dispatch", () => {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
       inbound: {
+        buildContext: buildChannelInboundEventContext,
         run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
@@ -447,7 +476,7 @@ describe("broadcast dispatch", () => {
       .mockResolvedValueOnce({
         queuedFinal: true,
         counts: { final: 1 },
-        failedCounts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: failedFinalReceipt,
       });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({

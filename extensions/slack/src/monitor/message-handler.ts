@@ -5,6 +5,11 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
@@ -101,6 +106,38 @@ export function createSlackMessageHandler(params: {
   dispatchReplayGuard?: SlackMessageDispatchReplayGuard;
 }): SlackMessageHandler {
   const { ctx, account, trackEvent, onPrepared } = params;
+  const startupRuntimeConfig = getRuntimeConfigSnapshot();
+  const startupRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  // Bind snapshot ownership once so unrelated process-global config cannot replace scoped monitors.
+  const followsRuntimeConfig =
+    !startupRuntimeConfig ||
+    startupRuntimeConfig === ctx.cfg ||
+    (startupRuntimeSourceConfig !== null &&
+      selectApplicableRuntimeConfig({
+        inputConfig: ctx.cfg,
+        runtimeConfig: startupRuntimeConfig,
+        runtimeSourceConfig: startupRuntimeSourceConfig,
+      }) === startupRuntimeConfig);
+  const runtimeContexts = new WeakMap<
+    NonNullable<SlackMonitorContext["cfg"]>,
+    SlackMonitorContext
+  >();
+  const resolveRuntimeContext = (): SlackMonitorContext => {
+    // Channel monitors outlive config reloads; pin one live snapshot per turn without reconnecting.
+    const runtimeConfig = getRuntimeConfigSnapshot();
+    if (!followsRuntimeConfig || !runtimeConfig || runtimeConfig === ctx.cfg) {
+      return ctx;
+    }
+    const cached = runtimeContexts.get(runtimeConfig);
+    if (cached) {
+      return cached;
+    }
+    // Keep identity, allowlists, and other mutable monitor state live while pinning this config.
+    const runtimeContext = Object.create(ctx) as SlackMonitorContext;
+    runtimeContext.cfg = runtimeConfig;
+    runtimeContexts.set(runtimeConfig, runtimeContext);
+    return runtimeContext;
+  };
   const dispatchReplayGuard =
     params.dispatchReplayGuard ??
     createSlackMessageDispatchReplayGuard({
@@ -274,8 +311,9 @@ export function createSlackMessageHandler(params: {
               let visibleDrop = false;
               let settlementHandedOff = false;
               try {
+                const runtimeContext = resolveRuntimeContext();
                 prepared = await prepareSlackMessage({
-                  ctx,
+                  ctx: runtimeContext,
                   account,
                   message: syntheticMessage,
                   opts: {

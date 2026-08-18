@@ -7,10 +7,11 @@ import type {
   SidebarWorkboardSnapshot,
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -21,12 +22,12 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
-import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
 import {
+  DEBUG_OVERLAY_ELEMENT,
   ensureOptionalElementForHost,
   isOptionalElementDefined,
   type OptionalCustomElement,
@@ -44,7 +45,7 @@ import {
 } from "./settings.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
+const EMPTY_OUTBOX_ATTENTION_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -63,16 +64,6 @@ function renderScopeUpgradeBanner(
   const state = readScopeUpgradeAvailability(snapshot);
   if (state.phase === "hidden") {
     return nothing;
-  }
-  if (state.phase === "guidance") {
-    return html`<openclaw-update-banner
-      .props=${{
-        statusBanner: {
-          tone: "warn",
-          text: t("connection.scopeUpgrade.guidance"),
-        },
-      }}
-    ></openclaw-update-banner>`;
   }
   void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
   if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
@@ -99,7 +90,6 @@ export interface ShellViewHost {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
-  readonly devicePairSetupElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -111,6 +101,10 @@ export interface ShellViewHost {
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
+  readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
+  readonly devicePairSetupLoadFailed: boolean;
+  loadDevicePairSetupRenderer(): void;
+  retryDevicePairSetupRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -133,6 +127,85 @@ export interface ShellViewHost {
   toggleNavigationSurface(trigger?: HTMLElement): void;
 }
 
+type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtime.ts");
+type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
+
+// Lazy: the pairing modal stays out of the startup chunk (perf budget); it is
+// fetched the first time an operator opens Pair mobile device. The eager shell
+// stays visible during that import so the action never appears to do nothing.
+function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupProps) {
+  if (!props.open) {
+    return nothing;
+  }
+  const renderer = host.devicePairSetupRenderer;
+  if (renderer) {
+    return renderer(props);
+  }
+  if (host.devicePairSetupLoadFailed) {
+    return renderDevicePairSetupLoadFailure(host, props);
+  }
+  host.loadDevicePairSetupRenderer();
+  return renderDevicePairSetupLoading(props);
+}
+
+function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("common.loading");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup" aria-busy="true">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p role="status">${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
+}
+
+// The pairing chunk failed to load while its overlay is open. Reuse the eager
+// modal chrome so the operator still gets a dialog, a reason, and a retry
+// instead of a silently empty surface.
+function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("devices.pairing.loadFailed");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p>${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button
+          class="btn btn--primary"
+          type="button"
+          @click=${() => host.retryDevicePairSetupRenderer()}
+        >
+          ${t("common.retry")}
+        </button>
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
+}
+
 export function renderApplicationShell(host: ShellViewHost) {
   const context = host.context;
   const runtime = host.runtime;
@@ -153,14 +226,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedDraftScopeKeys = outboxStoreRuntime
     ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
     : null;
-  const outboxCountForSession = outboxStoreRuntime
+  const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedOutboxes?.countsByScope.get(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ?? 0
-        );
+        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
+        return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
       }
-    : EMPTY_OUTBOX_COUNT_FOR_SESSION;
+    : EMPTY_OUTBOX_ATTENTION_COUNT_FOR_SESSION;
   const hasSessionDraft = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -201,8 +273,18 @@ export function renderApplicationShell(host: ShellViewHost) {
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
-    gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
+    // Scope-aware to match the store: admin-only, never advertisement alone.
+    canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
+  // Chat has an offline outbox, New Session keeps a local draft, and Appearance
+  // persists local preference intent for replay. Their server actions are
+  // independently gated; other pages cannot submit useful disconnected work.
+  const pageActionsBlocked =
+    gatewaySnapshot.phase === "reload-required" ||
+    (!gatewayConnected &&
+      activeRoute !== "chat" &&
+      activeRoute !== "new-session" &&
+      activeRoute !== "appearance");
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -244,12 +326,18 @@ export function renderApplicationShell(host: ShellViewHost) {
     mobileNavLayout,
   });
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
-  // Mirror the sidebar brand action: the open new-session route target wins
-  // over persisted selection so the collapsed cluster "+" uses the same agent.
-  const selectedAgentId = normalizeAgentId(
-    host.newSessionRouteAgentId() ||
-      (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
-  );
+  // A route query is navigation input, not an owner record. Let it override the
+  // live selection only after the roster proves that agent exists.
+  const requestedRouteAgentId = host.newSessionRouteAgentId();
+  const routeAgentId = requestedRouteAgentId ? normalizeAgentId(requestedRouteAgentId) : null;
+  const routeAgentIsKnown =
+    routeAgentId !== null &&
+    context.agents.state.agentsList?.agents.some(
+      (agent) => normalizeAgentId(agent.id) === routeAgentId,
+    ) === true;
+  const selectedAgentId = routeAgentIsKnown
+    ? routeAgentId
+    : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},
@@ -267,11 +355,9 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
+  const sessionRoute = isSessionRouteId(activeRoute);
+  const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
-  const inlineApproval = isSessionRouteId(activeRoute)
-    ? findInlineApproval(overlaySnapshot.approvalQueue, host.activeSessionKey)
-    : null;
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
@@ -283,7 +369,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
-      outboxCountForSession,
+      outboxAttentionCountForSession,
       hasSessionDraft,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
@@ -313,6 +399,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
       onRefresh: () => host.refreshControlUi(),
       onHoldUpdate: () => context.overlays.holdUpdate(),
+      onReviewUpdate: () => host.navigate("updates"),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -349,6 +436,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
         onRefresh: () => host.refreshControlUi(),
         onHoldUpdate: () => context.overlays.holdUpdate(),
+        onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -386,6 +474,9 @@ export function renderApplicationShell(host: ShellViewHost) {
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`
       : nothing}
+    ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
+      ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
+      : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
         ? "shell--nav-collapsed"
@@ -416,9 +507,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <openclaw-app-topbar
         .basePath=${context.basePath}
-        .searchDisabled=${false}
         .navDrawerOpen=${navDrawerOpen}
-        .onboarding=${onboarding}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -465,6 +554,19 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
+              ${navCollapsed && custodianPanelAvailable
+                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
+                      aria-label=${t("nav.askOpenClaw")}
+                      @click=${() =>
+                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
+                    >
+                      ${icons.lobster}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing}
             </div>
           `
         : nothing}
@@ -505,26 +607,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
       >
         ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
-        ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
-          ? // The migration banner is registered by a rare-flow dynamic import after first render.
-            customElements.get("openclaw-device-auth-migration-banner")
-            ? html`<openclaw-device-auth-migration-banner
-                .props=${{
-                  state: overlaySnapshot.deviceAuthMigration,
-                  onSecure: () => void context.overlays.secureThisBrowser(),
-                }}
-              ></openclaw-device-auth-migration-banner>`
-            : html`<openclaw-update-banner
-                .props=${{
-                  statusBanner: {
-                    tone: overlaySnapshot.deviceAuthMigration.error ? "danger" : "warn",
-                    text:
-                      overlaySnapshot.deviceAuthMigration.error ??
-                      t("login.deviceAuthMigration.banner"),
-                  },
-                }}
-              ></openclaw-update-banner>`
-          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
@@ -540,8 +622,16 @@ export function renderApplicationShell(host: ShellViewHost) {
           refreshRequired: overlaySnapshot.controlUiRefreshRequired,
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
+          onReviewUpdate: () => host.navigate("updates"),
         })}
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              ${t("connection.actionsUnavailable")}
+            </div>`
+          : nothing}
         <openclaw-router-outlet
+          ?inert=${pageActionsBlocked}
+          aria-disabled=${pageActionsBlocked ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
@@ -551,26 +641,34 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-terminal-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
+        .agentId=${selectedAgentId}
+        .sessionKey=${sessionRoute ? host.activeSessionKey : null}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      <openclaw-browser-panel
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${browserPanelAvailable}
-        .suppressed=${settingsTakeover}
-        .basePath=${context.basePath}
-        .authToken=${resolveControlUiAuthToken({
-          hello: gatewaySnapshot.hello,
-          settings: { token: context.gateway.connection.token },
-          password: context.gateway.connection.password,
-        })}
-      ></openclaw-browser-panel>
-      <openclaw-desktop-panel
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${desktopPanelAvailable}
-        .suppressed=${settingsTakeover}
-      ></openclaw-desktop-panel>
+      ${sessionRoute
+        ? nothing
+        : html`
+            <openclaw-browser-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${browserPanelAvailable}
+              .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
+              .authToken=${resolveControlUiAuthToken({
+                hello: gatewaySnapshot.hello,
+                settings: { token: context.gateway.connection.token },
+                password: context.gateway.connection.password,
+              })}
+            ></openclaw-browser-panel>
+            <openclaw-desktop-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${desktopPanelAvailable}
+              .suppressed=${settingsTakeover}
+            ></openclaw-desktop-panel>
+          `}
       <openclaw-custodian-panel
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}
@@ -581,9 +679,9 @@ export function renderApplicationShell(host: ShellViewHost) {
             .props=${{
               queue: overlaySnapshot.approvalQueue,
               busy: overlaySnapshot.approvalBusy,
+              canGrant: overlaySnapshot.approvalCanGrant,
               errors: overlaySnapshot.approvalErrors,
               nowMs: overlaySnapshot.approvalNowMs,
-              inlineApprovalId: inlineApproval?.id ?? null,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<typeof context.overlays.decideApproval>[0],
@@ -591,32 +689,23 @@ export function renderApplicationShell(host: ShellViewHost) {
             }}
           ></openclaw-exec-approval>`
         : nothing}
-      ${isOptionalElementDefined(host.devicePairSetupElement)
-        ? html`<openclaw-device-pair-setup
-            .props=${{
-              open: overlaySnapshot.devicePairSetupOpen,
-              loading: overlaySnapshot.devicePairSetupLoading,
-              error: overlaySnapshot.devicePairSetupError,
-              setup: overlaySnapshot.devicePairSetup,
-              access: overlaySnapshot.devicePairSetupAccess,
-              nowMs: Date.now(),
-              pendingCount: overlaySnapshot.devicePairPendingCount,
-              onRefresh: () => void context.overlays.refreshDevicePairSetup(),
-              onAccessChange: (
-                access: Parameters<typeof context.overlays.setDevicePairSetupAccess>[0],
-              ) => void context.overlays.setDevicePairSetupAccess(access),
-              onClose: () => context.overlays.closeDevicePairSetup(),
-              onManageDevices: () => {
-                context.overlays.closeDevicePairSetup();
-                host.navigate("devices");
-              },
-              onGetApps: () => {
-                context.overlays.closeDevicePairSetup();
-                host.navigate("apps");
-              },
-            }}
-          ></openclaw-device-pair-setup>`
-        : nothing}
+      ${renderLazyDevicePairSetup(host, {
+        open: overlaySnapshot.devicePairSetupOpen,
+        lifecycle: overlaySnapshot.devicePairSetupLifecycle,
+        nowMs: Date.now(),
+        pendingCount: overlaySnapshot.devicePairPendingCount,
+        onRefresh: () => void context.overlays.refreshDevicePairSetup(),
+        onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
+        onClose: () => context.overlays.closeDevicePairSetup(),
+        onManageDevices: () => {
+          context.overlays.closeDevicePairSetup();
+          host.navigate("devices");
+        },
+        onGetApps: () => {
+          context.overlays.closeDevicePairSetup();
+          host.navigate("apps");
+        },
+      })}
       ${onboarding && activeRoute !== "custodian"
         ? html`<openclaw-onboarding-memory-import
             .active=${true}

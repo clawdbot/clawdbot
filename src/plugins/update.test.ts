@@ -3638,6 +3638,29 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it.each(["security_scan_blocked", "security_scan_failed"] as const)(
+    "does not bypass %s with the beta npm fallback",
+    async (code) => {
+      installPluginFromNpmSpecMock.mockResolvedValueOnce({
+        ok: false,
+        code,
+        error: `install policy returned ${code}`,
+      });
+
+      const result = await updatePlugin(
+        createCodexAppServerInstallConfig({ spec: "openclaw-codex-app-server" }),
+        "openclaw-codex-app-server",
+        { updateChannel: "beta" },
+      );
+
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(result.outcomes[0]).toMatchObject({
+        status: "error",
+        message: `Failed to update openclaw-codex-app-server: install policy returned ${code}`,
+      });
+    },
+  );
+
   it.each([
     {
       name: "reports the fallback npm spec when beta fallback also fails",

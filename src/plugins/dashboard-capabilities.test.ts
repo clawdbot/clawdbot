@@ -35,6 +35,66 @@ function loadFixture(plugin: TempPlugin) {
 }
 
 describe("plugin dashboard declarations", () => {
+  it("publishes valid runtime board widget content kinds", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "diagram",
+      body: `module.exports = {
+        id: "diagram",
+        register(api) {
+          api.registerBoardWidgetContentKind({
+            kind: "diagram",
+            label: "Diagram",
+            resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+            validateSource(source) { if (!source.trim()) throw new Error("source required"); },
+            composeDocument({ source }) { return "<main>" + source + "</main>"; },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadFixture(plugin);
+
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+    expect(registry.boardWidgetContentKinds.get("diagram")).toMatchObject({
+      pluginId: "diagram",
+      pluginKind: "diagram:diagram",
+      definition: { kind: "diagram", label: "Diagram" },
+    });
+  });
+
+  it("fails plugin load atomically for invalid board widget content kinds", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "invalid-widget-kind",
+      body: `module.exports = {
+        id: "invalid-widget-kind",
+        register(api) {
+          api.registerBoardWidgetContentKind({
+            kind: "html",
+            label: "Invalid",
+            resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
+            validateSource() {},
+            composeDocument() { return ""; },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadFixture(plugin);
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+
+    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
+    expect(record?.error).toContain('kind "html" is invalid or reserved');
+    expect(registry.boardWidgetContentKinds.size).toBe(0);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: plugin.id,
+        code: "dashboard-declaration-invalid",
+      }),
+    );
+  });
+
   it("loads the Workboard bindings and dispatch action from its manifest", () => {
     const result = loadPluginManifest(path.join(process.cwd(), "extensions", "workboard"));
 

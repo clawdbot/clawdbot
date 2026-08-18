@@ -65,7 +65,6 @@ type NpmDistTagMirrorAuth = {
   source: "node-auth-token" | "npm-token" | "none";
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
-const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -361,29 +360,9 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.dependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
-    );
-  }
   if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
     errors.push(
       `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
-    );
-  }
-  if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json optionalDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it operator-installed.`,
-    );
-  }
-  if (pkg.peerDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json peerDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
-    );
-  }
-  if (pkg.peerDependenciesMeta?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json peerDependenciesMeta["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
     );
   }
 

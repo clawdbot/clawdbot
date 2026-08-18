@@ -13,8 +13,11 @@ import {
   areOAuthCredentialsEquivalent,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
-import { resolveSharedAuthStorePath } from "../../../agents/auth-profiles/path-resolve.js";
-import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../../../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
@@ -113,9 +116,8 @@ export async function scanStaleOAuthProfileShadows(params: {
 }): Promise<StaleOAuthProfileShadow[]> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const mainAgentDir = path.dirname(resolveSharedAuthStorePath(env));
-  const mainAuthPath = path.resolve(resolveAuthStorePath(mainAgentDir));
-  const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
+  const mainAuthPath = path.resolve(resolveAuthStorePath(resolveSharedMainAuthAgentDir(env)));
+  const mainStore = loadPersistedSharedAuthProfileStore(env);
   if (!mainStore) {
     return [];
   }
@@ -294,7 +296,7 @@ export async function repairStaleOAuthProfileShadows(params: {
     byAgentDir.set(hit.agentDir, existing);
   }
   for (const [agentDir, agentHits] of byAgentDir) {
-    const mainStore = loadPersistedAuthProfileStore(path.dirname(resolveSharedAuthStorePath(env)));
+    const mainStore = loadPersistedSharedAuthProfileStore(env);
     if (!mainStore) {
       continue;
     }

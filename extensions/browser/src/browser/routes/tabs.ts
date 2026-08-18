@@ -321,8 +321,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       targetId,
       mutate: async (profileCtx, id) => {
-        await profileCtx.closeTab(id, targetIdMode === "raw" ? { exactTargetId: true } : undefined);
-        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, id);
+        const canonicalTargetId = await profileCtx.closeTab(
+          id,
+          targetIdMode === "raw" ? { exactTargetId: true } : undefined,
+        );
+        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, canonicalTargetId);
+        return canonicalTargetId;
       },
     });
   });

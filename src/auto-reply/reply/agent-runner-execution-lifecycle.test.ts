@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import {
+  configureChannelAdmissionDecisionSink,
+  configureChannelAdmissionEvidenceCollection,
+} from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
@@ -13,17 +19,87 @@ import {
   createMockReplyOperation,
   requireRecord,
   expectMockCallArgFields,
+  requireMockCall,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  hasReplyOperationExecutionStarted,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("attributes one admitted channel participant before its admission decision", async () => {
+    const order: string[] = [];
+    const identityWork: unknown[] = [];
+    const decisionReceipts: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
+      order.push("identity");
+      identityWork.push(work);
+      return true;
+    });
+    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
+      order.push("decision");
+      decisionReceipts.push(receipt);
+      return true;
+    });
+    try {
+      const followupRun = createFollowupRun();
+      followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
+      followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        channelId: "whatsapp",
+        accountId: "default",
+        participantId: "person-42",
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        const admission = (
+          params as EmbeddedAgentParams & {
+            preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> };
+          }
+        ).preparedRunAdmission;
+        await admission.admit("embedded");
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+      });
+
+      expect(order).toEqual(["identity", "decision"]);
+      expect(identityWork).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            ingress: { kind: "channel", state: "present" },
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: '["whatsapp","default","person-42"]',
+            },
+          },
+        },
+      ]);
+      expect(decisionReceipts).toMatchObject([
+        {
+          action: { family: "channel", operation: "admission" },
+          enforcement: { coverageState: "attribution-only" },
+        },
+      ]);
+    } finally {
+      clearDecisionSink();
+      clearIdentitySink();
+      clearCollection();
+    }
+  });
+
   it("passes the reply abort signal to fallback orchestration and candidates", async () => {
     const { replyOperation } = createMockReplyOperation();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -383,32 +459,44 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("signals typing from embedded harness execution phases before assistant text", async () => {
+  it("signals typing and records the execution boundary before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:execution-boundary",
+      sessionId: "execution-boundary",
+      resetTriggered: false,
+    });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
       params.onExecutionPhase?.({
         phase: "model_call_started",
         provider: "openai",
         model: "gpt-5.4",
       });
+      expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(true);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onAgentRunStart,
-        } satisfies GetReplyOptions,
-      }),
-      typingSignals,
-    });
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({
+          opts: {
+            onAgentRunStart,
+          } satisfies GetReplyOptions,
+        }),
+        replyOperation,
+        typingSignals,
+      });
 
-    expect(result.kind).toBe("success");
-    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
-    expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
-    expect(onAgentRunStart).toHaveBeenCalledOnce();
+      expect(result.kind).toBe("success");
+      expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
+      expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
+      expect(onAgentRunStart).toHaveBeenCalledOnce();
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("injects pending MCP App context exactly once without changing transcript text", async () => {
@@ -549,6 +637,86 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
+  it("requires explicit message targets on heartbeat CLI runs", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6"),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    const params = createMinimalRunAgentTurnParams({
+      followupRun,
+      opts: { isHeartbeat: true },
+    });
+    params.isHeartbeat = true;
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(params);
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      trigger: "heartbeat",
+      requireExplicitMessageTarget: true,
+    });
+  });
+
+  it("requires explicit message targets on heartbeat embedded runs", async () => {
+    // Heartbeat ambient From/To must not become implicit message-tool recipients.
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const params = createMinimalRunAgentTurnParams({
+      opts: { isHeartbeat: true },
+    });
+    params.isHeartbeat = true;
+
+    await executeAgentTurn(params);
+
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "heartbeat embedded run params", {
+      trigger: "heartbeat",
+      requireExplicitMessageTarget: true,
+    });
+  });
+
+  it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams());
+
+    const embeddedParams = requireMockCall(
+      state.runEmbeddedAgentMock,
+      0,
+      "ordinary embedded run params",
+    )[0] as Record<string, unknown>;
+    expect(embeddedParams).not.toHaveProperty("requireExplicitMessageTarget");
+  });
+
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
@@ -596,6 +764,62 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
     expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consume channel evidence until a retry reaches runtime admission", async () => {
+    const captured: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearSink = configureExecutionIdentityAdmissionSink((work) => {
+      captured.push(work);
+      return true;
+    });
+    try {
+      const followupRun = createFollowupRun();
+      followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
+      followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        channelId: "whatsapp",
+        participantId: "person-1",
+      });
+      state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await expect(
+        executeAgentTurn(
+          createMinimalRunAgentTurnParams({
+            followupRun,
+            opts: { runId: "preflight-failure" },
+          }),
+        ),
+      ).rejects.toThrow("invalid image metadata");
+      expect(captured).toEqual([]);
+
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        const admission = (
+          params as EmbeddedAgentParams & {
+            preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> };
+          }
+        ).preparedRunAdmission;
+        await admission.admit("embedded");
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+      await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          opts: { runId: "preflight-success" },
+        }),
+      );
+
+      expect(captured).toHaveLength(1);
+      expect(captured).toMatchObject([
+        {
+          kind: "capture",
+          envelope: { ingress: { state: "present" }, invoker: { state: "present" } },
+        },
+      ]);
+    } finally {
+      clearSink();
+      clearCollection();
+    }
   });
 
   it("passes runtime toolsAllow to embedded agent runs", async () => {

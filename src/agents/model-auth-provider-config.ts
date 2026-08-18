@@ -12,7 +12,7 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -35,6 +35,7 @@ import {
 } from "./model-auth-markers.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { isLocalProviderBaseUrl } from "./model-provider-local.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
 const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
   "docker.orb.internal",
@@ -106,22 +107,6 @@ type ResolvedCustomProviderApiKey = {
   apiKey: string;
   source: string;
 };
-
-function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
-}
 
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
@@ -373,6 +358,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
 export function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
@@ -382,6 +368,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (
     isStoredCredentialCompatibleWithAuthProvider({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       provider: params.provider,
       credential: params.credential,
     })
@@ -401,6 +388,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
 /** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
@@ -429,7 +417,12 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
     };
   }
   if (
-    !canUseProfileAsProviderEntryApiKey({ cfg: params.cfg, provider: params.provider, credential })
+    !canUseProfileAsProviderEntryApiKey({
+      cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
+      provider: params.provider,
+      credential,
+    })
   ) {
     return {
       kind: "profile-incompatible",

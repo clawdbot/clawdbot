@@ -1,8 +1,17 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
+import {
+  isAuditLedgerEnabled,
+  isExecutionIdentityCollectionEnabled,
+  resolveAuditMessageMode,
+} from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
+import {
+  configureChannelAdmissionDecisionSink,
+  configureChannelAdmissionEvidenceCollection,
+} from "../channels/message-access/admission-evidence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -77,7 +86,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  terminalSessions: Pick<TerminalSessionManager, "closeAgentSessions">;
+  terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -89,6 +98,15 @@ export function startGatewayEventSubscriptions(params: {
   });
   const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
     auditRecorder.recordExecutionIdentity,
+  );
+  const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
+    isExecutionIdentityCollectionEnabled(runtimeConfig),
+  );
+  const clearChannelAdmissionDecisionSink = configureChannelAdmissionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
+  const clearMessageActionDecisionSink = configureMessageActionDecisionSink(
+    auditRecorder.recordExecutionDecision,
   );
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
@@ -351,6 +369,9 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
     clearExecutionIdentityAdmissionSink();
+    clearChannelAdmissionEvidenceCollection();
+    clearChannelAdmissionDecisionSink();
+    clearMessageActionDecisionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())
@@ -410,7 +431,7 @@ export function startGatewayEventSubscriptions(params: {
       params.broadcast("task", payload, { dropIfSlow: true });
       const taskId = terminalTaskId(event);
       if (taskId) {
-        params.terminalSessions.closeAgentSessions(taskId);
+        params.terminalSessions.closeTaskSessions(taskId);
       }
     },
   };
