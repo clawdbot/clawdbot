@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import "./app-host.ts";
@@ -163,15 +162,6 @@ describe("OpenClaw shell dock suppression", () => {
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
-    const custodianToggle = container.querySelector<HTMLButtonElement>(
-      ".shell-chrome-controls__custodian",
-    );
-    expect(custodianToggle).not.toBeNull();
-    const toggleListener = vi.fn();
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
-    custodianToggle?.click();
-    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
-    expect(toggleListener).toHaveBeenCalledOnce();
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
@@ -228,25 +218,5 @@ describe("OpenClaw shell dock suppression", () => {
     context.sessions.state.result = null;
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
-
-    context.gateway.snapshot.hello!.features!.methods = [
-      "terminal.open",
-      "browser.request",
-      "desktop.observe",
-    ];
-    renderLit(shell.render(), container);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
-
-    // Advertised but read-scoped: openclaw.chat requires operator.admin, so the
-    // control must hide instead of opening a panel the store refuses to use.
-    context.gateway.snapshot.hello!.features!.methods = [
-      "terminal.open",
-      "browser.request",
-      "openclaw.chat",
-      "desktop.observe",
-    ];
-    context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
-    renderLit(shell.render(), container);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   });
 });

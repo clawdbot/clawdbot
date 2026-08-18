@@ -14,6 +14,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
@@ -30,6 +31,7 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -249,6 +251,11 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
+  const custodianPanelAvailable = canCallGatewayMethod(
+    host.sessionDataContext?.gateway.snapshot,
+    "openclaw.chat",
+    "operator.admin",
+  );
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
@@ -287,7 +294,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         >
           <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
           <span class="sidebar-identity-card__text">
-            <span class="sidebar-identity-card__name">${selfLabel}</span>
+            <span class="sidebar-identity-card__name"
+              >${selfLabel}<span class="sidebar-identity-card__chevron" aria-hidden="true"
+                >${icons.chevronDown}</span
+              ></span
+            >
             ${host.offline
               ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
                   >${t("connection.reconnecting")}</span
@@ -314,14 +325,23 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                     >`
                   : nothing}
           </span>
-          <span class="sidebar-identity-card__chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
+          <span class="sidebar-identity-card__status" role="status" aria-live="polite"
+            >${host.offline ? t("connection.reconnecting") : ""}</span
           >
         </button>
       </openclaw-tooltip>
-      <span class="sidebar-identity-card__status" role="status" aria-live="polite"
-        >${host.offline ? t("connection.reconnecting") : ""}</span
-      >
+      ${custodianPanelAvailable
+        ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
+            <button
+              type="button"
+              class="sidebar-brand__icon sidebar-footer-bar__custodian"
+              aria-label=${t("nav.askOpenClaw")}
+              @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
+            >
+              ${icons.lobster}
+            </button>
+          </openclaw-tooltip>`
+        : nothing}
     </div>
   `;
 }
