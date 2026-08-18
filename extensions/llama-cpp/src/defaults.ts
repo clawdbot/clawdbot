@@ -31,6 +31,12 @@ export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
 // the first turn. 64K leaves real headroom for history and tool output; Gemma 4
 // supports far more, and the 16 GiB offer floor already bounds weaker machines.
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
+// The managed embedding server gets its own, much smaller context. The memory
+// host bounds local embedding inputs at 2,048 tokens before they reach the
+// server, so any larger KV reservation is pure waste: without a cap llama.cpp
+// falls back to the model's full training context (32K on Qwen3-Embedding) per
+// slot, which reserved ~5 GB and OOM-killed 16 GB gateways (#125792).
+export const DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE = 2048;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";

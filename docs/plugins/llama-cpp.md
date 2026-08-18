@@ -40,7 +40,9 @@ The default chat model remains:
 Gemma 4 E4B IT Q4_K_M is about 5.0 GB. OpenClaw offers that download only on
 machines with at least 16 GiB of RAM. The default context cap is 65,536 tokens,
 which the full agent system prompt requires. The bundled EmbeddingGemma model is
-about 0.3 GB.
+about 0.3 GB. The managed embedding server runs with its own 2,048-token
+context, matching the memory host's local embedding input bound, so it does not
+reserve the embedding model's full training context per slot.
 
 Discovery is read-only. It reports a prepared choice only when the managed
 binary, server preset, and selected model already exist; it never installs or

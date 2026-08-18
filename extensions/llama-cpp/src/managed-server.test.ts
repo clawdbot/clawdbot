@@ -85,8 +85,11 @@ describe("managed llama-server", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
+      // The embedding stanza owns its own small ctx-size (memory host bounds local
+      // embedding inputs at 2,048); it must never inherit the chat context, which
+      // is what let llama.cpp reserve the model's full training context per slot.
       expect(preset).toContain(
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nembedding = true",
+        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nctx-size = 2048\nembedding = true",
       );
       expect(preset).not.toMatch(/mmproj|draft/iu);
     } finally {
@@ -115,7 +118,7 @@ describe("managed llama-server", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toBe(
-        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nctx-size = 2048\nembedding = true\n",
       );
       expect(preset).not.toContain("jinja");
     } finally {
