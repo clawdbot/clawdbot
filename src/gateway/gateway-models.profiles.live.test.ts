@@ -1399,11 +1399,21 @@ function createExplicitLiveFallbackModel(provider: string, id: string): Model {
       reasoning: true,
     },
   });
+  const supportsXhigh = thinkingProfile?.levels.some((level) => level.id === "xhigh") ?? false;
+  const supportsMax = thinkingProfile?.levels.some((level) => level.id === "max") ?? false;
   return {
     ...createGatewayLiveTestModel(provider, id),
     contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
     maxTokens: 4_096,
     reasoning: thinkingProfile?.levels.some((level) => level.id !== "off") ?? false,
+    ...(supportsXhigh || supportsMax
+      ? {
+          thinkingLevelMap: {
+            ...(supportsXhigh ? { xhigh: "xhigh" } : {}),
+            ...(supportsMax ? { max: "max" } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -3961,6 +3971,7 @@ describe("OpenAI Ultra wire capture", () => {
     const candidate = createExplicitLiveFallbackModel("openai", "gpt-5.6-sol");
 
     expect(candidate.reasoning).toBe(true);
+    expect(candidate.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
     expect(
       resolveOpenAIUltraUpstreamBaseUrl({
         candidate,
