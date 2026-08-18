@@ -79,13 +79,16 @@ type WorkerPlacementFailedReclaimBarrier = (
   },
 ) => Promise<WorkerReclaimPlacement>;
 
-type WorkerPlacementDispatchOptions = {
+export type WorkerPlacementReclaimBarriers = {
+  runReclaimBarrier: WorkerPlacementReclaimBarrier;
+  runFailedReclaimBarrier: WorkerPlacementFailedReclaimBarrier;
+};
+
+type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runActivationBarrier: WorkerActivationBarrier;
-  runReclaimBarrier: WorkerPlacementReclaimBarrier;
-  runFailedReclaimBarrier: WorkerPlacementFailedReclaimBarrier;
   runMoveBarrier: WorkerPlacementMoveBarrier;
   resolveMoveDestination: (
     identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
@@ -607,11 +610,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           ...request,
           authorize,
           reclaim: async () => {
-            const current = placements.get(request.sessionId);
-            if (current?.state !== "failed") {
+            const failedPlacement = placements.get(request.sessionId);
+            if (failedPlacement?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
             }
-            await failure.retryFailedTeardown(current);
+            await failure.retryFailedTeardown(failedPlacement);
             const failed = placements.get(request.sessionId);
             if (failed?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
