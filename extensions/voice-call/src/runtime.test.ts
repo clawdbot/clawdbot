@@ -617,6 +617,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       throw new Error("expected realtime handler tools to be an array");
     }
     expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
+      "openclaw_end_call",
       "openclaw_agent_consult",
       "custom_tool",
     ]);
@@ -651,6 +652,53 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
+  });
+
+  it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    config.realtime.toolPolicy = "none";
+    config.realtime.tools = [
+      {
+        type: "function",
+        name: "openclaw_end_call",
+        description: "Configured replacement",
+        parameters: { type: "object", properties: { callId: { type: "string" } } },
+      },
+      {
+        type: "function",
+        name: "custom_tool",
+        description: "Custom tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: {} as never,
+    });
+
+    const realtimeHandlerOptions = requireRecord(
+      mocks.realtimeHandlerCtorArgs[0]?.[0],
+      "realtime handler options",
+    );
+    const tools = realtimeHandlerOptions.tools;
+    if (!Array.isArray(tools)) {
+      throw new Error("expected realtime handler tools to be an array");
+    }
+    expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
+      "openclaw_end_call",
+      "custom_tool",
+    ]);
+    const endCallTool = requireRecord(tools[0], "end-call tool");
+    expect(endCallTool.description).toContain("final words");
+    expect(endCallTool.description).toContain("no further reply");
+    expect(requireRecord(endCallTool.parameters, "end-call parameters")).toEqual({
+      type: "object",
+      properties: {},
+    });
+    expect(mocks.realtimeHandlerRegisterToolHandler).not.toHaveBeenCalled();
   });
 
   it("rejects a realtime consult whose lifecycle owner already aborted", async () => {

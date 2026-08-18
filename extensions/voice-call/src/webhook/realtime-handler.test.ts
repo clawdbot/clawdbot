@@ -1356,6 +1356,197 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("ends the closure-bound current call without requesting another provider response", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const closeBridge = vi.fn();
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({ close: closeBridge, submitToolResult });
+    });
+    const call = makeCallRecord("CA-end-current");
+    const endCall = vi.fn(async (_callId: string) => ({ success: true }));
+    const handler = makeHandler(undefined, {
+      manager: {
+        endCall,
+        getCallByProviderCallId: vi.fn(() => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-end-current", callSid: "CA-end-current" },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledOnce());
+
+      const closed = waitForClose(ws);
+      callbacks?.onToolCall?.({
+        itemId: "item-end-current",
+        callId: "provider-end-current",
+        name: "openclaw_end_call",
+        args: {},
+      });
+
+      await waitForRealtimeTest(() => {
+        expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1");
+        expect(closeBridge).toHaveBeenCalledOnce();
+      });
+      expect(await closed).toEqual({ code: 1000, reason: "Call ended" });
+      expect(submitToolResult).not.toHaveBeenCalled();
+      expect(recentTalkEvents(call)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "tool.result" })]),
+      );
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
+  it("reports an actionable end-call failure while leaving the current call connected", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const closeBridge = vi.fn();
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({ close: closeBridge, submitToolResult });
+    });
+    const call = makeCallRecord("CA-end-failed");
+    const endCall = vi.fn(async () => ({ success: false, error: "carrier rejected hangup" }));
+    const handler = makeHandler(undefined, {
+      manager: {
+        endCall,
+        getCallByProviderCallId: vi.fn(() => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+    const ws = await connectWs(server.url);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-end-failed", callSid: "CA-end-failed" },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledOnce());
+
+      callbacks?.onToolCall?.({
+        itemId: "item-end-failed",
+        callId: "provider-end-failed",
+        name: "openclaw_end_call",
+        args: {},
+      });
+
+      await waitForRealtimeTest(() => {
+        expect(submitToolResult).toHaveBeenCalledWith(
+          "provider-end-failed",
+          {
+            error:
+              "Could not end the current phone call: carrier rejected hangup. Tell the caller the call could not be ended and they can hang up or ask you to try again.",
+          },
+          undefined,
+        );
+      });
+      expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1");
+      expect(closeBridge).not.toHaveBeenCalled();
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      expect(recentTalkEvents(call)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "tool.error" })]),
+      );
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
+  it("ignores an end-call callback from a retired predecessor bridge", async () => {
+    const callbacks: RealtimeBridgeRequest[] = [];
+    const predecessorClose = vi.fn();
+    const replacementClose = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks.push(request);
+      return makeBridge({ close: callbacks.length === 1 ? predecessorClose : replacementClose });
+    });
+    const call = makeCallRecord("CA-end-replacement");
+    const endCall = vi.fn(async (_callId: string) => ({ success: true }));
+    const handler = makeHandler(undefined, {
+      manager: {
+        endCall,
+        getCallByProviderCallId: vi.fn(() => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const predecessorServer = await startRealtimeServer(handler);
+    const predecessorWs = await connectWs(predecessorServer.url);
+    let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
+    let replacementWs: WebSocket | undefined;
+
+    try {
+      predecessorWs.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-end-predecessor", callSid: "CA-end-replacement" },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledTimes(1));
+
+      replacementServer = await startRealtimeServer(handler);
+      replacementWs = await connectWs(replacementServer.url);
+      replacementWs.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-end-replacement", callSid: "CA-end-replacement" },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledTimes(2));
+      expect(predecessorClose).toHaveBeenCalledOnce();
+
+      callbacks[0]?.onToolCall?.({
+        itemId: "item-end-stale",
+        callId: "provider-end-stale",
+        name: "openclaw_end_call",
+        args: {},
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(endCall).not.toHaveBeenCalled();
+      expect(replacementClose).not.toHaveBeenCalled();
+      expect(replacementWs.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      if (
+        replacementWs &&
+        replacementWs.readyState !== WebSocket.CLOSED &&
+        replacementWs.readyState !== WebSocket.CLOSING
+      ) {
+        replacementWs.close();
+      }
+      if (
+        predecessorWs.readyState !== WebSocket.CLOSED &&
+        predecessorWs.readyState !== WebSocket.CLOSING
+      ) {
+        predecessorWs.close();
+      }
+      await handler.close();
+      await replacementServer?.close();
+      await predecessorServer.close();
+    }
+  });
+
   it("submits continuing responses only for realtime agent consult calls", async () => {
     let callbacks:
       | {

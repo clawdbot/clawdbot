@@ -275,6 +275,7 @@ Current runtime behavior:
 - `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
+- Voice Call exposes the built-in `openclaw_end_call` realtime tool on every call. It takes no arguments or call ID; the active voice bridge binds it to the current call.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
 - `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
@@ -290,6 +291,13 @@ the media WebSocket. If an intermediary does not promptly forward that close,
 OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
 2-second grace period for media to resume, and then ends the call.
 
+The realtime model can also call `openclaw_end_call` when the caller asks to
+hang up. The model must speak any final words before calling the tool: a
+successful call ends the current provider session and phone connection
+immediately, so no later reply is spoken. If the carrier cannot end the call,
+the bridge stays connected and the model receives an error it can explain to
+the caller. Configured `realtime.tools` cannot replace this built-in by name.
+
 For inbound Twilio numbers, also configure a Status Callback using `POST` to
 your public webhook URL with `?type=status` appended, for example
 `https://voice.example.com/voice/webhook?type=status`. Include the `completed`
@@ -299,13 +307,14 @@ close and the inactivity backstop remain independent of it.
 
 ### Tool policy
 
-`realtime.toolPolicy` controls the consult run:
+`realtime.toolPolicy` controls only the consult run. It never disables
+`openclaw_end_call`:
 
 | Policy           | Behavior                                                                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `safe-read-only` | Expose the consult tool and limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and `memory_get`. |
 | `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                      |
-| `none`           | Do not expose the consult tool. Custom `realtime.tools` are still passed through to the realtime provider.                               |
+| `none`           | Do not expose the consult tool. The built-in end-call tool and custom `realtime.tools` remain available.                                 |
 
 `realtime.consultPolicy` controls only the realtime model instructions:
 
