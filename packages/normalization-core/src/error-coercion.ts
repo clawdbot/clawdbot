@@ -84,6 +84,13 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       if (!message || seenMessages.has(message)) {
         return;
       }
+      // Wrappers routinely embed the cause verbatim ("failed to parse: SyntaxError: X"
+      // with cause "X"), and errno errors carry a code already spelled out in the
+      // detail. Exact-match dedupe misses both, so drop anything the text already says.
+      if (formatted.includes(message)) {
+        seenMessages.add(message);
+        return;
+      }
       formatted += ` | ${message}`;
       seenMessages.add(message);
     };

@@ -26,6 +26,27 @@ describe("formatErrorMessage", () => {
     );
   });
 
+  it("omits cause text the wrapper message already spells out", () => {
+    // Wrapper embeds the cause verbatim, as JSON5/parse wrappers do.
+    const parseFailure = new SyntaxError("JSON5: invalid character 'j' at 1:7");
+    const wrapped = new Error(`Failed to parse --file as JSON5: ${parseFailure.message}`, {
+      cause: parseFailure,
+    });
+    expect(format(wrapped)).toBe(
+      "Failed to parse --file as JSON5: JSON5: invalid character 'j' at 1:7",
+    );
+
+    // errno detail already contains the bare code, so the code must not be appended again.
+    const errno = Object.assign(
+      new Error("ENOENT: no such file or directory, open '/tmp/missing.json'"),
+      { code: "ENOENT" },
+    );
+    const notFound = new Error("--file not found: /tmp/missing.json.", { cause: errno });
+    expect(format(notFound)).toBe(
+      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json'",
+    );
+  });
+
   it("formats status/code records and structured non-Error causes", () => {
     expect(format({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
     expect(format({ status: 404 })).toBe("status=404 code=unknown");
