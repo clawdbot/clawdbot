@@ -20,6 +20,8 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-life
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
+const RESTART_AUTHORITY_EXPIRED =
+  "Cloud worker move request authority expired after Gateway restart; retry move";
 
 export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
@@ -178,15 +180,11 @@ export function createWorkerPlacementMoveService(options: {
             `Session ${identity.sessionKey} failed move environment must finish teardown before retry`,
           );
         }
-        placement = options.placements.transition({
-          sessionId: placement.sessionId,
-          from: "failed",
-          to: "local",
-          expectedGeneration: placement.generation,
+        options.placements.cancelPlacementMove({
+          operationId: intent.operationId,
+          sessionId: intent.sessionId,
         });
-        if (placement.state !== "local") {
-          throw new Error(`Session ${identity.sessionKey} failed move did not return local`);
-        }
+        return;
       } else if (placement.state === "draining") {
         const local = await options.reclaimSource(identity, intent);
         if (local.state !== "local") {
@@ -229,13 +227,23 @@ export function createWorkerPlacementMoveService(options: {
         return;
       }
       if (intent.target.kind === "gateway") {
-        throw new Error(`Session ${identity.sessionKey} Gateway move retained a completed intent`);
+        if (options.placements.getPlacementMove(intent.sessionId)) {
+          options.placements.cancelPlacementMove({
+            operationId: intent.operationId,
+            sessionId: intent.sessionId,
+          });
+        }
+        return;
       }
-      const destination = await options.resolveDestination(identity, intent.target);
-      if (!destination) {
-        throw new Error(`Session ${identity.sessionKey} worker move target is unavailable`);
-      }
-      await finishWorkerDestination({ identity, intent, destination });
+      options.placements.fail({
+        sessionId: placement.sessionId,
+        expectedGeneration: placement.generation,
+        recoveryError: RESTART_AUTHORITY_EXPIRED,
+      });
+      options.placements.cancelPlacementMove({
+        operationId: intent.operationId,
+        sessionId: intent.sessionId,
+      });
     } catch (error) {
       recordError(intent, error);
       throw error;

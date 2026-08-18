@@ -160,7 +160,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     environments,
     failure,
     placements,
-    runActivationBarrier: options.runActivationBarrier,
     resolveWorkspacePath: options.resolveWorkspacePath,
     reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,

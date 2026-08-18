@@ -15,10 +15,6 @@ export type WorkerActiveDispatchPlacement = Extract<
   { state: "active" }
 >;
 export type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
-export type WorkerStartingDispatchPlacement = Extract<
-  WorkerDispatchPlacement,
-  { state: "starting" }
->;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerReconcilingDispatchPlacement = Extract<
   WorkerDispatchPlacement,
@@ -33,6 +29,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
+  | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
   | "getPlacementMove"

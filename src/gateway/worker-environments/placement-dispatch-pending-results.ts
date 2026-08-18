@@ -1,7 +1,6 @@
 import {
   isCurrentActiveWorkerEnvironment,
   type PlacementFailureActions,
-  type WorkerActivationBarrier,
   type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
   type WorkerDispatchPlacementStore,
@@ -36,7 +35,6 @@ import {
 export type PlacementRecoveryDeps = {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
-  runActivationBarrier: WorkerActivationBarrier;
   failure: PlacementFailureActions;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
