@@ -645,8 +645,10 @@ struct DashboardPrimaryGatewayAdapterTests {
 struct DashboardGatewaySetupCoordinatorTests {
     @Test func `cancel prompts once and preserves primary state without credential disclosure`() {
         let state = AppState(preview: true)
+        state.remoteTransport = .ssh
         state.remoteUrl = "wss://previous.example:443"
         state.remoteToken = "previous-token"
+        state.connectionMode = .local
         let token = "fixture-token"
         let link = GatewayConnectDeepLink(
             host: "192.168.1.20",
