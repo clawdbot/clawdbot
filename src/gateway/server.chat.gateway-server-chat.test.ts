@@ -718,7 +718,7 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
       await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
-      await waitForAgentRunDrained("idem-2");
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
