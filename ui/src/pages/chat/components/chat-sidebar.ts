@@ -1,11 +1,15 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import {
+  handleMarkdownCodeBlockClick,
+  initializeMarkdownCodeBlocks,
+} from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -527,6 +531,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
       ? toSanitizedMarkdownHtml(content.content, {
+          codeBlockInteraction: "interactive",
           fileLinks: true,
           interactiveImages: props.onOpenImage !== undefined,
           sessionLinks: true,
@@ -1313,7 +1318,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (openInlineChatImage(event, this.onOpenImage ?? undefined)) {
       return;
     }
-    handleMarkdownCodeBlockCopy(event);
+    handleMarkdownCodeBlockClick(event);
     const target = markdownFileLinkFromEvent(event);
     if (target) {
       this.onOpenWorkspaceFile?.(target);
@@ -1359,6 +1364,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     return html`
       <div
         class=${fillHost ? "sidebar-panel-host--fill" : ""}
+        ${ref((element) => {
+          if (element instanceof HTMLElement) {
+            initializeMarkdownCodeBlocks(element);
+          }
+        })}
         @click=${this.handlePanelClick}
         @keydown=${this.handlePanelKeyDown}
       >

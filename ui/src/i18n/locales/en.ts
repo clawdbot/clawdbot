@@ -5104,7 +5104,12 @@ export const en: TranslationMap = {
     },
     codeBlock: {
       languageFallback: "Code",
-      jsonLines: "JSON · {count} lines",
+      hiddenLine: "1 hidden line",
+      hiddenLines: "{count} hidden lines",
+      showHiddenLine: "Show 1 hidden line",
+      showHiddenLines: "Show {count} hidden lines",
+      enableWrap: "Enable word wrap",
+      disableWrap: "Disable word wrap",
       jsonBadge: "JSON",
       jsonArrayItem: "Array ({count} item)",
       jsonArrayItems: "Array ({count} items)",

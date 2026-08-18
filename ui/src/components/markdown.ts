@@ -78,7 +78,9 @@ const allowedAttrs = [
   "data-session-key",
   "data-table-interactions",
   "type",
+  "aria-expanded",
   "aria-label",
+  "aria-pressed",
   "role",
 ];
 const sanitizeOptions = {
@@ -557,7 +559,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
