@@ -1295,6 +1295,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent before failure" },
           },
@@ -1395,6 +1400,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent through source reply" },
           },
@@ -1458,6 +1468,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "visible source reply" },
           },

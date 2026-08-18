@@ -2,27 +2,24 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import { readEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,
   isMessagingToolDeliveryAction,
 } from "./embedded-agent-messaging.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { isToolResultError } from "./tool-result-error.js";
+import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 
-const MESSAGE_TOOL_NAME = "message";
 const EXPLICIT_MESSAGE_ROUTE_KEYS = ["channel", "target", "to", "channelId", "provider"];
 const NON_DELIVERY_MESSAGE_IDS = new Set(["skipped", "suppressed"]);
 const FALLBACK_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
-
 export function resolveMessageToolSourceReplyFinal(args: unknown): boolean {
   return (asOptionalRecord(args) ?? {}).final !== false;
 }
 
 function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
-  return (
-    (asOptionalRecord(asOptionalRecord(value)?.details) ?? {}).sourceReplyRoute === "current-source"
-  );
+  return asOptionalRecord(asOptionalRecord(value)?.details)?.sourceReplyRoute === "current-source";
 }
 
 function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
@@ -175,7 +172,6 @@ function pluginBroadcastHasDelivery(value: unknown): boolean {
   );
 }
 
-/** Return true only when a plugin-native messaging result proves visible delivery. */
 export function isDeliveredMessagingToolResult(params: {
   toolName?: string;
   args?: unknown;
@@ -205,7 +201,7 @@ export function isDeliveredMessagingToolResult(params: {
   if (params.isError || results.some(isToolResultError)) {
     return false;
   }
-  const normalizedToolName = normalizeToolPolicyName(params.toolName ?? MESSAGE_TOOL_NAME);
+  const normalizedToolName = normalizeToolPolicyName(params.toolName ?? "message");
   const nonDelivery = results.some((result) => pluginEnvelopeHas(result, "nonDelivery"));
   const noOp = results.some((result) => pluginEnvelopeHas(result, "noOp"));
   if (
@@ -220,10 +216,6 @@ export function isDeliveredMessagingToolResult(params: {
   return !nonDelivery && !noOp && results.some((result) => pluginEnvelopeHas(result, "delivery"));
 }
 
-/**
- * Only delivered message actions on the confirmed current route qualify.
- * Explicit routes require an authoritative current-source marker from the action runner.
- */
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   toolName: string;
@@ -237,10 +229,13 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   const confirmedCurrentSourceRoute =
     resultConfirmsCurrentSourceRoute(params.result) ||
     resultConfirmsCurrentSourceRoute(params.hookResult);
+  const deliveryFact = readEmbeddedMessageDeliveryFact(
+    readToolResultDetails(params.hookResult ?? params.result)?.messageDelivery,
+  );
   if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }
-  if (normalizeToolPolicyName(params.toolName) !== MESSAGE_TOOL_NAME) {
+  if (normalizeToolPolicyName(params.toolName) !== "message") {
     return false;
   }
   const args = asOptionalRecord(params.args) ?? {};
@@ -257,5 +252,10 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   ) {
     return false;
   }
-  return params.deliveryConfirmed ?? isDeliveredMessagingToolResult(params);
+  return (
+    params.deliveryConfirmed ??
+    (deliveryFact
+      ? deliveryFact.status === "settled" && (!params.isError || deliveryFact.partialDelivery)
+      : isDeliveredMessagingToolResult(params))
+  );
 }
