@@ -36,13 +36,15 @@ function ownershipPolicy(
 }
 
 /**
- * Builds one config schema from an exact manifest registry. Callers holding the active config pass
- * the ownership policy so the schema names the owner the runtime activates; callers that only have
- * a registry (CLI redaction hints) omit it and get the unfiltered owner.
+ * Builds one config schema from an exact manifest registry.
+ *
+ * The policy is required, not optional: `uiHints` drive redaction, so a caller that skipped it
+ * would silently describe a different owner than the runtime activates and could print a field the
+ * configured owner marks sensitive. Every caller has a config to build one from.
  */
 export function buildRuntimeConfigSchemaFromRegistry(
   registry: PluginManifestRegistry,
-  policy?: ChannelOwnershipPolicy,
+  policy: ChannelOwnershipPolicy,
 ): ConfigSchemaResponse {
   return buildConfigSchemaCore({
     plugins: collectPluginSchemaMetadataCore(registry),

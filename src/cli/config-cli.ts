@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import { readConfigFileSnapshotWithPluginMetadata, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
@@ -171,8 +172,15 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     if (!pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
+    // Redaction hints must come from the owner the operator's config actually selects; the raw
+    // file is the source config here, so explicit selection reads correctly without a snapshot.
     const { uiHints } = buildRuntimeConfigSchemaFromRegistry(
       pluginMetadataSnapshot.manifestRegistry,
+      createConfiguredChannelOwnershipPolicy({
+        config: snapshot.config,
+        registry: pluginMetadataSnapshot.manifestRegistry,
+        env: process.env,
+      }),
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found) {
