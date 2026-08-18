@@ -160,6 +160,7 @@ export function renderWhereChip(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       <div class="new-session-page__picker-root">
+        <div class="new-session-page__menu-title">${t("newSession.environments")}</div>
         ${renderSessionMenuItem(
           {
             value: "gateway",

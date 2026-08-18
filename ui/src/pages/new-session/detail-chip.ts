@@ -121,6 +121,7 @@ export function renderDetailChip(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       <div class="new-session-page__picker-root">
+        <div class="new-session-page__menu-title">${t("newSession.branches")}</div>
         ${renderSessionMenuItem(
           {
             value: "worktree",
