@@ -120,6 +120,52 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(waitPromise).resolves.toMatchObject(terminalFailure);
   });
 
+  it("does not report a lifecycle end as ok without terminal reply evidence", async () => {
+    const runId = `run-missing-terminal-reply-${runSequence++}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
+    });
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      endedAt: 1_100,
+      error: "Agent run ended before producing a final reply.",
+    });
+  });
+
+  it("does not report a lifecycle end as ok when final delivery failed", async () => {
+    const runId = `run-failed-terminal-delivery-${runSequence++}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        terminalReply: { disposition: "visible", text: "Finished." },
+        terminalDelivery: { status: "failed", resultCount: 0 },
+      },
+    });
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      endedAt: 1_100,
+      error: "Agent final reply delivery failed.",
+    });
+  });
+
   it("publishes exhausted fallback provider timeouts without waiting for retry grace", async () => {
     const runId = `run-timeout-fallback-exhausted-provider-${runSequence++}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
