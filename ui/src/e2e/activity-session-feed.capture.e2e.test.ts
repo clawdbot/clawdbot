@@ -137,7 +137,9 @@ suite.define(() => {
         });
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         await expect.poll(() => page.locator(".activity-feed__person").count()).toBe(3);
-        await expect.poll(() => page.locator(".activity-feed__day").count()).toBe(3);
+        await expect
+          .poll(() => page.locator(".activity-feed__sessions > .activity-feed__session").count())
+          .toBe(4);
         await page.screenshot({
           animations: "disabled",
           path: path.join(outputDir, "02-global-activity.png"),
