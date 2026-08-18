@@ -618,6 +618,41 @@ describe("qa suite", () => {
     }
   });
 
+  it("distinguishes partial Markdown from the terminal report shape", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-report-lifecycle-");
+    const baseParams = {
+      outputDir,
+      startedAt: new Date("2026-04-11T00:00:00.000Z"),
+      finishedAt: new Date("2026-04-11T00:01:00.000Z"),
+      scenarios: [{ name: "Baseline", status: "pass" as const, steps: [] }],
+      transport: {
+        id: "qa-channel",
+        createReportNotes: () => [],
+      } as unknown as QaTransportAdapter,
+      providerMode: "mock-openai" as const,
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      fastMode: true,
+      concurrency: 1,
+    };
+
+    try {
+      const partial = await writeQaSuiteArtifacts({ ...baseParams, status: "running" });
+      expect(partial.report).toContain("# OpenClaw QA Scenario Suite (In Progress)");
+      expect(partial.report).toContain("- Status: running");
+      expect(partial.report).toContain("- Updated: 2026-04-11T00:01:00.000Z");
+      expect(partial.report).not.toContain("- Finished:");
+
+      const terminal = await writeQaSuiteArtifacts(baseParams);
+      expect(terminal.report).toContain("# OpenClaw QA Scenario Suite\n");
+      expect(terminal.report).toContain("- Finished: 2026-04-11T00:01:00.000Z");
+      expect(terminal.report).not.toContain("In Progress");
+      expect(terminal.report).not.toContain("- Status: running");
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("writes the selected Crabline driver with an honest failed result", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
     try {
