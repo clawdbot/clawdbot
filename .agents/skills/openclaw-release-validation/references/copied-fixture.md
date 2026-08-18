@@ -2,7 +2,7 @@
 
 Use this sequence for copied-state release validation. The source stays
 untouched; every repair or compatibility workaround belongs only to the fixture
-and must be recorded as a finding.
+and must be recorded as a private operational finding.
 
 ## 1. Create the durable run ledger
 
@@ -125,5 +125,6 @@ the ledger. Confirm the prior desired state, listener, and health separately.
 Source restoration and run-owned cleanup have independent dispositions. A
 restore blocker does not block comment publication or destruction of the
 fixture/runtime/checkout. Leave a blocked source safely stopped and retain its
-ledger, backup, blocker evidence, and exact recovery action. Update the same
-run comment after cleanup, and list every retained recovery artifact explicitly.
+ledger, backup, blocker evidence, and exact recovery action. Keep restoration,
+cleanup, and retained-artifact details private in `run.json`; never add them to
+the release-feedback issue comment.

@@ -151,7 +151,7 @@ describe("openclaw release validation", () => {
     });
   });
 
-  it("renders one redacted, resumable GitHub ledger comment per run", () => {
+  it("renders only release feedback for every tested subsystem", () => {
     const state = createRunState({
       runId: "run-123",
       candidateTag: "v2026.8.1-beta.3",
@@ -170,18 +170,28 @@ describe("openclaw release validation", () => {
         health: "unknown",
         observedAt: "2026-08-17T20:00:00.000Z",
       },
-      scenarios: [{ id: "memory", title: "Memory" }],
+      scenarios: [
+        { id: "memory", title: "Memory" },
+        { id: "models", title: "Models" },
+        { id: "channels", title: "Channels" },
+      ],
     });
-    const updated = recordSubsystemResult(state, "memory", {
+    let updated = recordSubsystemResult(state, "memory", {
       status: "pass",
-      notes: "Remembered the canary after restart.",
+      notes: "Remembered the canary from /Users/tester/.openclaw/workspace after restart.",
+    });
+    updated = recordSubsystemResult(updated, "models", {
+      status: "fail",
+      notes: "Model switching failed; details saved in ~/validation/models.log.",
     });
 
     const comment = renderRunComment({
       ...updated,
       promotionVote: "yes",
-      finalFeedback: "The model switch was clear. API_KEY=secret-value",
-      findings: ["Source restoration is blocked by its pre-existing schema mismatch."],
+      finalFeedback:
+        "The model switch was clear. API_KEY=secret-value Screenshot: /tmp/release-proof.png",
+      releaseIssues: ["Upgrade dropped the selected model; log at ~/.ocm/envs/beta/gateway.log."],
+      operationalFindings: ["OCM import failed once before retrying."],
       cleanup: {
         fixtureStopped: true,
         sourceRestoration: "blocked",
@@ -192,12 +202,19 @@ describe("openclaw release validation", () => {
 
     expect(comment).toContain("<!-- openclaw-release-validation-run:run-123 -->");
     expect(comment).toContain("**Candidate:** `v2026.8.1-beta.3`");
-    expect(comment).toContain("**Source:** `beta` · `2026.6.1-beta.1`");
-    expect(comment).toContain("| Memory | pass | Remembered the canary after restart. |");
+    expect(comment).toContain(`**Upgrade source:** \`2026.6.1-beta.1\` · \`${"b".repeat(40)}\``);
+    expect(comment).toContain("- **Memory — pass**:");
+    expect(comment).toContain("- **Models — fail**:");
+    expect(comment).not.toContain("Channels");
     expect(comment).toContain("The model switch was clear. API_KEY=[REDACTED]");
-    expect(comment).toContain("Source restoration: blocked — Source remains safely stopped.");
-    expect(comment).toContain("Retained recovery artifact: ~/recovery/run-123/source-backup");
+    expect(comment).toContain("Upgrade dropped the selected model; log at [LOCAL_PATH]");
     expect(comment).toContain("**Polished enough to promote?** Yes");
+    expect(comment).not.toContain("`beta`");
+    expect(comment).not.toContain("OCM import failed");
+    expect(comment).not.toContain("cleanup");
+    expect(comment).not.toContain("restoration");
+    expect(comment).not.toContain("Retained recovery artifact");
+    expect(comment).not.toMatch(/(?:\/Users\/|\/tmp\/|~\/|\.openclaw|\.ocm)/u);
   });
 
   it("updates the existing marker comment instead of creating a second comment", async () => {

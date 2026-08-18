@@ -23,8 +23,8 @@ seven phases. Keep exactly one phase in progress and check each off visibly:
 5. Choose the subsystem scope and complete only those missions.
 6. On exit, collect feedback and the promotion vote, stop the fixture, and
    publish the run comment.
-7. Restore the source when safe, destroy run-owned resources, update the same
-   comment, and report any retained recovery artifacts.
+7. Restore the source when safe and destroy run-owned resources. Keep all
+   operational cleanup evidence private in `run.json`.
 
 Tell the tester near the beginning, exactly: **Reply exactly `finish
 validation` to end the run.** This is the run's control phrase at any point,
@@ -136,7 +136,21 @@ remove channel configuration from the source gateway.
 
 After each mission, retain concise notes and only the smallest relevant log
 sample. Redact credentials, pairing codes, private endpoints, user identifiers,
-and secret-bearing config. Keep successful rows quiet.
+secret-bearing config, and local paths. Keep successful rows quiet.
+
+Keep two categories separate in `run.json`:
+
+- `releaseIssues`: OpenClaw candidate problems observed as a direct result of
+  the upgrade. These may be published.
+- `operationalFindings`: OCM, setup, fixture, restoration, cleanup, and local
+  tooling problems. These are private and must never appear in the GitHub
+  comment.
+
+Do not infer release feedback from operational failures. Publish only candidate
+identity, the upgrade source version/commit (never its name or path), the list
+of tested subsystem results, `releaseIssues`, feedback explicitly supplied by
+the tester, and the yes/no vote. Never publish any local path, gateway name,
+setup detail, cleanup state, restoration state, or retained artifact.
 
 When the tester submits exactly `finish validation`, stop mission work. In one
 prompt, ask for any final feedback and ask exactly: **Is this release polished
@@ -147,9 +161,8 @@ After recording both answers in `run.json`:
 
 1. Stop the validation fixture and confirm its listener is gone.
 2. Upsert the single marker-based, redacted run comment immediately, before
-   source restoration or destructive cleanup. Include candidate identity,
-   fixture/source identity, mission results, setup findings, final feedback,
-   vote, current cleanup state, and retained artifacts.
+   source restoration or destructive cleanup. The comment is a release-feedback
+   report only; operational details remain in the private ledger.
 
 ```sh
 node .agents/skills/openclaw-release-validation/scripts/release-validation.mts comment \
@@ -159,7 +172,7 @@ node .agents/skills/openclaw-release-validation/scripts/release-validation.mts c
 Comment publication is independent of restoration and cleanup: a blocker in
 either must never delay or suppress the campaign record.
 
-## 7. Restore, cleanup, and final publication
+## 7. Restore and cleanup
 
 With the fixture stopped, restore a source only when the exact recorded source,
 lifecycle owner, and prior desired state still match. Destroy run-owned envs,
@@ -171,6 +184,6 @@ backup, and any recovery receipt; and record the blocker plus one exact next
 action. Do not ask the tester to invent or select an unavailable runtime merely
 to finish cleanup.
 
-Finally, update cleanup state in `run.json` and run `comment --run` again. It
-must update the same marker comment, never create a second one. Report the
-source disposition and exact retained artifact paths to the tester.
+Finally, update cleanup state in private `run.json`. Report the source
+disposition and exact retained artifact paths only to the tester in the local
+session. Do not republish the comment because cleanup is not release feedback.
