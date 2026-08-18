@@ -403,7 +403,7 @@ describe("AppSidebar session accessibility", () => {
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
-    expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now · Unread");
+    expect(link?.hasAttribute("title")).toBe(false);
     expect(link?.getAttribute("aria-describedby")).toBe(
       `sidebar-session-state-${encodeURIComponent(key)}`,
     );
