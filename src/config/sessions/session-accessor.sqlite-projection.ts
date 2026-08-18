@@ -10,7 +10,10 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  type SessionArchivedTranscriptCleanupRule,
+} from "./session-accessor.lifecycle-types.js";
 import {
   prunePublishedSessionArchivesByRetention,
   publishSessionStateArchives,
@@ -344,7 +347,7 @@ export async function applySessionEntryLifecycleMutation(params: {
           if (sameKeyRemoval) {
             throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
           }
-          throw new Error(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+          throw new SessionEntryLifecycleUpsertConflictError(sessionKey);
         }
         if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
