@@ -117,12 +117,21 @@ type WhamUsageWindow = {
   reset_after_seconds?: number;
 };
 
+type WhamAdditionalRateLimit = {
+  limit_name?: string;
+  rate_limit?: {
+    allowed?: boolean;
+    limit_reached?: boolean;
+  };
+};
+
 type WhamUsageResponse = {
   rate_limit?: {
     limit_reached?: boolean;
     primary_window?: WhamUsageWindow;
     secondary_window?: WhamUsageWindow;
   };
+  additional_rate_limits?: WhamAdditionalRateLimit[];
 };
 
 type WhamCooldownProbeResult = {
@@ -131,6 +140,10 @@ type WhamCooldownProbeResult = {
   reason: string;
   blockedUntil?: number;
   blockedSource?: AuthProfileBlockedSource;
+  /** Models the probe saw with their own unexhausted bucket. */
+  exemptModels?: string[];
+  /** Overrides the failure reason when the probe itself identified the fault. */
+  cooldownReason?: AuthProfileFailureReason;
 };
 
 function shouldProbeWhamForFailure(
@@ -202,6 +215,20 @@ function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): n
   return null;
 }
 
+/**
+ * Model ids whose own provider-side bucket still allows requests. The provider
+ * names these buckets in display form ("GPT-5.3-Codex-Spark"); model ids are the
+ * same tokens lowercased, so no per-model table is needed here.
+ */
+function resolveWhamExemptModels(data: WhamUsageResponse): string[] {
+  const exempt = (data.additional_rate_limits ?? []).flatMap((entry) => {
+    const limited = entry.rate_limit?.limit_reached === true || entry.rate_limit?.allowed === false;
+    const modelId = entry.limit_name?.trim().toLowerCase().replace(/\s+/g, "-");
+    return limited || !modelId ? [] : [modelId];
+  });
+  return [...new Set(exempt)];
+}
+
 function isWhamWindowExhausted(window: WhamUsageWindow | undefined): boolean {
   return Boolean(
     window &&
@@ -232,6 +259,7 @@ function applyWhamCooldownResult(params: {
       ? existingBlockedUntil
       : 0;
   if (params.whamResult.blockedUntil) {
+    const exemptModels = params.whamResult.exemptModels ?? [];
     return {
       ...params.computed,
       lastProbeAt: params.now,
@@ -240,6 +268,9 @@ function applyWhamCooldownResult(params: {
       blockedSource: params.whamResult.blockedSource ?? "wham",
       blockedModel: undefined,
       blockedScope: undefined,
+      // Only this probe's observation may exempt a model; a stale list would
+      // let a model bypass a block the provider never said it could.
+      blockExemptModels: exemptModels.length > 0 ? exemptModels : undefined,
       cooldownUntil: undefined,
       cooldownReason: undefined,
       cooldownModel: undefined,
@@ -252,6 +283,9 @@ function applyWhamCooldownResult(params: {
       existingActiveCooldownUntil,
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
+    ...(params.whamResult.cooldownReason
+      ? { cooldownReason: params.whamResult.cooldownReason, cooldownModel: undefined }
+      : {}),
   };
 }
 
@@ -296,7 +330,14 @@ async function probeWhamForCooldown(
     if (!res.ok) {
       await cancelUnreadResponseBody(res);
       if (res.status === 401) {
-        return { cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS, reason: "wham_token_expired" };
+        // The probe, not the model request, is what failed here. Recording it as
+        // the caller's rate_limit would claim a model-scopable quota block while
+        // holding the whole profile down for 12h under a reason that never fits.
+        return {
+          cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS,
+          reason: "wham_token_expired",
+          cooldownReason: "auth",
+        };
       }
       if (res.status === 403) {
         return { cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS, reason: "wham_account_dead" };
@@ -318,6 +359,7 @@ async function probeWhamForCooldown(
     }
 
     const now = Date.now();
+    const exemptModels = resolveWhamExemptModels(data);
     const primaryResetMs = resolveWhamResetMs(data.rate_limit.primary_window, now);
     const secondaryResetMs = resolveWhamResetMs(data.rate_limit.secondary_window, now);
 
@@ -329,6 +371,7 @@ async function probeWhamForCooldown(
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
         blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
+        exemptModels,
         reason: "wham_personal_rolling",
       };
     }
@@ -341,6 +384,7 @@ async function probeWhamForCooldown(
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
         blockedUntil: resolveUsageWindowUntil(now, secondaryResetMs),
         blockedSource: "wham",
+        exemptModels,
         reason: "wham_team_weekly",
       };
     }
@@ -353,6 +397,7 @@ async function probeWhamForCooldown(
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
         blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
+        exemptModels,
         reason: "wham_team_rolling",
       };
     }
@@ -1058,6 +1103,7 @@ function buildBlockedProfileUsageStats(params: {
     blockedSource: params.source,
     blockedModel,
     blockedScope: blockedModel ? "model" : undefined,
+    blockExemptModels: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
     cooldownModel: undefined,

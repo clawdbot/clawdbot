@@ -107,6 +107,13 @@ export type ProfileUsageStats = {
   blockedSource?: AuthProfileBlockedSource;
   blockedModel?: string;
   blockedScope?: "model";
+  /**
+   * Models the usage probe observed with their own unexhausted quota bucket
+   * while the account-wide window was blocked. Without them a per-model
+   * allowance is invisible and the profile-wide block hides capacity the
+   * provider still grants.
+   */
+  blockExemptModels?: string[];
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;

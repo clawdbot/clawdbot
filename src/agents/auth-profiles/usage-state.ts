@@ -27,13 +27,16 @@ export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | u
 export function resolveProfileUnusableUntil(
   stats: Pick<
     ProfileUsageStats,
-    "blockedUntil" | "blockedModel" | "blockedScope" | "cooldownUntil" | "disabledUntil"
+    | "blockedUntil"
+    | "blockedModel"
+    | "blockedScope"
+    | "blockExemptModels"
+    | "cooldownUntil"
+    | "disabledUntil"
   >,
   forModel?: string,
 ): number | null {
-  const blockedUntil = isBlockScopedToDifferentModel(stats, forModel)
-    ? undefined
-    : stats.blockedUntil;
+  const blockedUntil = blockedWindowExcludesModel(stats, forModel) ? undefined : stats.blockedUntil;
   const values = [blockedUntil, stats.cooldownUntil, stats.disabledUntil]
     .map((value) => asDateTimestampMs(value))
     .filter((value): value is number => value !== undefined && value > 0);
@@ -50,28 +53,35 @@ export function isActiveUnusableWindow(until: number | undefined, now: number): 
 }
 
 function isBlockedWindowActiveForModel(
-  stats: Pick<ProfileUsageStats, "blockedUntil" | "blockedModel" | "blockedScope">,
+  stats: Pick<
+    ProfileUsageStats,
+    "blockedUntil" | "blockedModel" | "blockedScope" | "blockExemptModels"
+  >,
   now: number,
   forModel?: string,
 ): boolean {
   return (
-    !isBlockScopedToDifferentModel(stats, forModel) &&
-    isActiveUnusableWindow(stats.blockedUntil, now)
+    !blockedWindowExcludesModel(stats, forModel) && isActiveUnusableWindow(stats.blockedUntil, now)
   );
 }
 
-function isBlockScopedToDifferentModel(
-  stats: Pick<ProfileUsageStats, "blockedModel" | "blockedScope">,
+function blockedWindowExcludesModel(
+  stats: Pick<ProfileUsageStats, "blockedModel" | "blockedScope" | "blockExemptModels">,
   forModel?: string,
 ): boolean {
+  if (!forModel) {
+    return false;
+  }
   // Legacy rows carried blockedModel for profile-wide blocks without a scope marker.
   // Only explicit model scope narrows them; unmarked rows stay wide until expiry.
-  return Boolean(
-    forModel &&
+  const scopedToOtherModel =
     stats.blockedScope === "model" &&
-    stats.blockedModel &&
-    stats.blockedModel !== forModel,
-  );
+    Boolean(stats.blockedModel) &&
+    stats.blockedModel !== forModel;
+  // A profile-wide block still leaves models whose own provider-side quota
+  // bucket was observed unexhausted; blocking them would hide granted capacity.
+  const exempt = stats.blockExemptModels?.includes(forModel.toLowerCase()) === true;
+  return scopedToOtherModel || exempt;
 }
 
 function shouldBypassModelScopedCooldown(
@@ -80,6 +90,7 @@ function shouldBypassModelScopedCooldown(
     | "blockedUntil"
     | "blockedModel"
     | "blockedScope"
+    | "blockExemptModels"
     | "cooldownReason"
     | "cooldownModel"
     | "disabledUntil"

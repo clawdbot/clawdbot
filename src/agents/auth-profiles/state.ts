@@ -101,6 +101,16 @@ function normalizeLastGood(raw: unknown): AuthProfileState["lastGood"] {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeBlockExemptModels(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const models = [
+    ...new Set(raw.flatMap((value) => normalizeOptionalString(value)?.toLowerCase() ?? [])),
+  ];
+  return models.length > 0 ? models : undefined;
+}
+
 function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
   if (!isRecord(raw)) {
     return undefined;
@@ -112,6 +122,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedSource: normalizeEnumValue(raw.blockedSource, AUTH_BLOCKED_SOURCES),
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
+    blockExemptModels: normalizeBlockExemptModels(raw.blockExemptModels),
     cooldownUntil: asFiniteNumber(raw.cooldownUntil),
     cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),

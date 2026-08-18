@@ -322,6 +322,21 @@ describe("isProfileInCooldown", () => {
       { blockedUntil: now + 120_000, blockedModel: "gemini-3-flash-preview" },
       [["gemini-3.1-flash-lite", true]],
     ],
+    [
+      "keeps a model with its own unexhausted bucket usable under an account-wide block",
+      "openai:default",
+      {
+        blockedUntil: now + 120_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        blockExemptModels: ["gpt-5.6-luna"],
+      },
+      [
+        ["gpt-5.6-luna", false],
+        ["gpt-5.6-sol", true],
+        [undefined, true],
+      ],
+    ],
   ];
 
   it.each(cases)("%s", (name, profileId, stats, checks) => {
@@ -1456,6 +1471,50 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     } else {
       expect(stats?.cooldownUntil).toBe(now + expectedMs);
     }
+  });
+
+  it("keeps per-model buckets usable when the account-wide window is exhausted", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+      },
+      // The provider meters some models separately and still allows them while
+      // the account window is spent; blocking them hides granted capacity.
+      additional_rate_limits: [
+        {
+          limit_name: "GPT-5.6-Luna",
+          rate_limit: { allowed: true, limit_reached: false },
+        },
+        {
+          limit_name: "GPT-5.6-Sol",
+          rate_limit: { allowed: false, limit_reached: true },
+        },
+      ],
+    });
+
+    await markCodexFailureAt({ store, now });
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedUntil).toBe(now + 7_200_000);
+    expect(stats?.blockExemptModels).toEqual(["gpt-5.6-luna"]);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.6-luna")).toBe(false);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.6-sol")).toBe(true);
+  });
+
+  it("records a probe auth rejection as an auth cooldown, not the request's rate limit", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(401);
+
+    await markCodexFailureAt({ store, now });
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.cooldownUntil).toBe(now + 12 * 60 * 60 * 1000);
+    expect(stats?.cooldownReason).toBe("auth");
+    expect(stats?.cooldownModel).toBeUndefined();
   });
 
   it("probes WHAM before recording an OpenAI OAuth detail-less failure", async () => {
