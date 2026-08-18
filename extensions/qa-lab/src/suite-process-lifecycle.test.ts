@@ -17,6 +17,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcess>();
 
 const PROCESS_LIFECYCLE_SCENARIO = "channel-chat-baseline";
+// Suite execution contends with the surrounding extension shard; only the bounded
+// post-summary close window is the lifecycle contract this regression enforces.
+const SUITE_COMPLETION_TIMEOUT_MS = 420_000;
+const POST_SUMMARY_EXIT_TIMEOUT_MS = 45_000;
 
 function forceStopProcessTree(child: ChildProcess) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) {
@@ -187,13 +191,13 @@ async function waitForProcessClose(
 describe("qa suite command process lifecycle", () => {
   it(
     "exits after the terminal summary and leaves no gateway listener",
-    { timeout: 300_000 },
+    { timeout: SUITE_COMPLETION_TIMEOUT_MS + POST_SUMMARY_EXIT_TIMEOUT_MS + 30_000 },
     async () => {
       await fs.mkdir(artifactsRoot, { recursive: true });
       const outputDir = tempDirs.make("suite-process-lifecycle-", artifactsRoot);
       const run = startSuiteProcess(outputDir, [PROCESS_LIFECYCLE_SCENARIO]);
-      const summary = await waitForCompletedSummary(outputDir, 270_000);
-      const outcome = await waitForProcessClose(run.closed, 45_000);
+      const summary = await waitForCompletedSummary(outputDir, SUITE_COMPLETION_TIMEOUT_MS);
+      const outcome = await waitForProcessClose(run.closed, POST_SUMMARY_EXIT_TIMEOUT_MS);
       const output = run.output();
 
       expect(outcome, output.stderr).toEqual({ code: 0, signal: null });
