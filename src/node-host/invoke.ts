@@ -986,7 +986,16 @@ function boundMcpToolResultPayload(result: {
   structuredContent?: Record<string, unknown>;
   isError?: true;
 } {
-  const normalizedBlocks = result.content.filter(isRecord);
+  const mirroredStructuredContent = result.structuredContent
+    ? JSON.stringify(result.structuredContent, null, 2)
+    : undefined;
+  const normalizedBlocks = result.content.filter(
+    (block): block is McpInvokeContentBlock =>
+      isRecord(block) &&
+      (mirroredStructuredContent === undefined ||
+        block.type !== "text" ||
+        block.text !== mirroredStructuredContent),
+  );
   const totalTextBytes = normalizedBlocks.reduce<number>(
     (total, block) =>
       total +
@@ -1032,6 +1041,17 @@ function boundMcpToolResultPayload(result: {
   const isError = result.isError === true;
   let usedBytes = jsonUtf8Bytes({ content: [], ...(isError ? { isError } : {}) });
   let payloadTruncated = false;
+  let structuredContent: Record<string, unknown> | undefined;
+  if (result.structuredContent) {
+    const structuredBytes =
+      Buffer.byteLength(',"structuredContent":') + jsonUtf8Bytes(result.structuredContent);
+    if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
+      structuredContent = result.structuredContent;
+      usedBytes += structuredBytes;
+    } else {
+      payloadTruncated = true;
+    }
+  }
   const content: McpInvokeContentBlock[] = [];
   for (const block of textBoundedContent) {
     const blockBytes = jsonUtf8Bytes(block) + (content.length > 0 ? 1 : 0);
@@ -1041,16 +1061,6 @@ function boundMcpToolResultPayload(result: {
     }
     content.push(block);
     usedBytes += blockBytes;
-  }
-  let structuredContent: Record<string, unknown> | undefined;
-  if (result.structuredContent) {
-    const structuredBytes =
-      Buffer.byteLength(',"structuredContent":') + jsonUtf8Bytes(result.structuredContent);
-    if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
-      structuredContent = result.structuredContent;
-    } else {
-      payloadTruncated = true;
-    }
   }
   if (payloadTruncated) {
     content.push(payloadMarker);
