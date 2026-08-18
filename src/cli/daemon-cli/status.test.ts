@@ -85,6 +85,39 @@ describe("runDaemonStatus", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])(
+    "does not exit after reporting a failed non-required RPC probe in json=%s mode",
+    async (json) => {
+      gatherDaemonStatus.mockResolvedValueOnce({
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        rpc: {
+          ok: false,
+          url: "ws://127.0.0.1:18789",
+          error: "connect ECONNREFUSED 127.0.0.1:18789",
+        },
+        extraServices: [],
+      });
+
+      await runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: false,
+        json,
+      });
+
+      expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+        json,
+        deep: false,
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards require-rpc to daemon status gathering", async () => {
     await runDaemonStatus({
       rpc: {},

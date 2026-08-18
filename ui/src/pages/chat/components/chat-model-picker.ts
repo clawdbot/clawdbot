@@ -16,7 +16,7 @@ import { syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
   onRetry?: () => void;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error";
+  status: "idle" | "loading" | "refreshing" | "ready" | "error" | "offline";
 };
 
 type ChatModelPickerParams = {
@@ -231,15 +231,19 @@ function renderCatalogState(
     return nothing;
   }
   const label =
-    state.status === "refreshing"
-      ? t("chat.modelControls.refreshingModels")
-      : state.status === "error"
-        ? state.hasSnapshot
-          ? t("chat.modelControls.modelsRefreshFailed")
-          : t("chat.modelControls.modelsUnavailable")
-        : state.status === "ready"
-          ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-          : t("chat.modelControls.loadingModels");
+    state.status === "offline"
+      ? t("common.offline")
+      : state.status === "refreshing"
+        ? t("chat.modelControls.refreshingModels")
+        : state.status === "error"
+          ? state.hasSnapshot
+            ? t("chat.modelControls.modelsRefreshFailed")
+            : t("chat.modelControls.modelsUnavailable")
+          : state.status === "ready"
+            ? hasOptions
+              ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+              : t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${hasOptions

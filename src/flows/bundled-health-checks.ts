@@ -4,11 +4,19 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  loadBundledPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import type { InspectEmbeddingProviderSetup } from "../plugins/provider-policy-surface.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+  loadBundledPluginPublicArtifactModuleSync,
+} from "../plugins/public-surface-loader.js";
+import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
+import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 
 type EmbeddingProviderSetupInspectionResult =
@@ -33,6 +41,12 @@ type BundledHealthApi = {
     memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
+};
+
+type WorkerProviderHealthApi = {
+  registerWorkerProviderDoctorChecks?: (host: {
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
 };
 
 type BundledHealthCheckSelection = {
@@ -126,6 +140,27 @@ export function registerBundledHealthChecks(params: {
       dirName: "cua-computer",
       artifactBasename: "api.js",
     }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
+  }
+  registerBundledWorkerProviderHealthChecks(params, env);
+}
+
+function registerBundledWorkerProviderHealthChecks(
+  params: { cfg: OpenClawConfig; cwd?: string },
+  env: NodeJS.ProcessEnv,
+): void {
+  const providerIds = collectConfiguredWorkerProviderIds(params.cfg);
+  if (providerIds.length === 0) {
+    return;
+  }
+  const manifestRegistry = loadBundledPluginManifestRegistry({ env });
+  const pluginIds = new Set(
+    listBundledWorkerProviderOwners(manifestRegistry, providerIds).map((owner) => owner.pluginId),
+  );
+  for (const pluginId of pluginIds) {
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
+      dirName: pluginId,
+      artifactCandidates: ["doctor-health-api.js"],
+    })?.registerWorkerProviderDoctorChecks?.({ registerHealthCheck });
   }
 }
 

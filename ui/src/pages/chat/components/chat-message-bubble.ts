@@ -63,9 +63,12 @@ import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
+  renderToolOutcome,
   renderToolPreview,
+  isRunningToolCard,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
+  syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 
 function renderChatIcon(name: string) {
@@ -292,10 +295,11 @@ export function renderGroupedMessage(
   const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
-    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockChrome: "copy",
     fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
+    tableInteractions: "enabled",
   };
 
   // Detect pure-JSON messages and render as collapsible block
@@ -325,10 +329,15 @@ export function renderGroupedMessage(
   }
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  const toolMessageExpanded =
+    toolCards.some((card) => isRunningToolCard(card, opts.runActive)) ||
+    (opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false);
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageHasError = toolCards.some(isToolCardError);
+  // One expanded card already closes with its own outcome line; every other
+  // shape renders inline rows only, so the message body records the failure.
+  const expandsSingleToolCard = Boolean(singleToolCard) && !markdown && !hasImages;
+  const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -467,6 +476,8 @@ export function renderGroupedMessage(
                 class="chat-inline-disclosure chat-tool-msg-summary"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focus=${syncToolDisclosureOverflow}
                 @click=${(event: MouseEvent) => {
                   if (shouldToggleSelectableDisclosure(event)) {
                     opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId);
@@ -474,18 +485,15 @@ export function renderGroupedMessage(
                 }}
               >
                 <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
-                <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
-                ${toolSummaryLabel
-                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                  : toolPreview
-                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                    : nothing}
-                <span class="chat-inline-disclosure__chevron" aria-hidden="true"
-                  >${icons.chevronDown}</span
-                >
-                ${toolMessageHasError
-                  ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
-                  : nothing}
+                <span class="chat-tool-disclosure__content">
+                  <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
+                  ${toolSummaryLabel
+                    ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                    : toolPreview
+                      ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                      : nothing}
+                </span>
+                <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
               </button>
               ${toolMessageExpanded
                 ? html`
@@ -526,7 +534,7 @@ export function renderGroupedMessage(
                           ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                           : nothing}
                       ${hasToolCards
-                        ? singleToolCard && !markdown && !hasImages
+                        ? expandsSingleToolCard && singleToolCard
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               opts.sessionKey,
@@ -550,6 +558,9 @@ export function renderGroupedMessage(
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                             })
+                        : nothing}
+                      ${failedToolCard
+                        ? renderToolOutcome("failed", failedToolCard.exitCode)
                         : nothing}
                     </div>
                   `

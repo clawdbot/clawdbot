@@ -1,5 +1,6 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
-import type { Command } from "commander";
+import fs from "node:fs/promises";
+import { Option, type Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
   CF_ACCESS_CLIENT_ID_HEADER,
@@ -31,6 +32,8 @@ import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 
 type ConnectCommandOptions = {
   service?: boolean;
+  ephemeral?: boolean;
+  targetFile?: string;
   displayName?: string;
 };
 
@@ -133,8 +136,40 @@ function selectCloudflareAccessConfig(params: {
   );
 }
 
-async function runConnectCommand(target: string, opts: ConnectCommandOptions): Promise<void> {
-  const joinTarget = parseJoinTarget(target);
+async function resolveConnectTarget(
+  target: string | undefined,
+  targetFile: string | undefined,
+): Promise<string> {
+  if (target && targetFile) {
+    throw new Error("Provide the connect target or --target-file, not both.");
+  }
+  if (target) {
+    return target;
+  }
+  const path = targetFile?.trim();
+  if (!path) {
+    throw new Error("Connect target is required.");
+  }
+  try {
+    const value = (await fs.readFile(path, "utf8")).trim();
+    if (!value) {
+      throw new Error("Connect target file is empty.");
+    }
+    return value;
+  } finally {
+    await fs.rm(path, { force: true });
+  }
+}
+
+async function runConnectCommand(
+  target: string | undefined,
+  opts: ConnectCommandOptions,
+): Promise<void> {
+  if (opts.ephemeral && opts.service) {
+    throw new Error("--ephemeral cannot be combined with --service.");
+  }
+  const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
+  const joinTarget = parseJoinTarget(resolvedTarget);
   const saved = await loadNodeHostConfig();
   const initialCloudflareAccess = joinTarget
     ? selectCloudflareAccessConfig({
@@ -153,7 +188,7 @@ async function runConnectCommand(target: string, opts: ConnectCommandOptions): P
   });
   const payload = joinTarget
     ? await fetchJoinPayload(joinTarget, joinCredentials)
-    : decodePairingSetupCode(target);
+    : decodePairingSetupCode(resolvedTarget);
   const pair = resolveNodePairGatewayPayload(payload);
   const cloudflareAccess =
     initialCloudflareAccess ??
@@ -178,7 +213,10 @@ async function runConnectCommand(target: string, opts: ConnectCommandOptions): P
       : {}),
     gatewayCandidates,
     gatewayBootstrapToken: pair.bootstrapToken,
-    preferGatewayBootstrapToken: true,
+    // Environment-managed nodes reuse their persisted device token when a provider
+    // replays setup after the one-shot bootstrap credential has been consumed.
+    preferGatewayBootstrapToken: opts.ephemeral !== true,
+    ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
     displayName: opts.displayName,
   };
 
@@ -197,8 +235,10 @@ export function registerConnectCli(program: Command): void {
   program
     .command("connect")
     .description("Connect this machine to an OpenClaw Gateway as a node")
-    .argument("<target>", "oc-pair URL, setup code, or HTTPS Gateway join URL")
+    .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
+    .option("--ephemeral", "Run as an environment-managed disposable session host", false)
+    .addOption(new Option("--target-file <path>").hideHelp())
     .option("--display-name <name>", "Override the node display name")
     .addHelpText(
       "after",
@@ -211,7 +251,7 @@ export function registerConnectCli(program: Command): void {
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
     )
-    .action(async (target: string, opts: ConnectCommandOptions) => {
+    .action(async (target: string | undefined, opts: ConnectCommandOptions) => {
       try {
         await runConnectCommand(target, opts);
       } catch (error) {

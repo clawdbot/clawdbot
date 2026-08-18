@@ -15,6 +15,7 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -771,6 +772,68 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("reconciles hidden invalidations as one visible Lit update", async () => {
+    let visibilityState: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+    const { pane, requestUpdate, state } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & {
+      performUpdate: () => void;
+      render: () => unknown;
+      requestUpdate: () => void;
+    };
+    lifecycle.render = () => null;
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    const performUpdate = vi.spyOn(lifecycle, "performUpdate");
+    const cancelAnimationFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
+
+    visibilityState = "hidden";
+    state.chatStreamRenderFrame = 7;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
+    expect(state.chatStreamRenderFrame).toBeNull();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    lifecycle.requestUpdate();
+    lifecycle.requestUpdate();
+    await Promise.resolve();
+    expect(performUpdate).not.toHaveBeenCalled();
+
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await lifecycle.updateComplete;
+    expect(performUpdate).toHaveBeenCalledOnce();
+
+    const addVisibilityListener = vi.spyOn(document, "addEventListener");
+    const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
+    visibilityState = "hidden";
+    lifecycle.requestUpdate();
+    await Promise.resolve();
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+    expect(removeVisibilityListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: true });
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await Promise.resolve();
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await lifecycle.updateComplete;
+    expect(performUpdate).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+    addVisibilityListener.mockClear();
+    lifecycle.requestUpdate();
+    await lifecycle.updateComplete;
+    expect(addVisibilityListener).not.toHaveBeenCalledWith(
+      "visibilitychange",
+      expect.any(Function),
+    );
+  });
+
   it("fully tears down realtime Talk when the gateway disconnects", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

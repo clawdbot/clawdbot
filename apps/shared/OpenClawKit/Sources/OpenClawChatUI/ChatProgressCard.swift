@@ -1,6 +1,8 @@
+import Foundation
+import OpenClawProtocol
 import SwiftUI
 
-private struct ChatPlanPillSurface: ViewModifier {
+private struct ChatProgressCardSurface: ViewModifier {
     let cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
@@ -29,9 +31,9 @@ private struct ChatPlanPillSurface: ViewModifier {
     }
 }
 
-struct ChatPlanPill: View {
-    let steps: [OpenClawChatPlanStep]
-    let explanation: String?
+struct ChatProgressCard: View {
+    let steps: [ProgressCardStep]
+    let markdown: String?
 
     @State private var isExpanded = false
 
@@ -39,10 +41,25 @@ struct ChatPlanPill: View {
         self.steps.count { $0.status == .completed }
     }
 
-    private var currentStep: OpenClawChatPlanStep? {
+    private var currentStep: ProgressCardStep? {
         self.steps.first { $0.status == .inProgress }
             ?? self.steps.last { $0.status == .completed }
             ?? self.steps.first
+    }
+
+    private var markdownSummary: String? {
+        guard let line = self.markdown?
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else { return nil }
+        var summary = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let first = summary.first,
+              first.isWhitespace || "#-*>".contains(first)
+        {
+            summary.removeFirst()
+        }
+        return summary.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -66,11 +83,12 @@ struct ChatPlanPill: View {
                     .overlay(OpenClawChatTheme.divider)
                     .padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 9) {
-                    if let explanation {
-                        Text(explanation)
-                            .font(OpenClawChatTypography.caption)
-                            .foregroundStyle(OpenClawChatTheme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
+                    if let markdown {
+                        OpenClawChatMarkdownView(
+                            text: markdown,
+                            isUserMessage: false,
+                            variant: .compact,
+                            textColor: OpenClawChatTheme.assistantText)
                     }
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(Array(self.steps.enumerated()), id: \.offset) { _, step in
@@ -84,16 +102,16 @@ struct ChatPlanPill: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(ChatPlanPillSurface(cornerRadius: self.isExpanded ? 16 : 18))
+        .modifier(ChatProgressCardSurface(cornerRadius: self.isExpanded ? 16 : 18))
         .foregroundStyle(OpenClawChatTheme.assistantText)
     }
 
     private var summaryAccessibilityLabel: String {
-        guard let currentStep else {
-            return "Plan, \(self.completedCount) of \(self.steps.count) steps done"
+        if let currentStep {
+            return "Plan, \(self.completedCount) of \(self.steps.count) steps done, "
+                + "\(Self.accessibilityLabel(for: currentStep.status)): \(currentStep.step)"
         }
-        return "Plan, \(self.completedCount) of \(self.steps.count) steps done, "
-            + "\(Self.accessibilityLabel(for: currentStep.status)): \(currentStep.step)"
+        return "Plan, \(self.markdownSummary ?? "Progress update")"
     }
 
     private var summary: some View {
@@ -106,11 +124,18 @@ struct ChatPlanPill: View {
                     .font(OpenClawChatTypography.footnoteSemiBold)
                     .lineLimit(1)
                     .truncationMode(.tail)
+            } else if let markdownSummary {
+                Text(markdownSummary)
+                    .font(OpenClawChatTypography.footnoteSemiBold)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
             Spacer(minLength: 8)
-            Text(verbatim: "\(self.completedCount)/\(self.steps.count)")
-                .font(OpenClawChatTypography.captionSemiBold)
-                .foregroundStyle(OpenClawChatTheme.muted)
+            if !self.steps.isEmpty {
+                Text(verbatim: "\(self.completedCount)/\(self.steps.count)")
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .foregroundStyle(OpenClawChatTheme.muted)
+            }
             Image(systemName: "chevron.down")
                 .font(OpenClawChatTypography.caption2)
                 .foregroundStyle(OpenClawChatTheme.muted)
@@ -118,7 +143,7 @@ struct ChatPlanPill: View {
         }
     }
 
-    private func stepRow(_ step: OpenClawChatPlanStep) -> some View {
+    private func stepRow(_ step: ProgressCardStep) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(Self.marker(for: step.status))
                 .font(OpenClawChatTypography.captionSemiBold)
@@ -136,7 +161,7 @@ struct ChatPlanPill: View {
         .accessibilityLabel(Self.stepAccessibilityLabel(step))
     }
 
-    private static func marker(for status: OpenClawChatPlanStep.Status) -> String {
+    private static func marker(for status: ProgressCardStepStatus) -> String {
         switch status {
         case .completed: "✓"
         case .inProgress: "▸"
@@ -144,18 +169,18 @@ struct ChatPlanPill: View {
         }
     }
 
-    private static func markerColor(for status: OpenClawChatPlanStep.Status) -> Color {
+    private static func markerColor(for status: ProgressCardStepStatus) -> Color {
         switch status {
         case .completed, .inProgress: OpenClawChatTheme.accent
         case .pending: OpenClawChatTheme.muted
         }
     }
 
-    private static func stepAccessibilityLabel(_ step: OpenClawChatPlanStep) -> String {
+    private static func stepAccessibilityLabel(_ step: ProgressCardStep) -> String {
         "\(self.accessibilityLabel(for: step.status)), \(step.step)"
     }
 
-    private static func accessibilityLabel(for status: OpenClawChatPlanStep.Status) -> String {
+    private static func accessibilityLabel(for status: ProgressCardStepStatus) -> String {
         switch status {
         case .completed: "Completed"
         case .inProgress: "In progress"

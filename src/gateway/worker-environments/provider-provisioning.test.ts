@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { WorkerProviderError, type WorkerProfile } from "../../plugins/types.js";
+import {
+  WorkerProviderError,
+  type WorkerExecutionMode,
+  type WorkerLease,
+  type WorkerProfile,
+} from "../../plugins/types.js";
 import { hashWorkerCredential } from "./credential.js";
 import * as support from "./service.test-support.js";
 
@@ -67,6 +72,84 @@ describe("worker environment service", () => {
       code: "invalid_profile",
     });
   });
+
+  it("requires explicit placement modes before provider allocation", async () => {
+    const provision = vi.fn(support.createProvider().provision);
+    const provider = support.createProvider({ supportedExecutionModes: undefined, provision });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.create("development", "mode-configured", undefined, "remote-exec"),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    await expect(
+      workerService.createFromProfileSnapshot(
+        {
+          profileId: "development",
+          providerId: provider.id,
+          profileSnapshot: { install: "bundle", settings: { region: "test" } },
+        },
+        "mode-inherited",
+        undefined,
+        "worker-turn",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()).toEqual([]);
+
+    await expect(workerService.create("development", "lifecycle-only")).resolves.toMatchObject({
+      state: "ready",
+    });
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
+  it.each<{
+    mode: WorkerExecutionMode;
+    lease: WorkerLease;
+    expectedTransport: "node" | "SSH";
+  }>([
+    {
+      mode: "worker-turn",
+      lease: { leaseId: "lease-worker-turn-ssh", ssh: support.SSH_ENDPOINT },
+      expectedTransport: "node",
+    },
+    {
+      mode: "remote-exec",
+      lease: { leaseId: "lease-remote-exec-node", node: { deviceId: "device-1" } },
+      expectedTransport: "SSH",
+    },
+  ])(
+    "rejects a $mode provider that returns the wrong lease transport",
+    async ({ mode, lease, expectedTransport }) => {
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        supportedExecutionModes: [mode],
+        provision: async () => lease,
+        destroy,
+      });
+      const workerService = support.createService(provider);
+
+      await expect(
+        workerService.create("development", `transport-${mode}`, undefined, mode),
+      ).rejects.toMatchObject({
+        code: "invalid_profile",
+        message: expect.stringContaining(
+          `${mode} providers must return a ${expectedTransport} lease`,
+        ),
+      });
+
+      expect(destroy).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+      expect(support.testState.store.list()).toEqual([
+        expect.objectContaining({
+          state: "failed",
+          leaseId: null,
+          nodeDeviceId: null,
+          sshEndpoint: null,
+          lastError: `${mode} providers must return a ${expectedTransport} lease`,
+        }),
+      ]);
+    },
+  );
 
   it("delegates configured machine options to the profile provider", async () => {
     const listMachineOptions = vi.fn(() => [{ id: "standard", label: "Standard", default: true }]);

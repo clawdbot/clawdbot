@@ -886,7 +886,7 @@ describe("grouped chat rendering", () => {
     expect(expectElement(container, ".chat-group", HTMLElement).dataset.chatRowKey).toBeTruthy();
   });
 
-  it("renders user markdown without code-block copy chrome", () => {
+  it("renders user markdown without nested code-block chrome", () => {
     const container = document.createElement("div");
     const markdownContent = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
 
@@ -898,10 +898,11 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: false,
-      codeBlockChrome: "none",
+      codeBlockChrome: "copy",
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
+      tableInteractions: "enabled",
     });
   });
 
@@ -1021,6 +1022,7 @@ describe("grouped chat rendering", () => {
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
+      tableInteractions: "enabled",
     });
   });
 
@@ -1564,6 +1566,7 @@ describe("grouped chat rendering", () => {
       fileLinks: true,
       interactiveImages: false,
       sessionLinks: true,
+      tableInteractions: "enabled",
     });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
@@ -2359,8 +2362,8 @@ describe("grouped chat rendering", () => {
       ".chat-activity-group__summary",
       HTMLButtonElement,
     );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull();
+    expect(activitySummary.getAttribute("aria-expanded")).toBe("true");
     expect(activitySummary.getAttribute("aria-label")).toBeNull();
     expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
@@ -2425,7 +2428,6 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
     expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
 
     render(
       renderActivityGroup([successful, failed], {
@@ -2591,7 +2593,6 @@ describe("grouped chat rendering", () => {
       "failed",
     );
     expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
     // Command calls render a `$ command` row instead of the tool-name label.
     expect(summaries[0]?.querySelector(".chat-tool-row__cmd")?.textContent).toBe("run fallback");
   });
@@ -2642,9 +2643,8 @@ describe("grouped chat rendering", () => {
     expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
     expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("https://example.com");
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
-    expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool output"]);
+    // Plain output is the block's default content, so it carries no header.
+    expect(blocks[0]?.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
@@ -2895,7 +2895,7 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
-  it("marks status-only standalone tool-result summaries with only a failed badge", () => {
+  it("keeps status-only standalone tool-result summaries neutral until expanded", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onToggleToolMessageExpanded = vi.fn();
@@ -2922,7 +2922,6 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "sessions_spawn",
     );
-    expect(summary.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
     selectText(expectElement(summary, ".chat-tool-msg-summary__label", HTMLElement));
     pointerClick(summary);
     expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
@@ -2938,10 +2937,32 @@ describe("grouped chat rendering", () => {
     summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
     expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    expect(summary.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    // The failure stays recorded: the expanded body closes with the outcome.
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
     expect(
       JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
     ).toEqual({ status: "error" });
+    container.remove();
+  });
+
+  it("surfaces a producer-reported exit code in the expanded failure outcome", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const groups = [
+      createMessageGroup(
+        createToolResultMessage(
+          "call-exit-code",
+          "shell",
+          JSON.stringify({ status: "failed", exitCode: 1 }),
+          { id: "tool-exit-code" },
+        ),
+        "tool",
+      ),
+    ];
+
+    renderMessageGroups(container, groups, { isToolMessageExpanded: () => true });
+
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Exit code 1");
     container.remove();
   });
 

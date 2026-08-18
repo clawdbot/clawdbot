@@ -104,11 +104,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetPreparedModelRuntimeStateForHotReload();
 
-    let hooksReloadResolved = false;
-    if (plan.reloadHooks) {
+    if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
-        hooksReloadResolved = true;
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
         throw err;
@@ -188,7 +186,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
-        if (hooksReloadResolved) {
+        if (plan.reloadHooks) {
           commitHooksConfigReload();
         }
         applyGatewayLaneConcurrency(laneConcurrency);

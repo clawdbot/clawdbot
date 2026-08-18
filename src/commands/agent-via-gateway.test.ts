@@ -10,6 +10,7 @@ import {
   configureExecutionIdentityAdmissionSink,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
@@ -2459,6 +2460,27 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts.oneShotCliRun).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("marks a failed local terminal outcome unsuccessful", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      agentCommand.mockResolvedValueOnce(
+        recordAgentRunTerminalOutcome(
+          {
+            payloads: [{ text: "provider failed", isError: true }],
+            meta: { error: new Error("provider failed") },
+          },
+          "failed",
+        ),
+      );
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+        process: signals.processLike,
+      });
+
+      expect(signals.processLike.exitCode).toBe(1);
     });
   });
 

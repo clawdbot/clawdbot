@@ -152,10 +152,6 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function modelAuthenticationNeededText(): string {
-  return `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`;
-}
-
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const {
     currentOverride,
@@ -333,16 +329,21 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalogLoadingWithoutSnapshot =
     !managedCatalog.hasSnapshot &&
     ["idle", "loading", "refreshing"].includes(managedCatalog.status);
-  const catalogErrorWithoutSnapshot =
-    managedCatalog.status === "error" && !managedCatalog.hasSnapshot;
   const catalogSnapshotEmpty = managedCatalog.hasSnapshot && modelOptions.length === 0;
-  const catalogTriggerStatus = catalogLoadingWithoutSnapshot
-    ? t("chat.modelControls.loadingModels")
-    : catalogErrorWithoutSnapshot
-      ? t("chat.modelControls.modelsUnavailable")
-      : catalogSnapshotEmpty
-        ? modelAuthenticationNeededText()
-        : undefined;
+  const catalogTriggerStatus =
+    managedCatalog.status === "offline"
+      ? t("common.offline")
+      : managedCatalog.status === "error"
+        ? t(
+            managedCatalog.hasSnapshot
+              ? "chat.modelControls.modelsRefreshFailed"
+              : "chat.modelControls.modelsUnavailable",
+          )
+        : catalogLoadingWithoutSnapshot
+          ? t("chat.modelControls.loadingModels")
+          : catalogSnapshotEmpty
+            ? t("chat.modelControls.noModelsAvailable")
+            : undefined;
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =

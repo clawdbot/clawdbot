@@ -1116,6 +1116,51 @@ describe("runCliAgent reliability", () => {
     expect(JSON.stringify(result)).not.toContain("/tmp/untrusted.png");
   });
 
+  it("deduplicates a CLI Markdown image selected from structured tool media", async () => {
+    const mediaUrl = "/root/.openclaw/media/tool-image-generation/our-agent-soviet-meme.png";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected outbound media capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+        result: {
+          content: [{ type: "text", text: "Image generated" }],
+          details: { media: { mediaUrls: [mediaUrl], trustedLocalMedia: true } },
+        },
+        outcome: "completed",
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return makeManagedRun({
+        stdout: `Our agent.\n\n![Our Agent meme](${mediaUrl})`,
+      });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:markdown-tool-media",
+      runId: "run-markdown-tool-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Our agent.",
+        mediaUrls: [mediaUrl],
+        mediaUrl,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
   it("surfaces a CLI failure after a delivered progress reply", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1295,6 +1340,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent before failure" },
           },
@@ -1395,6 +1445,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent through source reply" },
           },
@@ -1458,6 +1513,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "visible source reply" },
           },

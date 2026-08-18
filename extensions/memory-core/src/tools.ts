@@ -61,6 +61,7 @@ type MemoryManagerSearchOptions = NonNullable<
 >;
 
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
+const MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES = 200;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
 
@@ -510,12 +511,18 @@ export function createMemorySearchTool(options: {
                 )
               : null;
             const memory = memorySetup?.context ?? null;
-            if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
+            let memoryCorpusUnavailable: string | undefined;
+            if (shouldQueryMemory && memory && "error" in memory) {
               recordMemorySearchToolCooldown(
                 cooldownKey,
                 memory.error ?? "memory search unavailable",
               );
-              return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+              if (!shouldQuerySupplements) {
+                return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+              }
+              // corpus=all still serves wiki supplements, but the omitted memory
+              // corpus must be recorded or the degraded search reads as complete.
+              memoryCorpusUnavailable = memory.error ?? "memory search unavailable";
             }
 
             const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -556,6 +563,9 @@ export function createMemorySearchTool(options: {
                   searchMs: number;
                   embeddingBootstrap?: MemorySearchRuntimeDebug["embeddingBootstrap"];
                   hits: number;
+                  candidateHits: number;
+                  withheldHits: number;
+                  searchWindow: number;
                 }
               | undefined;
             if (shouldQueryMemory && memorySetup && memory && !("error" in memory)) {
@@ -582,9 +592,10 @@ export function createMemorySearchTool(options: {
                       : requestedCorpus == null || requestedCorpus === "all"
                         ? effectiveSearchSources
                         : undefined;
-                const createSearchOptions = (signal: AbortSignal) =>
+                const resultLimit = maxResults ?? memorySearchConfig?.query.maxResults ?? 10;
+                const createSearchOptions = (signal: AbortSignal, candidateLimit: number) =>
                   ({
-                    maxResults,
+                    maxResults: candidateLimit,
                     minScore,
                     sessionKey: options.agentSessionKey,
                     activeProjectKeys: options.activeProjectKeys
@@ -596,61 +607,95 @@ export function createMemorySearchTool(options: {
                     },
                     ...(searchSources ? { sources: searchSources } : {}),
                   }) satisfies MemoryManagerSearchOptions;
-                const searchActiveMemory = async (): Promise<MemorySearchResult[]> =>
+                const searchActiveMemory = async (
+                  candidateLimit: number,
+                ): Promise<MemorySearchResult[]> =>
                   await runWithDefaultDeadline(
                     async (signal) =>
-                      await activeMemory.manager.search(query, createSearchOptions(signal)),
+                      await activeMemory.manager.search(
+                        query,
+                        createSearchOptions(signal, candidateLimit),
+                      ),
                   );
-                managerMs = memory.debug?.managerMs;
-                try {
-                  rawResults = await searchActiveMemory();
-                } catch (error) {
-                  if (!isClosedMemoryStoreError(error)) {
-                    throw error;
+                const searchWithStoreRefresh = async (
+                  candidateLimit: number,
+                ): Promise<MemorySearchResult[]> => {
+                  try {
+                    return await searchActiveMemory(candidateLimit);
+                  } catch (error) {
+                    if (!isClosedMemoryStoreError(error)) {
+                      throw error;
+                    }
+                    const refreshed = await runWithDefaultDeadline(async () =>
+                      trackMemoryManager(
+                        await getMemoryManagerContextWithPurpose({
+                          cfg,
+                          agentId,
+                          purpose: memoryManagerPurpose,
+                          acquireLocalService: options.acquireLocalService,
+                        }),
+                      ),
+                    );
+                    if ("error" in refreshed) {
+                      throw error;
+                    }
+                    managerMs = refreshed.debug?.managerMs;
+                    activeMemory = refreshed;
+                    return await searchActiveMemory(candidateLimit);
                   }
-                  const refreshed = await runWithDefaultDeadline(async () =>
-                    trackMemoryManager(
-                      await getMemoryManagerContextWithPurpose({
+                };
+                const applyPostFilters = async (
+                  hits: MemorySearchResult[],
+                ): Promise<MemorySearchResult[]> => {
+                  let filtered = await runWithDefaultDeadline(
+                    async () =>
+                      await filterMemorySearchHitsBySessionVisibility({
                         cfg,
                         agentId,
-                        purpose: memoryManagerPurpose,
-                        acquireLocalService: options.acquireLocalService,
+                        requesterSessionKey: options.agentSessionKey,
+                        sandboxed: options.sandboxed === true,
+                        hits,
+                        conversationRecall: options.conversationRecall,
                       }),
-                    ),
                   );
-                  if ("error" in refreshed) {
-                    throw error;
+                  if (searchSources) {
+                    const allowedSources = new Set<MemorySource>(searchSources);
+                    filtered = filtered.filter((hit) => allowedSources.has(hit.source));
                   }
-                  managerMs = refreshed.debug?.managerMs;
-                  activeMemory = refreshed;
-                  rawResults = await searchActiveMemory();
-                }
+                  if (requestedCorpus === "sessions") {
+                    filtered = filtered.filter((hit) => hit.source === "sessions");
+                  } else if (requestedCorpus === "memory") {
+                    filtered = filtered.filter((hit) => hit.source === "memory");
+                  }
+                  return filtered;
+                };
+                managerMs = memory.debug?.managerMs;
+                let searchWindow = resultLimit;
+                let candidates = await searchWithStoreRefresh(searchWindow);
                 const statusBeforeRetry = activeMemory.manager.status();
                 pausedIndexIdentityReason =
                   resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
                 if (pausedIndexIdentityReason) {
                   return;
                 }
-                rawResults = await runWithDefaultDeadline(
-                  async () =>
-                    await filterMemorySearchHitsBySessionVisibility({
-                      cfg,
-                      agentId,
-                      requesterSessionKey: options.agentSessionKey,
-                      sandboxed: options.sandboxed === true,
-                      hits: rawResults,
-                      conversationRecall: options.conversationRecall,
-                    }),
-                );
-                if (searchSources) {
-                  const allowedSources = new Set<MemorySource>(searchSources);
-                  rawResults = rawResults.filter((hit) => allowedSources.has(hit.source));
+                rawResults = await applyPostFilters(candidates);
+                if (candidates.length === resultLimit && rawResults.length < resultLimit) {
+                  const allowedSources = searchSources ? new Set(searchSources) : null;
+                  const indexedCandidateCount = (statusBeforeRetry.sourceCounts ?? [])
+                    .filter((entry) => !allowedSources || allowedSources.has(entry.source))
+                    .reduce((total, entry) => total + entry.chunks, 0);
+                  const widenedLimit = Math.min(
+                    MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES,
+                    indexedCandidateCount,
+                  );
+                  if (widenedLimit > searchWindow) {
+                    searchWindow = widenedLimit;
+                    candidates = await searchWithStoreRefresh(searchWindow);
+                    rawResults = await applyPostFilters(candidates);
+                  }
                 }
-                if (requestedCorpus === "sessions") {
-                  rawResults = rawResults.filter((hit) => hit.source === "sessions");
-                } else if (requestedCorpus === "memory") {
-                  rawResults = rawResults.filter((hit) => hit.source === "memory");
-                }
+                const postFilterHits = rawResults.length;
+                rawResults = rawResults.slice(0, resultLimit);
                 const status = activeMemory.manager.status();
                 staleness = resolveMemorySearchStaleness(status, agentId) ?? undefined;
                 const payloadResults = rawResults.map((result) => ({
@@ -688,6 +733,9 @@ export function createMemorySearchTool(options: {
                   searchMs,
                   embeddingBootstrap,
                   hits: rawResults.length,
+                  candidateHits: candidates.length,
+                  withheldHits: Math.max(0, candidates.length - postFilterHits),
+                  searchWindow,
                 };
               });
               if (pausedIndexIdentityReason) {
@@ -737,6 +785,11 @@ export function createMemorySearchTool(options: {
               fallback,
               citations: citationsMode,
               mode: searchMode,
+              ...(memoryCorpusUnavailable
+                ? {
+                    warning: `Memory corpus unavailable; results cover wiki supplements only: ${memoryCorpusUnavailable}`,
+                  }
+                : {}),
               ...staleness,
               debug: searchDebug,
             });

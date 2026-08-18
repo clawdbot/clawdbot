@@ -39,10 +39,32 @@ suite.define(() => {
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
       expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+      expect(
+        await trigger.evaluate((element) => element.closest(".agent-chat__composer-meta") != null),
+      ).toBe(true);
+      expect(
+        await trigger.evaluate(
+          (element) => element.closest(".chat-composer-model-control") != null,
+        ),
+      ).toBe(false);
 
       const firstListCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.deferNext("sessions.list");
       await trigger.click();
+      const firstOption = pane.locator('[data-chat-permission-option="default"]');
+      await firstOption.waitFor({ state: "visible" });
+      const [triggerBox, firstOptionBox] = await Promise.all([
+        trigger.boundingBox(),
+        firstOption.boundingBox(),
+      ]);
+      expect(triggerBox).not.toBeNull();
+      expect(firstOptionBox).not.toBeNull();
+      if (!triggerBox || !firstOptionBox) {
+        throw new Error("expected permission picker geometry");
+      }
+      expect(firstOptionBox.y + firstOptionBox.height).toBeLessThanOrEqual(triggerBox.y - 1);
+      expect(firstOptionBox.x).toBeGreaterThanOrEqual(triggerBox.x);
+      expect(firstOptionBox.x - triggerBox.x).toBeLessThanOrEqual(32);
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({

@@ -50,6 +50,8 @@ const CRABBOX_MACHINE_OPTIONS = [
 
 type IsExecutable = (candidate: string) => boolean;
 
+export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
+
 function requirePositiveDuration(value: unknown, key: string): string {
   const duration = nonEmptyString(value);
   if (!duration || parsePositiveGoDurationNanoseconds(duration) === undefined) {
@@ -230,9 +232,22 @@ export function resolveCrabboxBinary(params: {
   if (params.explicit) {
     return params.explicit;
   }
+  return findCrabboxBinary(params) ?? "crabbox";
+}
+
+export function findCrabboxBinary(params: {
+  explicit?: string;
+  isExecutable?: IsExecutable;
+  openclawRoot: string;
+  pathEnv?: string;
+  platform?: NodeJS.Platform;
+}): string | undefined {
   const platform = params.platform ?? process.platform;
   const isExecutable =
     params.isExecutable ?? ((candidate) => defaultIsExecutable(candidate, platform));
+  if (params.explicit) {
+    return isExecutable(params.explicit) ? params.explicit : undefined;
+  }
   const siblingBase = path.resolve(params.openclawRoot, "../crabbox/bin/crabbox");
   for (const candidate of binaryCandidates(siblingBase, platform)) {
     if (isExecutable(candidate)) {
@@ -252,7 +267,7 @@ export function resolveCrabboxBinary(params: {
       }
     }
   }
-  return "crabbox";
+  return undefined;
 }
 
 export function resolveOpenClawRoot(pluginRoot: string | undefined): string {
@@ -280,8 +295,4 @@ export function operationLeaseId(operationId: string): string {
     .update(operationId)
     .digest("hex")
     .slice(0, 12)}`;
-}
-
-export function identityRefId(leaseId: string): string {
-  return `/leases/${leaseId}/identity`;
 }

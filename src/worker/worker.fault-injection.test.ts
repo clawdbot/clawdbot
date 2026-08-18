@@ -232,11 +232,11 @@ describe("cloud worker milestone 2 fault injection", () => {
     const commit = current.transcript.commit([transcriptMessage("restart transcript")]);
     const fencedCommit = expect(commit).rejects.toMatchObject({
       name: "WorkerAdmissionError",
-      reason: "placement-mismatch",
+      reason: "invalid-handshake",
     });
     const fencedInference = expect(inference).rejects.toMatchObject({
       name: "WorkerAdmissionError",
-      reason: "placement-mismatch",
+      reason: "invalid-handshake",
     });
     await commitEntered.promise;
     for (const delta of ["tail-a", "tail-b"]) {
@@ -258,7 +258,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       kind: "failed",
       error: expect.objectContaining({
         name: WorkerAdmissionError.name,
-        reason: "placement-mismatch",
+        reason: "invalid-handshake",
       }),
     });
     expect(harness.providerCalls).toBe(1);

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import "./web-awesome-select.ts";
+import "../styles/select-picker.css";
 
 export type PickerOption = {
   value: string;

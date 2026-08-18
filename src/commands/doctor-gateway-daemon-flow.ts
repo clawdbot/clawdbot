@@ -527,16 +527,10 @@ export async function maybeRepairGatewayDaemon(params: {
       try {
         await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
       } catch (err) {
-        const message = String(err);
-        if (message.includes("gateway closed")) {
-          const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-          if (closedDiagnostic) {
-            note(closedDiagnostic, "Gateway");
-            note(params.gatewayDetailsMessage, "Gateway connection");
-          } else {
-            note("Gateway not running.", "Gateway");
-            note(params.gatewayDetailsMessage, "Gateway connection");
-          }
+        const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+        if (closedDiagnostic) {
+          note(closedDiagnostic, "Gateway");
+          note(params.gatewayDetailsMessage, "Gateway connection");
         } else {
           params.runtime.error(formatHealthCheckFailure(err));
         }

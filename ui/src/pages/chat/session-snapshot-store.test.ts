@@ -80,10 +80,9 @@ describe("persistent chat session snapshots", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shares sanitized snapshots and measured row heights across store owners", async () => {
+  it("shares sanitized snapshots across store owners", async () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:shared", snapshot({ text: "cached", callback: () => true }));
-    writer.recordRowHeight("agent:main:shared", "message:1", 184);
     const savedAt = writer.readSavedAt("agent:main:shared");
     expect(savedAt).not.toBeNull();
     await writer.flush();
@@ -93,7 +92,6 @@ describe("persistent chat session snapshots", () => {
     await reader.loadSavedAtIndex();
     expect(await reader.read("agent:main:shared")).toEqual(snapshot({ text: "cached" }));
     expect(reader.readSavedAt("agent:main:shared")).toBe(savedAt);
-    expect(reader.readRowHeight("agent:main:shared", "message:1")).toBe(184);
   });
 
   it("seeds the savedAt index once for every synchronous lookup", async () => {
@@ -120,8 +118,6 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
 
     writer.write(sessionKey, snapshot(1n));
-    writer.recordRowHeight(sessionKey, "message:1", 184);
-    expect(writer.readRowHeight(sessionKey, "message:1")).toBe(184);
 
     await writer.flush();
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
@@ -188,7 +184,6 @@ describe("persistent chat session snapshots", () => {
       sessionId: "session-1",
       savedAt: Date.now(),
       snapshot: { messages: "not-an-array" },
-      rowHeights: new Map(),
     });
 
     const reader = new SessionSnapshotStore();

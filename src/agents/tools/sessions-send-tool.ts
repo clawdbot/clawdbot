@@ -166,10 +166,20 @@ const SessionsSendOutputSchema = Type.Union([
   Type.Object(
     {
       runId: Type.String(),
+      status: Type.Literal("no_reply"),
+      sessionKey: Type.String(),
+      message: Type.String(),
+      watched: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      runId: Type.String(),
       status: Type.Literal("ok"),
       sessionKey: Type.String(),
       delivery: SessionsSendDeliverySchema,
-      reply: Type.Optional(Type.String()),
+      reply: Type.String(),
       watched: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
@@ -179,6 +189,7 @@ const SessionsSendOutputSchema = Type.Union([
 type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
+const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
 
 function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> {
   const params =
@@ -1229,16 +1240,13 @@ export function createSessionsSendTool(opts?: {
             });
           }
           const reply = result.replyText;
-          startA2AFlow(reply ?? undefined);
-
-          return jsonResult({
-            runId,
-            status: "ok",
-            sessionKey: displayKey,
-            delivery,
-            ...(typeof reply === "string" ? { reply } : {}),
-            ...watchField,
-          });
+          const response = reply
+            ? { status: "ok" as const, delivery, reply }
+            : { status: "no_reply" as const, message: NO_REPLY_MESSAGE };
+          if (reply) {
+            startA2AFlow(reply);
+          }
+          return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
         },
       });
     },

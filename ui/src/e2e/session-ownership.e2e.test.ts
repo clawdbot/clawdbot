@@ -17,8 +17,10 @@ const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2
 let page: Page | undefined;
 function sessionsList(creators: [string, string]) {
   const creatorFacet = [
-    { id: creators[0], label: "Ada" },
-    ...(creators[1] === creators[0] ? [] : [{ id: creators[1], label: "Bob" }]),
+    { type: "human" as const, id: creators[0], label: "Ada" },
+    ...(creators[1] === creators[0]
+      ? []
+      : [{ type: "human" as const, id: creators[1], label: "Bob" }]),
   ];
   return {
     count: 2,
@@ -32,6 +34,7 @@ function sessionsList(creators: [string, string]) {
         label: "Ada research",
         category: "Research",
         createdActor: { type: "human", id: creators[0], label: "Ada" },
+        owner: { actor: { type: "human", id: creators[0], label: "Ada" } },
         updatedAt: 2,
       },
       {
@@ -43,6 +46,13 @@ function sessionsList(creators: [string, string]) {
           type: "human",
           id: creators[1],
           label: creators[1] === creators[0] ? "Ada" : "Bob",
+        },
+        owner: {
+          actor: {
+            type: "human",
+            id: creators[1],
+            label: creators[1] === creators[0] ? "Ada" : "Bob",
+          },
         },
         updatedAt: 1,
       },
@@ -158,7 +168,7 @@ suite.define(() => {
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).some(
           (request) =>
-            (request.params as { creatorId?: unknown } | undefined)?.creatorId === "profile-ada",
+            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
         ),
       )
       .toBe(true);
@@ -479,7 +489,7 @@ suite.define(() => {
     }
     Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
     sessions.count = 1;
-    sessions.creators = [{ id: "profile-ada", label: "Ada" }];
+    sessions.creators = [{ type: "human", id: "profile-ada", label: "Ada" }];
     sessions.sessions = [activeSession];
     const longMemberLabel =
       "Alexandria Montgomery-Santiago from the International Collaboration Working Group";

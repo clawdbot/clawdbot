@@ -78,16 +78,16 @@ describe("models auth order", () => {
   it("set writes the store order and refreshes a running gateway", async () => {
     const runtime = createRuntime();
     await modelsAuthOrderSetCommand(
-      { provider: "anthropic", order: ["anthropic:b", "anthropic:a"] },
+      { provider: "anthropic", agent: "ops", order: ["anthropic:b", "anthropic:a"] },
       runtime,
     );
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent-main",
+      agentDir: "/tmp/agent-ops",
       provider: "anthropic",
       order: ["anthropic:b", "anthropic:a"],
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("ops");
     expect(runtime.logs).toContain("Auth profile order override: anthropic:b, anthropic:a");
   });
 
@@ -124,7 +124,7 @@ describe("models auth order", () => {
       provider: "anthropic",
       order: null,
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("main");
     expect(runtime.logs.some((line) => line.includes("Auth profile order override cleared"))).toBe(
       true,
     );

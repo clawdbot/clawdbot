@@ -2460,7 +2460,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
     expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
-    expect(publishedRunner).toContain('if [ "$SCENARIO" = "configured-plugin-installs" ]; then');
+    expect(publishedRunner).toContain("if configured_plugin_installs_enabled; then");
     expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
     expect(publishedRunner).toContain(
       'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
@@ -2493,7 +2493,7 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
     expect(publishedRunner).toContain(
       [
-        'if [ "$SCENARIO" = "configured-plugin-installs" ]; then',
+        'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
         "fi",
@@ -2786,6 +2786,80 @@ docker_e2e_docker_run_cmd run demo
     expect(upgradeSurvivor).toContain('timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc');
     for (const script of [multiNode, upgradeSurvivor]) {
       expect(script).not.toContain('timeout "$DOCKER_RUN_TIMEOUT"');
+    }
+  });
+
+  it("records an interrupted upgrade survivor phase as failed", async () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-signal-");
+    const binDir = join(workDir, "bin");
+    const markerPath = join(workDir, "npm-started");
+    const summaryPath = join(workDir, "artifacts", "summary.json");
+    writeExecutables(binDir, {
+      npm: `#!/bin/sh
+touch "$FAKE_NPM_MARKER"
+exec sleep 300
+`,
+      timeout: `#!/bin/sh
+while [ "\${1#--}" != "$1" ]; do shift; done
+shift
+exec "$@"
+`,
+    });
+
+    const child = spawn("bash", [UPGRADE_SURVIVOR_RUN_SCRIPT], {
+      detached: true,
+      env: {
+        ...process.env,
+        FAKE_NPM_MARKER: markerPath,
+        OPENCLAW_TEST_STATE_FUNCTION_B64: Buffer.from(
+          "openclaw_test_state_create() { :; }",
+        ).toString("base64"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
+        OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(workDir, "unused.tgz"),
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: join(workDir, "state-home"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      stdio: "ignore",
+    });
+    const childPid = child.pid;
+    if (!childPid) {
+      throw new Error("upgrade survivor process did not start");
+    }
+    const exitPromise = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+
+    try {
+      for (let attempt = 0; attempt < 500 && !existsSync(markerPath); attempt += 1) {
+        await delay(10);
+      }
+      expect(existsSync(markerPath)).toBe(true);
+      process.kill(-childPid, "SIGTERM");
+      const exit = await exitPromise;
+
+      expect(exit).toEqual({ code: 143, signal: null });
+      const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+      expect(summary).toMatchObject({
+        failure: {
+          message: "phase install-baseline interrupted by SIGTERM",
+          phase: "install-baseline",
+        },
+        status: "failed",
+      });
+      expect(summary.phases.at(-1)).toMatchObject({
+        phase: "install-baseline",
+        status: "started",
+      });
+      expect(
+        readFileSync(join(workDir, "artifacts", "baseline-install.log"), "utf8"),
+      ).not.toContain("Upgrade survivor summary:");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        process.kill(-childPid, "SIGKILL");
+      }
     }
   });
 

@@ -302,10 +302,9 @@ describe("AppSidebar session indicators", () => {
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked session");
-    expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
+    for (const row of [forked, unread, runningUnread]) {
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
+    }
     expect(runningUnread?.querySelector(".session-row-state")?.getAttribute("aria-label")).toBe(
       "Active run · Unread",
     );
@@ -324,9 +323,7 @@ describe("AppSidebar session indicators", () => {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
       expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
-      expect(row?.querySelector("a")?.getAttribute("title")).toContain(
-        key === keys.openPullRequest ? "Open PR" : "Merged",
-      );
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
       expect(row?.querySelector("[data-session-pr-state]")?.hasAttribute("title")).toBe(false);
     }
 

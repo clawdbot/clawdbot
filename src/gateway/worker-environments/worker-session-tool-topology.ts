@@ -7,7 +7,9 @@ export type WorkerSessionToolSource = {
   agentId: string;
   sessionKey: string;
   sessionId: string;
-  turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]>;
+  turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> & {
+    owner: { kind: "worker"; environmentId: string; ownerEpoch: number };
+  };
   entry: NonNullable<ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"]>;
 };
 
@@ -59,7 +61,7 @@ export function resolveWorkerSessionToolSource(params: {
     agentId: placement.agentId,
     sessionKey: placement.sessionKey,
     sessionId: identity.sessionId,
-    turnClaim: claim,
+    turnClaim: { ...claim, owner: claim.owner },
     entry: loaded.entry,
   };
 }

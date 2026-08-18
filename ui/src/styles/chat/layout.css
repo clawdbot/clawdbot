@@ -1690,23 +1690,45 @@ button.chat-reply-preview--message:disabled {
 /* Floating tray pinned to the conversation's top-right (the positioned
    ancestor is .chat-main__conversation); content scrolls underneath it. */
 .task-suggestions {
+  --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
+  --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);
+  --task-suggestion-prompt-bg: var(--panel);
+  --task-suggestion-action-bg: color-mix(in srgb, var(--accent) 82%, var(--panel) 18%);
+  --task-suggestion-action-fg: var(--primary-foreground);
+
   position: absolute;
   z-index: 24;
   top: 10px;
   right: 14px;
   display: grid;
-  gap: 8px;
-  width: min(400px, calc(100% - 28px));
-  max-height: min(48vh, 26rem);
-  overflow-y: auto;
+  width: min(450px, calc(100% - 28px));
+  overflow: visible;
   overscroll-behavior: contain;
+}
+
+.task-suggestions--stack::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  right: 14px;
+  bottom: -9px;
+  left: 14px;
+  height: 18px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 0 0 16px 16px;
+  background: var(--task-suggestion-card-bg);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--bg) 32%, transparent);
 }
 
 .session-suggestions {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 0 16px 8px;
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+  padding: 0 0 8px;
 }
 
 .session-suggestion {
@@ -1765,41 +1787,109 @@ button.chat-reply-preview--message:disabled {
 }
 
 .agent-chat__typing-indicator {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, auto);
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   min-width: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-style: italic;
+  width: fit-content;
+  margin: 14px 16px 0 4px;
+  padding-bottom: 26px;
 }
 
 .agent-chat__typing-avatars {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   flex: 0 0 auto;
 }
 
-.agent-chat__typing-indicator .chat-author-avatar {
-  flex-basis: 18px;
-  width: 18px;
-  height: 18px;
+.agent-chat__typing-indicator .chat-avatar {
+  flex-basis: 36px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  margin-bottom: 0;
 }
 
-.agent-chat__typing-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.agent-chat__typing-avatars
+  > :is(.chat-avatar, .chat-avatar-slot)
+  + :is(.chat-avatar, .chat-avatar-slot) {
+  margin-left: -7px;
 }
 
-.agent-chat__typing-indicator--outside {
+.agent-chat__typing-avatars > :is(.chat-avatar, .chat-avatar-slot) {
+  box-shadow: 0 0 0 2px var(--bg);
+  border-radius: 50%;
+}
+
+.agent-chat__typing-bubble {
+  --chat-typing-bubble-bg: var(--bg-muted);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   box-sizing: border-box;
-  width: calc(100% - 36px);
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin: 0 auto -2px;
-  padding-inline: 8px;
+  width: 50px;
+  height: 30px;
+  padding-inline: 12px;
+  border-radius: 15px;
+  background: var(--chat-typing-bubble-bg);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--bg) 28%, transparent);
+}
+
+.agent-chat__typing-tail {
+  position: absolute;
+  left: -6px;
+  bottom: 1px;
+  width: 12px;
+  height: 12px;
+  overflow: visible;
+  fill: var(--chat-typing-bubble-bg);
+}
+
+:root[data-theme-mode="light"] .agent-chat__typing-bubble {
+  --chat-typing-bubble-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
+}
+
+.agent-chat__typing-bubble > span {
+  position: relative;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chatTypingDot 1s ease-in-out infinite;
+}
+
+.agent-chat__typing-bubble > span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.agent-chat__typing-bubble > span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes chatTypingDot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.55;
+  }
+
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__typing-bubble > span {
+    animation: none;
+    opacity: 0.8;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1816,15 +1906,53 @@ button.chat-reply-preview--message:disabled {
 
 .task-suggestion {
   position: relative;
+  grid-area: 1 / 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 6px 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) 45%, transparent);
+  gap: 14px;
+  padding: 14px 16px 17px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 16px;
+  background: var(--task-suggestion-card-bg);
+  user-select: text;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 5%, transparent),
+    0 12px 30px color-mix(in srgb, var(--bg) 38%, transparent);
+}
+
+.task-suggestion[hidden] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.task-suggestion[data-swap-direction="next"] {
+  animation: task-suggestion-swap-next 240ms var(--ease-out);
+}
+
+.task-suggestion[data-swap-direction="previous"] {
+  animation: task-suggestion-swap-previous 240ms var(--ease-out);
+}
+
+@keyframes task-suggestion-swap-next {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@keyframes task-suggestion-swap-previous {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+.task-suggestion__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
 }
 
 .task-suggestion__body {
@@ -1832,22 +1960,74 @@ button.chat-reply-preview--message:disabled {
 }
 
 .task-suggestion__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.task-suggestion__position {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--task-suggestion-path-bg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.task-suggestion__header-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.task-suggestion__header-action {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  user-select: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.task-suggestion__header-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+.task-suggestion__header-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.task-suggestion__header-action svg {
+  width: 15px;
+  height: 15px;
 }
 
 .task-suggestion__title {
-  margin-top: 2px;
   color: var(--text);
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
 .task-suggestion__summary {
   display: -webkit-box;
-  margin-top: 3px;
+  margin-top: 6px;
   overflow: hidden;
   color: var(--muted);
   font-size: 13px;
@@ -1857,29 +2037,120 @@ button.chat-reply-preview--message:disabled {
 }
 
 .task-suggestion__instructions {
-  margin-top: 8px;
+  margin-top: 14px;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.task-suggestion__instructions > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 0 5px 20px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+}
+
+.task-suggestion__instructions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-suggestion__instructions > summary::before {
+  content: none;
+}
+
+.task-suggestion__instructions > summary:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.task-suggestion__instructions-chevron {
+  position: absolute;
+  top: 7px;
+  left: 0;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.task-suggestion__instructions-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.task-suggestion__instructions[open] .task-suggestion__instructions-chevron {
+  transform: rotate(90deg);
+}
+
+.task-suggestion__hide {
+  display: none;
+}
+
+.task-suggestion__instructions[open] .task-suggestion__show {
+  display: none;
+}
+
+.task-suggestion__instructions[open] .task-suggestion__hide {
+  display: inline;
 }
 
 .task-suggestion__instruction-body {
   display: grid;
-  gap: 6px;
-  padding: 0 8px 8px;
+  padding-top: 7px;
 }
 
 .task-suggestion__instruction-body code,
 .task-suggestion__instruction-body pre {
   min-width: 0;
-  max-height: 9rem;
   margin: 0;
-  padding: 5px 7px;
-  overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  background: var(--task-suggestion-card-bg);
   color: var(--text);
   font: 11px/1.4 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.task-suggestion__instruction-body code {
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 7px 10px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-radius: 9px 9px 0 0;
+  background: var(--task-suggestion-path-bg);
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.task-suggestion__instruction-body code[data-overflow-right] {
+  mask-image: linear-gradient(to right, black 0, black calc(100% - 28px), transparent 100%);
+}
+
+.task-suggestion__instruction-body code::-webkit-scrollbar {
+  display: none;
+}
+
+.task-suggestion__instruction-body pre {
+  position: relative;
+  z-index: 1;
+  max-height: 9rem;
+  margin-top: -5px;
+  padding: 12px 13px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--task-suggestion-prompt-bg);
 }
 
 .task-suggestion__actions {
@@ -1889,22 +2160,29 @@ button.chat-reply-preview--message:disabled {
   justify-self: end;
 }
 
-/* Paired actions stay pinned to the card's top-right and share one fixed height
-   while remaining visibly separate, independently rounded controls. */
+/* Both targets share one outer surface; the divider is the only internal edge. */
 .task-suggestion__split {
   display: inline-flex;
   align-items: stretch;
-  gap: 4px;
-  height: 26px;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 11px;
+  corner-shape: superellipse(1.5);
+  background: var(--task-suggestion-action-bg);
+  user-select: none;
 }
 
 .task-suggestion__start {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--task-suggestion-action-fg);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -1915,14 +2193,60 @@ button.chat-reply-preview--message:disabled {
   height: 12px;
 }
 
+.task-suggestion__start:hover:not(:disabled),
+.task-suggestion__start:focus-visible,
+.task-suggestion__menu-trigger:hover:not(:disabled),
+.task-suggestion__menu-trigger:focus-visible {
+  background: color-mix(in srgb, var(--task-suggestion-action-fg) 8%, transparent);
+  color: var(--task-suggestion-action-fg);
+}
+
 .task-suggestion__menu-trigger {
   display: grid;
-  width: 26px;
-  min-width: 26px;
-  height: 26px;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
   padding: 0;
   place-items: center;
-  border-radius: var(--radius-md);
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
+  border-radius: 0 !important;
+  background: transparent;
+  color: var(--task-suggestion-action-fg);
+}
+
+.task-suggestion__menu-trigger:hover:not(:disabled),
+.task-suggestion__menu-trigger:focus-visible {
+  border-left-color: color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
+}
+
+:root[data-theme-mode="light"] .task-suggestions {
+  --task-suggestion-card-bg: var(--sidebar-bg, var(--panel));
+  --task-suggestion-path-bg: var(--panel-strong);
+  --task-suggestion-prompt-bg: var(--card);
+  --task-suggestion-action-bg: color-mix(in srgb, var(--accent) 72%, var(--text-strong) 28%);
+  --task-suggestion-action-fg: var(--primary-foreground);
+}
+
+:root[data-theme-mode="light"] .task-suggestion__start,
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--task-suggestion-action-fg);
+}
+
+:root[data-theme-mode="light"] .task-suggestion__start:hover:not(:disabled),
+:root[data-theme-mode="light"] .task-suggestion__start:focus-visible,
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger:hover:not(:disabled),
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger:focus-visible {
+  background: color-mix(in srgb, var(--task-suggestion-action-fg) 10%, transparent);
+  color: var(--task-suggestion-action-fg);
+}
+
+:root[data-theme-mode="light"] .task-suggestion__menu-trigger {
+  border-left: 1px solid color-mix(in srgb, var(--task-suggestion-action-fg) 18%, transparent);
 }
 
 .task-suggestion__menu-trigger svg {
@@ -1939,11 +2263,17 @@ button.chat-reply-preview--message:disabled {
   max-width: min(320px, calc(100vw - 24px));
 }
 
-.task-suggestion__dismiss {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 5px;
+.task-suggestion__header-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-suggestion[data-swap-direction],
+  .task-suggestion__instructions-chevron {
+    animation: none;
+    transition-duration: 0ms;
+  }
 }
 
 .chat-swarm {
@@ -2076,7 +2406,8 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -2088,18 +2419,23 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr[data-state="merged"] {
-  border-color: color-mix(in srgb, var(--pr-merged) 32%, var(--border));
-  background: color-mix(in srgb, var(--pr-merged) 7%, var(--panel));
+  border-color: color-mix(in srgb, var(--pr-merged) 18%, var(--border));
+  background: color-mix(in srgb, var(--pr-merged) 12%, var(--panel));
 }
 
 .chat-pr__link {
-  display: flex;
-  flex: 1;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 18px minmax(4ch, auto) minmax(0, 1fr);
+  align-items: baseline;
   gap: 8px;
   min-width: 0;
   color: var(--text);
   text-decoration: none;
+}
+
+.chat-pr__link--static {
+  grid-template-columns: 18px minmax(0, 1fr);
+  cursor: default;
 }
 
 .chat-pr__link:hover .chat-pr__number {
@@ -2108,7 +2444,9 @@ button.chat-reply-preview--message:disabled {
 
 .chat-pr__icon {
   display: grid;
-  flex: 0 0 auto;
+  align-self: center;
+  width: 18px;
+  height: 18px;
   place-items: center;
   color: var(--ok);
 }
@@ -2129,10 +2467,6 @@ button.chat-reply-preview--message:disabled {
   color: var(--muted);
 }
 
-.chat-pr__link--static {
-  cursor: default;
-}
-
 .chat-pr__icon svg,
 .chat-pr__warning svg {
   width: 15px;
@@ -2150,13 +2484,21 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr__number {
-  flex: 0 0 auto;
+  min-width: 0;
   font-weight: 650;
+}
+
+.chat-pr__identity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .chat-pr__repo {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--text);
+  font-weight: 500;
 }
 
 .chat-pr__branch {
@@ -2339,12 +2681,14 @@ button.chat-pr__diff {
 }
 
 .chat-pr__create {
-  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   padding: 3px 10px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--text);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
@@ -2352,7 +2696,15 @@ button.chat-pr__diff {
 }
 
 .chat-pr__create:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-pr__create:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .chat-pr__dismiss {
@@ -2391,8 +2743,7 @@ button.chat-pr__diff {
 }
 
 @media (max-width: 640px) {
-  .chat-pr__branch,
-  .chat-pr__repo {
+  .chat-pr__identity {
     display: none;
   }
 }
@@ -2597,10 +2948,6 @@ button.chat-pr__diff {
   width: 100%;
 }
 
-.chat-composer-model-control .chat-controls__permission-picker {
-  flex: 0 0 auto;
-}
-
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
@@ -2682,7 +3029,8 @@ button.chat-pr__diff {
   padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
 }
 
-.agent-chat__composer-meta {
+.agent-chat__composer-meta,
+.agent-chat__composer-context {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2692,7 +3040,7 @@ button.chat-pr__diff {
 .agent-chat__composer-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
@@ -3223,17 +3571,21 @@ button.chat-pr__diff {
   stroke-linejoin: round;
 }
 
+/* Theme overrides adjust the hover fill via this variable instead of their own
+   :hover rules: a :root[data-theme] selector outranks every variant's hover
+   (--voice, --stop), which painted the idle mic with the send button's loud
+   accent hover in dark themes. */
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--chat-send-hover-background, var(--accent-hover));
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
-:root[data-theme="dark"] .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
+:root[data-theme="dark"] .chat-send-btn {
+  --chat-send-hover-background: var(--primary-hover);
 }
 
-:root[data-theme="openknot"] .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
+:root[data-theme="openknot"] .chat-send-btn {
+  --chat-send-hover-background: var(--primary-hover);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
@@ -3281,11 +3633,11 @@ button.chat-pr__diff {
   --chat-voice-hover-color: var(--text);
   display: inline-flex;
   align-items: center;
+  gap: 0;
   flex: 0 0 auto;
 }
 
 .chat-talk-control--active {
-  --chat-picker-border: color-mix(in srgb, var(--accent) 24%, transparent);
   --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
   --chat-picker-color: var(--accent);
   --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
@@ -3296,24 +3648,20 @@ button.chat-pr__diff {
   display: inline-flex;
 }
 
-.chat-talk-control .chat-send-btn {
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
-}
-
+/* The device picker is a detached round ghost button beside the mic — the mic
+   itself never changes shape. It reserves its width at all times and hover
+   only fades it in; collapsing the width instead shifts the whole
+   right-aligned mic/send cluster sideways under the cursor on mouse-over. */
 .chat-talk-input-picker {
   display: inline-flex;
-  align-self: stretch;
-  width: 20px;
-  transition:
-    width 120ms ease,
-    opacity 100ms ease;
+  align-self: center;
+  width: 22px;
+  transition: opacity var(--duration-fast) ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .chat-talk-control:not(.chat-talk-control--active, :hover, :focus-within)
     .chat-talk-input-picker:not([open]) {
-    width: 0;
-    min-width: 0;
     opacity: 0;
   }
 }
@@ -3322,12 +3670,11 @@ button.chat-pr__diff {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  height: 100%;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
-  border-left: 1px solid var(--chat-picker-border, var(--border));
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  border-radius: var(--radius-full);
   background: var(--chat-picker-background, transparent);
   color: var(--chat-picker-color, var(--muted));
   transition: background var(--duration-fast) ease;
@@ -3706,7 +4053,8 @@ button.chat-pr__diff {
 
   .agent-chat__composer-actions {
     flex-direction: column;
-    gap: 4px;
+    row-gap: 4px;
+    column-gap: 8px;
     margin-left: var(--chat-box-inset);
   }
 
@@ -3758,7 +4106,8 @@ button.chat-pr__diff {
     flex: 0 0 26px;
   }
 
-  .agent-chat__composer-meta {
+  .agent-chat__composer-meta,
+  .agent-chat__composer-context {
     margin-left: 0;
   }
 
@@ -3775,7 +4124,7 @@ button.chat-pr__diff {
      text yields before either picker does. */
   .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
     flex: 0 1 auto;
-    min-width: 138px;
+    min-width: 144px;
   }
 
   .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
@@ -3789,6 +4138,7 @@ button.chat-pr__diff {
 
   /* The borderless trigger is 30px on desktop; keep a >=44px touch target
      inside the mobile composer row. */
+  .agent-chat__input .agent-chat__composer-meta .chat-controls__inline-select-trigger,
   .agent-chat__input .agent-chat__composer-controls .chat-controls__inline-select-trigger {
     width: fit-content;
     max-width: 100%;
@@ -5327,6 +5677,10 @@ button.chat-pr__diff {
     gap: 6px;
   }
 
+  .session-suggestions {
+    width: calc(100% - 8px);
+  }
+
   .chat-run-error {
     width: calc(100% - 8px);
     margin: 6px 4px 0;
@@ -5364,6 +5718,16 @@ button.chat-pr__diff {
 }
 
 @media (max-width: 640px) {
+  .agent-chat__composer-meta .chat-controls__permission-trigger {
+    width: 44px;
+  }
+
+  .agent-chat__composer-meta
+    .chat-controls__permission-trigger
+    .chat-controls__inline-select-label {
+    display: none;
+  }
+
   .agent-chat__composer-controls {
     align-items: center;
     flex-direction: row;

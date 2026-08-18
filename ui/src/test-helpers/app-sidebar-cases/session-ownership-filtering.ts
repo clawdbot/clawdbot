@@ -30,6 +30,77 @@ async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string) 
 }
 
 describe("AppSidebar session ownership filtering", () => {
+  it("uses the complete owner facet instead of raw loaded-row principals", async () => {
+    const harness = createSessionsHarness("main", [
+      "agent:main:opaque-profile",
+      "agent:main:discord-channel",
+      "agent:main:session-principal",
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const opaqueProfile = result.sessions.find((row) => row.key.endsWith(":opaque-profile"));
+    const discordChannel = result.sessions.find((row) => row.key.endsWith(":discord-channel"));
+    const sessionPrincipal = result.sessions.find((row) => row.key.endsWith(":session-principal"));
+    if (!opaqueProfile || !discordChannel || !sessionPrincipal) {
+      throw new Error("expected owner rows");
+    }
+    opaqueProfile.createdActor = {
+      type: "human",
+      id: "profile:channel:opaque",
+      label: "Channel Keeper",
+    };
+    opaqueProfile.owner = { actor: opaqueProfile.createdActor };
+    discordChannel.createdActor = { type: "human", id: "discord:channel:123" };
+    sessionPrincipal.createdActor = {
+      type: "agent",
+      id: "agent:roboclaw:discord:channel:456",
+    };
+    result.creators = [
+      { type: "human", id: "profile:channel:opaque", label: "Channel Keeper" },
+      { type: "agent", id: "research", label: "Research" },
+    ];
+
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector(".sidebar-session-sort-menu");
+    expect(menu?.querySelector('[value="creator:profile:channel:opaque"]')).not.toBeNull();
+    expect(menu?.textContent).toContain("Channel Keeper");
+    expect(
+      sidebar.querySelector(
+        '[data-session-key="agent:main:opaque-profile"] openclaw-session-owner-chip',
+      ),
+    ).not.toBeNull();
+    expect(
+      sidebar.querySelector(
+        '[data-session-key="agent:main:discord-channel"] openclaw-session-owner-chip',
+      ),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector(
+        '[data-session-key="agent:main:session-principal"] openclaw-session-owner-chip',
+      ),
+    ).toBeNull();
+    expect(menu?.querySelector('[value="creator:discord:channel:123"]')).toBeNull();
+    expect(menu?.querySelector('[value="creator:agent:roboclaw:discord:channel:456"]')).toBeNull();
+
+    result.creators = undefined;
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    const unavailableMenu = sidebar.querySelector(".sidebar-session-sort-menu");
+    expect(unavailableMenu?.querySelector('[value^="creator:"]') ?? null).toBeNull();
+    expect(unavailableMenu?.textContent ?? "").not.toContain("Channel Keeper");
+  });
+
   it("filters by effective owner and hides custom groups without matching sessions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", [
@@ -60,6 +131,10 @@ describe("AppSidebar session ownership filtering", () => {
       assignedAt: 11,
     };
     bob.category = "Operations";
+    result.creators = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
     harness.publish({ groups: ["Research", "Operations"] });
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
@@ -75,7 +150,7 @@ describe("AppSidebar session ownership filtering", () => {
     expect(sidebar.querySelector(".sidebar-session-sort--filtered")).not.toBeNull();
   });
 
-  it("filters catalog rows by authoritative creator ownership", async () => {
+  it("filters adopted catalog rows by authoritative live ownership", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
     const harness = createSessionsHarness("main", [
@@ -93,10 +168,15 @@ describe("AppSidebar session ownership filtering", () => {
       throw new Error("expected ownership rows");
     }
     ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    adopted.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    adopted.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    adopted.owner = {
+      actor: { type: "human", id: "profile-bob", label: "Bob" },
+      assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+      assignedAt: 10,
+    };
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
 
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -118,7 +198,7 @@ describe("AppSidebar session ownership filtering", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: backingSessionKey,
-                createdActor: { type: "human", id: "profile-bob", label: "Bob" },
+                createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                 canContinue: true,
                 canArchive: false,
               },
@@ -141,9 +221,9 @@ describe("AppSidebar session ownership filtering", () => {
 
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).toContain("External unowned session");
-    await selectCreator(sidebar, "profile-ada");
+    await selectCreator(sidebar, "profile-bob");
 
-    expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).toBeNull();
+    expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
 
     harness.publishList({
@@ -174,8 +254,8 @@ describe("AppSidebar session ownership filtering", () => {
     ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
@@ -228,11 +308,13 @@ describe("AppSidebar session ownership filtering", () => {
       throw new Error("expected ownership rows");
     }
     unread.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    unread.owner = { actor: unread.createdActor };
     unread.unread = true;
     other.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    other.owner = { actor: other.createdActor };
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
 
     const { sidebar } = await mountSidebar(
@@ -264,11 +346,12 @@ describe("AppSidebar session ownership filtering", () => {
       ...parentRow,
       key: parentKey,
       createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+      owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
       childSessions: [childKey],
     };
     result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
     harness.list.mockResolvedValue({
       ts: 2,
@@ -284,6 +367,7 @@ describe("AppSidebar session ownership filtering", () => {
           updatedAt: 2,
           status: "done",
           createdActor: { type: "human", id: "profile-bob", label: "Bob" },
+          owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
         },
       ],
     });

@@ -175,6 +175,8 @@
    row-local messages can break onto a full-width line below the controls. */
 .plugins-item {
   flex-wrap: wrap;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 73px;
 }
 
 .plugins-item--clickable {

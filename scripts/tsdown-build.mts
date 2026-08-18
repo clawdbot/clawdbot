@@ -5,6 +5,7 @@
 import {
   spawn,
   spawnSync,
+  type StdioOptions,
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
 } from "node:child_process";
@@ -12,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
@@ -23,7 +25,6 @@ import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import {
   isSourceCheckoutRoot,
@@ -86,7 +87,7 @@ type TsdownBuildParams = MemoryLimitParams & {
 
 type TsdownBuildResult = ReturnType<ReturnType<typeof createTsdownOutputScanner>["finish"]> & {
   error: Error | null;
-  signal: NodeJS.Signals | null;
+  signal: string | null;
   status: number | null;
   timedOut: boolean;
 };
@@ -817,61 +818,8 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
 type TaskkillRunner = (
   command: string,
   args: string[],
-  options: { stdio: "ignore" },
+  options: { killSignal?: NodeJS.Signals; stdio?: StdioOptions; timeout?: number },
 ) => { error?: Error; status: number | null };
-
-function signalWindowsProcessTree(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: TaskkillRunner = spawnSync,
-) {
-  const args = ["/PID", String(pid), "/T"];
-  if (signal === "SIGKILL") {
-    args.push("/F");
-  }
-  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
-  return !result?.error && result?.status === 0;
-}
-
-function signalWindowsProcessTreeOrForce(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: TaskkillRunner = spawnSync,
-) {
-  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
-    return true;
-  }
-  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
-}
-
-export function signalTsdownBuildProcessTree(
-  child: { pid?: number; kill(signal?: NodeJS.Signals): unknown },
-  signal: NodeJS.Signals,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: TaskkillRunner;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The group may already be gone; fall back to the direct child handle.
-    }
-  }
-  if (platform === "win32" && child.pid) {
-    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
-      return;
-    }
-  }
-  child.kill(signal);
-}
 
 export async function runTsdownBuildInvocation(
   invocation: TsdownBuildInvocation,
@@ -919,7 +867,7 @@ export async function runTsdownBuildInvocation(
   }
 
   function signalChild(signal: NodeJS.Signals) {
-    signalTsdownBuildProcessTree(child, signal, {
+    terminateManagedChild(child, signal, {
       platform,
       runTaskkill,
       useProcessGroup,

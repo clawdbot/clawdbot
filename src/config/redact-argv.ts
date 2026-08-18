@@ -9,7 +9,7 @@ const SECRET_FLAG_NAMES = new Set([
   "--apikey",
   "--secret",
   "--password",
-  "--passwd",
+  "--provider-env",
   "--auth-token",
   "--access-token",
   "--refresh-token",

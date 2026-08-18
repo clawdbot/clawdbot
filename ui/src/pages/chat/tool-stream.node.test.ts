@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import {
   agentEvent,
@@ -14,12 +14,21 @@ import {
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 
+const globalWithWindow = globalThis as typeof globalThis & {
+  window?: Window & typeof globalThis;
+};
+let installedTestWindow = false;
+
 beforeAll(() => {
-  const globalWithWindow = globalThis as typeof globalThis & {
-    window?: Window & typeof globalThis;
-  };
   if (!globalWithWindow.window) {
     globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+    installedTestWindow = true;
+  }
+});
+
+afterAll(() => {
+  if (installedTestWindow) {
+    Reflect.deleteProperty(globalWithWindow, "window");
   }
 });
 

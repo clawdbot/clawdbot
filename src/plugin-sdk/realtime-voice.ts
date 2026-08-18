@@ -28,6 +28,7 @@ export {
   normalizeRealtimeVoiceResponseOutcome,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
 } from "../talk/provider-types.js";
 export {
   createTalkEventSequencer,
@@ -220,6 +221,7 @@ export {
 } from "../talk/audio-energy.js";
 export {
   convertPcmToMulaw8k,
+  createStreamingPcmResampler,
   mulawToPcm,
   pcmToMulaw,
   resamplePcm,

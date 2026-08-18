@@ -133,6 +133,13 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - Configure later: `openclaw configure --section web`.
 
   </Step>
+  <Step title="Skills (recommended)">
+    - Reads the available skills and checks requirements.
+    - Lets you choose a node manager: **npm / pnpm / bun**.
+    - Auto-installs optional dependencies for trusted bundled skills (some use Homebrew on macOS).
+    - Skips skills whose Homebrew, uv, or Go installer prerequisite is unavailable, groups them with manual setup guidance, and points you at `openclaw doctor` once the prerequisite is installed.
+
+  </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent
       - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
@@ -149,13 +156,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
   <Step title="Health check">
     - Starts the Gateway (if needed) and runs `openclaw health`.
     - Tip: `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported (requires a reachable gateway).
-
-  </Step>
-  <Step title="Skills (recommended)">
-    - Reads the available skills and checks requirements.
-    - Lets you choose a node manager: **npm / pnpm / bun**.
-    - Auto-installs optional dependencies for trusted bundled skills (some use Homebrew on macOS).
-    - Skips skills whose Homebrew, uv, or Go installer prerequisite is unavailable, groups them with manual setup guidance, and points you at `openclaw doctor` once the prerequisite is installed.
 
   </Step>
   <Step title="Finish">

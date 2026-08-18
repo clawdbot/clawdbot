@@ -5,6 +5,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchGatewayMethodInProcess, setFallbackGatewayContext } from "../server-plugins.js";
 import {
@@ -192,15 +193,30 @@ describe("sessions.assignOwner", () => {
         assignedBy: { type: "human", id: "profile-viewer" },
         assignedAt: 4242,
       });
-      expect(result.requestContext.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          reason: "owner",
-          owner: expect.objectContaining({ actor: expect.objectContaining({ id: "research" }) }),
-        }),
-        expect.any(Set),
-        expect.any(Object),
-      );
+      const durableOwner = ensureProfileForEmail("next-owner@example.test");
+      const reassigned = await invoke({
+        cfg,
+        client: client("profile-viewer"),
+        request: {
+          key: sessionKey,
+          owner: { type: "human", id: durableOwner.id },
+        },
+      });
+      expect(reassigned.responses).toMatchObject([
+        [
+          true,
+          {
+            owner: {
+              actor: { type: "human", id: durableOwner.id },
+              assignedBy: { type: "human", id: "profile-viewer" },
+            },
+          },
+          undefined,
+        ],
+      ]);
+      expect(
+        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner?.actor,
+      ).toEqual({ type: "human", id: durableOwner.id });
 
       const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
       if (!target) {
@@ -213,7 +229,7 @@ describe("sessions.assignOwner", () => {
     });
   });
 
-  it("rejects hidden viewers, unidentified callers, and unknown agent targets", async () => {
+  it("rejects hidden viewers, unidentified callers, and unknown owner targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:private-handoff";
       await upsertSessionEntryCore(
@@ -292,15 +308,24 @@ describe("sessions.assignOwner", () => {
           createdActor: { type: "human", id: "profile-creator" },
         },
       );
-      const unknown = await invoke({
-        cfg,
-        client: client("profile-viewer"),
-        request: { key: sessionKey, owner: { type: "agent", id: "missing" } },
-      });
-      expect(unknown.responses[0]?.[2]).toMatchObject({
-        code: "INVALID_REQUEST",
-        message: 'unknown agent id "missing"',
-      });
+      for (const owner of [
+        { type: "human" as const, id: "unknown-profile" },
+        { type: "human" as const, id: "discord:channel:123" },
+        { type: "agent" as const, id: "missing" },
+      ]) {
+        const unknown = await invoke({
+          cfg,
+          client: client("profile-viewer"),
+          request: { key: sessionKey, owner },
+        });
+        expect(unknown.responses[0]?.[2]).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: `unknown session owner "${owner.id}"`,
+        });
+      }
+      expect(
+        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
+      ).toBeUndefined();
     });
   });
 });

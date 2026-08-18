@@ -9,7 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as StateDatabase,
   WorkerSessionPlacementMoves,
@@ -24,6 +24,7 @@ import { boundedWorkerError } from "./worker-error.js";
 const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (";
 const MOVE_SCHEMA_END = "\n) STRICT;";
 const MOVE_OPERATION_PREFIX = "move:v1:";
+const MOVE_MACHINE_CLASS_MAX_LENGTH = 128;
 
 type MoveRow = Selectable<WorkerSessionPlacementMoves>;
 type MoveDatabase = Pick<
@@ -60,8 +61,31 @@ function moveSchemaSql(): string {
   return OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MOVE_SCHEMA_END.length);
 }
 
+// Single-slot per-handle memo: getPlacementMoves feeds the sessions read
+// projection, so the DDL/PRAGMA ensure must not run per read.
+const ensuredMoveSchemaHandles = new WeakSet<DatabaseSync>();
+
 function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
+  if (ensuredMoveSchemaHandles.has(db)) {
+    return;
+  }
   db.exec(moveSchemaSql()); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+  // Databases that created this table before the column shipped upgrade in place;
+  // the column is bare and nullable, so old readers stay compatible.
+  ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
+  ensuredMoveSchemaHandles.add(db);
+}
+
+function ensureExistingWorkerPlacementMoveSchema(db: DatabaseSync): boolean {
+  if (ensuredMoveSchemaHandles.has(db)) {
+    return true;
+  }
+  // Reads stay lazy: never create the optional table from a read path.
+  if (!tableExists(db, "worker_session_placement_moves")) {
+    return false;
+  }
+  ensureWorkerPlacementMoveSchema(db);
+  return true;
 }
 
 function normalizeGeneration(value: number): number {
@@ -71,12 +95,14 @@ function normalizeGeneration(value: number): number {
   return value;
 }
 
-function boundedIdentifier(value: string, field: string): string {
+function boundedIdentifier(
+  value: string,
+  field: string,
+  maximumLength = WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+): string {
   const normalized = required(value, field);
-  if (normalized.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH) {
-    throw new Error(
-      `Worker session placement ${field} exceeds ${WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH} characters`,
-    );
+  if (normalized.length > maximumLength) {
+    throw new Error(`Worker session placement ${field} exceeds ${maximumLength} characters`);
   }
   return normalized;
 }
@@ -95,8 +121,22 @@ function normalizeWorkerPlacementMoveTarget(
   switch (target.kind) {
     case "gateway":
       return { kind: "gateway" };
-    case "profile":
-      return { kind: "profile", profileId: boundedIdentifier(target.profileId, "move profile id") };
+    case "profile": {
+      const machineClass = target.machineClass;
+      return {
+        kind: "profile",
+        profileId: boundedIdentifier(target.profileId, "move profile id"),
+        ...(machineClass === undefined
+          ? {}
+          : {
+              machineClass: boundedIdentifier(
+                machineClass,
+                "move machine class",
+                MOVE_MACHINE_CLASS_MAX_LENGTH,
+              ),
+            }),
+      };
+    }
     case "device":
       return { kind: "device", deviceId: boundedIdentifier(target.deviceId, "move device id") };
   }
@@ -116,14 +156,19 @@ function normalizeWorkerPlacementMoveSource(
 function targetValues(target: WorkerPlacementMoveTarget): {
   target_kind: MoveRow["target_kind"];
   target_id: MoveRow["target_id"];
+  target_machine_class: MoveRow["target_machine_class"];
 } {
   switch (target.kind) {
     case "gateway":
-      return { target_kind: target.kind, target_id: null };
+      return { target_kind: target.kind, target_id: null, target_machine_class: null };
     case "profile":
-      return { target_kind: target.kind, target_id: target.profileId };
+      return {
+        target_kind: target.kind,
+        target_id: target.profileId,
+        target_machine_class: target.machineClass ?? null,
+      };
     case "device":
-      return { target_kind: target.kind, target_id: target.deviceId };
+      return { target_kind: target.kind, target_id: target.deviceId, target_machine_class: null };
   }
   throw new Error("Worker placement move target is invalid");
 }
@@ -135,10 +180,25 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
     ownerEpoch: row.source_owner_epoch,
   });
   let target: WorkerPlacementMoveTarget;
+  if (row.target_kind !== "profile" && row.target_machine_class !== null) {
+    throw new Error(`Invalid worker placement move target: ${row.target_kind}`);
+  }
   if (row.target_kind === "gateway" && row.target_id === null) {
     target = { kind: "gateway" };
   } else if (row.target_kind === "profile" && row.target_id !== null) {
-    target = { kind: "profile", profileId: boundedIdentifier(row.target_id, "move profile id") };
+    target = {
+      kind: "profile",
+      profileId: boundedIdentifier(row.target_id, "move profile id"),
+      ...(row.target_machine_class === null
+        ? {}
+        : {
+            machineClass: boundedIdentifier(
+              row.target_machine_class,
+              "move machine class",
+              MOVE_MACHINE_CLASS_MAX_LENGTH,
+            ),
+          }),
+    };
   } else if (row.target_kind === "device" && row.target_id !== null) {
     target = { kind: "device", deviceId: boundedIdentifier(row.target_id, "move device id") };
   } else {
@@ -156,7 +216,7 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
 }
 
 function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | undefined {
-  if (!tableExists(db, "worker_session_placement_moves")) {
+  if (!ensureExistingWorkerPlacementMoveSchema(db)) {
     return undefined;
   }
   return executeSqliteQueryTakeFirstSync(
@@ -169,7 +229,7 @@ function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | un
 }
 
 function findMoveRowByOperation(db: DatabaseSync, operationId: string): MoveRow | undefined {
-  if (!tableExists(db, "worker_session_placement_moves")) {
+  if (!ensureExistingWorkerPlacementMoveSchema(db)) {
     return undefined;
   }
   return executeSqliteQueryTakeFirstSync(
@@ -208,6 +268,10 @@ function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): v
     values.target_id === null
       ? statement.where("target_id", "is", null)
       : statement.where("target_id", "=", values.target_id);
+  statement =
+    values.target_machine_class === null
+      ? statement.where("target_machine_class", "is", null)
+      : statement.where("target_machine_class", "=", values.target_machine_class);
   const result = executeSqliteQuerySync(db, statement);
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Session ${intent.sessionId} placement move changed before completion`);
@@ -265,7 +329,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       ];
       const results = new Map<string, WorkerPlacementMoveIntent>();
       const db = read();
-      if (!tableExists(db, "worker_session_placement_moves")) {
+      if (!ensureExistingWorkerPlacementMoveSchema(db)) {
         return results;
       }
       for (let offset = 0; offset < normalizedIds.length; offset += 250) {
@@ -286,7 +350,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
 
     listPlacementMoves(): WorkerPlacementMoveIntent[] {
       const db = read();
-      if (!tableExists(db, "worker_session_placement_moves")) {
+      if (!ensureExistingWorkerPlacementMoveSchema(db)) {
         return [];
       }
       return executeSqliteQuerySync(
@@ -390,6 +454,10 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           values.target_id === null
             ? statement.where("target_id", "is", null)
             : statement.where("target_id", "=", values.target_id);
+        statement =
+          values.target_machine_class === null
+            ? statement.where("target_machine_class", "is", null)
+            : statement.where("target_machine_class", "=", values.target_machine_class);
         return executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
       });
     },

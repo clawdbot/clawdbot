@@ -188,7 +188,9 @@ Local mode (default) walks through these steps:
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
    QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-5. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
+5. **Web search** - configures an optional search provider.
+6. **Skills** - installs recommended skills and their optional dependencies.
+7. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
    (Linux/WSL2), or a native Windows Scheduled Task with a per-user
    Startup-folder fallback.
    If token auth is required and `gateway.auth.token` is SecretRef-managed,
@@ -197,8 +199,7 @@ Local mode (default) walks through these steps:
    install with guidance. If both `gateway.auth.token` and
    `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
    is blocked until you set the mode explicitly.
-6. **Health check** - starts the Gateway and verifies it is reachable.
-7. **Skills** - installs recommended skills and their optional dependencies.
+8. **Health check** - starts the Gateway and verifies it is reachable.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you pass `--reset`.

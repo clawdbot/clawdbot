@@ -5201,6 +5201,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let label: String?
     public let boardface: AnyCodable?
     public let creatorid: String?
+    public let ownerid: String?
     public let involvingme: Bool?
     public let spawnedby: String?
     public let agentid: String?
@@ -5221,6 +5222,7 @@ public struct SessionsListParams: Codable, Sendable {
         label: String? = nil,
         boardface: AnyCodable? = nil,
         creatorid: String? = nil,
+        ownerid: String? = nil,
         involvingme: Bool? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
@@ -5240,6 +5242,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.label = label
         self.boardface = boardface
         self.creatorid = creatorid
+        self.ownerid = ownerid
         self.involvingme = involvingme
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -5261,6 +5264,7 @@ public struct SessionsListParams: Codable, Sendable {
         case label
         case boardface = "boardFace"
         case creatorid = "creatorId"
+        case ownerid = "ownerId"
         case involvingme = "involvingMe"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
@@ -7877,25 +7881,29 @@ public struct SessionMoveGatewayTarget: Codable, Sendable {
 public struct SessionMoveProfileTarget: Codable, Sendable {
     public let kind: String
     public let profileid: String
+    public let machineclass: String?
 
     public init(
-        profileid: String
+        profileid: String,
+        machineclass: String? = nil
     )
     {
         self.kind = "profile"
         self.profileid = profileid
+        self.machineclass = machineclass
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case profileid = "profileId"
+        case machineclass = "machineClass"
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["kind", "profileId"]).contains($0) }
+            .filter { !Set(["kind", "profileId", "machineClass"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -7915,12 +7923,14 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
         }
         self.kind = "profile"
         self.profileid = try container.decode(String.self, forKey: .profileid)
+        self.machineclass = try container.decodeIfPresent(String.self, forKey: .machineclass)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("profile", forKey: .kind)
         try container.encode(profileid, forKey: .profileid)
+        try container.encodeIfPresent(machineclass, forKey: .machineclass)
     }
 }
 
@@ -14676,6 +14686,106 @@ public struct ToolsCatalogParams: Codable, Sendable {
     }
 }
 
+public struct ToolsGitHubStatusParams: Codable, Sendable {
+    public let agentid: String
+
+    public init(
+        agentid: String)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct ToolsGitHubStatusResult: Codable, Sendable {
+    public let agentid: String
+    public let source: AnyCodable
+    public let credentialstate: AnyCodable
+    public let account: AnyCodable
+    public let gitauthor: [String: AnyCodable]
+    public let evidence: AnyCodable
+
+    public init(
+        agentid: String,
+        source: AnyCodable,
+        credentialstate: AnyCodable,
+        account: AnyCodable,
+        gitauthor: [String: AnyCodable],
+        evidence: AnyCodable)
+    {
+        self.agentid = agentid
+        self.source = source
+        self.credentialstate = credentialstate
+        self.account = account
+        self.gitauthor = gitauthor
+        self.evidence = evidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case source
+        case credentialstate = "credentialState"
+        case account
+        case gitauthor = "gitAuthor"
+        case evidence
+    }
+}
+
+public struct ToolsGitHubManagedConfigureParams: Codable, Sendable {
+    public let scope: AnyCodable
+    public let agentid: String
+    public let mode: String
+    public let secretname: String
+    public let gitauthor: [String: AnyCodable]?
+
+    public init(
+        scope: AnyCodable,
+        agentid: String,
+        mode: String,
+        secretname: String,
+        gitauthor: [String: AnyCodable]? = nil)
+    {
+        self.scope = scope
+        self.agentid = agentid
+        self.mode = mode
+        self.secretname = secretname
+        self.gitauthor = gitauthor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+        case mode
+        case secretname = "secretName"
+        case gitauthor = "gitAuthor"
+    }
+}
+
+public struct ToolsGitHubInheritConfigureParams: Codable, Sendable {
+    public let scope: AnyCodable
+    public let agentid: String
+    public let mode: String
+
+    public init(
+        scope: AnyCodable,
+        agentid: String,
+        mode: String)
+    {
+        self.scope = scope
+        self.agentid = agentid
+        self.mode = mode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+        case mode
+    }
+}
+
 public struct ToolCatalogProfile: Codable, Sendable {
     public let id: AnyCodable
     public let label: String
@@ -21010,6 +21120,37 @@ public enum AuditRunIdentityV1: Codable, Sendable {
         case .unknown(let value): try value.encode(to: encoder)
         case .unsupported(let value): try value.encode(to: encoder)
         case .ambiguous(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ToolsGitHubConfigureParams: Codable, Sendable {
+    case managed(ToolsGitHubManagedConfigureParams)
+    case inherit(ToolsGitHubInheritConfigureParams)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "mode"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "managed": self = try .managed(ToolsGitHubManagedConfigureParams(from: decoder))
+        case "inherit": self = try .inherit(ToolsGitHubInheritConfigureParams(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ToolsGitHubConfigureParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .managed(let value): try value.encode(to: encoder)
+        case .inherit(let value): try value.encode(to: encoder)
         }
     }
 }

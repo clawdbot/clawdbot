@@ -15,6 +15,7 @@ import {
   type PluginToolMetadataRegistration,
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import { validateControlUiNativeRoutePlacement } from "./registry-control-ui-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type {
   PluginRecord,
@@ -390,6 +391,9 @@ export function createHostRegistrars(state: PluginRegistryState) {
         });
         return;
       }
+    }
+    if (!validateControlUiNativeRoutePlacement({ record, placement, pushDiagnostic })) {
+      return;
     }
     if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
       pushDiagnostic({

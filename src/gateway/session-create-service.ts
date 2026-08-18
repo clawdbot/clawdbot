@@ -879,6 +879,11 @@ export async function createGatewaySession(params: {
       return { ok: false, error: preparationResult.error };
     }
     preparedLifecycle = preparationResult?.value;
+    const spawnedCwd = normalizeOptionalString(preparedLifecycle?.spawnedCwd ?? params.spawnedCwd);
+    const sessionRoot = normalizeOptionalString(
+      preparedLifecycle?.sessionRoot ?? params.sessionRoot,
+    );
+    const runtimeCwd = spawnedCwd ?? sessionRoot;
 
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
@@ -1034,12 +1039,6 @@ export async function createGatewaySession(params: {
           return patched;
         }
         sessionEntries[target.canonicalKey] = patched.entry;
-        const spawnedCwd = normalizeOptionalString(
-          preparedLifecycle?.spawnedCwd ?? params.spawnedCwd,
-        );
-        const sessionRoot = normalizeOptionalString(
-          preparedLifecycle?.sessionRoot ?? params.sessionRoot,
-        );
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
         const initialAgentHarnessId = params.initialEntry
@@ -1235,6 +1234,7 @@ export async function createGatewaySession(params: {
             }
           : {}),
         ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+        ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
       },
     );
     if (!created.ok) {

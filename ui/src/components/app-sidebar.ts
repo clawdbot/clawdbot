@@ -1,6 +1,10 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  FsListDirResult,
+  WorktreeRepositoryStatus,
+  WorktreesBranchesResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -86,15 +90,43 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
-    const scope = this.sessionData.beginSessionMutation();
-    if (!scope) {
+    const sessions = this.context?.sessions;
+    const scope = sessions?.captureConnectionScope();
+    if (!sessions || !scope) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
-    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     return result;
+  }
+
+  async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
+    const requestedPath = path?.trim();
+    const agent = this.activeChipAgent().agent;
+    if (!requestedPath) {
+      return agent?.workspaceGit === true
+        ? "git"
+        : agent?.workspaceGit === false
+          ? "not_git"
+          : "unavailable";
+    }
+    const sessions = this.context?.sessions;
+    const scope = sessions?.captureConnectionScope();
+    if (!sessions || !scope) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
+      repoRoot: requestedPath,
+      includeRepositoryStatus: true,
+    });
+    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
+      ? result.repositoryStatus
+      : "unavailable";
   }
 
   // Lazy: the controller pulls core token-suppression modules that must stay
@@ -435,7 +467,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const expandedAgentId = this.expandedAgentId();
     const liveRows = [
       ...(this.sessionData.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
+      ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
     ];
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
     const catalogs = this.visibleSessionCatalogs();
@@ -466,7 +498,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
         toSidebarSession: navigationState.toSidebarSession,
-        creatorId: this.activeSessionCreatorId,
+        ownerId: this.activeSessionCreatorId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,
       },
@@ -475,6 +507,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
+    const occupiedPluginPlacements = new Set(
+      sidebarZone.entries.flatMap((entry) =>
+        entry.type === "route" ? [`route:${entry.route}`] : [],
+      ),
+    );
     return html`
       <aside
         class="sidebar"
@@ -512,9 +549,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                     sidebarZone.workboardRows,
                   ),
                 )}
-                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                  (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
+                  .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
+                  .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
               </div>
             </nav>
             ${this.renderSessions()}

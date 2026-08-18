@@ -427,7 +427,8 @@ openclaw-chat-sidebar-region,
   align-items: center;
   justify-content: flex-start;
   gap: 7px;
-  padding: 0 8px;
+  padding-block: 0;
+  padding-inline: 8px 0;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -440,14 +441,21 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
+.side-panel__header .tabstrip-tab[active]::part(base) {
+  border-start-start-radius: var(--radius-md);
+  border-end-start-radius: var(--radius-md);
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.side-panel__header
   .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
 
 .side-panel__header .tabstrip-tab[active]::part(base) {
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
 }
@@ -504,19 +512,22 @@ openclaw-chat-sidebar-region,
   width: max-content;
   max-width: 100%;
   min-width: 24px;
-  align-self: stretch;
+  align-self: center;
   align-items: center;
   flex: 1 1 auto;
 }
 
 .side-panel__header .tabstrip-tab__close {
-  width: 16px;
-  min-width: 16px;
+  width: 28px;
+  min-width: 28px;
   height: 28px;
-  flex: 0 0 16px;
+  flex: 0 0 28px;
   align-self: center;
   margin: 0;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: var(--radius-md);
+  border-end-end-radius: var(--radius-md);
   opacity: 0;
   transition:
     background-color 120ms ease,

@@ -1460,59 +1460,71 @@ describe("sessions_send gating", () => {
     ]);
   });
 
-  it("keeps synchronous distinct-target sends unchanged", async () => {
-    const targetSessionKey = "agent:main:other";
-    const tool = createSessionsSendTool({
-      agentSessionKey: MAIN_AGENT_SESSION_KEY,
-      agentChannel: MAIN_AGENT_CHANNEL,
-      config: {
-        session: { scope: "per-sender", mainKey: "main" },
-        tools: {
-          agentToAgent: { enabled: false },
-          sessions: { visibility: "all" },
-        },
-      } as never,
-    });
-    let historyCalls = 0;
-    const staleAssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "older reply from a previous run" }],
-      timestamp: 20,
-    };
+  it.each(["silent", "empty"] as const)(
+    "reports a terminal %s target without leaving an announcement pending",
+    async (disposition) => {
+      const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+      vi.mocked(runSessionsSendA2AFlow).mockClear();
+      const targetSessionKey = "agent:main:other";
+      const tool = createSessionsSendTool({
+        agentSessionKey: MAIN_AGENT_SESSION_KEY,
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: "main" },
+          tools: {
+            agentToAgent: { enabled: false },
+            sessions: { visibility: "all" },
+          },
+        } as never,
+      });
+      let historyCalls = 0;
+      const staleAssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "older reply from a previous run" }],
+        timestamp: 20,
+      };
 
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: targetSessionKey, kind: "direct" }],
-        };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-stale-send", acceptedAt: 123 };
-      }
-      if (request.method === "agent.wait") {
-        return { runId: "run-stale-send", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        historyCalls += 1;
-        return { messages: [staleAssistantMessage] };
-      }
-      return {};
-    });
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method === "sessions.list") {
+          return {
+            path: "/tmp/sessions.json",
+            sessions: [{ key: targetSessionKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-stale-send", acceptedAt: 123 };
+        }
+        if (request.method === "agent.wait") {
+          return {
+            runId: "run-stale-send",
+            status: "ok",
+            terminalReply: { disposition },
+          };
+        }
+        if (request.method === "chat.history") {
+          historyCalls += 1;
+          return { messages: [staleAssistantMessage] };
+        }
+        return {};
+      });
 
-    const result = await tool.execute("call-stale-send", {
-      sessionKey: targetSessionKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+      const result = await tool.execute("call-stale-send", {
+        sessionKey: targetSessionKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      });
 
-    expect(historyCalls).toBe(2);
-    const details = requireDetails(result);
-    expect(details.status).toBe("ok");
-    expect(details.reply).toBeUndefined();
-    expect(details.sessionKey).toBe(targetSessionKey);
-  });
+      expect(historyCalls).toBe(2);
+      const details = requireDetails(result);
+      expect(details.status).toBe("no_reply");
+      expect(details.reply).toBeUndefined();
+      expect(details.delivery).toBeUndefined();
+      expect(details.message).toContain("pending announcement");
+      expect(details.sessionKey).toBe(targetSessionKey);
+      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
@@ -1935,7 +1947,7 @@ describe("sessions_send gating", () => {
       timeoutSeconds: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(requireDetails(result).status).toBe("ok");
+    expect(requireDetails(result).status).toBe("no_reply");
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });

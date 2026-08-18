@@ -16,8 +16,8 @@ type NavigationItem = {
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
+// Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "workboard",
   "dashboards",
   "usage",
   "cron",
@@ -28,6 +28,10 @@ export const SIDEBAR_NAV_ROUTES = [
   "apps",
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
+
+// `route:workboard` shipped in browser and synced preferences before Workboard
+// became plugin-owned. Keep it as a placement slot, but not a customizable core route.
+const PERSISTED_SIDEBAR_ROUTES = ["workboard", ...SIDEBAR_NAV_ROUTES] as const;
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
@@ -50,9 +54,14 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+export type PersistedSidebarRoute = (typeof PERSISTED_SIDEBAR_ROUTES)[number];
+
+export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
+  return PERSISTED_SIDEBAR_ROUTES.includes(value as PersistedSidebarRoute);
+}
 
 export type SidebarZoneEntry =
-  | { type: "route"; route: SidebarNavRoute }
+  | { type: "route"; route: PersistedSidebarRoute }
   | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
@@ -71,9 +80,7 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("route:")) {
     const route = value.slice("route:".length);
-    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
-      ? { type: "route", route: route as SidebarNavRoute }
-      : null;
+    return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
   if (value.startsWith("session:")) {
     const key = value.slice("session:".length).trim();

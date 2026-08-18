@@ -727,6 +727,63 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("uses target-bounded validation reads for multi-session imports", async () => {
+    const countTargetReads = async (sessionCount: number) => {
+      const store = createLegacyStore();
+      const sessions = Object.fromEntries(
+        Array.from({ length: sessionCount }, (_, offset) => {
+          const index = offset + 1;
+          return [
+            index === 1 ? "agent:main:main" : `agent:main:session-${index}`,
+            {
+              sessionFile: `session-${index}.jsonl`,
+              sessionId: `session-${index}`,
+              updatedAt: 2000 + index,
+            },
+          ];
+        }),
+      );
+      fs.writeFileSync(store.storePath, `${JSON.stringify(sessions)}\n`, { mode: 0o600 });
+      for (let index = 2; index <= sessionCount; index += 1) {
+        fs.writeFileSync(
+          path.join(store.sessionDir, `session-${index}.jsonl`),
+          `{"type":"session","sessionId":"session-${index}"}\n{"type":"event","id":"evt-${index}"}\n`,
+          { mode: 0o600 },
+        );
+      }
+
+      const sqlitePath = path.resolve(
+        resolveTargetSqlitePath({ agentId: "main", storePath: store.storePath }),
+      );
+      const openSqlite = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      try {
+        const report = await runDoctorSessionSqlite({
+          env: store.env,
+          mode: "import",
+          store: store.storePath,
+        });
+        expect(report.totals).toMatchObject({
+          importedEntries: sessionCount,
+          importedTranscriptEvents: sessionCount * 2,
+          issues: 0,
+          sqliteEntries: sessionCount,
+        });
+        return openSqlite.mock.calls.filter(
+          ([location, options]) =>
+            path.resolve(location) === sqlitePath && options?.readOnly === true,
+        ).length;
+      } finally {
+        openSqlite.mockRestore();
+      }
+    };
+
+    const singleSessionReads = await countTargetReads(1);
+    const multiSessionReads = await countTargetReads(3);
+
+    expect(singleSessionReads).toBeGreaterThan(0);
+    expect(multiSessionReads).toBe(singleSessionReads);
+  });
+
   it("archives legacy stores with valid sessions and invalid cron stubs without failing", async () => {
     const store = createLegacyStore();
     const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
@@ -1171,13 +1228,32 @@ describe("runDoctorSessionSqlite", () => {
     ]);
   });
 
-  it("checkpoints bulk unreferenced archive moves without per-file manifest rewrites", async () => {
+  it("checkpoints bulk archive moves without per-file manifest rewrites", async () => {
     const store = createLegacyStore();
+    const sessions = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
     for (let index = 0; index < 64; index += 1) {
+      const sessionId = `bulk-session-${index}`;
+      const sessionFile = `${sessionId}.jsonl`;
+      sessions[`agent:main:bulk:${index}`] = {
+        channel: "cli",
+        chatType: "direct",
+        sessionFile,
+        sessionId,
+        updatedAt: 2000 + index,
+      };
+      fs.writeFileSync(
+        path.join(store.sessionDir, sessionFile),
+        `${JSON.stringify({ type: "session", sessionId })}\n`,
+        { mode: 0o600 },
+      );
       fs.writeFileSync(path.join(store.sessionDir, `orphan-${index}.jsonl`), "{}\n", {
         mode: 0o600,
       });
     }
+    fs.writeFileSync(store.storePath, JSON.stringify(sessions, null, 2), { mode: 0o600 });
     fs.writeFileSync(path.join(store.sessionDir, "orphan collision.jsonl"), "{}\n", {
       mode: 0o600,
     });
@@ -1199,12 +1275,18 @@ describe("runDoctorSessionSqlite", () => {
       const plannedUnreferencedMoves =
         manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "unreferenced-jsonl") ??
         [];
+      const plannedTranscriptMoves =
+        manifest.targets[0]?.plannedMoves.filter((move) => move.kind === "transcript") ?? [];
 
       expect(plannedUnreferencedMoves).toHaveLength(67);
       expect(new Set(plannedUnreferencedMoves.map((move) => move.archivePath)).size).toBe(67);
+      expect(plannedTranscriptMoves).toHaveLength(65);
       expect(
         manifest.targets[0]?.completedMoves.filter((move) => move.kind === "unreferenced-jsonl"),
       ).toHaveLength(67);
+      expect(
+        manifest.targets[0]?.completedMoves.filter((move) => move.kind === "transcript"),
+      ).toHaveLength(65);
       expect(manifestWrites).toBeLessThan(20);
       expect(replaceFileAtomicSync).toHaveBeenCalledWith(
         expect.objectContaining({

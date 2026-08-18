@@ -318,7 +318,7 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
   };
-  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  /** Owner for ambient system-agent/Custodian inference and unscoped operator-read fallbacks. */
   systemAgent?: {
     agentId?: string;
   };

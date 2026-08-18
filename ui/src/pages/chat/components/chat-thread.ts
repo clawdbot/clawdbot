@@ -1,5 +1,6 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -11,6 +12,11 @@ import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
+import {
+  enhanceMarkdownTables,
+  handleMarkdownTableInteraction,
+  releaseMarkdownTables,
+} from "../../../components/markdown-tables.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import {
@@ -24,6 +30,33 @@ import {
 } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
+
+const markdownTableOwnerRefs = new WeakMap<
+  ChatTranscriptSession,
+  (element: Element | undefined) => void
+>();
+
+function markdownTableOwnerRef(
+  transcript: ChatTranscriptSession,
+): (element: Element | undefined) => void {
+  const current = markdownTableOwnerRefs.get(transcript);
+  if (current) {
+    return current;
+  }
+  let owner: HTMLElement | null = null;
+  const callback = (element: Element | undefined) => {
+    const next = element instanceof HTMLElement ? element : null;
+    if (owner && owner !== next) {
+      releaseMarkdownTables(owner);
+    }
+    owner = next;
+    if (owner) {
+      enhanceMarkdownTables(owner);
+    }
+  };
+  markdownTableOwnerRefs.set(transcript, callback);
+  return callback;
+}
 
 function renderLoadingSkeleton() {
   return html`
@@ -115,6 +148,7 @@ function renderTranscriptShell(
       aria-live="off"
       aria-relevant="additions"
       tabindex="0"
+      ${ref(markdownTableOwnerRef(transcript))}
       @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
       @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
       @scroll=${props.onChatScroll}
@@ -147,6 +181,7 @@ function renderTranscriptShell(
       @touchcancel=${props.onHistoryIntent}
       @click=${(event: MouseEvent) => {
         handleMarkdownCodeBlockCopy(event);
+        handleMarkdownTableInteraction(event);
         const target = markdownFileLinkFromEvent(event);
         if (target) {
           props.onOpenWorkspaceFile?.(target);

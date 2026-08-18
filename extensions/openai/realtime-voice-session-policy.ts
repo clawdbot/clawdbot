@@ -82,6 +82,7 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
+  logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
 };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";

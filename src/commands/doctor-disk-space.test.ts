@@ -181,7 +181,7 @@ describe("collectDiskSpaceHealthFindings", () => {
     ]);
   });
 
-  it("returns a critical-space warning finding", () => {
+  it("returns a critical-space error finding", () => {
     const findings = collectDiskSpaceHealthFindings({ gateway: { mode: "local" } } as never, {
       env: { HOME: "/home/test" },
       readDiskSpace: () => ({ availableBytes: 50 * 1024 * 1024 }),
@@ -190,7 +190,7 @@ describe("collectDiskSpaceHealthFindings", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/disk-space",
-        severity: "warning",
+        severity: "error",
         message: "CRITICAL: only 50 MB free on the partition containing /home/test/.openclaw.",
         path: "/home/test/.openclaw",
         target: "50 MB",

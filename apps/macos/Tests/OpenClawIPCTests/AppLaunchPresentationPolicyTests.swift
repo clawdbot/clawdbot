@@ -84,6 +84,7 @@ struct AppLaunchRuntimePlanTests {
         #expect(policy.allowsUpdater)
         #expect(policy.allowsDockIcon)
         #expect(policy.allowsInteractiveServices)
+        #expect(policy.allowsCuaComputerControl)
         #expect(policy.shouldAutoOpenChat(arguments: ["OpenClaw", "--chat"]))
         #expect(policy.shouldAutoOpenDashboard(arguments: ["OpenClaw", "--dashboard"]))
     }
@@ -99,6 +100,7 @@ struct AppLaunchRuntimePlanTests {
         #expect(policy.allowsUpdater)
         #expect(policy.allowsDockIcon)
         #expect(policy.allowsInteractiveServices)
+        #expect(policy.allowsCuaComputerControl)
         #expect(!policy.shouldAutoOpenChat(arguments: arguments))
         #expect(!policy.shouldAutoOpenDashboard(arguments: arguments))
     }
@@ -115,6 +117,7 @@ struct AppLaunchRuntimePlanTests {
         #expect(!policy.allowsUpdater)
         #expect(!policy.allowsDockIcon)
         #expect(!policy.allowsInteractiveServices)
+        #expect(!policy.allowsCuaComputerControl)
         #expect(!policy.shouldAutoOpenChat(arguments: arguments))
         #expect(!policy.shouldAutoOpenDashboard(arguments: arguments))
         #expect(DockIconManager.activationPolicy(

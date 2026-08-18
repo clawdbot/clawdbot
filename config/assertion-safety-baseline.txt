@@ -189,7 +189,6 @@ extensions/codex/src/app-server/config-reviewer.ts	2
 extensions/codex/src/app-server/config-utils.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	4
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
-extensions/codex/src/app-server/dynamic-tool-response-state.ts	1
 extensions/codex/src/app-server/dynamic-tools.ts	6
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
 extensions/codex/src/app-server/elicitation-bridge.ts	1
@@ -1382,7 +1381,6 @@ extensions/vllm/stream.ts	1
 extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
-extensions/voice-call/src/cli.ts	2
 extensions/voice-call/src/config.ts	2
 extensions/voice-call/src/manager.ts	2
 extensions/voice-call/src/manager/outbound.ts	3
@@ -1391,13 +1389,13 @@ extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/mock.ts	7
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
-extensions/voice-call/src/providers/twilio.ts	3
+extensions/voice-call/src/providers/twilio.ts	2
 extensions/voice-call/src/providers/twilio/api.ts	3
 extensions/voice-call/src/realtime-agent-context.ts	1
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	3
 extensions/voice-call/src/tts-provider-voice.ts	1
-extensions/voice-call/src/webhook.ts	12
+extensions/voice-call/src/webhook.ts	11
 extensions/voice-call/src/webhook/realtime-handler.ts	3
 extensions/voice-call/src/webhook/stream-frame-adapter.ts	2
 extensions/volcengine/tts.ts	2
@@ -1621,7 +1619,6 @@ packages/memory-host-sdk/src/host/batch-http.ts	2
 packages/memory-host-sdk/src/host/batch-output.ts	2
 packages/memory-host-sdk/src/host/batch-upload.ts	1
 packages/memory-host-sdk/src/host/config-utils.ts	2
-packages/memory-host-sdk/src/host/fs-utils.ts	3
 packages/memory-host-sdk/src/host/internal.ts	1
 packages/memory-host-sdk/src/host/memory-schema-fts.ts	2
 packages/memory-host-sdk/src/host/memory-schema-migration.ts	1
@@ -1685,7 +1682,7 @@ src/agents/agent-bundle-lsp-runtime.ts	4
 src/agents/agent-bundle-mcp-combined.ts	2
 src/agents/agent-bundle-mcp-manager-api.ts	2
 src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
-src/agents/agent-bundle-mcp-materialize.ts	4
+src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	9
 src/agents/agent-command-restart-recovery.ts	4
@@ -1808,7 +1805,6 @@ src/agents/embedded-agent-helpers/images.ts	8
 src/agents/embedded-agent-helpers/openai.ts	21
 src/agents/embedded-agent-helpers/turns.ts	23
 src/agents/embedded-agent-live-edit-diff.ts	3
-src/agents/embedded-agent-message-tool-source-reply.ts	15
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
 src/agents/embedded-agent-runner/cache-ttl.ts	2
@@ -1830,11 +1826,11 @@ src/agents/embedded-agent-runner/history.ts	3
 src/agents/embedded-agent-runner/message-visibility.ts	13
 src/agents/embedded-agent-runner/model-context-tokens.ts	1
 src/agents/embedded-agent-runner/model.compat.ts	1
-src/agents/embedded-agent-runner/model.configured-fallback.ts	2
-src/agents/embedded-agent-runner/model.configured-overrides.ts	3
+src/agents/embedded-agent-runner/model.configured-fallback.ts	1
+src/agents/embedded-agent-runner/model.configured-overrides.ts	2
 src/agents/embedded-agent-runner/model.inline-provider.ts	2
 src/agents/embedded-agent-runner/model.provider-hooks.ts	10
-src/agents/embedded-agent-runner/model.registry-resolution.ts	7
+src/agents/embedded-agent-runner/model.registry-resolution.ts	6
 src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
@@ -1913,7 +1909,6 @@ src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
 src/agents/embedded-agent-runner/tool-result-truncation.ts	23
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
-src/agents/embedded-agent-subscribe.handlers.compaction.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
@@ -2198,7 +2193,7 @@ src/agents/worktrees/git.ts	2
 src/agents/worktrees/provisioned-files.ts	3
 src/agents/worktrees/registry.ts	12
 src/agents/worktrees/run-lease.ts	1
-src/audit/execution-identity-admission.ts	5
+src/audit/execution-identity-admission.ts	2
 src/audit/execution-identity-context-build.ts	3
 src/auto-reply/chunk.ts	4
 src/auto-reply/command-auth.ts	5
@@ -2905,7 +2900,7 @@ src/gateway/agent-turn/internal-facade.ts	4
 src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
-src/gateway/call.ts	7
+src/gateway/call.ts	6
 src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
@@ -3085,8 +3080,7 @@ src/gateway/server-reload-utils.ts	1
 src/gateway/server-resident-registry.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	3
 src/gateway/server-runtime-handles.ts	11
-src/gateway/server-runtime-state-prepare.ts	3
-src/gateway/server-runtime-state.ts	1
+src/gateway/server-runtime-state-prepare.ts	2
 src/gateway/server-session-events.ts	4
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
@@ -3325,7 +3319,7 @@ src/infra/retry-policy.ts	3
 src/infra/retryable-network-errors.ts	1
 src/infra/session-cost-usage-aggregation.ts	5
 src/infra/session-cost-usage-cache-runtime.ts	1
-src/infra/session-cost-usage-cache.sqlite.ts	2
+src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	4
 src/infra/session-cost-usage-pricing.ts	6
 src/infra/session-cost-usage-reporting.ts	9
@@ -3992,7 +3986,7 @@ src/worker/worker-process.ts	2
 src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/api/gateway.ts	1
-ui/src/app-navigation.ts	3
+ui/src/app-navigation.ts	2
 ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
@@ -4018,7 +4012,7 @@ ui/src/app/overlays.ts	1
 ui/src/app/question-prompt.ts	2
 ui/src/app/server-prefs-state.ts	14
 ui/src/app/server-prefs.ts	17
-ui/src/app/settings.ts	10
+ui/src/app/settings.ts	9
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/theme.ts	4
@@ -4091,7 +4085,7 @@ ui/src/components/session-data-controller.ts	2
 ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-menu.ts	1
-ui/src/components/session-organizer-controller.ts	9
+ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
 ui/src/components/sidebar-agent-card.ts	1

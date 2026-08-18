@@ -423,18 +423,20 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row--archived")).toHaveLength(1);
   });
 
-  it("groups sessions by channel with section headers and no pagination", async () => {
+  it("paginates grouped sessions while preserving full group counts", async () => {
     const container = document.createElement("div");
+    const onPageChange = vi.fn();
+    const result = buildMultiResult([
+      { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
+      { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
+      { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
+    ]);
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
-            { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
-            { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
-          ]),
-        ),
+        ...buildProps(result),
         groupBy: "channel",
+        pageSize: 2,
+        onPageChange,
       }),
       container,
     );
@@ -443,12 +445,41 @@ describe("sessions view", () => {
     const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(headers).toEqual(["discord", "telegram"]);
+    expect(headers).toEqual(["discord"]);
     const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(counts).toEqual(["2 sessions", "1 session"]);
-    expect(container.querySelector(".data-table-pagination")).toBeNull();
+    expect(counts).toEqual(["2 sessions"]);
+    expect(container.querySelectorAll(".session-data-row")).toHaveLength(2);
+    expect(container.querySelector(".data-table-pagination")?.textContent).toContain(
+      "1-2 of 3 rows",
+    );
+
+    const next = Array.from(container.querySelectorAll(".data-table-pagination button")).find(
+      (button) => button.textContent?.trim() === "Next",
+    );
+    expect(next).toBeInstanceOf(HTMLButtonElement);
+    next!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPageChange).toHaveBeenCalledWith(1);
+
+    render(
+      renderSessions({
+        ...buildProps(result),
+        groupBy: "channel",
+        page: 1,
+        pageSize: 2,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-group-row__label")?.textContent?.trim()).toBe(
+      "telegram",
+    );
+    expect(container.querySelector(".session-group-row__count")?.textContent?.trim()).toBe(
+      "1 session",
+    );
+    expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
   });
 
   it("selects and names the current page size on first render", async () => {

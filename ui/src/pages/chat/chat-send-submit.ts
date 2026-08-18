@@ -61,6 +61,7 @@ import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queu
 import {
   handleAbortChat,
   hasAbortableSessionRun,
+  hasDirectSessionRun,
   isChatBusy,
   isChatStopCommand,
 } from "./run-lifecycle.ts";
@@ -584,7 +585,7 @@ export async function handleSendChat(
       pending?.sendState === "waiting-idle" &&
       host.sessionKey === submittedSessionKey &&
       visibleSessionMatches(host, submittedSessionKey, pending.agentId) &&
-      (isChatBusy(host) || hasAbortableSessionRun(host));
+      (isChatBusy(host) || hasDirectSessionRun(host));
     if (pendingBusySend) {
       recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
       // Only an explicit browser override replaces inherited Gateway policy.
@@ -596,7 +597,7 @@ export async function handleSendChat(
         !skillWorkshopRevision &&
         followUpMode !== "queue" &&
         host.connected &&
-        hasAbortableSessionRun(host)
+        hasDirectSessionRun(host)
       ) {
         void sendQueuedChatMessageWithQueueModeLifecycle(
           host,

@@ -216,6 +216,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     chatMetadataLifecycle,
     gatewayRequestContext,
     flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
+    minimalTestGateway,
+    logWarning: (message) => log.warn(message),
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;
