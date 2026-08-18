@@ -2330,7 +2330,7 @@ describe("cron controller", () => {
     expect(state.cronError).toBe("cron.runs unavailable");
   });
 
-  it("runs cron job in due mode when requested", async () => {
+  it("preserves queued run feedback when due-mode history refresh fails", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "cron.run") {
         expectRecordFields(requireRecord(payload, "cron.run payload"), {
@@ -2340,7 +2340,7 @@ describe("cron controller", () => {
         return { ok: true, enqueued: true, runId: "run-due" };
       }
       if (method === "cron.runs") {
-        return { entries: [], total: 0, hasMore: false, nextOffset: null };
+        throw new Error("run history refresh unavailable");
       }
       return {};
     });

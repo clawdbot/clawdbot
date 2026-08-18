@@ -1336,10 +1336,10 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
       }
       return;
     }
+    await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
     if ("enqueued" in result && result.enqueued) {
       state.cronError = `Run queued. Run ID: ${result.runId}`;
     }
-    await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
   });
 }
 
