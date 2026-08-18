@@ -19,6 +19,7 @@ suite.define(() => {
   it("captures online, global activity, and person-filtered activity surfaces", async () => {
     await suite.withPage(
       {
+        colorScheme: "light",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
@@ -147,10 +148,46 @@ suite.define(() => {
         await expect
           .poll(() => page.locator('[data-online-user-id="profile-bob"]').getAttribute("class"))
           .toContain("sidebar-online__person--away");
+        const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
         await mkdir(outputDir, { recursive: true });
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "01-sidebar-online.png"),
+          path: path.join(outputDir, "01-sidebar-online-expanded-light.png"),
+        });
+
+        await onlineToggle.focus();
+        await page.keyboard.press("Enter");
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(0);
+        expect(
+          await page.evaluate(() => {
+            const value = localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections");
+            return value ? JSON.parse(value) : [];
+          }),
+        ).toEqual(expect.arrayContaining(["work", "online"]));
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await page.locator(".sidebar").screenshot({
+          animations: "disabled",
+          path: path.join(outputDir, "02-sidebar-online-collapsed-light.png"),
+        });
+
+        await page.reload();
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
+        await page.emulateMedia({ colorScheme: "dark" });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+        await page.locator(".sidebar").screenshot({
+          animations: "disabled",
+          path: path.join(outputDir, "03-sidebar-online-collapsed-dark.png"),
+        });
+        await onlineToggle.focus();
+        await page.keyboard.press("Space");
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await page.locator(".sidebar").screenshot({
+          animations: "disabled",
+          path: path.join(outputDir, "04-sidebar-online-expanded-dark.png"),
         });
 
         await page.evaluate(() => {
@@ -199,7 +236,7 @@ suite.define(() => {
         );
         await page.screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "02-global-activity.png"),
+          path: path.join(outputDir, "05-global-activity.png"),
         });
 
         await page.locator('[data-online-user-id="profile-alice"]').click();
@@ -214,7 +251,7 @@ suite.define(() => {
           .toBe(2);
         await page.screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "03-person-activity.png"),
+          path: path.join(outputDir, "06-person-activity.png"),
         });
       },
     );

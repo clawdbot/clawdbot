@@ -143,11 +143,55 @@ describe("AppSidebar viewer presence", () => {
     });
     expect(sidebar.querySelector('[data-online-user-id="self"]')).toBeNull();
 
+    const onlineToggle = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-online button[aria-label="Online"]',
+    );
+    expect(onlineToggle?.getAttribute("aria-expanded")).toBe("true");
+    onlineToggle?.click();
+    await sidebar.updateComplete;
+    expect(onlineToggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(0);
+    expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections")).toBe(
+      JSON.stringify(["online"]),
+    );
+
+    onlineToggle?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(3);
+
     sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')?.click();
     expect(onNavigate).toHaveBeenCalledWith("activity", {
       pathname: "/activity",
       search: "?person=alice",
     });
+  });
+
+  it("restores the collapsed online section", async () => {
+    localStorage.setItem(
+      "openclaw:sidebar:sessions:collapsed-sections",
+      JSON.stringify(["online"]),
+    );
+    const gatewayHarness = createGatewayHarness({
+      instanceId: "self-instance",
+    } as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        { instanceId: "self-instance", user: { id: "self", name: "Self" } },
+        { instanceId: "alice-instance", user: { id: "alice", name: "Alice" } },
+      ],
+    });
+    await sidebar.updateComplete;
+
+    const onlineToggle = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-online button[aria-label="Online"]',
+    );
+    expect(onlineToggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(sidebar.querySelector(".sidebar-online__person")).toBeNull();
   });
 
   it("renders the self user's avatar route in the footer identity chip", async () => {

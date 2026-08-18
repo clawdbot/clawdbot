@@ -255,6 +255,9 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
 }
 
 export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
+  const sectionId = "online";
+  const collapsed = host.collapsedSessionSections.has(sectionId);
+  const label = t("presence.rosterTitle");
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
@@ -269,34 +272,56 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
     return nothing;
   }
   return html`
-    <section class="sidebar-online" aria-label=${t("presence.rosterTitle")}>
-      <div class="sidebar-online__heading">${t("presence.rosterTitle")}</div>
-      <div class="sidebar-online__list">
-        ${users.map((user) => {
-          const pathname = pathForRoute("activity", host.basePath);
-          const search = `?${new URLSearchParams({ person: user.id }).toString()}`;
-          return html`<a
-            class="sidebar-online__person ${isPresenceViewerIdle(user)
-              ? "sidebar-online__person--away"
-              : ""}"
-            data-online-user-id=${user.id}
-            href=${`${pathname}${search}`}
-            @click=${(event: MouseEvent) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              event.preventDefault();
-              host.onNavigate?.("activity", { pathname, search });
-            }}
-          >
-            <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
-            <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
-            <span class="sidebar-online__person-action" aria-hidden="true"
-              >${icons.chevronRight}</span
+    <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
+      <div class="sidebar-recent-sessions__head">
+        <button
+          type="button"
+          class="sidebar-session-group-toggle"
+          aria-expanded=${String(!collapsed)}
+          aria-label=${label}
+          @click=${() => host.toggleSection(sectionId)}
+        >
+          <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+            <span class="sidebar-session-group-toggle__icon"
+              >${collapsed ? icons.chevronRight : icons.chevronDown}</span
             >
-          </a>`;
-        })}
+          </span>
+          <span class="sidebar-recent-sessions__label-text">${label}</span>
+          ${collapsed
+            ? html`<span class="sidebar-session-group-count sidebar-online__count"
+                >${users.length}</span
+              >`
+            : nothing}
+        </button>
       </div>
+      ${collapsed
+        ? nothing
+        : html`<div class="sidebar-online__list">
+            ${users.map((user) => {
+              const pathname = pathForRoute("activity", host.basePath);
+              const search = `?${new URLSearchParams({ person: user.id }).toString()}`;
+              return html`<a
+                class="sidebar-online__person ${isPresenceViewerIdle(user)
+                  ? "sidebar-online__person--away"
+                  : ""}"
+                data-online-user-id=${user.id}
+                href=${`${pathname}${search}`}
+                @click=${(event: MouseEvent) => {
+                  if (!shouldHandleNavigationClick(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  host.onNavigate?.("activity", { pathname, search });
+                }}
+              >
+                <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
+                <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                <span class="sidebar-online__person-action" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >
+              </a>`;
+            })}
+          </div>`}
     </section>
   `;
 }

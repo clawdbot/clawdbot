@@ -2457,19 +2457,14 @@ body.update-dialog-open .sidebar-update-card__status {
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
 }
 
-.sidebar-online__heading {
-  padding: 0 8px 3px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .sidebar-online__list {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.sidebar-online__count {
+  margin-left: 2px;
 }
 
 .sidebar-online__person {
