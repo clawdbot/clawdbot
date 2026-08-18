@@ -1,6 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Checks plugin minimum host version compatibility.
-import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { valid as validSemver } from "semver";
+import { compareOpenClawVersions } from "../config/version.js";
 
 /** Validation message for plugin minHostVersion manifest fields. */
 const MIN_HOST_VERSION_FORMAT =
@@ -46,7 +47,7 @@ export function parseMinHostVersionRequirement(
     return null;
   }
   const minimumLabel = match[1] ?? "";
-  if (!parseSemver(minimumLabel)) {
+  if (!validSemver(minimumLabel)) {
     return null;
   }
   return {
@@ -71,16 +72,15 @@ export function checkMinHostVersion(params: {
     return { ok: false, kind: "invalid", error: MIN_HOST_VERSION_FORMAT };
   }
   const currentVersion = normalizeOptionalString(params.currentVersion) || "unknown";
-  const currentSemver = parseSemver(currentVersion);
-  if (!currentSemver) {
+  const comparison = compareOpenClawVersions(currentVersion, requirement.minimumLabel);
+  if (comparison === null) {
     return {
       ok: false,
       kind: "unknown_host_version",
       requirement,
     };
   }
-  const minimumSemver = parseSemver(requirement.minimumLabel)!;
-  if (!isAtLeast(currentSemver, minimumSemver)) {
+  if (comparison < 0) {
     return {
       ok: false,
       kind: "incompatible",

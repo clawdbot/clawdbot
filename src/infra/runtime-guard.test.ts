@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
-  isAtLeast,
   isSupportedNodeVersion,
   nodeVersionSatisfiesEngine,
   parseSemver,
@@ -14,21 +13,6 @@ describe("runtime-guard", () => {
     expect(parseSemver("1.3.0")).toEqual({ major: 1, minor: 3, patch: 0 });
     expect(parseSemver("22.22.3-beta.1")).toEqual({ major: 22, minor: 22, patch: 3 });
     expect(parseSemver("invalid")).toBeNull();
-  });
-
-  it("compares versions correctly", () => {
-    expect(isAtLeast({ major: 22, minor: 16, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      true,
-    );
-    expect(isAtLeast({ major: 22, minor: 17, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      true,
-    );
-    expect(isAtLeast({ major: 22, minor: 15, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      false,
-    );
-    expect(isAtLeast({ major: 21, minor: 9, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      false,
-    );
   });
 
   it("checks node versions against simple engine ranges", () => {
