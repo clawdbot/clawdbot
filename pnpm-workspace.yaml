@@ -189,3 +189,6 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
+
+patchedDependencies:
+  ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
