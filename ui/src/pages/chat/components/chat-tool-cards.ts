@@ -6,7 +6,6 @@ import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
@@ -23,6 +22,7 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -765,7 +765,6 @@ export function renderToolCard(
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isError = outcome === "failed";
   const isRunning = outcome === "running";
   const expanded = opts.expanded || isRunning;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
@@ -776,11 +775,7 @@ export function renderToolCard(
   const isFileRow = Boolean(workspaceFilePath);
 
   return html`
-    <div
-      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded
-        ? "is-open"
-        : ""}"
-    >
+    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}">
       ${isFileRow
         ? html`<div
             class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${isRunning
@@ -809,25 +804,25 @@ export function renderToolCard(
             <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </div>`
         : html`<button
-        class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
-          ? "chat-tool-row--running"
-          : ""}"
-        type="button"
-        aria-expanded=${String(expanded)}
-        @pointerenter=${syncToolDisclosureOverflow}
-        @focus=${syncToolDisclosureOverflow}
-        @click=${(event: MouseEvent) => {
-          if (shouldToggleSelectableDisclosure(event)) {
-            opts.onToggleExpanded(card.id);
-          }
-        }}
-      >
-        <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-        <span class="chat-tool-disclosure__content"
-          >${renderToolRowContent(card, view, outcome)}</span
-        >
-        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-      </button>`}
+            class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
+              ? "chat-tool-row--running"
+              : ""}"
+            type="button"
+            aria-expanded=${String(expanded)}
+            @pointerenter=${syncToolDisclosureOverflow}
+            @focus=${syncToolDisclosureOverflow}
+            @click=${(event: MouseEvent) => {
+              if (shouldToggleSelectableDisclosure(event)) {
+                opts.onToggleExpanded(card.id);
+              }
+            }}
+          >
+            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+            <span class="chat-tool-disclosure__content"
+              >${renderToolRowContent(card, view, outcome)}</span
+            >
+            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+          </button>`}
       ${expanded
         ? html`
             <div class="chat-tool-msg-body">
@@ -937,12 +932,7 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(
-          view.command,
-          card.outputText,
-          outcome,
-          card.exitCode,
-        )}
+        ${renderTerminalBlock(view.command, card.outputText, outcome, card.exitCode)}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
       </div>
     `;
@@ -961,8 +951,7 @@ export function renderExpandedToolCardContent(
           )}
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
-        ${renderDiffBlock(view.diff, outcome)}
-        ${renderToolOutcome(outcome, card.exitCode)}
+        ${renderDiffBlock(view.diff, outcome)} ${renderToolOutcome(outcome, card.exitCode)}
         ${isError && hasOutput
           ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
           : hasOutput

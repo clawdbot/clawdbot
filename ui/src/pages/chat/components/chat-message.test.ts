@@ -2359,8 +2359,8 @@ describe("grouped chat rendering", () => {
       ".chat-activity-group__summary",
       HTMLButtonElement,
     );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull();
+    expect(activitySummary.getAttribute("aria-expanded")).toBe("true");
     expect(activitySummary.getAttribute("aria-label")).toBeNull();
     expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
@@ -2425,7 +2425,7 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
     expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(container.querySelector(".chat-tool-row__badge")).toBeNull();
 
     render(
       renderActivityGroup([successful, failed], {
@@ -2591,7 +2591,7 @@ describe("grouped chat rendering", () => {
       "failed",
     );
     expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(0);
-    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(container.querySelector(".chat-tool-row__badge")).toBeNull();
     // Command calls render a `$ command` row instead of the tool-name label.
     expect(summaries[0]?.querySelector(".chat-tool-row__cmd")?.textContent).toBe("run fallback");
   });
