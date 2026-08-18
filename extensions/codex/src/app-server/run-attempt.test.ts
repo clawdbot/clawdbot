@@ -4014,17 +4014,23 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    if (!threadStart) {
+      throw new Error("expected thread/start request");
+    }
     const threadInstructions =
-      (threadStart?.params as { developerInstructions?: string }).developerInstructions ?? "";
+      (threadStart.params as { developerInstructions?: string }).developerInstructions ?? "";
     expect(threadInstructions).toContain("OpenClaw Agent Workspace Instructions");
     expect(threadInstructions).toContain(path.join(agentWorkspaceDir, "AGENTS.md"));
     expect(threadInstructions).toContain(agentsGuidance);
     expect(threadInstructions).not.toContain(soulGuidance);
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    if (!turnStart) {
+      throw new Error("expected turn/start request");
+    }
     const collaborationInstructions =
       (
-        turnStart?.params as {
+        turnStart.params as {
           collaborationMode?: { settings?: { developer_instructions?: string | null } };
         }
       ).collaborationMode?.settings?.developer_instructions ?? "";
@@ -4044,8 +4050,11 @@ describe("runCodexAppServerAttempt", () => {
     const threadResume = resumeHarness.requests.find(
       (request) => request.method === "thread/resume",
     );
+    if (!threadResume) {
+      throw new Error("expected thread/resume request");
+    }
     const resumedInstructions =
-      (threadResume?.params as { developerInstructions?: string }).developerInstructions ?? "";
+      (threadResume.params as { developerInstructions?: string }).developerInstructions ?? "";
     expect(resumedInstructions).toContain(agentsGuidance);
     expect(resumedInstructions).not.toContain(updatedGuidance);
   });
