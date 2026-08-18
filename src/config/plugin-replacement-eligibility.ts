@@ -65,7 +65,7 @@ export function isPluginPolicyDisabled(
   if (!builtInChannelId) {
     return false;
   }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channels = asOptionalRecord(cfg.channels);
   return asOptionalRecord(channels?.[builtInChannelId])?.enabled === false;
 }
 

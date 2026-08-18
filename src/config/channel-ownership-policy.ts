@@ -2,7 +2,10 @@
 // operator-facing runtime schema pick the same channel owner plugin activation does.
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { ChannelOwnershipPolicy } from "./channel-config-metadata.js";
+import {
+  type ChannelOwnershipPolicy,
+  collectChannelSchemaMetadataWithOwnership,
+} from "./channel-config-metadata.js";
 import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
 import {
   isPluginExplicitlySelected,
@@ -35,4 +38,20 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({ record, channelId, env: params.env }),
   };
+}
+
+/**
+ * Channel schema metadata for a config under validation. Validation must not build the ownership
+ * policy itself: the policy module owns how explicit selection is read, and the file being
+ * validated is its own source config because auto-enable has not materialized entries yet.
+ */
+export function configuredChannelSchemas(
+  registry: PluginManifestRegistry,
+  config: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+) {
+  return collectChannelSchemaMetadataWithOwnership(
+    registry,
+    createConfiguredChannelOwnershipPolicy({ config, registry, env: env ?? process.env }),
+  );
 }

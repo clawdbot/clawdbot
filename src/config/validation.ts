@@ -16,11 +16,8 @@ import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import {
-  collectChannelDmPolicyMetadata,
-  collectChannelSchemaMetadataWithOwnership,
-} from "./channel-config-metadata.js";
-import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
+import { collectChannelDmPolicyMetadata } from "./channel-config-metadata.js";
+import { configuredChannelSchemas } from "./channel-ownership-policy.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -364,19 +361,9 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      // Ownership must ignore a denied or disabled replacement, exactly as auto-enable does, or a
-      // valid fallback config is checked against the replacement's schema and rejected.
       // Ownership must land on the plugin activation would run, or a valid config is checked
       // against a schema the runtime never applies.
-      const ownershipPolicy = createConfiguredChannelOwnershipPolicy({
-        config: ensureCompatConfig(),
-        registry: info.registry,
-        env: opts.env ?? process.env,
-      });
-      for (const entry of collectChannelSchemaMetadataWithOwnership(
-        info.registry,
-        ownershipPolicy,
-      )) {
+      for (const entry of configuredChannelSchemas(info.registry, ensureCompatConfig(), opts.env)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
