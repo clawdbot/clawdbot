@@ -154,6 +154,26 @@ const representativeConfigSteps: ConfigStep[] = [
   ),
 ];
 
+const configuredPluginInstallSteps = [
+  configSetJsonFile(
+    "plugins-configured-installs",
+    "configured-plugin-installs",
+    "plugins",
+    "plugins-configured-installs.json",
+  ),
+  {
+    id: "channels-whatsapp-unset",
+    intent: "configured-plugin-installs",
+    argv: ["config", "unset", "channels.whatsapp"],
+  },
+  configSetJsonFile(
+    "channels-matrix",
+    "configured-plugin-installs",
+    "channels.matrix",
+    "channels-matrix.json",
+  ),
+];
+
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "acpx-openclaw-tools-bridge",
@@ -188,28 +208,8 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
       },
     ],
   ],
-  [
-    "configured-plugin-installs",
-    [
-      configSetJsonFile(
-        "plugins-configured-installs",
-        "configured-plugin-installs",
-        "plugins",
-        "plugins-configured-installs.json",
-      ),
-      {
-        id: "channels-whatsapp-unset",
-        intent: "configured-plugin-installs",
-        argv: ["config", "unset", "channels.whatsapp"],
-      },
-      configSetJsonFile(
-        "channels-matrix",
-        "configured-plugin-installs",
-        "channels.matrix",
-        "channels-matrix.json",
-      ),
-    ],
-  ],
+  ["configured-plugin-installs", configuredPluginInstallSteps],
+  ["sqlite-volume", configuredPluginInstallSteps],
   [
     "codex-allowlist-survival",
     [
