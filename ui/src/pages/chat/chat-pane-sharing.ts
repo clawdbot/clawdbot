@@ -692,21 +692,11 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     if (
-      clearTypingActorForSessionMessage(
-        payload,
-        this.typingActors,
-        this.typingTimers,
-        (key, agentId) =>
-          uiSessionEventMatches(
-            {
-              agentsList: this.context.agents.state.agentsList,
-              hello: this.context.gateway.snapshot.hello,
-              sessionKey: state.sessionKey,
-            },
-            key,
-            agentId,
-          ),
-      )
+      clearTypingActorForSessionMessage(payload, this.typingActors, this.typingTimers, {
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+        sessionKey: state.sessionKey,
+      })
     ) {
       this.requestUpdate();
     }

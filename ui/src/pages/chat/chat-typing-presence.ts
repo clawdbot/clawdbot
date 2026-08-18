@@ -1,21 +1,22 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 
 export function clearTypingActorForSessionMessage(
   payload: unknown,
   actors: Map<string, unknown>,
   timers: Map<string, number>,
-  matchesSession: (key: string, agentId?: string) => boolean,
+  sessionHost: Parameters<typeof uiSessionEventMatches>[0],
 ): boolean {
   const event = readSessionChangedEvent(payload);
-  if (!event || !matchesSession(event.key, event.agentId ?? undefined)) {
+  if (!event || !uiSessionEventMatches(sessionHost, event.key, event.agentId ?? undefined)) {
     return false;
   }
   return clearTypingActorForUserMessage(payload, actors, timers);
 }
 
-export function clearTypingActorForUserMessage(
+function clearTypingActorForUserMessage(
   payload: unknown,
   actors: Map<string, unknown>,
   timers: Map<string, number>,
