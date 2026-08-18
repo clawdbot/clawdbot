@@ -1,5 +1,6 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -14,9 +15,12 @@ import {
   reconcileSkillCollection,
   restoreLatestSkillCollectionBackup,
 } from "../../skills/workshop/collection-reconcile.js";
+import { listSkillCollectionReviewOutcomes } from "../../skills/workshop/collection-review-state.js";
 import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";
 import { readToolStringParam, ToolInputError } from "./common.js";
+
+const SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS = 300;
 
 export async function recordSkillCollectionReadReceipt(params: {
   context: SkillCollectionReconcileContext;
@@ -128,6 +132,40 @@ export async function executeSkillCollectionRestore(params: {
       },
     ],
     details: result,
+  };
+}
+
+export function executeSkillCollectionHistory(params: {
+  workspaceDir: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const reviews = listSkillCollectionReviewOutcomes(
+    params.workspaceDir,
+    params.env ? { env: params.env } : {},
+  ).map((review) => ({
+    createTime: new Date(review.createTime).toISOString(),
+    backupId: review.backupId,
+    kept: review.kept,
+    written: review.written,
+    dropped: review.dropped.map((entry) => ({
+      name: entry.name,
+      reason:
+        entry.reason.length > SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS
+          ? `${truncateUtf16Safe(entry.reason, SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS - 1)}…`
+          : entry.reason,
+    })),
+  }));
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text:
+          reviews.length === 0
+            ? "No recorded collection reviews."
+            : `Recent collection reviews, newest first:\n${reviews.map((review) => JSON.stringify(review)).join("\n")}`,
+      },
+    ],
+    details: { reviews },
   };
 }
 

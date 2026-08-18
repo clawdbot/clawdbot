@@ -26,10 +26,19 @@ const REVIEW_INTERVAL_MS = 24 * 60 * 60_000;
 const REVIEW_CLAIM_MS = 11 * 60_000;
 // Bound per-workspace history so unattended daily maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
+const SKILL_COLLECTION_REVIEW_HISTORY_LIMIT = 20;
 type CollectionReviewDatabase = Pick<
   OpenClawStateDatabase,
   "skill_curator_state" | "skill_workshop_collection_reviews"
 >;
+
+type SkillCollectionReviewOutcome = {
+  createTime: number;
+  backupId: string;
+  kept: string[];
+  written: string[];
+  dropped: SkillCollectionReconcileResult["dropped"];
+};
 
 function workspaceKey(workspaceDir: string): string {
   return sha256Hex(path.resolve(workspaceDir));
@@ -91,6 +100,56 @@ export function isSkillCollectionReviewDue(
   );
   const lastSuccess = parseReviewTimes(state?.last_result_json)[workspaceKey(workspaceDir)];
   return lastSuccess === undefined || nowMs - lastSuccess >= REVIEW_INTERVAL_MS;
+}
+
+function parseStoredNames(value: string, field: string): string[] {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((entry): entry is string => typeof entry === "string")
+  ) {
+    throw new Error(`Invalid ${field} in stored skill collection review.`);
+  }
+  return parsed;
+}
+
+function parseStoredDrops(value: string): SkillCollectionReconcileResult["dropped"] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error("Invalid dropped entries in stored skill collection review.");
+  }
+  return parsed.map((entry) => {
+    const record = asNullableRecord(entry);
+    if (!record || typeof record.name !== "string" || typeof record.reason !== "string") {
+      throw new Error("Invalid dropped entry in stored skill collection review.");
+    }
+    return { name: record.name, reason: record.reason };
+  });
+}
+
+export function listSkillCollectionReviewOutcomes(
+  workspaceDir: string,
+  options: SkillWorkshopStoreOptions = {},
+): SkillCollectionReviewOutcome[] {
+  ensureSkillWorkshopSchema(options);
+  const database = openOpenClawStateDatabase(databaseOptions(options));
+  const kysely = getNodeSqliteKysely<CollectionReviewDatabase>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("skill_workshop_collection_reviews")
+      .select(["backup_id", "create_time", "kept_names_json", "written_names_json", "dropped_json"])
+      .where("workspace_dir", "=", path.resolve(workspaceDir))
+      .orderBy("create_time", "desc")
+      .orderBy("review_id", "desc")
+      .limit(SKILL_COLLECTION_REVIEW_HISTORY_LIMIT),
+  ).rows.map((row) => ({
+    createTime: row.create_time,
+    backupId: row.backup_id,
+    kept: parseStoredNames(row.kept_names_json, "kept names"),
+    written: parseStoredNames(row.written_names_json, "written names"),
+    dropped: parseStoredDrops(row.dropped_json),
+  }));
 }
 
 export function recordSkillCollectionReviewSuccess(

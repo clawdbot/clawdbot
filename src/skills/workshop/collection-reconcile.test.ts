@@ -4,10 +4,7 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -15,6 +12,7 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import { listWritableSkillCollection, reconcileSkillCollection } from "./collection-reconcile.js";
+import { listSkillCollectionReviewOutcomes } from "./collection-review-state.js";
 import { stageSkillCollectionDrop } from "./collection-rollback.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import {
@@ -265,13 +263,15 @@ describe("skill collection reconciliation", () => {
       name: "deploy-two",
       reason: "merged into deploy-one",
     });
-    expect(
-      openOpenClawStateDatabase({ env: testState.env })
-        .db.prepare(
-          "SELECT dropped_json FROM skill_workshop_collection_reviews WHERE workspace_dir = ?",
-        )
-        .get(workspaceDir),
-    ).toEqual({ dropped_json: JSON.stringify(result.dropped) });
+    expect(listSkillCollectionReviewOutcomes(workspaceDir, { env: testState.env })).toEqual([
+      {
+        createTime: expect.any(Number),
+        backupId: result.backupId,
+        kept: result.kept,
+        written: result.written,
+        dropped: result.dropped,
+      },
+    ]);
     expect(
       dispatchCommittedSkillChangeBestEffort.mock.calls.map(([event]) => event.action),
     ).toEqual(["updated", "removed", "removed"]);
