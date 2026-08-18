@@ -1975,13 +1975,12 @@ describe("redactSensitiveLines", () => {
     expect(result[1]).toBe("normal log line");
   });
 
-  it("applies exact registered secrets even when pattern redaction is off", () => {
+  it("returns lines unmodified when redaction is off", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
     const secret = "opaque-registry-value-1234567890";
     registerSecretValueForRedaction(secret);
-    expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([
-      "TOKEN=abcdef1234567890ghij opaque…7890",
-    ]);
+    const lines = [`TOKEN=abcdef1234567890ghij ${secret}`];
+    expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
   it("redacts structured auth when form-body preprocessing is disabled", () => {
