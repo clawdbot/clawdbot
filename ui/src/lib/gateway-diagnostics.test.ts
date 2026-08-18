@@ -27,6 +27,7 @@ describe("loadGatewayDiagnostics", () => {
 
     expect(result.models).toEqual([]);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "diagnostics.lanes",
       "status",
       "health",
       "last-heartbeat",

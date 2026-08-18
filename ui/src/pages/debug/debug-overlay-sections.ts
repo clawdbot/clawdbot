@@ -131,7 +131,8 @@ function renderActiveRuns(sessions: ActiveSession[]): TemplateResult {
 }
 
 function renderEvents(gateway: ApplicationGateway): TemplateResult {
-  const events = gateway.eventLog.slice(-8).toReversed();
+  // The store prepends: eventLog is newest-first, so the head is the live tail.
+  const events = gateway.eventLog.slice(0, 8);
   return events.length > 0
     ? html`<ul class="debug-overlay__list debug-overlay__events">
         ${events.map(
