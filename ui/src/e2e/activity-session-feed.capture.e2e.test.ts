@@ -136,7 +136,17 @@ suite.define(() => {
           app.runtime?.context.navigate("activity");
         });
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
-        await expect.poll(() => page.locator(".activity-feed__person").count()).toBe(3);
+        await page.locator(".activity-feed__people-trigger").click();
+        await expect
+          .poll(() =>
+            page
+              .locator(
+                '.activity-feed__people-row[data-activity-person]:not([data-activity-person=""])',
+              )
+              .count(),
+          )
+          .toBe(3);
+        await page.keyboard.press("Escape");
         await expect
           .poll(() => page.locator(".activity-feed__sessions > .activity-feed__session").count())
           .toBe(4);
