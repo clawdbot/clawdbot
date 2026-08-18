@@ -286,6 +286,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         sessionKey: request.sessionKey,
         agentId: request.agentId,
         executionMode: request.executionMode,
+        authorize,
         activate: () => {
           const activated = placements.transition({
             sessionId: request.sessionId,

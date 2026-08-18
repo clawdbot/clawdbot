@@ -242,7 +242,14 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         }
         return placement;
       },
-      runActivationBarrier: async ({ sessionId, sessionKey, agentId, executionMode, activate }) => {
+      runActivationBarrier: async ({
+        sessionId,
+        sessionKey,
+        agentId,
+        executionMode,
+        authorize,
+        activate,
+      }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const {
           resolveWorkerPlacementExecutionMode,
@@ -295,6 +302,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker activation. Retry.`,
               );
             }
+            authorize?.();
             activePlacement = activate();
           },
         });

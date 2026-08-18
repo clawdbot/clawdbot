@@ -5,6 +5,7 @@ import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
+import type { WorkerPlacementAuthorization } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -82,6 +83,7 @@ export type WorkerActivationBarrier = (params: {
   sessionKey: string;
   agentId: string;
   executionMode: WorkerPlacementExecutionMode;
+  authorize?: WorkerPlacementAuthorization;
   activate: () => WorkerActiveDispatchPlacement;
 }) => Promise<WorkerActiveDispatchPlacement>;
 

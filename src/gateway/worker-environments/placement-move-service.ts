@@ -50,6 +50,7 @@ export function createWorkerPlacementMoveService(options: {
   reclaimSource: (
     request: WorkerPlacementReclaimRequest,
     intent: WorkerPlacementMoveIntent,
+    authorize?: WorkerPlacementAuthorization,
   ) => Promise<WorkerReclaimPlacement>;
   resolveDestination: (
     identity: MoveSessionIdentity,
@@ -69,6 +70,7 @@ export function createWorkerPlacementMoveService(options: {
     intent: WorkerPlacementMoveIntent;
     destination: NonNullable<WorkerPlacementMoveDestination>;
     onTransition?: (placement: WorkerDispatchPlacement) => void;
+    authorize?: WorkerPlacementAuthorization;
   }): Promise<WorkerActiveDispatchPlacement> => {
     const active = await options.dispatch(
       {
@@ -77,6 +79,7 @@ export function createWorkerPlacementMoveService(options: {
         idempotencyKey: `session-move:${params.intent.operationId}:dispatch`,
       },
       params.onTransition,
+      params.authorize,
     );
     const completed = options.placements.completePlacementMoveToWorker({
       operationId: params.intent.operationId,
@@ -126,7 +129,7 @@ export function createWorkerPlacementMoveService(options: {
       });
       intent = begun.intent;
       onTransition?.(begun.placement);
-      const local = await options.reclaimSource(request, intent);
+      const local = await options.reclaimSource(request, intent, authorize);
       onTransition?.(local);
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
@@ -142,6 +145,7 @@ export function createWorkerPlacementMoveService(options: {
         intent,
         destination,
         ...(onTransition ? { onTransition } : {}),
+        ...(authorize ? { authorize } : {}),
       });
     } catch (error) {
       const durableIntent = intent ?? options.placements.getPlacementMove(request.sessionId);

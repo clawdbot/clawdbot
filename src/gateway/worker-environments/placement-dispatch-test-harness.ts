@@ -354,7 +354,8 @@ export function createHarness(
       }
       return placement;
     },
-    runActivationBarrier: async ({ activate }) => {
+    runActivationBarrier: async ({ authorize, activate }) => {
+      authorize?.();
       fail("activation");
       return activate();
     },
