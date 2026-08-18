@@ -196,7 +196,17 @@ describe("qa suite command process lifecycle", () => {
       await fs.mkdir(artifactsRoot, { recursive: true });
       const outputDir = tempDirs.make("suite-process-lifecycle-", artifactsRoot);
       const run = startSuiteProcess(outputDir, [PROCESS_LIFECYCLE_SCENARIO]);
-      const summary = await waitForCompletedSummary(outputDir, SUITE_COMPLETION_TIMEOUT_MS);
+      const startedWaitingAt = Date.now();
+      const heartbeat = setInterval(() => {
+        const output = run.output();
+        process.stderr.write(
+          `[qa-process-lifecycle] waiting for completed summary elapsedMs=${Date.now() - startedWaitingAt} gatewayPorts=${run.gatewayPorts.size} stderrBytes=${Buffer.byteLength(output.stderr)}\n`,
+        );
+      }, 30_000);
+      heartbeat.unref();
+      const summary = await waitForCompletedSummary(outputDir, SUITE_COMPLETION_TIMEOUT_MS).finally(
+        () => clearInterval(heartbeat),
+      );
       const outcome = await waitForProcessClose(run.closed, POST_SUMMARY_EXIT_TIMEOUT_MS);
       const output = run.output();
 
