@@ -15,6 +15,7 @@ import {
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
+  releaseMarkdownTables,
 } from "../../../components/markdown-tables.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
@@ -29,6 +30,33 @@ import {
 } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
+
+const markdownTableOwnerRefs = new WeakMap<
+  ChatTranscriptSession,
+  (element: Element | undefined) => void
+>();
+
+function markdownTableOwnerRef(
+  transcript: ChatTranscriptSession,
+): (element: Element | undefined) => void {
+  const current = markdownTableOwnerRefs.get(transcript);
+  if (current) {
+    return current;
+  }
+  let owner: HTMLElement | null = null;
+  const callback = (element: Element | undefined) => {
+    const next = element instanceof HTMLElement ? element : null;
+    if (owner && owner !== next) {
+      releaseMarkdownTables(owner);
+    }
+    owner = next;
+    if (owner) {
+      enhanceMarkdownTables(owner);
+    }
+  };
+  markdownTableOwnerRefs.set(transcript, callback);
+  return callback;
+}
 
 function renderLoadingSkeleton() {
   return html`
@@ -120,11 +148,7 @@ function renderTranscriptShell(
       aria-live="off"
       aria-relevant="additions"
       tabindex="0"
-      ${ref((element) => {
-        if (element instanceof HTMLElement) {
-          enhanceMarkdownTables(element);
-        }
-      })}
+      ${ref(markdownTableOwnerRef(transcript))}
       @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
       @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
       @scroll=${props.onChatScroll}

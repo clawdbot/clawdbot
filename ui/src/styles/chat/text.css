@@ -214,9 +214,9 @@
 }
 
 .markdown-table-dialog {
-  width: min-content;
-  max-width: 100vw;
-  max-height: 100dvh;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
   padding: 48px 28px 28px;
   border: 0;
   background: transparent;
@@ -229,6 +229,8 @@
 }
 
 .markdown-table-dialog > table {
+  width: max-content;
+  min-width: max-content;
   margin: 0;
   max-width: none;
   overflow: visible;

@@ -2,8 +2,8 @@ import { render } from "lit";
 import type MarkdownIt from "markdown-it";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import { icons } from "./icons.ts";
 import { toolIcons } from "./icons-tools.ts";
+import { icons } from "./icons.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
@@ -118,6 +118,17 @@ export function enhanceMarkdownTables(owner: HTMLElement): void {
   }
 }
 
+export function releaseMarkdownTables(owner: HTMLElement): void {
+  const state = tableOwnerStates.get(owner);
+  if (!state) {
+    return;
+  }
+  state.mutationObserver.disconnect();
+  state.resizeObserver?.disconnect();
+  state.observedViewports.clear();
+  tableOwnerStates.delete(owner);
+}
+
 function showTableDialog(table: HTMLTableElement, trigger: HTMLElement): void {
   const dialog = document.createElement("dialog");
   dialog.className = "markdown-table-dialog chat-text";
@@ -167,10 +178,13 @@ export function handleMarkdownTableInteraction(event: Event): void {
     void copyToClipboard(tableText(table)).then((copied) => {
       copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
       clearTimeout(tableCopyResetTimers.get(copy));
-      const resetTimer = setTimeout(() => {
-        copy.setAttribute("aria-label", t("common.copyTable"));
-        tableCopyResetTimers.delete(copy);
-      }, copied ? 1500 : 2000);
+      const resetTimer = setTimeout(
+        () => {
+          copy.setAttribute("aria-label", t("common.copyTable"));
+          tableCopyResetTimers.delete(copy);
+        },
+        copied ? 1500 : 2000,
+      );
       tableCopyResetTimers.set(copy, resetTimer);
     });
   }
