@@ -101,6 +101,13 @@ private func progressCard(
         steps: steps)
 }
 
+private func legacyPlanStep(_ step: String, status: String) -> AnyCodable {
+    AnyCodable([
+        "step": AnyCodable(step),
+        "status": AnyCodable(status),
+    ])
+}
+
 private func usageEvent(runId: String, outputTokens: Int, seq: Int) -> OpenClawAgentEventPayload {
     OpenClawAgentEventPayload(
         runId: runId,
@@ -344,6 +351,7 @@ private func makeViewModel(
     commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
     fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)? = nil,
+    progressCardStoreAvailable: Bool? = nil,
     historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
     setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -395,6 +403,7 @@ private func makeViewModel(
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
         fetchProgressCardHook: fetchProgressCardHook,
+        progressCardStoreAvailable: progressCardStoreAvailable,
         historyResponseHook: historyResponseHook,
         setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
@@ -540,6 +549,28 @@ private func emitAgentLifecycleEnd(
                 stream: "lifecycle",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
                 data: ["phase": AnyCodable("end")])))
+}
+
+private func legacyPlanEvent(
+    runId: String = "sess-main",
+    steps: [AnyCodable],
+    explanation: String? = nil,
+    seq: Int = 1,
+    timestamp: Int? = 1000) -> OpenClawChatTransportEvent
+{
+    var data: [String: AnyCodable] = [
+        "phase": AnyCodable("update"),
+        "steps": AnyCodable(steps),
+    ]
+    if let explanation {
+        data["explanation"] = AnyCodable(explanation)
+    }
+    return .agent(OpenClawAgentEventPayload(
+        runId: runId,
+        seq: seq,
+        stream: "plan",
+        ts: timestamp,
+        data: data))
 }
 
 private func emitExternalFinal(
@@ -692,6 +723,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
     private let fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)?
+    private let progressCardStoreAvailable: Bool?
     private let historyResponseHook:
         (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)?
     private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
@@ -732,6 +764,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
         fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)? = nil,
+        progressCardStoreAvailable: Bool? = nil,
         historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
         setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -766,6 +799,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
         self.fetchProgressCardHook = fetchProgressCardHook
+        self.progressCardStoreAvailable = progressCardStoreAvailable
         self.historyResponseHook = historyResponseHook
         self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
@@ -844,6 +878,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
         try await self.fetchProgressCardHook?(sessionKey)
+    }
+
+    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+        self.progressCardStoreAvailable
     }
 
     func sendMessage(
@@ -1458,6 +1496,116 @@ private actor SwarmCapabilityScript {
 
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test func `legacy plan renders only when progress card store is unavailable`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [
+                    legacyPlanStep("  Inspect state  ", status: "in_progress"),
+                    AnyCodable("Write fix"),
+                    legacyPlanStep("Verify", status: "completed"),
+                    legacyPlanStep("Duplicate active", status: "in_progress"),
+                    legacyPlanStep("   ", status: "pending"),
+                    legacyPlanStep("Invalid status", status: "blocked"),
+                    AnyCodable(42),
+                ],
+                explanation: "  Working through the change  ",
+                timestamp: 4321))
+        }
+
+        let card = try #require(await MainActor.run { vm.progressCard })
+        #expect(card.sessionkey == "main")
+        #expect(card.updatedat == 4321)
+        #expect(card.markdown == "Working through the change")
+        #expect(card.steps?.map(\.step) == ["Inspect state", "Write fix", "Verify"])
+        #expect(card.steps?.map(\.status.rawValue) == ["in_progress", "pending", "completed"])
+    }
+
+    @Test func `legacy plan is ignored when progress card store is available`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: true)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves available") {
+            await MainActor.run { vm.progressCardStoreAvailable == true }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Ignored", status: "in_progress")]))
+        }
+
+        #expect(await MainActor.run { vm.progressCard == nil })
+    }
+
+    @Test func `legacy plan is ignored while progress card capability is unknown`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: nil)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Ignored", status: "in_progress")]))
+        }
+
+        #expect(await MainActor.run { vm.progressCard == nil })
+        #expect(await MainActor.run { vm.progressCardStoreAvailable == nil })
+    }
+
+    @Test func `empty legacy plan clears progress card`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            fetchProgressCardHook: { _ in progressCard(revision: 9, markdown: "Existing") },
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("initial progress card and legacy capability apply") {
+            await MainActor.run {
+                vm.progressCard?.revision == 9 && vm.progressCardStoreAvailable == false
+            }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(steps: []))
+        }
+
+        #expect(await MainActor.run { vm.progressCard == nil })
+    }
+
+    @Test func `successive legacy plan snapshots use distinct revisions`() async throws {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [AnyCodable("First")],
+                seq: 1))
+        }
+        let firstRevision = try #require(await MainActor.run { vm.progressCard?.revision })
+        #expect(await MainActor.run { vm.progressCard?.steps?.first?.status.rawValue } == "pending")
+
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [AnyCodable("Second")],
+                seq: 2))
+        }
+
+        #expect(await MainActor.run { vm.progressCard?.steps?.first?.step } == "Second")
+        #expect(await MainActor.run { vm.progressCard?.revision } == firstRevision + 1)
+    }
+
     @Test func `progress card change fetches durable card beyond run completion`() async throws {
         let fetchCalls = AsyncCounter()
         let card = progressCard(

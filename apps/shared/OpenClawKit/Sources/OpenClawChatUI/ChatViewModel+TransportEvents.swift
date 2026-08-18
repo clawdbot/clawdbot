@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 private let transportEventsLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
@@ -642,6 +643,27 @@ extension OpenClawChatViewModel {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
                 self.updateStreamingAssistantText(text)
             }
+        case "plan":
+            // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".
+            // Rendering these only when the store is known-absent keeps a dual-emitting Gateway from
+            // fighting the durable card. Remove with the Gateway's legacy dual-emit once the minimum
+            // supported Gateway ships the store.
+            guard self.progressCardStoreAvailable == false else { return }
+            guard evt.data["phase"]?.value as? String == "update" else { return }
+            let steps = Self.parseLegacyProgressCardSteps(evt.data["steps"])
+            guard !steps.isEmpty else {
+                self.clearProgressCard()
+                return
+            }
+            self.legacyProgressCardRevision &+= 1
+            let explanation = (evt.data["explanation"]?.value as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            self.applyProgressCard(ProgressCard(
+                sessionkey: self.sessionKey,
+                revision: self.legacyProgressCardRevision,
+                updatedat: evt.ts ?? 0,
+                markdown: explanation?.isEmpty == false ? explanation : nil,
+                steps: steps))
         case "tool":
             guard let phase = evt.data["phase"]?.value as? String else { return }
             guard let name = evt.data["name"]?.value as? String else { return }
