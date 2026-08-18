@@ -1204,6 +1204,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+      status: "queued",
       task: "follow-up",
     });
   });
