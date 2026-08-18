@@ -174,7 +174,7 @@ suite.define(() => {
         async ({ store, key, scopeOwner }) => {
           const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(scopeOwner.gatewayOwner)}`;
           const local = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as {
-            sessions: Record<string, { draftRevision?: number }>;
+            sessions: Record<string, { draft?: string; draftRevision?: number }>;
           };
           const scopeKey = `${key}\u0000agent:main`;
           const durable = await store.readDurableComposerDraft({ ...scopeOwner, scopeKey });
