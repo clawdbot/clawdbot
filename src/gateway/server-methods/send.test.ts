@@ -4255,6 +4255,10 @@ describe("gateway send mirroring", () => {
             requesterSenderUsername: "blocked-user",
             requesterSenderE164: "+15551234567",
           });
+          if (action === "send") {
+            expect(actionCall?.params).toMatchObject({ mediaUrl: workspaceFile });
+            expect(actionCall?.params).not.toHaveProperty("buffer");
+          }
           const mediaAccess = actionCall?.mediaAccess;
           expect(mediaAccess.localRoots).not.toContain(TEST_AGENT_WORKSPACE);
           await expect(
