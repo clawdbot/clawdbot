@@ -15,12 +15,19 @@ import {
 import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
-import "./channel-avatar.ts";
 
 type SessionAvatarAuth = {
   authTokens: readonly string[];
   authReady: boolean;
 };
+
+// Channel avatars stay out of the startup bundle (startup-JS budget): the
+// element registers on the first avatar row, and the owner-chip fallback
+// keeps the lead slot occupied through the one-time upgrade window.
+let channelAvatarElementLoad: Promise<unknown> | undefined;
+function ensureChannelAvatarElement(): void {
+  channelAvatarElementLoad ??= import("./channel-avatar.ts");
+}
 
 function renderGlyphBadge(
   session: SidebarRecentSession,
@@ -153,6 +160,7 @@ export function renderSessionLeadingState(
       };
     }
     if (session.channelAvatarUrl) {
+      ensureChannelAvatarElement();
       return {
         running,
         leadingIndicator: renderSessionGlyph({
@@ -222,6 +230,7 @@ export function renderSessionLeadingState(
         )
       : undefined;
   if (session.channelAvatarUrl) {
+    ensureChannelAvatarElement();
     return {
       running,
       leadingIndicator: renderSessionGlyph({
