@@ -1,10 +1,10 @@
 // Private runtime barrel for the bundled Signal extension.
 // Prefer narrower SDK subpaths plus local extension seams over the legacy signal barrel.
 
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 export { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { RuntimeOpenClawConfig as OpenClawConfig };
 export type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/core";

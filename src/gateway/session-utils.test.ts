@@ -36,7 +36,10 @@ import {
   buildSessionListRowContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import {
+  buildGatewaySessionRow as buildGatewaySessionRowOwner,
+  projectSessionActor,
+} from "./session-utils-row.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -218,6 +221,29 @@ function setTestActivePluginRegistry(
 }
 
 describe("gateway session utils", () => {
+  test("projects configured agent identity while tolerating legacy session-key actor ids", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "roboclaw", identity: { name: "Roboclaw", avatar: "avatar.png" } }],
+      },
+      gateway: { controlUi: { basePath: "/control" } },
+    } as OpenClawConfig;
+
+    expect(projectSessionActor({ type: "agent", id: "roboclaw" }, new Map(), cfg)).toEqual({
+      type: "agent",
+      id: "roboclaw",
+      label: "Roboclaw",
+      avatarUrl: "/control/avatar/roboclaw",
+    });
+    expect(
+      projectSessionActor(
+        { type: "agent", id: "agent:roboclaw:discord:channel:123" },
+        new Map(),
+        cfg,
+      ),
+    ).toEqual({ type: "agent", id: "agent:roboclaw:discord:channel:123" });
+  });
+
   beforeEach(() => {
     // Real artifact loading belongs to its owner tests; session projections only need the contract.
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
@@ -1249,58 +1275,6 @@ describe("gateway session utils", () => {
   );
 
   test.each([true, false])(
-    "preserves matching native Codex telemetry when only runtime config materializes a window (lightweight=%s)",
-    (lightweightListRow) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.6-sol" },
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              models: [{ id: "gpt-5.6-sol", contextWindow: 200_000 }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      const sourceCfg = {
-        ...cfg,
-        models: {
-          providers: {
-            openai: {
-              models: [{ id: "gpt-5.6-sol" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setRuntimeConfigSnapshot(cfg, sourceCfg);
-      onTestFinished(resetConfigRuntimeState);
-
-      const row = buildGatewaySessionRow({
-        cfg,
-        storePath: "",
-        store: {},
-        key: "agent:main:main",
-        entry: {
-          sessionId: "native-window",
-          modelProvider: "openai",
-          model: "gpt-5.6-sol",
-          agentHarnessId: "codex",
-          contextTokens: 1_000_000,
-          contextTokensSource: "runtime",
-        } as SessionEntry,
-        lightweightListRow,
-      });
-
-      expect(row.agentRuntime?.id).toBe("codex");
-      expect(row.contextTokens).toBe(1_000_000);
-    },
-  );
-
-  test.each([true, false])(
     "keeps matching runtime telemetry below a higher authored contextWindow (lightweight=%s)",
     (lightweightListRow) => {
       const cfg = {
@@ -1460,40 +1434,46 @@ describe("gateway session utils", () => {
     },
   );
 
-  test("invalidates a persisted resolved cap after the cap is removed", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }],
+  test.each(["resolved", "runtime-configured"] as const)(
+    "invalidates a persisted %s cap after the cap is removed",
+    (contextTokensSource) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
           },
         },
-      },
-    } as unknown as OpenClawConfig;
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
 
-    const row = buildGatewaySessionRow({
-      cfg,
-      storePath: "",
-      store: {},
-      key: "agent:main:main",
-      entry: {
-        sessionId: "removed-cap",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        agentHarnessId: "codex",
-        contextTokens: 272_000,
-        contextTokensSource: "resolved",
-      } as SessionEntry,
-    });
+      for (const lightweightListRow of [true, false]) {
+        const row = buildGatewaySessionRow({
+          cfg,
+          storePath: "",
+          store: {},
+          key: "agent:main:main",
+          entry: {
+            sessionId: "removed-cap",
+            modelProvider: "openai",
+            model: "gpt-5.6-sol",
+            agentHarnessId: "codex",
+            contextTokens: 272_000,
+            contextTokensSource,
+          } as SessionEntry,
+          lightweightListRow,
+        });
 
-    expect(row.contextTokens).toBe(1_000_000);
-  });
+        expect(row.contextTokens).toBe(1_000_000);
+      }
+    },
+  );
 
   test.each(["xhigh", "max"] as const)(
     "preserves catalog-less persisted %s in session change projections",
@@ -2116,6 +2096,40 @@ describe("gateway session utils", () => {
     expect(row.worktree).toEqual({ id: "wt-id", branch: "openclaw/wt-1234", repoRoot: "/repo" });
     expect(row.execNode).toBe("macbook");
     expect(row.execCwd).toBe("/Users/peter/Projects/openclaw");
+  });
+
+  test("buildGatewaySessionRow projects the session root only for an explicit permission mode", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const ordinaryEntry: SessionEntry = {
+      sessionId: "ordinary",
+      sessionRoot: "/workspace/private",
+      updatedAt: 1,
+    };
+    const ordinaryRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:ordinary": ordinaryEntry },
+      key: "agent:main:ordinary",
+      entry: ordinaryEntry,
+    });
+    expect(ordinaryRow).not.toHaveProperty("sessionRoot");
+
+    const permissionEntry: SessionEntry = {
+      ...ordinaryEntry,
+      permissionMode: "workspace",
+      sessionId: "permission",
+    };
+    const permissionRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:permission": permissionEntry },
+      key: "agent:main:permission",
+      entry: permissionEntry,
+    });
+    expect(permissionRow).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/private",
+    });
   });
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {

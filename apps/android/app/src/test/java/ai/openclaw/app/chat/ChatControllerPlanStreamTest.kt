@@ -39,17 +39,21 @@ class ChatControllerPlanStreamTest {
         "agent",
         planPayload(
           runId,
-          """{"phase":"update","steps":[{"step":" Inspect ","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"},{"step":"   ","status":"pending"},{"step":"Unknown","status":"blocked"},{"step":42,"status":"pending"},42]}""",
+          """{"phase":"update","explanation":" Inspect, patch, and test ","steps":[{"step":" Inspect ","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"},{"step":"   ","status":"pending"},{"step":"Unknown","status":"blocked"},{"step":42,"status":"pending"},42]}""",
         ),
       )
 
       assertEquals(
-        listOf(
-          ChatPlanStep(step = "Inspect", status = ChatPlanStepStatus.Completed),
-          ChatPlanStep(step = "Patch", status = ChatPlanStepStatus.InProgress),
-          ChatPlanStep(step = "Test", status = ChatPlanStepStatus.Pending),
+        ChatPlanSnapshot(
+          steps =
+            listOf(
+              ChatPlanStep(step = "Inspect", status = ChatPlanStepStatus.Completed),
+              ChatPlanStep(step = "Patch", status = ChatPlanStepStatus.InProgress),
+              ChatPlanStep(step = "Test", status = ChatPlanStepStatus.Pending),
+            ),
+          explanation = "Inspect, patch, and test",
         ),
-        controller.planSteps.value,
+        controller.planSnapshot.value,
       )
     }
 
@@ -64,11 +68,14 @@ class ChatControllerPlanStreamTest {
       )
 
       assertEquals(
-        listOf(
-          ChatPlanStep(step = "First", status = ChatPlanStepStatus.Pending),
-          ChatPlanStep(step = "Second", status = ChatPlanStepStatus.Pending),
+        ChatPlanSnapshot(
+          steps =
+            listOf(
+              ChatPlanStep(step = "First", status = ChatPlanStepStatus.Pending),
+              ChatPlanStep(step = "Second", status = ChatPlanStepStatus.Pending),
+            ),
         ),
-        controller.planSteps.value,
+        controller.planSnapshot.value,
       )
     }
 
@@ -79,16 +86,19 @@ class ChatControllerPlanStreamTest {
 
       controller.handleGatewayEvent(
         "agent",
-        planPayload(runId, """{"phase":"update","steps":[{"step":"First","status":"in_progress"},{"step":"Second","status":"pending"}]}"""),
+        planPayload(runId, """{"phase":"update","explanation":"Initial approach","steps":[{"step":"First","status":"in_progress"},{"step":"Second","status":"pending"}]}"""),
       )
       controller.handleGatewayEvent(
         "agent",
-        planPayload(runId, """{"phase":"update","steps":[{"step":"Replacement","status":"completed"}]}"""),
+        planPayload(runId, """{"phase":"update","explanation":"Replacement approach","steps":[{"step":"Replacement","status":"completed"}]}"""),
       )
 
       assertEquals(
-        listOf(ChatPlanStep(step = "Replacement", status = ChatPlanStepStatus.Completed)),
-        controller.planSteps.value,
+        ChatPlanSnapshot(
+          steps = listOf(ChatPlanStep(step = "Replacement", status = ChatPlanStepStatus.Completed)),
+          explanation = "Replacement approach",
+        ),
+        controller.planSnapshot.value,
       )
     }
 
@@ -100,11 +110,11 @@ class ChatControllerPlanStreamTest {
 
       controller.handleGatewayEvent("agent", planPayload(runId, populated))
       controller.handleGatewayEvent("agent", planPayload(runId, """{"phase":"update","steps":[]}"""))
-      assertTrue(controller.planSteps.value.isEmpty())
+      assertEquals(ChatPlanSnapshot(steps = emptyList()), controller.planSnapshot.value)
 
       controller.handleGatewayEvent("agent", planPayload(runId, populated))
       controller.handleGatewayEvent("agent", planPayload(runId, """{"phase":"update","explanation":"Revising"}"""))
-      assertTrue(controller.planSteps.value.isEmpty())
+      assertEquals(ChatPlanSnapshot(steps = emptyList()), controller.planSnapshot.value)
     }
 
   @Test
@@ -119,40 +129,48 @@ class ChatControllerPlanStreamTest {
 
       controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 2))
 
-      assertTrue(controller.planSteps.value.isEmpty())
+      assertEquals(ChatPlanSnapshot(steps = emptyList()), controller.planSnapshot.value)
     }
 
   @Test
   fun terminalEventForAnotherRunPreservesActivePlan() =
     runTest {
       val (controller, gateway, runId) = startRun()
-      val expected = listOf(ChatPlanStep(step = "Active", status = ChatPlanStepStatus.InProgress))
+      val expected =
+        ChatPlanSnapshot(
+          steps = listOf(ChatPlanStep(step = "Active", status = ChatPlanStepStatus.InProgress)),
+          explanation = "Stay owned",
+        )
       controller.handleGatewayEvent(
         "agent",
-        planPayload(runId, """{"phase":"update","steps":[{"step":"Active","status":"in_progress"}]}"""),
+        planPayload(runId, """{"phase":"update","explanation":"Stay owned","steps":[{"step":"Active","status":"in_progress"}]}"""),
       )
       gateway.respondWith("chat.history", historyResponse(sessionId = "session-1", messages = emptyList()))
 
       controller.handleGatewayEvent("chat", chatTerminalPayload("main", "other-run", seq = 2))
 
-      assertEquals(expected, controller.planSteps.value)
+      assertEquals(expected, controller.planSnapshot.value)
     }
 
   @Test
   fun wrongRunCannotReplaceCurrentPlan() =
     runTest {
       val (controller, _, runId) = startRun()
-      val expected = listOf(ChatPlanStep(step = "Owned", status = ChatPlanStepStatus.InProgress))
+      val expected =
+        ChatPlanSnapshot(
+          steps = listOf(ChatPlanStep(step = "Owned", status = ChatPlanStepStatus.InProgress)),
+          explanation = "Current run",
+        )
       controller.handleGatewayEvent(
         "agent",
-        planPayload(runId, """{"phase":"update","steps":[{"step":"Owned","status":"in_progress"}]}"""),
+        planPayload(runId, """{"phase":"update","explanation":"Current run","steps":[{"step":"Owned","status":"in_progress"}]}"""),
       )
 
       controller.handleGatewayEvent(
         "agent",
-        planPayload("other-run", """{"phase":"update","steps":[{"step":"Foreign","status":"completed"}]}"""),
+        planPayload("other-run", """{"phase":"update","explanation":"Other run","steps":[{"step":"Foreign","status":"completed"}]}"""),
       )
 
-      assertEquals(expected, controller.planSteps.value)
+      assertEquals(expected, controller.planSnapshot.value)
     }
 }

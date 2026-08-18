@@ -1,3 +1,4 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   floatToPcm16,
@@ -255,7 +256,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (this.closed) {
       return;
     }
-    this.ctx.callbacks.onStatus?.("error", error instanceof Error ? error.message : String(error));
+    this.ctx.callbacks.onStatus?.("error", formatUiError(error));
     this.stop();
   }
 
@@ -272,7 +273,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     if (event.type === "error") {
-      this.lastRelayError = event.message ?? "Realtime relay failed";
+      this.lastRelayError = event.message ? formatUiError(event.message) : "Realtime relay failed";
     }
     if (event.type === "close") {
       this.startupError = new Error(
@@ -359,7 +360,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           }
           return;
         case "error":
-          this.lastRelayError = event.message ?? "Realtime relay failed";
+          this.lastRelayError = event.message
+            ? formatUiError(event.message)
+            : "Realtime relay failed";
           this.ctx.callbacks.onStatus?.("error", this.lastRelayError);
           return;
         case "close":
@@ -602,7 +605,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (this.closed) {
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     this.lastRelayError = message;
     this.ctx.callbacks.onStatus?.("error", message);
   }

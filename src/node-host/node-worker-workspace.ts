@@ -19,6 +19,7 @@ import type {
 } from "../worker/node-workspace-retain-protocol.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
+  type NodeWorkerTransferGateway,
   runNodeWorkerWorkspaceTransfer,
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
@@ -617,7 +618,7 @@ export class NodeWorkerWorkspaceRuntime {
   async exec(
     input: NodeWorkerWorkspaceExecInput,
     signal?: AbortSignal,
-    gateway?: { url: string; tlsFingerprint?: string },
+    gateway?: NodeWorkerTransferGateway,
   ): Promise<NodeWorkerWorkspaceExecResult> {
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
@@ -668,6 +669,7 @@ export class NodeWorkerWorkspaceRuntime {
           const stdout = await runNodeWorkerWorkspaceTransfer({
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
+            gatewayCloudflareAccess: gateway.cloudflareAccess,
             environmentId: input.environmentId,
             workspaceDir: workspacePath,
             manifestHome: sessionRoot,

@@ -1,6 +1,10 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { defaultRangeExtractor, observeElementRect } from "@tanstack/virtual-core";
+import {
+  defaultRangeExtractor,
+  measureElement as measureVirtualElement,
+  observeElementRect,
+} from "@tanstack/virtual-core";
 import {
   html,
   nothing,
@@ -43,6 +47,11 @@ export type ChatTranscriptSession = {
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
+};
+
+type TranscriptRowHeightCache = {
+  read: (sessionKey: string, rowKey: string) => number | undefined;
+  write: (sessionKey: string, rowKey: string, height: number) => void;
 };
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
@@ -140,10 +149,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const instance = this.virtualizerController.getVirtualizer();
     for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-virtual-row") ??
       []) {
-      instance.resizeItem(
-        instance.indexFromElement(row),
-        row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"],
-      );
+      const index = instance.indexFromElement(row);
+      const size = row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"];
+      this.recordRowHeight(index, size);
+      instance.resizeItem(index, size);
     }
   }
   private queueConnectedRowMeasure(): void {
@@ -208,13 +217,20 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
 
   constructor(
     private readonly host: ReactiveControllerHost,
+    private readonly sessionKey: string,
+    private readonly rowHeightCache?: TranscriptRowHeightCache,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
   ) {
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
       getScrollElement: () => this.scrollElement,
-      estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
+      estimateSize: (index) => {
+        const rowKey = this.rowKeys[index];
+        return rowKey
+          ? (this.rowHeightCache?.read(this.sessionKey, rowKey) ?? CHAT_TRANSCRIPT_ESTIMATED_ROW_PX)
+          : CHAT_TRANSCRIPT_ESTIMATED_ROW_PX;
+      },
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
@@ -257,6 +273,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
             this.queueConnectedRowMeasure();
           }
         }),
+      measureElement: (element, entry, instance) => {
+        const size = measureVirtualElement(element, entry, instance);
+        this.recordRowHeight(instance.indexFromElement(element), size);
+        return size;
+      },
       rangeExtractor: (range) => {
         const indexes = defaultRangeExtractor(range);
         const focused =
@@ -514,6 +535,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     return row.dataset.virtualRowKey || null;
   }
 
+  private recordRowHeight(index: number, height: number): void {
+    const rowKey = this.rowKeys[index];
+    if (rowKey && Number.isFinite(height) && height > 0) {
+      this.rowHeightCache?.write(this.sessionKey, rowKey, height);
+    }
+  }
+
   private syncAnnouncement(announcement: TranscriptAnnouncement | null, announce: boolean): void {
     if (!this.announcementInitialized || !announce) {
       this.announcementInitialized = true;
@@ -640,7 +668,10 @@ export class ChatTranscriptController implements ReactiveController {
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   private connected = false;
 
-  constructor(private readonly host: ReactiveControllerHost) {
+  constructor(
+    private readonly host: ReactiveControllerHost,
+    private readonly rowHeightCache?: TranscriptRowHeightCache,
+  ) {
     host.addController(this);
   }
 
@@ -664,6 +695,8 @@ export class ChatTranscriptController implements ReactiveController {
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
         this.host,
+        sessionKey,
+        this.rowHeightCache,
         initialOffset,
         initialOffset === null
           ? undefined

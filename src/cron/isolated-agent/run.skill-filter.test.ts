@@ -8,7 +8,7 @@ import {
   dispatchCronDeliveryMock,
   getCliSessionBindingMock,
   isCliProviderMock,
-  lookupContextTokensMock,
+  resolveContextTokensForModelMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
   makeCronSession,
@@ -411,7 +411,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupContextTokensMock.mockReturnValue(512_000);
+      resolveContextTokensForModelMock.mockReturnValue(512_000);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -440,18 +440,113 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     it("preserves existing session contextTokens when no configured or cached model window is loaded", async () => {
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          agentHarnessId: "codex",
           contextTokens: 222_000,
           contextTokensSource: "runtime",
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupContextTokensMock.mockReturnValue(undefined);
+      resolveContextTokensForModelMock.mockReturnValue(undefined);
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              agentHarnessId: "codex",
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+      });
 
       const result = await runSkillFilterCase();
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(222_000);
       expect(session.sessionEntry.contextTokensSource).toBe("runtime");
+    });
+
+    it("does not relabel a previous harness window when the current run reports none", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          agentHarnessId: "openclaw",
+          contextTokens: 222_000,
+          contextTokensSource: "runtime",
+          contextBudgetStatus: {} as NonNullable<
+            ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
+          >,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      resolveContextTokensForModelMock.mockReturnValue(undefined);
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              agentHarnessId: "codex",
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.agentHarnessId).toBe("codex");
+      expect(session.sessionEntry.contextTokens).toBe(128_000);
+      expect(session.sessionEntry.contextTokensSource).toBe("resolved");
+      expect(session.sessionEntry.contextBudgetStatus).toBeUndefined();
+    });
+
+    it("does not relabel a previous model window when the harness stays the same", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          modelProvider: "openai",
+          model: "gpt-5.3",
+          agentHarnessId: "codex",
+          contextTokens: 222_000,
+          contextTokensSource: "runtime",
+          contextBudgetStatus: {} as NonNullable<
+            ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
+          >,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      resolveContextTokensForModelMock.mockReturnValue(undefined);
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              agentHarnessId: "codex",
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.model).toBe("gpt-5.4");
+      expect(session.sessionEntry.contextTokens).toBe(128_000);
+      expect(session.sessionEntry.contextTokensSource).toBe("resolved");
+      expect(session.sessionEntry.contextBudgetStatus).toBeUndefined();
     });
 
     it("prefers sync-configured model contextTokens over the previous session value", async () => {
@@ -462,14 +557,17 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupContextTokensMock.mockReturnValue(512_000);
+      resolveContextTokensForModelMock.mockReturnValue(512_000);
 
       const result = await runSkillFilterCase();
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
       expect(session.sessionEntry.contextTokensSource).toBe("resolved");
-      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-5.4", {
+      expect(resolveContextTokensForModelMock).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        provider: "openai",
+        model: "gpt-5.4",
         allowAsyncLoad: false,
       });
     });

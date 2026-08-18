@@ -19,7 +19,7 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
-import type { GatewayNodeWorkerBundleInstaller } from "./worker-environments/node-worker-bundle-installer.js";
+import { createWorkerNodeEnrollmentManager } from "./worker-environments/node-enrollment.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
@@ -53,7 +53,6 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
-  ensureNodeWorkerBundle?: GatewayNodeWorkerBundleInstaller;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
@@ -147,7 +146,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
-  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
+  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
+    // Claims loaded before this Gateway acquired the state lock remain usable only by
+    // workspace recovery. Worker authority is minted from claims created in this lifecycle.
+    rejectExistingWorkerClaims: true,
+  });
   const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = () =>
     listRetainedWorkerBundleHashes({
@@ -229,6 +232,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     transfer: nodeWorkerBundleTransfer,
   });
+  const nodeEnrollment = createWorkerNodeEnrollmentManager({
+    store: params.startup.store,
+    getConfig: getRuntimeConfig,
+    resolveAvailability: deviceRuntime.resolveAvailability,
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };
@@ -244,10 +252,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         ? deviceRuntime.provider
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
-    resolveNodeWorkerBuild: async (deviceId) => {
-      const build = await deviceRuntime.resolveWorkerBuild(deviceId);
-      return build ? structuredClone(build) : undefined;
-    },
+    ensureNodeWorkerBundle: async (deviceId) => await ensureNodeWorkerBundle({ deviceId }),
+    prepareNodeEnrollment: nodeEnrollment.begin,
+    retireNodeEnrollment: nodeEnrollment.retire,
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
     stopNodeWorkerBundleTransfers: () => nodeWorkerBundleTransfer.closeAll(),
@@ -299,7 +306,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     logger: workerEnvironmentLog,
   });
   const workerEnvironmentService = workerEnvironmentServiceBase;
-  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.isAvailable);
+  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
     const environmentIds = params.startup.store
       .listForReconcile()
@@ -337,7 +344,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerLiveEvents,
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
-    ensureNodeWorkerBundle,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },

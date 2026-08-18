@@ -246,38 +246,6 @@ export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent):
   return projectTranscriptEntryMessage(entry.event, entry.seq);
 }
 
-export function extractMessageRole(message: unknown): string | undefined {
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? ((message as { role?: unknown }).role as string | undefined)
-    : undefined;
-}
-
-export function extractSessionTranscriptText(message: unknown): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  const record = message as { content?: unknown; text?: unknown };
-  if (typeof record.content === "string") {
-    return record.content.trim() || null;
-  }
-  if (Array.isArray(record.content)) {
-    const text = record.content
-      .map((entry) =>
-        entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string"
-          ? (entry as { text: string }).text
-          : "",
-      )
-      .filter((part) => part.trim())
-      .join("\n")
-      .trim();
-    return text || null;
-  }
-  if (typeof record.text === "string") {
-    return record.text.trim() || null;
-  }
-  return null;
-}
-
 function readSqliteAggregateUsageSnapshot(
   target: ResolvedTranscriptReadTarget,
 ): SessionTranscriptUsageSnapshot | null {

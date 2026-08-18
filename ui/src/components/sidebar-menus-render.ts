@@ -25,6 +25,7 @@ import {
 } from "./app-sidebar-session-menu-renderers.ts";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 import type {
   SidebarMenusController,
   SidebarMenusControllerHost,
@@ -171,12 +172,38 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     context &&
     isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
   );
+  const selfUser = context?.gateway.snapshot.selfUser ?? null;
+  const sessionsResult = context?.sessions.state.result;
+  const ownerOptions = listAssignableSessionOwners({
+    sessions: sessionsResult?.sessions ?? [session],
+    facet: sessionsResult?.creators,
+    agents: context?.agents.state.agentsList?.agents,
+    self: selfUser,
+  });
+  const selfOwner = selfUser
+    ? (ownerOptions.find((owner) => owner.type === "human" && owner.id === selfUser.id) ?? null)
+    : null;
+  const assignmentAccess = host.readSessionMutationAccess({
+    method: "sessions.assignOwner",
+    params: { key: session.key, owner: { type: "human", id: selfUser?.id ?? "profile" } },
+    requiredScope: "operator.write",
+  });
+  const actionDisabledReasons = {
+    ...sessionMenuReasons({
+      snapshot: context?.gateway.snapshot,
+      session,
+      batchRows,
+      cloudWorkerStopAction: session.cloudWorkerStopAction,
+    }),
+    ...(!assignmentAccess.allowed ? { "assign-owner": assignmentAccess.reason } : {}),
+  };
   return keyed(
     menu,
     html`
       <openclaw-session-menu
         .session=${{
           label: session.label,
+          isChild: session.isChild,
           pinned: session.pinned,
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
@@ -191,18 +218,16 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .anchor=${menu}
         .trigger=${controller.sessionMenuTrigger}
         .disabled=${!host.connected}
-        .actionDisabledReasons=${sessionMenuReasons({
-          snapshot: context?.gateway.snapshot,
-          session,
-          batchRows,
-          cloudWorkerStopAction: session.cloudWorkerStopAction,
-        })}
+        .actionDisabledReasons=${actionDisabledReasons}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
+        .ownerOptions=${ownerOptions}
+        .selfOwner=${selfOwner}
+        .currentOwnerId=${(session.owner?.actor ?? session.createdActor)?.id ?? null}
         .work=${batchRows ? null : controller.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => {
@@ -233,6 +258,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "set-icon":
               void host.sessionOrganizer.patchSession(session, { icon: action.icon });
+              break;
+            case "assign-owner":
+              void host.sessionOrganizer.assignSessionOwner(session, action.owner);
               break;
             case "fork":
               void host.sessionOrganizer.forkSession(session);
@@ -351,6 +379,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showSystem: host.sessionsShowSystem,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    involvingMe: host.sessionInvolvingMeFilterActive,
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -363,9 +392,12 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       host.sessionOrganizer.setSessionsStatusFilter(statusFilter);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
-    onCreatorFilterChange: (creatorId) => {
+    onCreatorFilterChange: (creatorId, involvingMe = false) => {
       host.sessionCreatorFilterId = creatorId;
-      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
+      host.sessionInvolvingMeFilterActive = involvingMe;
+      void (involvingMe
+        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
+        : host.sessionDataContext?.sessions.setCreatorFilter(creatorId));
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {
@@ -394,6 +426,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     grouping: host.catalogProjectGrouping,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    involvingMe: host.sessionInvolvingMeFilterActive,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });
@@ -405,9 +438,12 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
       host.hideSessionCatalog(position.catalogId);
       controller.closeCatalogViewMenu();
     },
-    onCreatorFilterChange: (creatorId) => {
+    onCreatorFilterChange: (creatorId, involvingMe = false) => {
       host.sessionCreatorFilterId = creatorId;
-      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
+      host.sessionInvolvingMeFilterActive = involvingMe;
+      void (involvingMe
+        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
+        : host.sessionDataContext?.sessions.setCreatorFilter(creatorId));
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

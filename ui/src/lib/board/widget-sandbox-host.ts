@@ -1,3 +1,4 @@
+import { formatUiError } from "../format-error.ts";
 import type { BoardWidget } from "./types.ts";
 import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
@@ -256,13 +257,7 @@ export class BoardWidgetSandboxHost {
         this.completeRequest(data.id, generation, true, result);
       })
       .catch((error: unknown) => {
-        this.completeRequest(
-          data.id,
-          generation,
-          false,
-          undefined,
-          error instanceof Error ? error.message : String(error),
-        );
+        this.completeRequest(data.id, generation, false, undefined, formatUiError(error));
       });
   }
 

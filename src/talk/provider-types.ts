@@ -183,6 +183,8 @@ export type RealtimeVoiceProviderResolveConfigContext = {
 
 export type RealtimeVoiceProviderConfiguredContext = {
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth readiness. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
 };
 

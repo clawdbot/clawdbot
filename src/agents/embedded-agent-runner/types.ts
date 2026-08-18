@@ -44,7 +44,7 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
-  contextTokensSource?: "runtime" | "resolved";
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
@@ -186,6 +186,8 @@ export type EmbeddedAgentRunMeta = {
   terminalReplyKind?: "silent-empty";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
+  /** Explicit user-facing waiting status supplied to sessions_yield. */
+  yieldAcknowledgment?: string;
   error?: {
     kind:
       | "context_overflow"

@@ -24,6 +24,7 @@ import {
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
@@ -185,7 +186,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
       return;
     }
-    const resolved = resolveSkillsAgentWorkspace(params, context);
+    const agentId =
+      params.agentId ?? tryResolveSystemAgentTargetAgentId(context.getRuntimeConfig());
+    const resolved = resolveSkillsAgentWorkspace({ ...params, agentId }, context);
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;

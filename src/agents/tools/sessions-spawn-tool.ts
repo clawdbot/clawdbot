@@ -311,6 +311,7 @@ export function createSessionsSpawnTool(
   const { restrictToSpawned } = resolveSandboxedSessionToolContext({
     cfg: visibilityCfg,
     agentSessionKey: opts?.agentSessionKey,
+    requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
   return {

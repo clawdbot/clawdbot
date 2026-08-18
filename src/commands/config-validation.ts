@@ -6,7 +6,7 @@ import {
   type OpenClawConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -33,7 +33,7 @@ export async function requireValidConfigFileSnapshot(
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0
-        ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
+        ? renderConfigValidationIssueLines(snapshot).join("\n")
         : "Unknown validation issue.";
     runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
     runtime.error(

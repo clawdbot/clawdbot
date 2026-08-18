@@ -11,20 +11,20 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 
 ## Available tools
 
-| Tool                 | What it does                                                                |
-| -------------------- | --------------------------------------------------------------------------- |
-| `sessions`           | Patch, reset, or delete visible sessions and manage session groups          |
-| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)  |
-| `sessions_search`    | Search visible session transcripts and return matching excerpts             |
-| `sessions_history`   | Read the transcript of a specific session                                   |
-| `sessions_send`      | Run another session on the same Gateway and optionally wait                 |
-| `conversations_list` | List stable external conversation addresses                                 |
-| `conversations_send` | Send to one exact external conversation without running a local session     |
-| `conversations_turn` | Send to one exact external conversation and wait for its correlated reply   |
-| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                     |
-| `sessions_yield`     | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`          | List or cancel background work in this session tree                         |
-| `session_status`     | Show a `/status`-style card and optionally set a per-session model override |
+| Tool                 | What it does                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `sessions`           | Patch, reset, delete, or assign ownership of visible sessions and manage session groups |
+| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)              |
+| `sessions_search`    | Search visible session transcripts and return matching excerpts                         |
+| `sessions_history`   | Read the transcript of a specific session                                               |
+| `sessions_send`      | Run another session on the same Gateway and optionally wait                             |
+| `conversations_list` | List stable external conversation addresses                                             |
+| `conversations_send` | Send to one exact external conversation without running a local session                 |
+| `conversations_turn` | Send to one exact external conversation and wait for its correlated reply               |
+| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                                 |
+| `sessions_yield`     | End the current turn and wait for follow-up sub-agent results                           |
+| `subagents`          | List or cancel background work in this session tree                                     |
+| `session_status`     | Show a `/status`-style card and optionally set a per-session model override             |
 
 These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set. `tools.profile: "messaging"` includes session self-service, discovery, recall, cross-session messaging, external-conversation tools, and the complete spawn lifecycle (`sessions_spawn`, `sessions_yield`, and `subagents`). The UI-only task-suggestion tools `suggest_task` and `dismiss_task` remain coding-profile tools.
 
@@ -60,9 +60,10 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 The owner-gated `sessions` tool exposes bounded self-service surfaces:
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, pin/archive state, model, and thinking level. The icon must be one emoji grapheme; pass an empty string to clear it. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, pin/archive state, model, and thinking level. The icon must be one emoji grapheme or one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`; pass an empty string to clear it. The Control UI picker also accepts a custom emoji and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
+- `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. Ownership is display and responsibility, not access control; see [Multi-user mode](/concepts/multi-user).
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` replaces the ordered name list rather than patching one entry.
 
 Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
@@ -128,7 +129,7 @@ Key options:
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` for native sub-agents when the child needs the current requester transcript; omit it or use `context: "isolated"` for a clean child. `context: "fork"` is only valid with `runtime: "subagent"`. Thread-bound native sub-agents default to `context: "fork"` unless `threadBindings.defaultSpawnContext` says otherwise.
-- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits.
+- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the requesting agent. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. The spawned session is attributed to the requesting agent in the sidebar; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 Default leaf sub-agents do not get session tools. When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Leaf runs still do not get recursive orchestration tools.
 
@@ -140,18 +141,19 @@ For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
 Session tools are scoped to limit what the agent can see:
 
-| Level   | Scope                                                      |
-| ------- | ---------------------------------------------------------- |
-| `self`  | Only the current session                                   |
-| `tree`  | Current + spawned; reads include watched same-agent groups |
-| `agent` | All sessions for this agent                                |
-| `all`   | All sessions (cross-agent if configured)                   |
+| Level   | Scope                                                             |
+| ------- | ----------------------------------------------------------------- |
+| `self`  | Only the current session                                          |
+| `tree`  | Current + spawned; when called from main, all same-agent sessions |
+| `agent` | All sessions for this agent                                       |
+| `all`   | All sessions (cross-agent if configured)                          |
 
-Default is `tree`. Sandboxed sessions are clamped to `tree` regardless of config.
-With the default `session.dmScope: "main"`, group activity makes watched
-same-agent group sessions readable from the main session, and the main
-session's system prompt lists those watched sessions so the agent knows it can
-read them.
+Default is `tree`. The main-session widening applies to list, history, search,
+send, and status, but never crosses agents. `self` remains a strict lockdown,
+including for main. A sandboxed caller under the default spawned-only session
+tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
+from every cross-session tool. Ambient group watches still add activity notices
+and prompt hints; they do not grant access.
 
 ## Further reading
 

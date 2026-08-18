@@ -2,6 +2,7 @@
 import type { AllMiddlewareArgs, SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
@@ -16,7 +17,11 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { decodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
+import {
+  decodeSlackApprovalAction,
+  SLACK_APPROVAL_HEADER_BLOCK_ID,
+  type SlackApprovalAction,
+} from "../../approval-actions.js";
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
@@ -537,11 +542,9 @@ function buildSlackApprovalTerminalBlocks(params: {
   prefix: "Resolved" | "Already resolved";
 }): (Block | KnownBlock)[] {
   const blocks = removeSlackApprovalControls(params.blocks ?? []).filter((block) => {
-    const text = (block as { type?: unknown; text?: { text?: unknown } }).text?.text;
+    const blockId = (block as { block_id?: unknown }).block_id;
     return !(
-      (block as { type?: unknown }).type === "section" &&
-      typeof text === "string" &&
-      /^\*(?:Exec|Plugin) approval required\*/u.test(text)
+      (block as { type?: unknown }).type === "section" && blockId === SLACK_APPROVAL_HEADER_BLOCK_ID
     );
   });
   return [
@@ -729,7 +732,7 @@ async function handleSlackLegacyApprovalInteraction(params: {
     accountId: params.ctx.accountId,
     senderId: params.parsed.userId,
   });
-  const resolveMethods: Array<"exec" | "plugin"> = [];
+  const resolveMethods: ChannelApprovalKind[] = [];
   if (execAuthorized) {
     resolveMethods.push("exec");
   }

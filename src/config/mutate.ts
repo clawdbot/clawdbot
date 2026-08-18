@@ -22,8 +22,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
-import { restoreEnvVarRefs } from "./env-preserve.js";
-import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {

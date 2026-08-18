@@ -29,7 +29,6 @@ async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
 
 function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMcpManager {
   return {
-    configuredServerCount: 1,
     descriptors: [],
     callMcpTool,
     close: async () => undefined,
@@ -74,14 +73,24 @@ describe("mcp.tools.call.v1", () => {
     });
   });
 
-  it("maps MCP tool errors and unavailable servers to failed invokes", async () => {
+  it("returns MCP tool errors as results while thrown failures fail the invoke", async () => {
     const toolError = await invokeMcp(
-      managerWith(async () => ({ isError: true, content: [{ type: "text", text: "bad query" }] })),
+      managerWith(async () => ({
+        isError: true,
+        content: [{ type: "text", text: "bad query" }],
+        structuredContent: { retryable: true },
+      })),
       { server: "docs", tool: "search" },
     );
-    expect(toolError).toMatchObject({
-      ok: false,
-      error: { code: "MCP_TOOL_ERROR", message: "bad query" },
+    expect(toolError).toEqual({
+      id: "invoke-mcp",
+      nodeId: "node-1",
+      ok: true,
+      payload: {
+        content: [{ type: "text", text: "bad query" }],
+        structuredContent: { retryable: true },
+        isError: true,
+      },
     });
 
     const unavailable = await invokeMcp(

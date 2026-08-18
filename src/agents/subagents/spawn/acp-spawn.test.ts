@@ -870,7 +870,7 @@ describe("spawnAcpDirect", () => {
       inheritedToolPolicyVersion: 1,
       parentSessionKey: "agent:main:main",
       createdVia: "spawn",
-      createdActor: { type: "agent", id: "agent:main:main" },
+      createdActor: { type: "agent", id: "main" },
       createdAt: expect.any(Number),
     });
     expectBindingCallFields({

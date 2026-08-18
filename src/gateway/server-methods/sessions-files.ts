@@ -24,6 +24,7 @@ import { runGit } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -313,14 +314,6 @@ function toDisplayPath(root: string, resolved: string): string {
   return relative.split(path.sep).join("/");
 }
 
-function isInsideRoot(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
-}
-
 function resolveTouchedFilePath(params: {
   root: string | undefined;
   fileRoot: string | undefined;
@@ -331,7 +324,7 @@ function resolveTouchedFilePath(params: {
   }
   const base = params.fileRoot ?? params.root;
   const resolved = resolveSessionToolPathToCwd(params.filePath, base);
-  if (!isInsideRoot(params.root, resolved)) {
+  if (!isPathInside(params.root, resolved)) {
     return undefined;
   }
   return resolved;
@@ -349,7 +342,7 @@ function resolveFileRoot(params: {
   }
   const resolvedCwd = path.resolve(params.spawnedCwd);
   const resolvedRoot = path.resolve(params.root);
-  return isInsideRoot(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
+  return isPathInside(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
 }
 
 function relevanceForKind(kind: FileKind): SessionFileRelevance {

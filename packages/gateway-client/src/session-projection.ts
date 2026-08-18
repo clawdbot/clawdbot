@@ -1,5 +1,6 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
+import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
 
 export type SessionMessageEnvelope = {
@@ -119,12 +120,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readNonemptyString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;

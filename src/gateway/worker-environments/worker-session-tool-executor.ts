@@ -134,7 +134,7 @@ export function createWorkerSessionToolExecutor(params: {
     }
     const targetAgentId = normalizeAgentId(operation.request.agentId ?? operation.source.agentId);
     const authorizedTools = WORKER_TOOL_NAMES.filter((name) =>
-      params.placements.isWorkerTurnToolAuthorized(operation.source.binding, name),
+      params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
     );
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
@@ -185,7 +185,8 @@ export function createWorkerSessionToolExecutor(params: {
             createParams,
             {
               via: "spawn",
-              actor: { type: "agent", id: operation.source.sessionKey },
+              actor: { type: "agent", id: operation.source.agentId },
+              requesterSessionKey: operation.source.sessionKey,
               inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
             },
             {
@@ -465,7 +466,7 @@ export function createWorkerSessionToolExecutor(params: {
           },
     );
     const started = params.placements.beginWorkerSessionToolOperation({
-      binding: source.binding,
+      claim: source.turnClaim,
       toolName: request.toolName,
       toolCallId: request.request.toolCallId,
       requestDigest,
@@ -495,7 +496,8 @@ export function createWorkerSessionToolExecutor(params: {
     if (started.kind === "unauthorized") {
       throw new Error("Worker session tool authority changed");
     }
-    const inFlightKey = `${source.sessionId}\0${started.claimId}\0${request.request.toolCallId}`;
+    const sourceClaimId = source.turnClaim.claimId;
+    const inFlightKey = `${source.sessionId}\0${sourceClaimId}\0${request.request.toolCallId}`;
     if (started.kind === "in-progress") {
       const existing = inFlight.get(inFlightKey);
       return {
@@ -528,7 +530,7 @@ export function createWorkerSessionToolExecutor(params: {
           if (
             !params.placements.bindWorkerSessionToolOperationChild({
               sourceSessionId: source.sessionId,
-              sourceClaimId: started.claimId,
+              sourceClaimId,
               toolCallId: request.request.toolCallId,
               requestDigest,
               childSessionKey: childKey,
@@ -563,7 +565,7 @@ export function createWorkerSessionToolExecutor(params: {
           if (
             !params.placements.abandonWorkerSessionToolOperation({
               sourceSessionId: source.sessionId,
-              sourceClaimId: started.claimId,
+              sourceClaimId,
               toolCallId: request.request.toolCallId,
               requestDigest,
             })
@@ -587,7 +589,7 @@ export function createWorkerSessionToolExecutor(params: {
       if (
         !params.placements.completeWorkerSessionToolOperation({
           sourceSessionId: source.sessionId,
-          sourceClaimId: started.claimId,
+          sourceClaimId,
           toolCallId: request.request.toolCallId,
           requestDigest,
           resultJson,

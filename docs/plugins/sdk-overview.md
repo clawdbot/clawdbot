@@ -131,7 +131,7 @@ persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
-Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
+Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers may expose process-stable picker metadata with `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional `description`, and optional `default` because the host has no authoritative cross-provider CPU, memory, or price source. Session-placement providers declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases, while `remote-exec` providers return SSH leases. Omission advertises no placement modes while preserving direct environment lifecycle calls. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
 `WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The Gateway reads the password file over the provider's SSH endpoint when needed and never persists the password. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
@@ -140,10 +140,8 @@ Providers with renewable leases can also implement `renew(leaseId)`.
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
 is the generic embedding surface for reusable vector generation. Memory search
-can consume this generic provider surface. The older
-`api.registerMemoryEmbeddingProvider(...)` and
-`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
-existing memory-specific providers migrate.
+consumes this generic provider surface. The older memory-specific registrar and
+manifest contract were removed after their August 2026 migration window.
 
 Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
 the existing per-file batching contract unless their runtime explicitly sets
@@ -669,11 +667,7 @@ rebuild earlier history. Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 
-### Deprecated memory embedding adapters
-
-| Method                                         | What it registers                              |
-| ---------------------------------------------- | ---------------------------------------------- |
-| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+### Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
@@ -692,12 +686,8 @@ engine unchanged, and tries that engine again on the next logical turn.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
-  should use `api.registerEmbeddingProvider(...)` and
-  `contracts.embeddingProviders`.
-- Existing memory-specific providers continue to work during the migration
-  window, but plugin inspection reports this as compatibility debt for
-  non-bundled plugins.
+- Embedding providers use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`; there is no separate memory-only registry.
 
 ### Events and lifecycle
 

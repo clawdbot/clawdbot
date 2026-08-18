@@ -3,14 +3,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import {
-  resolveContextTokensForModel,
-  resolveExplicitContextTokenSourceForModel,
-} from "../agents/context.js";
+import type {
+  SessionCreatedActor,
+  SessionOwner,
+} from "../../packages/gateway-protocol/src/index.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentIdentity } from "../agents/identity.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
@@ -38,8 +39,10 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { buildControlUiAvatarUrl, normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
@@ -75,15 +78,31 @@ import {
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-/** Adds current durable human profile display data without persisting rename-prone metadata. */
+/** Adds current actor display data without persisting rename-prone metadata. */
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
+  cfg?: OpenClawConfig,
 ): SessionCreatedActor | undefined {
   if (!actor) {
     return undefined;
   }
   const id = normalizeOptionalString(actor.id);
+  if (actor.type === "agent" && id && cfg) {
+    const identity = resolveAgentIdentity(cfg, id);
+    const label = normalizeOptionalString(identity?.name);
+    const avatar = normalizeOptionalString(identity?.avatar);
+    const avatarUrl =
+      avatar && looksLikeAvatarPath(avatar)
+        ? buildControlUiAvatarUrl(normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath), id)
+        : undefined;
+    return {
+      type: actor.type,
+      id,
+      ...(label ? { label } : {}),
+      ...(avatarUrl ? { avatarUrl } : {}),
+    };
+  }
   if (actor.type !== "human" || !id) {
     return { type: actor.type, ...(id ? { id } : {}) };
   }
@@ -100,6 +119,40 @@ export function projectSessionActor(
     userProfileIdentityById.set(id, identity);
   }
   return { type: actor.type, id, ...identity };
+}
+
+function projectSessionOwner(
+  entry: SessionEntry | undefined,
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
+  cfg: OpenClawConfig,
+): SessionOwner | undefined {
+  const persisted = entry?.owner;
+  const actor = projectSessionActor(
+    persisted?.actor ?? entry?.createdActor,
+    userProfileIdentityById,
+    cfg,
+  );
+  if (!actor) {
+    return undefined;
+  }
+  const assignedBy = projectSessionActor(persisted?.assignedBy, userProfileIdentityById, cfg);
+  return {
+    actor,
+    ...(assignedBy ? { assignedBy } : {}),
+    ...(persisted?.assignedAt !== undefined ? { assignedAt: persisted.assignedAt } : {}),
+  };
+}
+
+function projectSessionParticipants(
+  entry: SessionEntry | undefined,
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
+  cfg: OpenClawConfig,
+): SessionCreatedActor[] | undefined {
+  const participants = entry?.participants?.flatMap((participant) => {
+    const projected = projectSessionActor(participant, userProfileIdentityById, cfg);
+    return projected ? [projected] : [];
+  });
+  return participants?.length ? participants.slice(0, 4) : undefined;
 }
 
 export function buildGatewaySessionRow(params: {
@@ -243,7 +296,6 @@ export function buildGatewaySessionRow(params: {
   );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
@@ -255,7 +307,7 @@ export function buildGatewaySessionRow(params: {
     }) === undefined;
   const transcriptUsage =
     !skipTranscriptUsage &&
-    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
+    (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -364,23 +416,19 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
   });
-  const configuredAgentContextTokens =
-    resolveAgentConfig(cfg, sessionAgentId)?.contextTokens ?? cfg.agents?.defaults?.contextTokens;
-  const explicitModelContextSource = resolveExplicitContextTokenSourceForModel({
-    cfg,
-    provider: rowModelProvider,
-    model: rowModel,
-  });
-  const hasExplicitContextTokens =
-    resolvePositiveNumber(configuredAgentContextTokens) !== undefined ||
-    explicitModelContextSource === "contextTokens";
   const resolvedCurrentContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
       provider: rowModelProvider,
       model: rowModel,
-      contextTokensOverride: configuredAgentContextTokens,
       allowAsyncLoad: false,
+    }),
+  );
+  const authoredContextTokens = resolvePositiveNumber(
+    resolveAuthoredModelContextTokens({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
     }),
   );
   const persistedContextTokens = resolvePositiveNumber(entry?.contextTokens);
@@ -398,19 +446,18 @@ export function buildGatewaySessionRow(params: {
     entry?.modelSelectionLocked === true || persistedContextMatchesCurrentSelection
       ? persistedContextTokens
       : undefined;
-  // contextTokens is an effective override; an authored contextWindow only
-  // caps matching runtime telemetry and must not inflate it to native capacity.
-  const currentContextTokens = hasExplicitContextTokens
-    ? resolvedCurrentContextTokens
-    : explicitModelContextSource === "contextWindow"
-      ? resolvedCurrentContextTokens !== undefined && trustedPersistedContextTokens !== undefined
-        ? Math.min(resolvedCurrentContextTokens, trustedPersistedContextTokens)
-        : (resolvedCurrentContextTokens ?? trustedPersistedContextTokens)
-      : trustedPersistedContextTokens;
+  // An authored effective cap wins. Other resolved windows only constrain matching
+  // telemetry, so native capacity cannot inflate a smaller observed runtime budget.
+  const currentContextTokens =
+    authoredContextTokens !== undefined
+      ? resolvedCurrentContextTokens
+      : trustedPersistedContextTokens !== undefined && resolvedCurrentContextTokens !== undefined
+        ? Math.min(trustedPersistedContextTokens, resolvedCurrentContextTokens)
+        : (trustedPersistedContextTokens ?? resolvedCurrentContextTokens);
   const contextTokens =
     entry?.modelSelectionLocked === true
-      ? (trustedPersistedContextTokens ?? currentContextTokens ?? resolvedCurrentContextTokens)
-      : (currentContextTokens ?? resolvedCurrentContextTokens);
+      ? (persistedContextTokens ?? currentContextTokens)
+      : currentContextTokens;
   const fastModeState = resolveFastModeState({
     cfg,
     provider: selectedModelProvider,
@@ -436,6 +483,10 @@ export function buildGatewaySessionRow(params: {
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    permissionMode: entry?.permissionMode,
+    ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
+      ? { sessionRoot: entry.sessionRoot }
+      : {}),
     worktree: entry?.worktree,
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
@@ -444,7 +495,14 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileIdentityById),
+    createdActor: projectSessionActor(
+      entry?.createdActor,
+      rowContext?.userProfileIdentityById,
+      cfg,
+    ),
+    owner: projectSessionOwner(entry, rowContext?.userProfileIdentityById, cfg),
+    participants: projectSessionParticipants(entry, rowContext?.userProfileIdentityById, cfg),
+    participantCount: entry?.participantCount,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
@@ -466,7 +524,7 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),

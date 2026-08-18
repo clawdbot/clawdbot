@@ -242,7 +242,6 @@ export async function persistSessionUsageUpdate(params: {
             (params.preserveFreshTotalTokensOnStaleUsage !== true ||
               entry.totalTokensFresh !== true)
           ) {
-            patch.totalTokens = undefined;
             patch.totalTokensFresh = false;
             patch.totalTokensVersion = undefined;
           }

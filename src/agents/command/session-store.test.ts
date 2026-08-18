@@ -562,7 +562,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -709,7 +708,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result,
@@ -781,7 +779,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result,
@@ -827,7 +824,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore: staleInMemory,
-        contextTokensOverride: 200_000,
         defaultProvider: "openai",
         defaultModel: "gpt-5.4",
         result: {
@@ -943,7 +939,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        contextTokensOverride: 200_000,
         defaultProvider: "openai",
         defaultModel: "gpt-5.4",
         result: {
@@ -994,7 +989,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey: first.sessionKey!,
         storePath: first.storePath,
         sessionStore: first.sessionStore!,
-        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result: {
@@ -1268,7 +1262,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -1314,7 +1307,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg: {} as OpenClawConfig,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -1428,7 +1420,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,

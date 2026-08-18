@@ -938,6 +938,20 @@ test("sessions.changed mutation events include live session setting metadata", a
   });
 });
 
+test("sessions.patch broadcasts the prepared permission boundary", async () => {
+  await writeMainSessionStore({ sessionRoot: "/workspace/project" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    permissionMode: "workspace",
+  });
+
+  expectMainPatchBroadcast(result, {
+    permissionMode: "workspace",
+    sessionRoot: "/workspace/project",
+  });
+});
+
 test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
   // No explicit responseUsage and no configured default → the row builder resolves
   // effectiveResponseUsage to "off". The event must carry that resolved value, not

@@ -305,6 +305,16 @@ describe("TasksPage concurrent refresh events", () => {
 });
 
 describe("TasksPage active pagination", () => {
+  it("redacts secrets in displayed list failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+
+    await vi.waitFor(() => expect(page.error).toBe("OPENAI_API_KEY=sk-123...cdef"));
+  });
+
   it("drains active pages with the selected scope and merges each task once", async () => {
     const sharedPageOne = createTask("task-shared", "running", {
       progressSummary: "Page one progress",

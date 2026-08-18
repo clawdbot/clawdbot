@@ -25,6 +25,7 @@ import {
   isSecretEgressProxyActive,
   registerSecretEgressProxyRun,
 } from "../secrets/egress-proxy/registry.js";
+import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -33,6 +34,7 @@ import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
   createExecRequestPreparation,
   type ExecToolArgs,
+  resolveExecPreparedRunEnvironment,
   resolveNotifyOnExitEmptySuccess,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
@@ -70,24 +72,24 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+type GatewayApprovalRevalidator = () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const secretEgressEnabled = isSecretEgressProxyActive();
+  const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
-  let storeEnvPromise:
-    | Promise<import("../secrets/store/secret-store.js").SecretStoreExecEnvironment>
-    | undefined;
-  const resolveStoreEnv = () => {
-    storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) => {
-      return store.readSecretStoreExecEnvironment({
+  let storeEnvPromise: Promise<SecretStoreExecEnvironment>;
+  const resolveStoreEnv = () =>
+    (storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) =>
+      store.readSecretStoreExecEnvironment({
         includeSecretSentinels: secretEgressEnabled,
-      });
-    });
-    return storeEnvPromise;
-  };
+        excludeNames: preparedRunEnvironment.excludedStoreNames,
+      }),
+    ));
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
@@ -96,9 +98,7 @@ export function createExecTool(
   );
   const allowBackground = defaults?.allowBackground ?? true;
   const defaultTimeoutSec =
-    typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
-      ? defaults.timeoutSec
-      : 1800;
+    defaults?.timeoutSec && defaults.timeoutSec > 0 ? defaults.timeoutSec : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {
     safeBins,
@@ -205,6 +205,7 @@ export function createExecTool(
       }
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
+      let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       const foregroundFallbackWarning =
@@ -438,6 +439,7 @@ export function createExecTool(
           storeEnv: storeEnv.env,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           secretEgressEnv,
+          ...preparedRunEnvironment,
           warnings,
         });
 
@@ -535,10 +537,10 @@ export function createExecTool(
             return gatewayResult.deniedResult;
           }
           signal?.throwIfAborted();
-          execCommandOverride = gatewayResult.execCommandOverride;
-          if (gatewayResult.allowWithoutEnforcedCommand) {
-            execCommandOverride = undefined;
-          }
+          revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
+          execCommandOverride = gatewayResult.allowWithoutEnforcedCommand
+            ? undefined
+            : gatewayResult.execCommandOverride;
         }
 
         // Pending approvals have not started the command. Add fallback warnings only
@@ -560,6 +562,10 @@ export function createExecTool(
           });
         }
 
+        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
+        if (gatewayApprovalDenied) {
+          return gatewayApprovalDenied;
+        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,

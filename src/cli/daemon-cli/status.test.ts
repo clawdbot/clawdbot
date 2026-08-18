@@ -131,8 +131,11 @@ describe("runDaemonStatus", () => {
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error:
-        "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      error: {
+        type: "cli_error",
+        message:
+          "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
@@ -156,7 +159,10 @@ describe("runDaemonStatus", () => {
     expect(printDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error: expect.stringContaining("Gateway status failed: service manager unavailable"),
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("Gateway status failed: service manager unavailable"),
+      },
     });
     expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
     expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);

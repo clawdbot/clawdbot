@@ -8,12 +8,33 @@ openclaw-new-session-page {
 }
 
 .new-session-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+/* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
+   the page, not to the message being composed. */
+.new-session-page__incognito-rail {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 45;
+}
+
+.new-session-page__incognito-toggle--active,
+.new-session-page__incognito-toggle--active:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+}
+
+html.openclaw-native-macos .new-session-page__incognito-rail {
+  top: 52px;
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -518,6 +539,13 @@ wa-dropdown.new-session-page__start-menu {
   opacity: 0.5;
 }
 
+/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
+.new-session-page__blocked-submit {
+  padding: 4px var(--chat-box-inset) 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__start-submit[aria-busy="true"] svg {
     animation: none;
@@ -733,7 +761,7 @@ wa-dropdown.new-session-page__start-menu {
    the right edge. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
-    padding: 12px 8px;
+    padding: 52px 8px 12px;
   }
 
   .new-session-page__triggers {

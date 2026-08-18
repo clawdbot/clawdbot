@@ -3,9 +3,9 @@ import net from "node:net";
 import type { TLSSocket } from "node:tls";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type ClientOptions, type RawData } from "ws";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, probeRfbServer } from "../gateway/desktop/rfb-probe.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 
@@ -77,8 +77,8 @@ function attachWebSocketUrl(gatewayUrl: string, attachPath: string): string {
 }
 
 function assertTlsSocketFingerprint(socket: TLSSocket, expectedRaw: string): void {
-  const expected = normalizeFingerprint(expectedRaw);
-  const actual = normalizeFingerprint(socket.getPeerCertificate().fingerprint256 ?? "");
+  const expected = normalizeTlsFingerprint(expectedRaw);
+  const actual = normalizeTlsFingerprint(socket.getPeerCertificate().fingerprint256 ?? "");
   if (!expected || !actual || actual !== expected) {
     throw new Error("gateway TLS fingerprint mismatch");
   }
@@ -117,13 +117,13 @@ function assertGatewayTlsFingerprint(ws: WebSocket, expectedRaw?: string): void 
   if (!expectedRaw?.trim()) {
     return;
   }
-  const expected = normalizeFingerprint(expectedRaw);
+  const expected = normalizeTlsFingerprint(expectedRaw);
   const socket = (
     ws as WebSocket & {
       _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
     }
   )["_socket"];
-  const actual = normalizeFingerprint(socket?.getPeerCertificate?.().fingerprint256 ?? "");
+  const actual = normalizeTlsFingerprint(socket?.getPeerCertificate?.().fingerprint256 ?? "");
   if (!expected || !actual || actual !== expected) {
     throw new Error("gateway TLS fingerprint mismatch");
   }

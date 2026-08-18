@@ -16,3 +16,23 @@ export function resetAppHostTestGlobals(): void {
   );
   vi.unstubAllGlobals();
 }
+
+export type TestOptionalCustomElement = {
+  tagName: string;
+  label: string;
+  loadModule: () => Promise<unknown>;
+};
+
+let lazyElementSequence = 0;
+
+export function createLazyElementSpec(label: string): TestOptionalCustomElement {
+  lazyElementSequence += 1;
+  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
+  return {
+    tagName,
+    label,
+    loadModule: async () => {
+      customElements.define(tagName, class extends HTMLElement {});
+    },
+  };
+}

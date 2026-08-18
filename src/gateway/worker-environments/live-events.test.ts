@@ -46,6 +46,13 @@ const ID: Identity = {
   bundleHash: "b".repeat(64),
   sessionId: SID,
   runId: RUN,
+  turnClaim: {
+    sessionId: SID,
+    claimId: "claim-worker-live",
+    runId: RUN,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-live", ownerEpoch: EPOCH },
+  },
   ownerEpoch: EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-live-event-v1"],

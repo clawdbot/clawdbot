@@ -351,10 +351,10 @@ openclaw-chat-page {
   background: transparent;
 }
 
-/* The oversized clipped transcript owns its focus ring, so it stays inward to keep every edge visible. */
+/* The transcript stays keyboard-focusable for scroll keys, but the owner chose
+   no focus box: a ring around the whole main content reads as a broken border. */
 .chat-thread:focus-visible {
-  outline: 2px solid var(--muted-strong);
-  outline-offset: -2px;
+  outline: none;
 }
 
 .chat-thread-inner > :first-child {
@@ -456,6 +456,23 @@ openclaw-chat-page {
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.chat-history-available {
+  position: absolute;
+  z-index: 10;
+  top: 10px;
+  left: 50%;
+  max-width: calc(100% - 2 * var(--chat-thread-gutter));
+  border-radius: var(--radius-full);
+  background: var(--panel-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--muted);
+  transform: translateX(-50%);
+}
+
+.chat-history-available strong {
+  color: var(--text);
 }
 
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
@@ -1872,11 +1889,12 @@ button.chat-reply-preview--message:disabled {
   justify-self: end;
 }
 
-/* Compact split control pinned to the card's top-right; both halves share one
-   fixed height so the chevron cap can never overhang the primary segment. */
+/* Paired actions stay pinned to the card's top-right and share one fixed height
+   while remaining visibly separate, independently rounded controls. */
 .task-suggestion__split {
   display: inline-flex;
   align-items: stretch;
+  gap: 4px;
   height: 26px;
 }
 
@@ -1886,14 +1904,10 @@ button.chat-reply-preview--message:disabled {
   gap: 5px;
   height: 26px;
   padding: 0 10px;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  border-radius: var(--radius-md);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
-}
-
-.task-suggestion__start:only-child {
-  border-radius: var(--radius-md);
 }
 
 .task-suggestion__start svg {
@@ -1906,10 +1920,9 @@ button.chat-reply-preview--message:disabled {
   width: 26px;
   min-width: 26px;
   height: 26px;
-  margin-left: -1px;
   padding: 0;
   place-items: center;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-radius: var(--radius-md);
 }
 
 .task-suggestion__menu-trigger svg {
@@ -2166,6 +2179,13 @@ button.chat-reply-preview--message:disabled {
   display: inline-flex;
   gap: 5px;
   font: 12px/1.4 var(--mono);
+}
+
+button.chat-pr__diff {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: var(--cursor-action);
 }
 
 .chat-pr__additions {
@@ -2515,7 +2535,9 @@ button.chat-reply-preview--message:disabled {
   padding: 8px 10px 0;
 }
 
-.agent-chat__composer-status-stack:not(:has(.compaction-indicator, .agent-chat__goal)) {
+.agent-chat__composer-status-stack:not(
+  :has(.compaction-indicator, .agent-chat__goal, .session-progress-card)
+) {
   display: none;
 }
 
@@ -2575,6 +2597,10 @@ button.chat-reply-preview--message:disabled {
   width: 100%;
 }
 
+.chat-composer-model-control .chat-controls__permission-picker {
+  flex: 0 0 auto;
+}
+
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
@@ -2596,53 +2622,6 @@ button.chat-reply-preview--message:disabled {
    of the row rather than something each new child has to remember. */
 .agent-chat__composer-input-row > * {
   min-height: var(--chat-composer-control-height);
-}
-
-/* Edit-mode marker beside the input: the queued row already names the state, so
-   this only says which mode the composer is in and how to leave it. It takes the
-   row's control height like every other child, so it needs no alignment nudge. */
-.agent-chat__composer-edit {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  flex-shrink: 0;
-  padding-inline: 7px 3px;
-  border-radius: var(--radius-full);
-  background: var(--info-subtle);
-  color: var(--info);
-}
-
-.agent-chat__composer-edit-icon,
-.agent-chat__composer-edit-cancel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.agent-chat__composer-edit-icon svg,
-.agent-chat__composer-edit-cancel svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.85px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.agent-chat__composer-edit-cancel {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: inherit;
-  cursor: var(--cursor-action);
-}
-
-.agent-chat__composer-edit-cancel:hover {
-  background: color-mix(in srgb, var(--info) 18%, transparent);
 }
 
 .agent-chat__disabled-reason {
@@ -3084,7 +3063,8 @@ button.chat-reply-preview--message:disabled {
   }
 
   .chat-send-btn--voice-live .agent-chat__voice-activity,
-  .chat-send-btn__voice-stop-glyph {
+  .chat-send-btn__voice-stop-glyph,
+  .chat-talk-input-picker {
     transition: none !important;
   }
 }
@@ -3273,24 +3253,43 @@ button.chat-reply-preview--message:disabled {
   cursor: not-allowed;
 }
 
-/* Idle voice fill stays muted so the idle -> hover -> recording progression
-   escalates (10% -> 18% -> live meter + breathing glow); a full-strength idle
-   fill makes recording state indistinguishable at a glance. */
+/* The composer mic progresses transparent idle -> subtle hover -> full accent
+   recording; Talk-session controls retain the louder accent treatment. */
 .chat-send-btn--voice {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
+  background: var(--chat-voice-background, color-mix(in srgb, var(--accent) 10%, transparent));
+  color: var(--chat-voice-color, var(--accent));
   box-shadow: none;
 }
 
+.chat-talk-control:not(.chat-talk-control--active) .chat-send-btn--voice:disabled {
+  opacity: 0.4;
+}
+
 .chat-send-btn--voice:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(
+    --chat-voice-hover-background,
+    color-mix(in srgb, var(--accent) 18%, transparent)
+  );
+  color: var(--chat-voice-hover-color, var(--accent));
   box-shadow: none;
 }
 
 .chat-talk-control {
+  --chat-voice-background: transparent;
+  --chat-voice-color: var(--muted);
+  --chat-voice-hover-background: var(--bg-hover);
+  --chat-voice-hover-color: var(--text);
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
+}
+
+.chat-talk-control--active {
+  --chat-picker-border: color-mix(in srgb, var(--accent) 24%, transparent);
+  --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
+  --chat-picker-color: var(--accent);
+  --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
+  --chat-picker-hover-color: var(--accent);
 }
 
 .chat-talk-control > openclaw-tooltip {
@@ -3301,41 +3300,43 @@ button.chat-reply-preview--message:disabled {
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
-/* Stretch instead of a fixed height so the picker always matches the voice
-   button, including the 44px mobile bump in layout.mobile.css. */
 .chat-talk-input-picker {
   display: inline-flex;
   align-self: stretch;
+  width: 20px;
+  transition:
+    width 120ms ease,
+    opacity 100ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chat-talk-control:not(.chat-talk-control--active, :hover, :focus-within)
+    .chat-talk-input-picker:not([open]) {
+    width: 0;
+    min-width: 0;
+    opacity: 0;
+  }
 }
 
 .chat-talk-input-picker__trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
   min-width: 20px;
   height: 100%;
   padding: 0;
   border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-left: 1px solid var(--chat-picker-border, var(--border));
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
+  background: var(--chat-picker-background, transparent);
+  color: var(--chat-picker-color, var(--muted));
   transition: background var(--duration-fast) ease;
-}
-
-.chat-talk-control--active .chat-talk-input-picker__trigger {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .chat-talk-input-picker__trigger:hover,
 .chat-talk-input-picker[open] .chat-talk-input-picker__trigger {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-/* Keep both halves of the voice pill visually joined when Talk is unavailable. */
-.chat-talk-control:has(.chat-send-btn:disabled) .chat-talk-input-picker__trigger {
-  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  background: var(--chat-picker-hover-background, var(--bg-hover));
+  color: var(--chat-picker-hover-color, var(--text));
 }
 
 .chat-talk-input-picker__trigger:focus-visible {
@@ -3707,6 +3708,10 @@ button.chat-reply-preview--message:disabled {
     flex-direction: column;
     gap: 4px;
     margin-left: var(--chat-box-inset);
+  }
+
+  .agent-chat__composer-actions:has(> .chat-talk-control:not(.chat-talk-control--active)) {
+    flex-direction: row;
   }
 
   .agent-chat__composer-controls {
@@ -4449,6 +4454,91 @@ button.chat-reply-preview--message:disabled {
 .chat-controls__effort-menu {
   width: min(330px, calc(100vw - 24px));
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
+}
+
+.chat-controls__permission-picker::part(menu) {
+  width: min(360px, calc(100vw - 24px));
+  padding: 6px;
+  overflow: hidden;
+}
+
+.chat-controls__permission-icon,
+.chat-controls__permission-lock {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-controls__permission-option-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.chat-controls__permission-label--full {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.chat-controls__permission-option::part(base) {
+  align-items: flex-start;
+  min-height: 54px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-controls__permission-option--selected::part(base) {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.chat-controls__permission-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-controls__permission-option-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.chat-controls__permission-option-description {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-controls__permission-shortcut {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.chat-controls__permission-root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 6px -6px -6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-controls__permission-root code {
+  min-width: 0;
+  color: var(--text);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-controls__model-search-wrap {

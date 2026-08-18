@@ -21,7 +21,6 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
-import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
@@ -44,7 +43,7 @@ import {
 } from "./settings.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
+const EMPTY_OUTBOX_ATTENTION_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -225,14 +224,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedDraftScopeKeys = outboxStoreRuntime
     ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
     : null;
-  const outboxCountForSession = outboxStoreRuntime
+  const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedOutboxes?.countsByScope.get(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ?? 0
-        );
+        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
+        return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
       }
-    : EMPTY_OUTBOX_COUNT_FOR_SESSION;
+    : EMPTY_OUTBOX_ATTENTION_COUNT_FOR_SESSION;
   const hasSessionDraft = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -275,6 +273,15 @@ export function renderApplicationShell(host: ShellViewHost) {
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
+  // Chat has an offline outbox, New Session keeps a local draft, and Appearance
+  // persists local preference intent for replay. Their server actions are
+  // independently gated; other pages cannot submit useful disconnected work.
+  const pageActionsBlocked =
+    gatewaySnapshot.phase === "reload-required" ||
+    (!gatewayConnected &&
+      activeRoute !== "chat" &&
+      activeRoute !== "new-session" &&
+      activeRoute !== "appearance");
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -347,9 +354,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
-  const inlineApproval = isSessionRouteId(activeRoute)
-    ? findInlineApproval(overlaySnapshot.approvalQueue, host.activeSessionKey)
-    : null;
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
@@ -361,7 +365,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
-      outboxCountForSession,
+      outboxAttentionCountForSession,
       hasSessionDraft,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
@@ -583,26 +587,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
       >
         ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
-        ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
-          ? // The migration banner is registered by a rare-flow dynamic import after first render.
-            customElements.get("openclaw-device-auth-migration-banner")
-            ? html`<openclaw-device-auth-migration-banner
-                .props=${{
-                  state: overlaySnapshot.deviceAuthMigration,
-                  onSecure: () => void context.overlays.secureThisBrowser(),
-                }}
-              ></openclaw-device-auth-migration-banner>`
-            : html`<openclaw-update-banner
-                .props=${{
-                  statusBanner: {
-                    tone: overlaySnapshot.deviceAuthMigration.error ? "danger" : "warn",
-                    text:
-                      overlaySnapshot.deviceAuthMigration.error ??
-                      t("login.deviceAuthMigration.banner"),
-                  },
-                }}
-              ></openclaw-update-banner>`
-          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
@@ -619,7 +603,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
         })}
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              ${t("connection.actionsUnavailable")}
+            </div>`
+          : nothing}
         <openclaw-router-outlet
+          ?inert=${pageActionsBlocked}
+          aria-disabled=${pageActionsBlocked ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
@@ -631,27 +622,32 @@ export function renderApplicationShell(host: ShellViewHost) {
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
         .suppressed=${settingsTakeover}
+        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      <openclaw-browser-panel
-        data-chat-autotype-exempt
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${browserPanelAvailable}
-        .suppressed=${settingsTakeover}
-        .basePath=${context.basePath}
-        .authToken=${resolveControlUiAuthToken({
-          hello: gatewaySnapshot.hello,
-          settings: { token: context.gateway.connection.token },
-          password: context.gateway.connection.password,
-        })}
-      ></openclaw-browser-panel>
-      <openclaw-desktop-panel
-        data-chat-autotype-exempt
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${desktopPanelAvailable}
-        .suppressed=${settingsTakeover}
-      ></openclaw-desktop-panel>
+      ${isSessionRouteId(activeRoute)
+        ? nothing
+        : html`
+            <openclaw-browser-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${browserPanelAvailable}
+              .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
+              .authToken=${resolveControlUiAuthToken({
+                hello: gatewaySnapshot.hello,
+                settings: { token: context.gateway.connection.token },
+                password: context.gateway.connection.password,
+              })}
+            ></openclaw-browser-panel>
+            <openclaw-desktop-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${desktopPanelAvailable}
+              .suppressed=${settingsTakeover}
+            ></openclaw-desktop-panel>
+          `}
       <openclaw-custodian-panel
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}
@@ -664,7 +660,6 @@ export function renderApplicationShell(host: ShellViewHost) {
               busy: overlaySnapshot.approvalBusy,
               errors: overlaySnapshot.approvalErrors,
               nowMs: overlaySnapshot.approvalNowMs,
-              inlineApprovalId: inlineApproval?.id ?? null,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<typeof context.overlays.decideApproval>[0],

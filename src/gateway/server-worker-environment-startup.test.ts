@@ -75,13 +75,14 @@ describe("gateway worker environment startup", () => {
           to: "ready",
           patch: {
             leaseId: "device-lease",
+            nodeDeviceId: DEVICE_ID,
             sshEndpoint: null,
             sharedHost: true,
             bootstrapReceipt: {
               bundleHash: "a".repeat(64),
               openclawVersion: "2026.8.14",
               protocolFeatures: ["worker-heartbeat-v1"],
-              installKind: "local",
+              installKind: "bundle",
             },
             credential: {
               credentialHash: hashWorkerCredential("device-credential"),

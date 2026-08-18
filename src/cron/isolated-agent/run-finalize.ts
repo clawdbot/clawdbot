@@ -3,7 +3,10 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber as resolvePositiveContextTokens,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
@@ -26,13 +29,16 @@ import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
-import { adoptCronRunSessionMetadata } from "./run-session-state.js";
+import {
+  adoptCronRunSessionMetadata,
+  setCronSessionAgentHarnessId,
+  setCronSessionRuntimeModel,
+} from "./run-session-state.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
   deriveSessionTotalTokens,
   hasNonzeroUsage,
   isCliProvider,
-  setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -94,37 +100,55 @@ export async function finalizeCronRun(params: {
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
-  const configuredContextTokens = resolvePositiveContextTokens(prepared.agentCfg?.contextTokens);
-  const modelContextTokens = (await cronContextRuntimeLoader.load()).lookupContextTokens(
-    modelUsed,
-    {
-      allowAsyncLoad: false,
-    },
-  );
+  const modelContextTokens = (await cronContextRuntimeLoader.load()).resolveContextTokensForModel({
+    cfg: prepared.cfgWithAgentDefaults,
+    provider: providerUsed,
+    model: modelUsed,
+    allowAsyncLoad: false,
+  });
   const persistedContextTokens = resolvePositiveContextTokens(
     prepared.cronSession.sessionEntry.contextTokens,
   );
+  const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
+  const persistedRuntimeContextMatchesRun =
+    persistedContextTokens !== undefined &&
+    prepared.cronSession.sessionEntry.contextTokensSource === "runtime" &&
+    Boolean(agentHarnessId) &&
+    normalizeLowercaseStringOrEmpty(prepared.cronSession.sessionEntry.modelProvider) ===
+      normalizeLowercaseStringOrEmpty(providerUsed) &&
+    normalizeLowercaseStringOrEmpty(prepared.cronSession.sessionEntry.model) ===
+      normalizeLowercaseStringOrEmpty(modelUsed) &&
+    normalizeLowercaseStringOrEmpty(prepared.cronSession.sessionEntry.agentHarnessId) ===
+      normalizeLowercaseStringOrEmpty(agentHarnessId);
+  // A fallback value without the same producer identity would relabel stale
+  // telemetry as if the completed run's harness had observed it.
+  const retainedRuntimeContextTokens = persistedRuntimeContextMatchesRun
+    ? persistedContextTokens
+    : undefined;
   const contextTokens =
     runtimeContextTokens ??
-    configuredContextTokens ??
     modelContextTokens ??
-    persistedContextTokens ??
+    retainedRuntimeContextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource =
     runtimeContextTokens !== undefined
       ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
-      : configuredContextTokens !== undefined || modelContextTokens !== undefined
+      : modelContextTokens !== undefined
         ? "resolved"
-        : (prepared.cronSession.sessionEntry.contextTokensSource ?? "resolved");
+        : retainedRuntimeContextTokens !== undefined
+          ? "runtime"
+          : "resolved";
 
   if (!params.isAborted()) {
-    setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
+    setCronSessionRuntimeModel({
+      entry: prepared.cronSession.sessionEntry,
       provider: providerUsed,
       model: modelUsed,
     });
-    prepared.cronSession.sessionEntry.agentHarnessId = normalizeOptionalString(
-      finalRunResult.meta?.agentMeta?.agentHarnessId,
-    );
+    setCronSessionAgentHarnessId({
+      entry: prepared.cronSession.sessionEntry,
+      agentHarnessId,
+    });
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
     if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {

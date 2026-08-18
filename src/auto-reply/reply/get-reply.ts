@@ -632,6 +632,9 @@ export async function getReplyFromConfig(
       sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
       sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
     } catch (error) {
+      if (isSessionWorkStartInvalidatedError(error)) {
+        throw error;
+      }
       logVerbose(
         `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
       );

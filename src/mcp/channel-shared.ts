@@ -4,6 +4,7 @@ import {
   normalizeOptionalString as toText,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 
 /**
  * Shared channel MCP contracts and normalization helpers.
@@ -82,14 +83,12 @@ export type SessionMessagePayload = {
   [key: string]: unknown;
 };
 
-/** Gateway approval family exposed through MCP. */
-export type ApprovalKind = "exec" | "plugin";
 /** Decision values accepted by Gateway approval resolvers. */
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 /** Approval request tracked locally while waiting for an MCP client decision. */
 export type PendingApproval = {
-  kind: ApprovalKind;
+  kind: ChannelApprovalKind;
   id: string;
   request?: Record<string, unknown>;
   createdAtMs?: number;

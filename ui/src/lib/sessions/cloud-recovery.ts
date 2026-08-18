@@ -20,6 +20,7 @@ export type CloudSessionRecovery = {
   message: string;
   attachments?: unknown[];
   profileId: string;
+  machineClass?: string;
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
@@ -105,6 +106,8 @@ function validateCloudSessionRecovery(
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !isNonEmptyString(value.profileId) ||
+    (value.machineClass !== undefined &&
+      (!isNonEmptyString(value.machineClass) || value.machineClass.length > 128)) ||
     !isNonEmptyString(value.agentId) ||
     !cloudSessionRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
     (value.phase !== "creating" && value.phase !== "dispatching" && value.phase !== "sending") ||

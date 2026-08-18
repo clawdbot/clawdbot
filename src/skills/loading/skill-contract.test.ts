@@ -6,8 +6,8 @@ import {
   formatSkillsForPromptCore,
   resolveSkillDisplayName,
   type Skill,
+  formatSkillsCompactForPrompt as formatSkillsCompact,
 } from "./skill-contract.js";
-import { formatSkillsCompactForPrompt as formatSkillsCompact } from "./skill-contract.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({
@@ -39,8 +39,8 @@ describe("resolveSkillDisplayName", () => {
 describe("formatSkillsCompact", () => {
   it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
     const skills = [
-      { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
+      { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
     ];
     expect(formatSkillsForPromptCore(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
   });

@@ -115,6 +115,16 @@ short-lived bearer setup link must not be persisted in service arguments.
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
+For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` together before `openclaw connect`, `openclaw node
+run`, or `openclaw node install`. The node stores env SecretRefs under its
+canonical `gateway.cloudflareAccess.clientId` and `clientSecret` connection
+keys. Installed services keep the values in the managed service environment
+file, not in service arguments or inline supervisor definitions. Access
+credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
+resolution while credential-free plaintext node routes remain unchanged. See
+[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
+
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
 trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; without
@@ -164,6 +174,9 @@ openclaw node uninstall
 Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
+`node start` and `node restart` print install hints and exit nonzero when no
+managed node service is installed; run `openclaw node install` first. Stopping
+an absent service remains a successful no-op.
 
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host

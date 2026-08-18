@@ -43,6 +43,7 @@ export class PendingCloudRecoveryState {
   message = "";
   attachments: unknown[] | undefined;
   profileId = "";
+  machineClass = "";
   agentId = "";
   gatewayUrl = "";
   recoveryScope = "";
@@ -82,6 +83,7 @@ export class PendingCloudRecoveryState {
     this.message = "";
     this.attachments = undefined;
     this.profileId = "";
+    this.machineClass = "";
     this.agentId = "";
     this.gatewayUrl = "";
     this.recoveryScope = "";
@@ -110,6 +112,7 @@ export class PendingCloudRecoveryState {
   stageCreate(params: {
     agentId: string;
     profileId: string;
+    machineClass?: string;
     message: string;
     attachments?: unknown[];
     gatewayUrl: string;
@@ -136,6 +139,7 @@ export class PendingCloudRecoveryState {
       message: params.message,
       attachments: params.attachments,
       profileId: params.profileId,
+      ...(params.machineClass ? { machineClass: params.machineClass } : {}),
       agentId: params.agentId,
       gatewayUrl: params.gatewayUrl,
       recoveryScope: params.recoveryScope,
@@ -183,6 +187,7 @@ export class PendingCloudRecoveryState {
       message: this.message,
       attachments: this.attachments ? [...this.attachments] : undefined,
       profileId: this.profileId,
+      ...(this.machineClass ? { machineClass: this.machineClass } : {}),
       agentId: this.agentId,
       gatewayUrl: this.gatewayUrl,
       recoveryScope: this.recoveryScope,
@@ -199,6 +204,7 @@ export class PendingCloudRecoveryState {
     this.message = recovery.message;
     this.attachments = recovery.attachments;
     this.profileId = recovery.profileId;
+    this.machineClass = recovery.machineClass ?? "";
     this.agentId = recovery.agentId;
     this.gatewayUrl = recovery.gatewayUrl;
     this.recoveryScope = recovery.recoveryScope;

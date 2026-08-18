@@ -31,7 +31,7 @@ async function handleChatSendWithOptions(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
-  options?: { trustedSystemInput?: boolean },
+  options?: { trustedSystemInput?: boolean; toolsAllow?: string[] },
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
@@ -222,7 +222,6 @@ async function handleChatSendWithOptions(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
-
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -274,6 +273,7 @@ async function handleChatSendWithOptions(
       attachments: preparedAttachments.value,
       client,
       context,
+      toolsAllow: options?.toolsAllow,
       cronCreatorAuthority,
       externalAuthorityAdmission,
       injection: {
@@ -310,6 +310,14 @@ export async function handleChatSend(
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+}
+
+/** Dispatches an internally delegated turn within its caller-owned tool boundary. */
+export async function handleChatSendWithRuntimeTools(
+  options: GatewayRequestHandlerOptions,
+  toolsAllow: string[],
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
 }
 
 /** Dispatches Gateway-authored system input without widening the public chat-send contract. */

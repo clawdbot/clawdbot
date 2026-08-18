@@ -412,6 +412,15 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       contextTokensSource: "runtime",
     });
 
+    const configured = await prepareStats({
+      attempt: { contextTokens: 272_000, contextTokensSource: "runtime-configured" },
+      outerContextTokenMeta: { contextTokens: 1_000_000 },
+    });
+    expect(configured.agentMeta).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "runtime-configured",
+    });
+
     const resolved = await prepareStats({
       outerContextTokenMeta: { contextTokens: 272_000 },
     });

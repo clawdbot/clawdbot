@@ -1,7 +1,23 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const evictionWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
+    "../../logging/subsystem.js",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "sessions/history-eviction"
+        ? { ...logger, warn: evictionWarnSpy }
+        : logger;
+    },
+  };
+});
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -25,6 +41,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
+  kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -126,7 +143,16 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists(sessionId)).toBe(false);
   });
 
-  it("removes counted archives before evicting searchable history", async () => {
+  it.each([
+    {
+      archiveName: "already-extracted.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      kind: "deleted transcript archive",
+    },
+    {
+      archiveName: `legacy-compact.jsonl.bak.2026-01-01T00-00-00.000Z.${"a".repeat(32)}.zst`,
+      kind: "legacy compact backup",
+    },
+  ])("removes a $kind before evicting searchable history", async ({ archiveName }) => {
     await createHistoricalTranscript({
       content: "keep searchable history",
       nextSessionId: "archive-live",
@@ -135,10 +161,7 @@ describe("SQLite historical session disk budget", () => {
       updatedAt: 1,
     });
     database().walMaintenance.checkpoint();
-    const oldArchive = path.join(
-      tempDir,
-      "already-extracted.jsonl.deleted.2026-01-01T00-00-00.000Z",
-    );
+    const oldArchive = path.join(tempDir, archiveName);
     fs.writeFileSync(oldArchive, Buffer.alloc(256 * 1024));
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
@@ -342,6 +365,33 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("recent-live")).toBe(true);
     expect(sessionExists("stale-old")).toBe(false);
     expect(sessionExists("stale-live")).toBe(true);
+  });
+
+  it("warns when a fire-and-forget budget sweep fails instead of swallowing it", async () => {
+    evictionWarnSpy.mockClear();
+    // The kick gate reads maxDiskBytes twice synchronously; the queued sweep
+    // re-reads it asynchronously. Throwing on the later read rejects the
+    // fire-and-forget promise, exercising the catch path deterministically.
+    let maxDiskBytesReads = 0;
+    const maintenanceConfig = {
+      mode: "enforce",
+      highWaterBytes: 1,
+      get maxDiskBytes() {
+        maxDiskBytesReads += 1;
+        if (maxDiskBytesReads > 1) {
+          throw new Error("sweep exploded");
+        }
+        return 1;
+      },
+    } as never;
+
+    kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
+    await vi.waitFor(() => {
+      expect(evictionWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("disk-budget sweep failed"),
+        expect.objectContaining({ storePath }),
+      );
+    });
   });
 
   it("warn mode reports physical overage without extracting or deleting history", async () => {

@@ -27,6 +27,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { errorShapeFromError } from "../error-shape.js";
 import {
   assertExpectedExistingSession,
   ExpectedExistingSessionChangedError,
@@ -35,7 +36,6 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
 import type { TrustedSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { formatForLog } from "../ws-log.js";
 import {
   cronContinuationHasReusableRuntime,
   emitAgentSendSessionLifecycleTransition,
@@ -372,7 +372,7 @@ export async function persistAgentSessionPhase(params: {
         return undefined;
       }
       if (deletedDuringStoreUpdateError) {
-        params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
         return undefined;
       }
       if (err instanceof ExpectedExistingSessionChangedError) {
@@ -430,7 +430,7 @@ export async function persistAgentSessionPhase(params: {
     try {
       params.assertGatewayWorkAdmissionAllowed();
     } catch (err) {
-      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+      params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
       return undefined;
     }
     if (

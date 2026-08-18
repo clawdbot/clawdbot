@@ -149,6 +149,7 @@ const WORKBOARD_SCHEMA_SQL = `
       description TEXT,
       icon TEXT,
       color TEXT,
+      automation_job_id TEXT,
       default_workspace_json TEXT,
       orchestration_json TEXT,
       created_at INTEGER NOT NULL,
@@ -354,6 +355,7 @@ const WORKBOARD_SCHEMA_SQL = `
 
 function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(WORKBOARD_SCHEMA_SQL);
+  ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
   ensureColumn(
     db,
     "workboard_cards",
@@ -1281,14 +1283,15 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
       .prepare(
         `
           INSERT INTO workboard_boards (
-            id, name, description, icon, color, default_workspace_json, orchestration_json,
-            created_at, updated_at, archived_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, description, icon, color, automation_job_id, default_workspace_json,
+            orchestration_json, created_at, updated_at, archived_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
             icon = excluded.icon,
             color = excluded.color,
+            automation_job_id = excluded.automation_job_id,
             default_workspace_json = excluded.default_workspace_json,
             orchestration_json = excluded.orchestration_json,
             created_at = excluded.created_at,
@@ -1302,6 +1305,7 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
         bindNull(board.description),
         bindNull(board.icon),
         bindNull(board.color),
+        bindNull(board.automationJobId),
         jsonValue(board.defaultWorkspace),
         jsonValue(board.orchestration),
         board.createdAt,
@@ -1333,6 +1337,9 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
           : {}),
         ...(stringValue(row, "icon") ? { icon: stringValue(row, "icon") } : {}),
         ...(stringValue(row, "color") ? { color: stringValue(row, "color") } : {}),
+        ...(stringValue(row, "automation_job_id")
+          ? { automationJobId: stringValue(row, "automation_job_id") }
+          : {}),
         ...(defaultWorkspace ? { defaultWorkspace } : {}),
         ...(orchestration ? { orchestration } : {}),
         createdAt: requiredNumber(row, "created_at"),

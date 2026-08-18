@@ -4,6 +4,7 @@ import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
   resolveChannelSessionInfo,
@@ -35,6 +36,7 @@ import {
   normalizeAgentId,
   resolveUiCanonicalMainSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
@@ -50,9 +52,9 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
 import {
-  listSessionCreators,
+  listSessionOwners,
   type SessionCreatedActor,
-  type SessionCreatorOption,
+  type SessionOwnerOption,
 } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -85,13 +87,15 @@ export function compareSidebarSessionRowsByMode(input: {
       : compareSidebarSessionRowsByCreatedAt(a, b, input.createdOrder);
   }
   const creators = input.creators ?? [];
-  const idA = a.createdActor?.id?.trim() ?? "";
-  const idB = b.createdActor?.id?.trim() ?? "";
+  const ownerA = a.owner?.actor ?? a.createdActor;
+  const ownerB = b.owner?.actor ?? b.createdActor;
+  const idA = ownerA?.id?.trim() ?? "";
+  const idB = ownerB?.id?.trim() ?? "";
   if (idA !== idB) {
     const creatorA = creators.find((candidate) => candidate.id === idA);
     const creatorB = creators.find((candidate) => candidate.id === idB);
-    const labelA = creatorA?.label?.trim() || a.createdActor?.label?.trim() || idA;
-    const labelB = creatorB?.label?.trim() || b.createdActor?.label?.trim() || idB;
+    const labelA = creatorA?.label?.trim() || ownerA?.label?.trim() || idA;
+    const labelB = creatorB?.label?.trim() || ownerB?.label?.trim() || idB;
     const byCreator = labelA.localeCompare(labelB) || idA.localeCompare(idB);
     if (byCreator !== 0) {
       return byCreator;
@@ -162,7 +166,7 @@ export function buildSidebarSessionNavigationState(input: {
   highlightCurrentSession: boolean;
   runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>;
   loadingChildSessionKeys: ReadonlySet<string>;
-  outboxCountForSessionKey: (sessionKey: string) => number;
+  outboxAttentionCountForSessionKey: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   resolveAttention: (row: GatewaySessionRow) => SidebarRecentSession["attention"];
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
@@ -203,6 +207,9 @@ export function buildSidebarSessionNavigationState(input: {
       displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,
+      owner: row.owner,
+      participants: row.participants,
+      participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
@@ -253,7 +260,7 @@ export function buildSidebarSessionNavigationState(input: {
       cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
-      outboxCount: input.outboxCountForSessionKey(row.key),
+      outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
       hasComposerDraft: input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
@@ -416,7 +423,7 @@ export function extendSidebarSessionSelection(input: {
   };
 }
 
-export function latestVisibleAgentSessionRow(input: {
+function latestVisibleAgentSessionRow(input: {
   agentId: string;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
@@ -437,6 +444,44 @@ export function latestVisibleAgentSessionRow(input: {
     archivedFilter: "active",
   });
   return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+}
+
+export function resolveActiveSidebarAgent(input: {
+  activeId: string;
+  roster: NonNullable<ApplicationContext<RouteId>["agents"]["state"]["agentsList"]>["agents"];
+  identities: ReturnType<ApplicationContext<RouteId>["agentIdentity"]["entries"]>;
+}) {
+  const identities = new Map(
+    input.identities.map((identity) => [identity.agentId, identity] as const),
+  );
+  return {
+    activeId: input.activeId,
+    agent: input.roster.find((entry) => normalizeAgentId(entry.id) === input.activeId),
+    agents: listSelectableAgents(input.roster),
+    identity: identities.get(input.activeId) ?? null,
+    identities,
+  };
+}
+
+export function resolveLatestSidebarAgentSession(input: {
+  agentId: string;
+  sessionData: {
+    sessionsAgentId: string | null;
+    sessionsResult: SessionsListResult | null;
+    sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
+  };
+  context: ApplicationContext<RouteId> | undefined;
+}): SessionRow | null {
+  return latestVisibleAgentSessionRow({
+    agentId: input.agentId,
+    sessionsAgentId: input.sessionData.sessionsAgentId,
+    sessionsResult: input.sessionData.sessionsResult,
+    sessionRowsByAgent: input.sessionData.sessionRowsByAgent,
+    defaultAgentId: resolveUiDefaultAgentId({
+      agentsList: input.context?.agents.state.agentsList,
+      hello: input.context?.gateway.snapshot.hello,
+    }),
+  });
 }
 
 /**
@@ -571,14 +616,19 @@ export function promoteSidebarSessionCreatedOrder(
 
 export function applySidebarSessionCreatorFilter(input: {
   projected: readonly SidebarRecentSession[];
-  creatorRows: readonly { createdActor?: SessionCreatedActor }[];
+  creatorRows: readonly {
+    createdActor?: SessionCreatedActor;
+    owner?: { actor: SessionCreatedActor };
+  }[];
   creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
   selectedCreatorId: string | null;
+  involvingActorId?: string;
 }): {
   rows: SidebarRecentSession[];
-  creatorOptions: readonly SessionCreatorOption[];
+  creatorOptions: readonly SessionOwnerOption[];
   ownershipVisible: boolean;
   activeCreatorId: string | null;
+  involvingMeActive: boolean;
 } {
   const flattened: SidebarRecentSession[] = [];
   const pending = [...input.projected];
@@ -589,27 +639,38 @@ export function applySidebarSessionCreatorFilter(input: {
       pending.push(...row.children);
     }
   }
-  const creatorOptions = listSessionCreators([
+  const creatorOptions = listSessionOwners([
     ...(input.creatorFacet ?? []).map((creator) => ({
       createdActor: { type: "human" as const, ...creator },
     })),
     ...flattened,
     ...input.creatorRows,
   ]);
-  const ownershipVisible = creatorOptions.length >= 2;
+  const ownershipVisible =
+    creatorOptions.length >= 2 || flattened.some((row) => (row.participantCount ?? 0) > 0);
+  const involvingMeActive = Boolean(input.involvingActorId);
   const activeCreatorId = ownershipVisible
     ? creatorOptions.some((creator) => creator.id === input.selectedCreatorId)
       ? input.selectedCreatorId
       : null
     : null;
   if (!activeCreatorId) {
-    return { rows: [...input.projected], creatorOptions, ownershipVisible, activeCreatorId };
+    // Involving-me is evaluated by the Gateway against the complete participant table.
+    // The bounded display projection cannot safely repeat that predicate client-side.
+    return {
+      rows: [...input.projected],
+      creatorOptions,
+      ownershipVisible,
+      activeCreatorId,
+      involvingMeActive,
+    };
   }
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
-      if (row.createdActor?.id === activeCreatorId) {
+      const ownerId = (row.owner?.actor ?? row.createdActor)?.id;
+      if (activeCreatorId && ownerId === activeCreatorId) {
         filtered.push({ ...row, children });
       } else {
         for (const child of children) {
@@ -624,6 +685,7 @@ export function applySidebarSessionCreatorFilter(input: {
     creatorOptions,
     ownershipVisible,
     activeCreatorId,
+    involvingMeActive,
   };
 }
 

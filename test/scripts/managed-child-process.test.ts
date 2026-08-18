@@ -240,12 +240,12 @@ describe("managed-child-process", () => {
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-const descendant = spawn(process.execPath, [
+spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+  process.argv[3],
 ], { stdio: "ignore" });
 fs.writeFileSync(process.argv[2], String(process.pid));
-fs.writeFileSync(process.argv[3], String(descendant.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1_000);
 `,
@@ -506,10 +506,12 @@ setInterval(() => {}, 1_000);
             "-e",
             `
 const { spawn } = require("node:child_process");
-const fs = require("node:fs");
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-child.unref();
-fs.writeFileSync(process.argv[1], String(child.pid));
+const child = spawn(process.execPath, [
+  "-e",
+  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.send('ready'); process.disconnect(); setInterval(() => {}, 1000)",
+  process.argv[1],
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+child.once("message", () => process.exit(0));
 `,
             descendantPidPath,
           ],
@@ -545,12 +547,12 @@ fs.writeFileSync(process.argv[1], String(child.pid));
 	import { spawn } from "node:child_process";
 	import fs from "node:fs";
 
-	const descendant = spawn(process.execPath, [
+	spawn(process.execPath, [
 	  "-e",
-	  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+	  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+	  process.argv[3],
 	], { stdio: "ignore" });
 	fs.writeFileSync(process.argv[2], String(process.pid));
-	fs.writeFileSync(process.argv[3], String(descendant.pid));
 	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
 	  process.on(signal, () => process.exit(0));
 	}

@@ -2,7 +2,6 @@
 // agent reports a model id. This includes custom models.json entries.
 
 import { getRuntimeConfig } from "../config/config.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
@@ -24,7 +23,6 @@ import {
   type ContextTokenResolutionParams,
   type ModelsConfig,
   resolveContextTokensForModelFromCache,
-  resolveExplicitContextTokenSourceForModelFromConfig,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
@@ -314,16 +312,6 @@ export function lookupContextTokens(
   );
 }
 
-function resolveContextSourceConfig(
-  params: Pick<ContextTokenResolutionParams, "cfg" | "sourceCfg">,
-): OpenClawConfig | null | undefined {
-  return params.sourceCfg !== undefined
-    ? params.sourceCfg
-    : params.cfg
-      ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
-      : undefined;
-}
-
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
@@ -332,20 +320,9 @@ export function resolveContextTokensForModel(
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  const sourceCfg = resolveContextSourceConfig(params);
   return resolveContextTokensForModelFromCache(
-    { ...params, sourceCfg },
+    params,
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );
-}
-
-export function resolveExplicitContextTokenSourceForModel(
-  params: Pick<
-    ContextTokenResolutionParams,
-    "cfg" | "model" | "modelProvider" | "provider" | "sourceCfg"
-  >,
-): "contextTokens" | "contextWindow" | undefined {
-  const sourceCfg = resolveContextSourceConfig(params);
-  return resolveExplicitContextTokenSourceForModelFromConfig({ ...params, sourceCfg });
 }

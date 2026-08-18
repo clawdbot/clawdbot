@@ -280,7 +280,6 @@ export type CronServiceState = {
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
-  restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
@@ -295,6 +294,8 @@ export type CronServiceState = {
    * until the runtime can quarantine and sanitize the active store.
    */
   warnedInvalidPersistedJobKeys: Set<string>;
+  /** Availability is rechecked every tick; this set only bounds skip diagnostics. */
+  reportedUnavailableReaperAgentIds: Set<string>;
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
@@ -315,7 +316,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
-    restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
@@ -323,6 +323,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
+    reportedUnavailableReaperAgentIds: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
@@ -338,8 +339,12 @@ export function emit(state: CronServiceState, evt: CronEvent) {
   }
 }
 
-/** Direct-run mode: respect due time or force execution. */
-export type CronRunMode = "due" | "force";
+/** Direct-run mode: respect due time, force execution, or run immediately while enabled. */
+export type CronRunMode = "due" | "force" | "if-enabled";
+
+export function isImmediateCronRunMode(mode: CronRunMode | undefined): boolean {
+  return mode === "force" || mode === "if-enabled";
+}
 
 /** Main-session wake strategy used after enqueuing cron text. */
 export type CronWakeMode = "now" | "next-heartbeat";
@@ -361,9 +366,9 @@ export type CronStatusSummary = {
 export type CronRunResult =
   | { ok: true; ran: true }
   | { ok: true; enqueued: true; runId: string }
+  | { ok: true; ran: false; reason: "disabled" }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
-  | { ok: true; ran: false; reason: "restart-recovery-pending" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
   | { ok: false };

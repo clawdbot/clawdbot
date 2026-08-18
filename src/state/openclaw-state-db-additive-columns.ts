@@ -19,6 +19,8 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "extension_mapped_json", dataType: "TEXT", tableName: "claw_package_refs" },
   { columnName: "extension_unavailable_json", dataType: "TEXT", tableName: "claw_package_refs" },
   { columnName: "shared_host", dataType: "INTEGER", tableName: "worker_environments" },
+  { columnName: "node_setup_id", dataType: "TEXT", tableName: "worker_environments" },
+  { columnName: "node_device_id", dataType: "TEXT", tableName: "worker_environments" },
   { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
   { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
   { columnName: "run_end_cleanup_json", dataType: "TEXT", tableName: "worktrees" },

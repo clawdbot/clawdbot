@@ -1,4 +1,5 @@
 // Voice Call plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -28,7 +29,6 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
-import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
@@ -97,6 +97,9 @@ const VOICE_CALL_RUNTIME_COORDINATOR_KEY = Symbol.for("openclaw.voice-call.runti
 type VoiceCallRuntimeGeneration = {
   epoch: number;
   retired: boolean;
+  serviceHealth?: Parameters<
+    Parameters<OpenClawPluginApi["registerService"]>[0]["start"]
+  >[0]["serviceHealth"];
   stopPromise?: Promise<void>;
 };
 
@@ -176,10 +179,10 @@ export default definePluginEntry({
           };
     const continueOperationStore = createVoiceCallContinueOperationStore({
       config,
-      coreConfig: api.config as CoreConfig,
+      coreConfig: api.config as OpenClawConfig,
     });
 
-    const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
+    const ensureRuntimeForGeneration = async (): Promise<VoiceCallRuntime> => {
       activateVoiceCallRuntimeGeneration(runtimeCoordinator, runtimeGeneration);
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
@@ -233,7 +236,7 @@ export default definePluginEntry({
 
         const runtimePromise = createVoiceCallRuntime({
           config,
-          coreConfig: api.config as CoreConfig,
+          coreConfig: api.config as OpenClawConfig,
           fullConfig: api.config,
           agentRuntime: api.runtime.agent,
           stateRuntime: api.runtime.state,
@@ -246,6 +249,20 @@ export default definePluginEntry({
           promise: runtimePromise,
         };
         runtimeCoordinator.slot = startingSlot;
+      }
+    };
+    const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
+      try {
+        const runtime = await ensureRuntimeForGeneration();
+        runtimeGeneration.serviceHealth?.clearFailure();
+        return runtime;
+      } catch (err) {
+        const staleGeneration =
+          runtimeGeneration.retired || runtimeGeneration.epoch < runtimeCoordinator.registeredEpoch;
+        if (!(err instanceof VoiceCallRuntimeLifecycleError && staleGeneration)) {
+          runtimeGeneration.serviceHealth?.reportFailure(err);
+        }
+        throw err;
       }
     };
 
@@ -513,7 +530,8 @@ export default definePluginEntry({
 
     api.registerService({
       id: "voicecall",
-      start: () => {
+      start: (ctx) => {
+        runtimeGeneration.serviceHealth = ctx.serviceHealth;
         if (isCliOnlyProcess()) {
           return;
         }
@@ -587,6 +605,7 @@ export default definePluginEntry({
           if (runtimeCoordinator.current === runtimeGeneration) {
             runtimeCoordinator.current = undefined;
           }
+          runtimeGeneration.serviceHealth = undefined;
         }
       },
     });

@@ -12,6 +12,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "archived",
   "unread",
   "model",
+  "permissionMode",
 ]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
@@ -25,6 +26,7 @@ const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
   "agentId",
   "deleteTranscript",
+  "expectedSessionId",
   "archivedOnly",
 ]);
 
@@ -33,6 +35,9 @@ function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOper
     // Malformed params cannot mutate anything; let the handler return the
     // precise validation error instead of a misleading missing-scope error.
     return "operator.write";
+  }
+  if (params.permissionMode === "full") {
+    return "operator.admin";
   }
   return Object.keys(params).every(
     (key) =>
@@ -48,6 +53,9 @@ function resolveSessionsPatchManyRequiredScope(params: unknown): SessionMutation
     // Malformed params cannot mutate anything; schema validation should report
     // the exact closed/non-empty patch failure under the least privilege scope.
     return "operator.write";
+  }
+  if (params.patch.permissionMode === "full") {
+    return "operator.admin";
   }
   return Object.keys(params.patch).every((key) => SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key))
     ? "operator.write"
@@ -66,7 +74,8 @@ function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOpe
     (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
     (typeof params.parentSessionKey === "string" &&
       isIncognitoSessionKey(params.parentSessionKey)) ||
-    Object.hasOwn(params, "execNode")
+    Object.hasOwn(params, "execNode") ||
+    params.permissionMode === "full"
   ) {
     return "operator.admin";
   }

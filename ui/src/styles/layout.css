@@ -148,11 +148,7 @@
       .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
   )
   .content
-  > :is(
-    openclaw-update-banner,
-    openclaw-device-scope-upgrade-banner,
-    openclaw-device-auth-migration-banner
-  )
+  > :is(openclaw-update-banner, openclaw-device-scope-upgrade-banner)
   .callout {
   margin-left: var(--shell-chrome-safe-area-left);
 }
@@ -1153,7 +1149,6 @@ openclaw-settings-save-indicator {
 
 .sidebar-update-card__actions {
   display: flex;
-  align-items: stretch;
   gap: 5px;
 }
 
@@ -1250,8 +1245,7 @@ html.openclaw-native-macos
   cursor: wait;
 }
 
-/* The install outlives the request that started it, so the card keeps moving
-   for the whole wait instead of reading as a dead disabled button. */
+/* Keep the card moving while its install outlives the initiating request. */
 .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
   animation: sidebar-update-card-spin 1s linear infinite;
 }
@@ -1268,20 +1262,22 @@ html.openclaw-native-macos
   }
 }
 
-/* The update outcome belongs beside the control that started it, not over the
-   top of the shell where it covers unrelated chrome. While the update dialog is
-   open it owns the report, so the ambient copy would only duplicate it. */
+/* Keep the outcome beside its control, except while the dialog owns the report. */
 body.update-dialog-open .sidebar-update-card__status {
   display: none;
 }
 
 .sidebar-update-card__status {
-  padding: 8px 10px;
+  padding: 8px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.sidebar-update-card__status + .sidebar-update-card__actions {
+  margin-top: 6px;
 }
 
 .sidebar-update-card__status--danger {
@@ -1425,7 +1421,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  margin: 0 -8px;
+  margin-inline: -8px 0;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
   cursor: var(--cursor-action);
@@ -2258,7 +2254,9 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-session__name {
-  flex: 1 1 auto;
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2326,15 +2324,21 @@ body.update-dialog-open .sidebar-update-card__status {
   padding-right: 2px;
 }
 
-/* The trailing aside overlays the row so action-only rows retain the full
-   resting link width. It must not intercept clicks on the link beneath it —
-   the buttons re-enable their own pointer-events on hover/focus. Child rows
-   keep the in-flow aside because their runtime trail is resting content. */
+/* Actions overlay only the second line, preserving the title's full width.
+   The buttons re-enable their own pointer-events on hover/focus. */
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  top: 50%;
+  bottom: 0;
   right: 2px;
-  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.sidebar-recent-session--child > .sidebar-recent-session__aside {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 24px;
+  padding-right: 0;
   pointer-events: none;
 }
 
@@ -2346,42 +2350,22 @@ body.update-dialog-open .sidebar-update-card__status {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* State-bearing rows reserve the larger state/action maximum throughout the
-   swap, while action-only rows reserve controls only when they appear. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):where(
-    :has(> .sidebar-recent-session__aside > .session-row-state)
-  )
-  > .sidebar-recent-session__link {
-  padding-right: 68px;
-}
-
-.sidebar-recent-session:not(.sidebar-recent-session--child):not(
-    :has(> .sidebar-recent-session__aside > .session-row-state)
-  ):is(:hover, :focus-within)
-  > .sidebar-recent-session__link {
+/* Hover actions replace the second-row endcap without shortening the title. */
+.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  .sidebar-recent-session__details {
   padding-right: 52px;
 }
 
-/* While the actions are surfaced, the link content fades out beneath them.
-   A mask (not a background scrim) keeps the fade correct over rest, hover,
-   active, and selected row backgrounds alike. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):hover > .sidebar-recent-session__link,
-.sidebar-recent-session:not(.sidebar-recent-session--child):focus-within
-  > .sidebar-recent-session__link {
-  mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+  .sidebar-recent-session__details-endcap {
+  opacity: 0;
+  pointer-events: none;
 }
 
-/* Touch keeps the actions permanently visible, so the fade is permanent too. */
+/* Touch keeps the actions permanently visible beside the persistent endcap. */
 @media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-      > .sidebar-recent-session__aside > .session-row-state
-    )
-    > .sidebar-recent-session__link {
-    padding-right: 112px;
-  }
-
-  .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__link {
-    mask-image: linear-gradient(to right, black calc(100% - 80px), transparent calc(100% - 52px));
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__details {
+    padding-right: 52px;
   }
 }
 
@@ -2812,6 +2796,197 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__separator {
   margin: 4px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__icon-picker {
+  padding: 2px;
+}
+
+.session-menu__icon-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.session-menu__icon-section-label {
+  padding: 4px 4px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.session-menu__icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 28px);
+  gap: 3px;
+}
+
+.session-menu__icon-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  cursor: var(--cursor-action);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-choice:hover,
+.session-menu__icon-choice:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-choice:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
+.session-menu__icon-choice[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.session-menu__icon-choice--custom {
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.session-menu__icon-choice--custom svg,
+.session-menu__icon-choice--glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-menu__icon-choice--glyph {
+  color: var(--text);
+  font-size: inherit;
+}
+
+.session-menu__icon-separator {
+  margin: 5px 4px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__icon-remove {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  text-align: left;
+}
+
+.session-menu__icon-remove:hover,
+.session-menu__icon-remove:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-custom-entry {
+  width: 180px;
+}
+
+.session-menu__icon-custom-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 3px 4px;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.session-menu__icon-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.session-menu__icon-back svg {
+  width: 15px;
+  height: 15px;
+}
+
+.session-menu__icon-back:hover,
+.session-menu__icon-back:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-custom-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.session-menu__icon-custom-input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--menu-item-radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-custom-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline-offset: -1px;
+}
+
+.session-menu__icon-set {
+  min-width: 42px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.session-menu__icon-set:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.session-menu__icon-custom-hint {
+  padding: 6px 2px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.session-menu__icon-remove:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
 }
 
 /* Nav rail entries are anchors (for middle-click/new-tab) but read as app
@@ -3680,6 +3855,15 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 8px;
 }
 
+.connection-action-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .content--chat {
   display: flex;
   flex-direction: column;
@@ -3999,12 +4183,41 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   min-width: 0;
 }
 
+.sidebar-recent-session__details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  min-width: 0;
+  transition: padding-right var(--duration-fast) ease;
+}
+
 .sidebar-recent-session__subtitle {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--control-ui-text-xs);
+  line-height: 18px;
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
+}
+
+.sidebar-recent-session__details-endcap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 18px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
+  margin-left: auto;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-recent-session__details-endcap .session-row-state {
+  min-height: 18px;
 }
 
 .sidebar-session-attention__icon {

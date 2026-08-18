@@ -132,7 +132,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
     ...llmTaskToolDefinition,
 
-    async execute(_id: string, params: LlmTaskParams) {
+    async execute(_id: string, params: LlmTaskParams, signal?: AbortSignal) {
       const prompt = typeof params.prompt === "string" ? params.prompt : "";
       if (!prompt.trim()) {
         throw new Error("prompt required");
@@ -235,6 +235,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         reasoning: thinkLevel,
         maxTokens: streamParams.maxTokens,
         temperature: streamParams.temperature,
+        signal,
         purpose: "llm-task",
         execution: {
           mode: "isolated-agent-runtime",

@@ -56,6 +56,7 @@ type ChatTurnRouterOptions = {
   classifyApproval?: SystemAgentApprovalClassifier;
   surface?: "cli" | "gateway";
   operatorApprovalOnly?: boolean;
+  requesterAgentId?: string;
 };
 
 type CaptureRuntime = RuntimeEnv & { read: () => string };
@@ -153,8 +154,8 @@ export class ChatTurnRouter {
 
   propose(operation: SystemAgentOperation): string {
     this.clearPendingProposals();
-    this.pending = operation;
-    return describeSystemAgentPersistentOperation(operation);
+    this.pending = this.recordCreateAgentRequester(operation);
+    return describeSystemAgentPersistentOperation(this.pending);
   }
 
   hasPendingProposal(): boolean {
@@ -162,6 +163,16 @@ export class ChatTurnRouter {
   }
 
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
+    const proposalOperation = this.agentSession.proposalRef.operation;
+    if (proposalOperation) {
+      const recordedOperation = this.recordCreateAgentRequester(proposalOperation);
+      if (recordedOperation !== proposalOperation) {
+        // Request provenance is part of the exact approval-bound operation.
+        // Replace the model-tool hash before exposing the proposal to the operator.
+        this.agentSession.proposalRef.current = undefined;
+        this.agentSession.proposalRef.operation = recordedOperation;
+      }
+    }
     return resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
   }
 
@@ -524,16 +535,17 @@ export class ChatTurnRouter {
     operation: SystemAgentOperation,
     provenance: string | undefined,
   ): Promise<SystemAgentChatReply> {
+    const recordedOperation = this.recordCreateAgentRequester(operation);
     await this.callbacks.requireVerifiedInference();
-    if (operation.kind === "open-tui") {
+    if (recordedOperation.kind === "open-tui") {
       this.clearPendingProposals();
       return {
         text: "Opening your normal agent TUI. Use /openclaw there to come back.",
         action: "open-tui",
-        handoff: operation,
+        handoff: recordedOperation,
       };
     }
-    if (operation.kind === "open-setup") {
+    if (recordedOperation.kind === "open-setup") {
       this.clearPendingProposals();
       if (this.options.surface === "gateway") {
         return {
@@ -541,13 +553,13 @@ export class ChatTurnRouter {
           action: "none",
         };
       }
-      if (!["channels", "search", "gateway"].includes(operation.target)) {
+      if (!["channels", "search", "gateway"].includes(recordedOperation.target)) {
         return {
           text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
           action: "none",
         };
       }
-      let handoff = operation;
+      let handoff = recordedOperation;
       if (handoff.target === "channels" && !handoff.channel) {
         if (!this.lastSensitiveChannel) {
           this.awaitingSetupChannel = true;
@@ -568,44 +580,44 @@ export class ChatTurnRouter {
             : "Gateway setup";
       return { text: `Opening the ${label} wizard.`, action: "open-setup", handoff };
     }
-    if (operation.kind === "channel-setup") {
-      return await this.startWizard(this.wizard.startChannel(operation.channel));
+    if (recordedOperation.kind === "channel-setup") {
+      return await this.startWizard(this.wizard.startChannel(recordedOperation.channel));
     }
-    if (operation.kind === "skills-setup") {
+    if (recordedOperation.kind === "skills-setup") {
       return await this.startWizard(this.wizard.startSkills());
     }
-    if (operation.kind === "search-setup") {
+    if (recordedOperation.kind === "search-setup") {
       return await this.startWizard(this.wizard.startSearch());
     }
-    if (operation.kind === "gateway-config-setup") {
+    if (recordedOperation.kind === "gateway-config-setup") {
       return await this.startWizard(this.wizard.startGateway());
     }
-    if (operation.kind === "memory-import") {
+    if (recordedOperation.kind === "memory-import") {
       return await this.startWizard(this.wizard.startMemoryImport());
     }
-    if (operation.kind === "model-setup") {
+    if (recordedOperation.kind === "model-setup") {
       return this.startModelSetup();
     }
 
     const capture = createCaptureRuntime();
-    if (isPersistentSystemAgentOperation(operation) && !this.options.yes) {
+    if (isPersistentSystemAgentOperation(recordedOperation) && !this.options.yes) {
       this.clearPendingProposals();
-      this.pending = operation;
-      await executeSystemAgentOperation(operation, capture, {
+      this.pending = recordedOperation;
+      await executeSystemAgentOperation(recordedOperation, capture, {
         approved: false,
         deps: this.commandDeps(),
       });
       return {
-        text: [provenance, capture.read(), approvalQuestion(operation)]
+        text: [provenance, capture.read(), approvalQuestion(recordedOperation)]
           .filter(Boolean)
           .join("\n\n"),
         action: "none",
       };
     }
     const result = await this.executeOperation(
-      operation,
+      recordedOperation,
       capture,
-      this.options.yes === true || !isPersistentSystemAgentOperation(operation),
+      this.options.yes === true || !isPersistentSystemAgentOperation(recordedOperation),
     );
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
@@ -689,6 +701,18 @@ export class ChatTurnRouter {
     this.pending = null;
     this.agentSession.proposalRef.current = undefined;
     this.agentSession.proposalRef.operation = undefined;
+  }
+
+  private recordCreateAgentRequester(operation: SystemAgentOperation): SystemAgentOperation {
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    if (
+      operation.kind !== "create-agent" ||
+      !requesterAgentId ||
+      operation.requesterAgentId === requesterAgentId
+    ) {
+      return operation;
+    }
+    return { ...operation, requesterAgentId };
   }
 
   private armFollowUp(operation: SystemAgentOperation | undefined): string | null {

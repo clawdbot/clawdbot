@@ -76,11 +76,20 @@ export function renderChatDivider(
 
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
   return html`
-    <div class="chat-notice" data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+    <div
+      class="chat-notice ${item.tone === "danger" ? "chat-notice--danger callout danger" : ""}"
+      data-chat-row-key=${item.key}
+      data-ts=${String(item.timestamp)}
+      role=${item.tone === "danger" ? "alert" : nothing}
+    >
       ${item.label ? renderSystemLine({ icon: item.icon, label: item.label }) : nothing}
-      <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
-        ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
-      </div>
+      ${item.text
+        ? html`
+            <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
+              ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }

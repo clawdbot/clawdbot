@@ -133,19 +133,16 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (!state) {
       return false;
     }
-    let opened = openSlot(state.sidebarLayout, "discussion", "right");
+    let opened = openSlot(state.sidebarLayout, "discussion");
     const discussionPanel = opened.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "discussion");
     if (discussionPanel) {
       opened = activatePanel(opened, discussionPanel.id);
     }
-    const newColumn = opened.columns.find(
-      (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
-    );
     const fitted =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(opened, this.paneWidth, newColumn?.id) ?? opened)
+        ? (fitSidebarLayout(opened, this.paneWidth) ?? opened)
         : opened;
     state.updateSidebarLayout(fitted);
     if (discussionPanel) {
