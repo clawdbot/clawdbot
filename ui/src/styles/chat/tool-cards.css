@@ -75,7 +75,7 @@
   --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
 
   font-family: var(--font-body);
-  font-size: var(--control-ui-text-sm);
+  font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
   color: var(--chat-tool-activity-color);
