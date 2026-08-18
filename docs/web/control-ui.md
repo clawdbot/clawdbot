@@ -104,9 +104,11 @@ For connections with a durable user profile, the Gateway stores each agent's lat
 
 On the first identified connection, the Control UI uploads existing browser-local new-session preferences only when the Gateway has no such preferences yet. Later changes write to the Gateway first and then update the browser mirror. Connections without a durable identity continue using browser-local preferences and the loaded session roster for recents.
 
-## Personal identity (browser-local)
+## Personal identity
 
-The Control UI supports a per-browser personal identity (display name and avatar) attached to outgoing messages, for attribution in shared sessions. It lives in browser storage, scoped to the current browser profile, and is not synced to other devices or persisted server-side beyond the normal transcript authorship metadata on messages you send. Clearing site data or switching browsers resets it to empty.
+Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional GitHub identity. Open **Settings → Profile → Identity** to update it. The profile follows the authenticated person across browsers and supplies attribution in shared sessions; clearing browser site data does not delete it.
+
+Linking GitHub opts the profile into public commit co-author credit for agent sessions that person prompts. The row shows GitHub's public account avatar and link without replacing a custom OpenClaw avatar. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for the noreply privacy and eligibility rules.
 
 The assistant avatar override follows the same browser-local pattern: uploaded overrides overlay the gateway-resolved identity locally and never round-trip through `config.patch`. The shared `ui.assistant.avatar` config field is still available for non-UI clients that write the field directly.
 

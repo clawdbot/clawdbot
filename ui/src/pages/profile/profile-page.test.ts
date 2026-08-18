@@ -200,6 +200,7 @@ it("renders identity before a Usage statistics link without requesting usage dat
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const request = vi.fn(async (method: string) => {
@@ -378,6 +379,7 @@ it("retries the identity bootstrap when users.self returns no profile", async ()
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let identityRequests = 0;
@@ -424,6 +426,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let rejectIdentity: ((reason: Error) => void) | undefined;
@@ -485,6 +488,7 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const freshProfile = { ...staleProfile, displayName: "Fresh identity", updatedAt: 3 };
@@ -546,6 +550,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test", "ada@work.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let omitNextProfile = false;

@@ -8,17 +8,22 @@ import {
 import { t } from "../../i18n/index.ts";
 import "../../components/viewer-facepile.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 type IdentitySectionProps = {
   profile: UserProfile;
   avatarUrl: string | null;
   displayName: string;
-  busy: "display-name" | "avatar" | "loading" | null;
+  githubUsername: string;
+  busy: "display-name" | "avatar" | "github" | "loading" | null;
   error: string | null;
   onDisplayNameInput: (value: string) => void;
   onSaveDisplayName: () => void;
   onAvatarSelect: (file: File) => void;
+  onGitHubUsernameInput: (value: string) => void;
+  onSaveGitHubIdentity: () => void;
+  onClearGitHubIdentity: () => void;
 };
 
 function avatarViewer(profile: UserProfile, avatarUrl: string | null): PresenceViewer {
@@ -35,6 +40,9 @@ export function renderIdentitySection(props: IdentitySectionProps) {
   const savedName = props.profile.displayName ?? "";
   const nameChanged = props.displayName.trim() !== savedName;
   const emails = props.profile.emails.join(", ");
+  const githubIdentity = props.profile.githubIdentity;
+  const githubLoginChanged =
+    props.githubUsername.trim().toLowerCase() !== (githubIdentity?.login.toLowerCase() ?? "");
   return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
     ${renderSettingsSection(
       {
@@ -108,6 +116,76 @@ export function renderIdentitySection(props: IdentitySectionProps) {
           title: t("profilePage.identity.linkedEmails"),
           description: t("profilePage.identity.linkedEmailsDescription"),
           control: emails ? renderSettingsValue(emails) : nothing,
+        })}
+        ${renderSettingsRow({
+          title: t("profilePage.identity.github"),
+          description: t("profilePage.identity.githubDescription"),
+          control: html`
+            <div class="identity-github-control">
+              ${githubIdentity
+                ? html`<a
+                    class="settings-account"
+                    href=${githubIdentity.profileUrl}
+                    target=${EXTERNAL_LINK_TARGET}
+                    rel=${buildExternalLinkRel()}
+                  >
+                    <img class="settings-account__avatar" src=${githubIdentity.avatarUrl} alt="" />
+                    <span class="settings-row__value settings-row__value--mono"
+                      >@${githubIdentity.login}</span
+                    >
+                  </a>`
+                : nothing}
+              <form
+                class="identity-github-form"
+                @submit=${(event: SubmitEvent) => {
+                  event.preventDefault();
+                  props.onSaveGitHubIdentity();
+                }}
+              >
+                <input
+                  class="settings-input"
+                  type="text"
+                  maxlength="39"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label=${t("profilePage.identity.githubUsername")}
+                  placeholder=${t("profilePage.identity.githubPlaceholder")}
+                  .value=${props.githubUsername}
+                  ?disabled=${props.busy !== null}
+                  @input=${(event: Event) => {
+                    if (event.currentTarget instanceof HTMLInputElement) {
+                      props.onGitHubUsernameInput(event.currentTarget.value);
+                    }
+                  }}
+                />
+                <button
+                  type="submit"
+                  class="btn btn--sm"
+                  ?disabled=${props.busy !== null ||
+                  !props.githubUsername.trim() ||
+                  !githubLoginChanged}
+                >
+                  ${props.busy === "github"
+                    ? t("profilePage.identity.githubLinking")
+                    : githubIdentity
+                      ? t("profilePage.identity.githubChange")
+                      : t("profilePage.identity.githubLink")}
+                </button>
+                ${githubIdentity
+                  ? html`<button
+                      type="button"
+                      class="btn btn--sm"
+                      ?disabled=${props.busy !== null}
+                      @click=${props.onClearGitHubIdentity}
+                    >
+                      ${t("profilePage.identity.githubDisconnect")}
+                    </button>`
+                  : nothing}
+              </form>
+              <span class="settings-row__desc">${t("profilePage.identity.githubPrivacy")}</span>
+              <span class="settings-row__desc">${t("profilePage.identity.githubOwnership")}</span>
+            </div>
+          `,
         })}
         ${props.error
           ? html`<div class="settings-row identity-error" role="alert">

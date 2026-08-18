@@ -116,6 +116,8 @@ const CURRENT_TRAIN_METHODS = [
   "progressCard.put",
   "tools.github.status",
   "tools.github.configure",
+  "users.setGitHubIdentity",
+  "users.clearGitHubIdentity",
 ] as const;
 
 describe("core gateway method release trains", () => {

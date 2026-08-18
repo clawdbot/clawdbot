@@ -3869,7 +3869,7 @@ src/state/openclaw-state-lease.ts	1
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
-src/state/user-profiles.ts	3
+src/state/user-profiles.ts	1
 src/status/link-channel.ts	1
 src/status/status-message.ts	3
 src/status/status-text.ts	3

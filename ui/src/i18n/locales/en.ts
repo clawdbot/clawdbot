@@ -3416,6 +3416,17 @@ export const en: TranslationMap = {
       displayNameDescription: "Shown to other people using this gateway.",
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
+      github: "GitHub",
+      githubDescription:
+        "Linking opts you into public GitHub co-author credit when you participate in agent sessions that create commits.",
+      githubUsername: "GitHub username",
+      githubPlaceholder: "octocat",
+      githubLink: "Link GitHub",
+      githubLinking: "Linking…",
+      githubChange: "Change",
+      githubDisconnect: "Disconnect",
+      githubPrivacy: "Commit credit uses GitHub's public noreply address, never a private email.",
+      githubOwnership: "Link only an account you control.",
       avatarErrors: {
         invalid: "That image could not be processed.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",

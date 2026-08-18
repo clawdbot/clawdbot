@@ -90,7 +90,7 @@ export function buildControlUiCspHeader(opts?: {
     "frame-src 'self' http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob: https://gravatar.com",
+    "img-src 'self' data: blob: https://gravatar.com https://avatars.githubusercontent.com",
     "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",

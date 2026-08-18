@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
+import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveProfileParticipantIdFromSessionCreation } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -356,8 +358,18 @@ export async function executePreparedReplyAgentRun(
         return { ...hookResult, reply: hookReply };
       },
     },
-    () =>
-      traceAgentPhase("reply.run_agent_turn", () =>
+    () => {
+      const gitCoauthorAttribution = prepareGitCoauthorAttribution({
+        agentId: followupRun.run.agentId,
+        config: cfg,
+        currentProfileId: resolveProfileParticipantIdFromSessionCreation(
+          sessionCtx.SessionCreation,
+        ),
+        sessionKey,
+        storePath,
+      });
+      const agentTurnOpts = gitCoauthorAttribution ? { ...opts, gitCoauthorAttribution } : opts;
+      return traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           commandBody,
           transcriptCommandBody,
@@ -365,7 +377,7 @@ export async function executePreparedReplyAgentRun(
           sessionCtx,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
-          opts,
+          opts: agentTurnOpts,
           typingSignals,
           blockReplyPipeline,
           blockStreamingEnabled,
@@ -387,7 +399,8 @@ export async function executePreparedReplyAgentRun(
           replyMediaContext,
           isRestartRecoveryArmed,
         }),
-      ),
+      );
+    },
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
   recordReplyOperationAgentTurn(

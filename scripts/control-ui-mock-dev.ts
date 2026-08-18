@@ -1096,6 +1096,7 @@ async function createChatPickerScenario(
     createdAt: baseTime,
     updatedAt: baseTime,
     emails: ["riley@example.com"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const devicePairSetupCode = Buffer.from(
