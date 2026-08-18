@@ -1,14 +1,11 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCreatedActor,
   SessionOwner,
 } from "../../packages/gateway-protocol/src/index.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
@@ -29,6 +26,7 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  resolveTrustedSessionContextTokens,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -306,8 +304,7 @@ export function buildGatewaySessionRow(params: {
       rowContext,
     }) === undefined;
   const transcriptUsage =
-    !skipTranscriptUsage &&
-    (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
+    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -432,20 +429,12 @@ export function buildGatewaySessionRow(params: {
     }),
   );
   const persistedContextTokens = resolvePositiveNumber(entry?.contextTokens);
-  const persistedContextMatchesCurrentSelection =
-    persistedContextTokens !== undefined &&
-    entry?.contextTokensSource === "runtime" &&
-    normalizeLowercaseStringOrEmpty(entry?.modelProvider) ===
-      normalizeLowercaseStringOrEmpty(rowModelProvider) &&
-    normalizeLowercaseStringOrEmpty(entry?.model) === normalizeLowercaseStringOrEmpty(rowModel) &&
-    normalizeLowercaseStringOrEmpty(entry?.agentHarnessId) ===
-      normalizeLowercaseStringOrEmpty(thinkingProjection.agentRuntime.id);
-  // A locked session owns its native window, including legacy rows that predate
-  // harness provenance. Otherwise telemetry must match the producing selection.
-  const trustedPersistedContextTokens =
-    entry?.modelSelectionLocked === true || persistedContextMatchesCurrentSelection
-      ? persistedContextTokens
-      : undefined;
+  const trustedPersistedContextTokens = resolveTrustedSessionContextTokens({
+    entry,
+    provider: rowModelProvider,
+    model: rowModel,
+    agentHarnessId: thinkingProjection.agentRuntime.id,
+  });
   // An authored effective cap wins. Other resolved windows only constrain matching
   // telemetry, so native capacity cannot inflate a smaller observed runtime budget.
   const currentContextTokens =

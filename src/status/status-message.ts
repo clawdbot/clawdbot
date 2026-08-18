@@ -38,6 +38,7 @@ import {
   resolveFreshSessionTotalTokens,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+  resolveTrustedSessionContextTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -763,32 +764,16 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     selectedModel: selectedLookupModel,
     parentSessionKey: args.parentSessionKey,
   });
-  const persistedContextTokens =
-    typeof entry?.contextTokens === "number" && entry.contextTokens > 0
-      ? entry.contextTokens
-      : undefined;
-  const persistedContextMatchesActiveModel = (() => {
-    if (persistedContextTokens === undefined) {
-      return false;
-    }
-    const entryProvider = normalizeLowercaseStringOrEmpty(entry?.modelProvider);
-    const entryModel = normalizeLowercaseStringOrEmpty(entry?.model);
-    const lookupProvider = normalizeLowercaseStringOrEmpty(contextLookupProvider);
-    const lookupModel = normalizeLowercaseStringOrEmpty(contextLookupModel);
-    if (!entryModel || !lookupModel || entryModel !== lookupModel) {
-      return false;
-    }
-    if (entryProvider && lookupProvider && entryProvider !== lookupProvider) {
-      return false;
-    }
-    return !runtimeDiffersFromSelected || initialFallbackState.active;
-  })();
+  const persistedContextTokens = resolveTrustedSessionContextTokens({
+    entry,
+    provider: contextLookupProvider,
+    model: contextLookupModel,
+    agentHarnessId: args.resolvedHarness,
+  });
   const cappedPersistedContextTokens =
     typeof persistedContextTokens === "number" && typeof activeContextTokens === "number"
       ? Math.min(persistedContextTokens, activeContextTokens)
-      : persistedContextMatchesActiveModel
-        ? persistedContextTokens
-        : undefined;
+      : persistedContextTokens;
   const channelOverrideContextTokens = channelModelNote
     ? (explicitRuntimeContextTokens ?? cappedPersistedContextTokens ?? activeContextTokens)
     : undefined;

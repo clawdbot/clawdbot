@@ -1,6 +1,7 @@
 // Status message tests cover status message formatting and persistence.
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { buildStatusMessage, buildStatusMessageParts } from "./status-message.js";
 
@@ -139,6 +140,72 @@ describe("buildStatusMessageParts presentation", () => {
 });
 
 describe("buildStatusMessage context window", () => {
+  it("rejects a stale runtime window after a same-model harness change", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-sol",
+            contextTokens: 1_000_000,
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000)],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-sol", contextTokens: 1_000_000 },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "same-model-runtime-change",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("preserves a locked legacy session window", () => {
+    const text = buildStatusMessage({
+      agent: { model: "openai/gpt-5.6-sol", contextTokens: 1_000_000 },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "locked-legacy-window",
+        updatedAt: 0,
+        modelSelectionLocked: true,
+        contextTokens: 272_000,
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/272k");
+  });
+
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
       config: {
@@ -297,6 +364,9 @@ describe("buildStatusMessage context window", () => {
         modelOverrideFallbackOriginModel: "deepseek-v4-pro",
         modelProvider: "ollama-cloud",
         model: "deepseek-v4-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 128_000,
+        contextTokensSource: "runtime",
         totalTokens: 50_000,
         totalTokensFresh: true,
         totalTokensVersion: 1,
@@ -305,12 +375,14 @@ describe("buildStatusMessage context window", () => {
       sessionScope: "per-sender",
       queue: { mode: "steer", depth: 0 },
       modelAuth: "api-key",
+      resolvedHarness: "openclaw",
     });
 
     expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
     expect(text).toContain("auto fallback; config primary ollama-cloud/deepseek-v4-pro");
     expect(text).toContain("check provider");
     expect(text).not.toContain("pinned session");
+    expect(text).toContain("Context: 50k/128k");
   });
 
   it("does not label a configured subagent model as auto fallback", () => {

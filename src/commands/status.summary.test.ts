@@ -82,7 +82,7 @@ vi.mock("../status/summary.runtime.js", () => ({
       provider: "openai",
       model: "gpt-5.5",
     })),
-    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
+    resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
     resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
       typeof model === "string" && model.length > 0
         ? {
@@ -265,6 +265,11 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+      id: "openclaw",
+      label: "OpenClaw Default",
+    });
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
@@ -722,7 +727,10 @@ describe("getStatusSummary", () => {
   });
 
   it("includes the selected agent runtime on recent sessions", async () => {
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+      id: "codex",
+      label: "OpenAI Codex",
+    });
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
@@ -735,6 +743,84 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
+  });
+
+  it("rejects a stale runtime window after a same-model harness change", async () => {
+    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(1_000_000);
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+      id: "codex",
+      label: "OpenAI Codex",
+    });
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "same-model-runtime-change",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+          totalTokens: 11,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]).toMatchObject({
+      runtime: "OpenAI Codex",
+      contextTokens: 1_000_000,
+      remainingTokens: 999_989,
+    });
+  });
+
+  it("keeps telemetry from the matching runtime producer", async () => {
+    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(1_000_000);
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "matching-runtime-window",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+          totalTokens: 11,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
+  });
+
+  it("preserves the native window owned by a locked legacy session", async () => {
+    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(1_000_000);
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+      id: "codex",
+      label: "OpenAI Codex",
+    });
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "locked-legacy-window",
+          updatedAt: Date.now(),
+          modelSelectionLocked: true,
+          contextTokens: 272_000,
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
   });
 
   it("hydrates only recent session rows while preserving total counts", async () => {
@@ -773,7 +859,7 @@ describe("getStatusSummary", () => {
     );
 
     const hydratedKeys = vi
-      .mocked(statusSummaryRuntime.resolveSessionRuntimeLabel)
+      .mocked(statusSummaryRuntime.resolveSessionRuntime)
       .mock.calls.map(([params]) => params.sessionKey);
     expect(hydratedKeys).not.toContain("agent:main:session-1");
     expect(hydratedKeys).not.toContain("agent:main:session-2");
@@ -924,6 +1010,11 @@ describe("getStatusSummary", () => {
           modelOverrideSource: "auto",
           modelOverrideFallbackOriginProvider: "zhipu",
           modelOverrideFallbackOriginModel: "glm-4.5-air",
+          modelProvider: "deepseek",
+          model: "deepseek-v4-flash",
+          agentHarnessId: "openclaw",
+          contextTokens: 128_000,
+          contextTokensSource: "runtime",
         },
       }),
     );
@@ -933,6 +1024,7 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
     expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBe("fallback selected");
+    expect(summary.sessions.recent[0]?.contextTokens).toBe(128_000);
   });
 
   it("does not mark configured subagent models as auto fallback", async () => {
@@ -1040,7 +1132,7 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.configuredModel).toBe("anthropic/claude-opus-4-8");
     expect(summary.sessions.recent[0]?.selectedModel).toBe("anthropic/opus");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
-    expect(statusSummaryRuntime.resolveSessionRuntimeLabel).toHaveBeenCalledWith(
+    expect(statusSummaryRuntime.resolveSessionRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "anthropic",
         model: "claude-opus-4-8",
