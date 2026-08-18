@@ -19,7 +19,7 @@ import type {
 import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
 import { resolveSkillTelemetrySource } from "./source.js";
-import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadMergedWorkspaceSkills, loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -129,8 +129,9 @@ export async function syncWorkspaceSkills(params: {
   return await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
-    const skillsVersion = getSkillsSnapshotVersion(sourceDir);
     const skillsSnapshot = params.skillsSnapshot;
+    const skillRoots = skillsSnapshot?.skillRoots;
+    const skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
 
     await ensureSyncedSkillsDirectory(targetSkillsDir);
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
@@ -155,7 +156,7 @@ export async function syncWorkspaceSkills(params: {
       return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
     }
 
-    const entries = loadWorkspaceSkills(sourceDir, {
+    const loadOptions = {
       config: params.config,
       skillFilter: params.skillFilter,
       agentId: params.agentId,
@@ -163,7 +164,12 @@ export async function syncWorkspaceSkills(params: {
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
       pluginSkillsDir: params.pluginSkillsDir,
-    });
+      ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
+      ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
+    };
+    const entries = skillRoots
+      ? loadMergedWorkspaceSkills({ ...skillRoots, ...loadOptions })
+      : loadWorkspaceSkills(sourceDir, loadOptions);
 
     const usedDirNames = new Set<string>();
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];

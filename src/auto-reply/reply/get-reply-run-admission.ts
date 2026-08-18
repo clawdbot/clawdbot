@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -196,6 +197,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionId,
           isFirstTurnInSession,
           workspaceDir: context.skillsWorkspaceDir,
+          executionSkillsDir: path.join(context.workspaceDir, "skills"),
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,

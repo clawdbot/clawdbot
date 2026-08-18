@@ -3,8 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
 const tempDirs = createTempDirTracker();
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -45,6 +47,52 @@ afterEach(() => {
 });
 
 describe("resolveEmbeddedRunSkillEntries (integration)", () => {
+  it("matches snapshot skill roots when a snapshot-less run uses a different execution directory", async () => {
+    const agentWorkspaceDir = tempDirs.make("openclaw-agent-workspace-");
+    const executionWorkspaceDir = tempDirs.make("openclaw-execution-workspace-");
+    const executionSkillsDir = path.join(executionWorkspaceDir, "skills");
+    for (const [workspaceDir, name, description] of [
+      [agentWorkspaceDir, "fallback-agent", "Agent only"],
+      [agentWorkspaceDir, "fallback-shared", "Agent wins"],
+      [executionWorkspaceDir, "fallback-execution", "Execution only"],
+      [executionWorkspaceDir, "fallback-shared", "Execution loses"],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description,
+      });
+    }
+    const skillNames = ["fallback-agent", "fallback-shared", "fallback-execution"];
+    const snapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: agentWorkspaceDir,
+      executionSkillsDir,
+      config: {},
+      skillFilter: skillNames,
+      watch: false,
+      snapshotVersion: 1,
+    }).snapshot;
+
+    const fallback = resolveEmbeddedRunSkillEntries({
+      workspaceDir: agentWorkspaceDir,
+      executionSkillsDir,
+      config: {},
+    });
+    const fallbackSkills = fallback.skillEntries.filter((entry) =>
+      skillNames.includes(entry.skill.name),
+    );
+
+    expect(fallbackSkills.map((entry) => entry.skill.name)).toEqual(
+      snapshot.skills.map((skill) => skill.name),
+    );
+    expect(
+      fallbackSkills.find((entry) => entry.skill.name === "fallback-shared")?.skill,
+    ).toMatchObject({
+      description: "Agent wins",
+      filePath: path.join(agentWorkspaceDir, "skills", "fallback-shared", "SKILL.md"),
+    });
+  });
+
   it("loads bundled diffs skill when explicitly enabled in config", async () => {
     const config: OpenClawConfig = {
       plugins: {

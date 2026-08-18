@@ -228,7 +228,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
 });
 
 describe("prepareEmbeddedAttemptSkills", () => {
-  it("discovers fallback skills from the configured agent workspace", async () => {
+  it("discovers fallback skills from the agent and execution workspaces", async () => {
     const agentWorkspace = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skills-")),
     );
@@ -258,7 +258,7 @@ describe("prepareEmbeddedAttemptSkills", () => {
       });
       try {
         expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
-        expect(prepared.skillsPrompt).not.toContain("execution-workspace-skill");
+        expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
       } finally {
         prepared.restoreSkillEnv();
       }

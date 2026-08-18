@@ -520,6 +520,11 @@ export function prepareEmbeddedAttemptSkills(params: {
       agentId: params.sessionAgentId,
       eligibility: skillsEligibility,
       skillsSnapshot,
+      // Sandbox fallbacks stay inside their sandbox skill workspace;
+      // host execution skills are not mounted there.
+      ...(params.sandbox?.enabled === true
+        ? {}
+        : { executionSkillsDir: path.join(params.effectiveWorkspace, "skills") }),
       workspaceOnly,
     },
   );

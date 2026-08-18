@@ -23,6 +23,7 @@ type WorkspaceSkillBuildOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
+  preserveEntryOrder?: boolean;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -40,6 +41,7 @@ function resolveWorkspaceSkillPromptState(
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,
+    preserveOrder: opts?.preserveEntryOrder,
   });
   return { eligible, prompt, resolvedSkills, skillFilter };
 }

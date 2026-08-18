@@ -58,6 +58,34 @@ type LoadedSkillRecord = {
   syncDirName?: string;
 };
 
+export type WorkspaceSkillRoots = {
+  agentWorkspaceDir: string;
+  executionSkillsDir?: string;
+};
+
+type WorkspaceSkillLoadOptions = {
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  pluginSkillsDir?: string;
+  skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+  workspaceOnly?: boolean;
+  includeArchived?: boolean;
+};
+
+export function normalizeWorkspaceSkillRoots(roots: WorkspaceSkillRoots): WorkspaceSkillRoots {
+  const agentWorkspaceDir = path.resolve(roots.agentWorkspaceDir);
+  const executionSkillsDir = roots.executionSkillsDir
+    ? path.resolve(roots.executionSkillsDir)
+    : undefined;
+  return executionSkillsDir && executionSkillsDir !== path.join(agentWorkspaceDir, "skills")
+    ? { agentWorkspaceDir, executionSkillsDir }
+    : { agentWorkspaceDir };
+}
+
 function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
   skillsLogger.warn("Skipping invalid skill.", {
     source,
@@ -280,6 +308,7 @@ function loadSkillEntries(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     pluginSkillsDir?: string;
+    workspaceSkillsDir?: string;
     workspaceOnly?: boolean;
     includeArchived?: boolean;
   },
@@ -291,7 +320,7 @@ function loadSkillEntries(
 
   const workspaceOnly = opts?.workspaceOnly === true;
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
+  const workspaceSkillsDir = opts?.workspaceSkillsDir ?? path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = workspaceOnly
     ? undefined
     : (opts?.bundledSkillsDir ?? resolveBundledSkillsDir());
@@ -466,18 +495,7 @@ export function resolveWorkspaceSkillPromptEntries(
 
 export function loadWorkspaceSkills(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    pluginSkillsDir?: string;
-    skillFilter?: string[];
-    skillOverrides?: Record<string, boolean>;
-    agentId?: string;
-    eligibility?: SkillEligibilityContext;
-    workspaceOnly?: boolean;
-    includeArchived?: boolean;
-  },
+  opts?: WorkspaceSkillLoadOptions,
 ): SkillEntry[] {
   const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
     canExec: opts?.eligibility?.nodeSkills?.canExec,
@@ -497,6 +515,35 @@ export function loadWorkspaceSkills(
     effectiveSkillFilter,
     opts?.skillOverrides,
     opts?.eligibility,
+  );
+}
+
+/** Loads agent-workspace skills first, then execution-directory OpenClaw skills. */
+export function loadMergedWorkspaceSkills(
+  params: WorkspaceSkillRoots & WorkspaceSkillLoadOptions,
+): SkillEntry[] {
+  const { agentWorkspaceDir, executionSkillsDir } = normalizeWorkspaceSkillRoots(params);
+  if (!executionSkillsDir) {
+    return loadWorkspaceSkills(agentWorkspaceDir, params);
+  }
+
+  const agentEntries = mergeRemoteNodeSkillEntries(loadSkillEntries(agentWorkspaceDir, params), {
+    canExec: params.eligibility?.nodeSkills?.canExec,
+    node: params.eligibility?.nodeSkills?.node,
+  });
+  const agentNames = new Set(agentEntries.map((entry) => entry.skill.name));
+  const executionEntries = loadSkillEntries(agentWorkspaceDir, {
+    ...params,
+    workspaceOnly: true,
+    workspaceSkillsDir: executionSkillsDir,
+  }).filter((entry) => !agentNames.has(entry.skill.name));
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(params);
+  return filterSkillEntries(
+    [...agentEntries, ...executionEntries],
+    params.config,
+    effectiveSkillFilter,
+    params.skillOverrides,
+    params.eligibility,
   );
 }
 

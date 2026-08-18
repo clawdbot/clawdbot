@@ -3,6 +3,7 @@
  * prepared direct compaction attempt.
  */
 import os from "node:os";
+import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -152,6 +153,11 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         agentId: effectiveSkillAgentId,
         eligibility: skillsEligibility,
         skillsSnapshot: skillsSnapshotForRun,
+        // Sandbox fallbacks stay inside their sandbox skill workspace;
+        // host execution skills are not mounted there.
+        ...(sandbox?.enabled === true
+          ? {}
+          : { executionSkillsDir: path.join(effectiveWorkspace, "skills") }),
         workspaceOnly: loadSkillsWorkspaceOnly,
       });
     restoreSkillEnv = skillsSnapshotForRun
