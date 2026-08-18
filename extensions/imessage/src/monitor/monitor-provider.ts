@@ -9,6 +9,7 @@ import {
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  toHistoryMediaEntries,
   type ChannelInboundTurnPlan,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -28,7 +29,14 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { CHANNEL_HISTORY_MEDIA_SUBDIR } from "openclaw/plugin-sdk/media-store";
+import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryPersistence,
+  createChannelHistoryWindow,
+  type HistoryEntry,
+  type PersistedChannelHistory,
+} from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -75,6 +83,7 @@ import {
   maybeResolveIMessageQuestionReaction,
 } from "../question-reactions.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
+import { getIMessageRuntime } from "../runtime.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
@@ -369,6 +378,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
+  const historyStateStore = getIMessageRuntime().state.openSyncKeyedStore<PersistedChannelHistory>({
+    namespace: "channel-history-v1",
+    maxEntries: 1000,
+    defaultTtlMs: 24 * 60 * 60_000,
+  });
+  const channelHistory = createChannelHistoryWindow({
+    historyMap: groupHistories,
+    persistence: {
+      store: createChannelHistoryPersistence(historyStateStore),
+      keyPrefix: accountInfo.accountId,
+    },
+  });
   const sentMessageCache = createSentMessageCache();
   const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
@@ -794,6 +815,33 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
 
     if (decision.kind === "drop") {
+      if (decision.history) {
+        let historyMedia: ChannelInboundMediaInput[] = [];
+        if (!remoteHost) {
+          try {
+            historyMedia = (
+              await stageIMessageAttachments(mediaCandidates, {
+                maxBytes: mediaMaxBytes,
+                allowedRoots: effectiveAttachmentRoots,
+                subdir: CHANNEL_HISTORY_MEDIA_SUBDIR,
+                deps: { logVerbose },
+              })
+            ).attachments;
+          } catch (err) {
+            logVerbose(
+              `imessage: retained text-only group history for ${decision.history.entry.messageId ?? "unknown"} after media staging failure: ${String(err)}`,
+            );
+          }
+        }
+        await channelHistory.recordWithMedia({
+          historyKey: decision.history.historyKey,
+          limit: historyLimit,
+          entry: decision.history.entry,
+          media: toHistoryMediaEntries(historyMedia),
+          mediaMaxBytes,
+          messageId: decision.history.entry.messageId,
+        });
+      }
       // Record echo/reflection drops so the rate limiter can detect sustained loops.
       // Only loop-related drop reasons feed the counter; policy/mention/empty drops
       // are normal and should not escalate. "from me" is excluded: every own-send
@@ -1045,21 +1093,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
-    const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
-      cfg,
-      decision: contextDecision,
-      message,
-      previousTimestamp,
-      remoteHost,
-      historyLimit,
-      groupHistories,
-      dmHistory,
-      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-        .buildContext,
-      media: {
-        facts: mediaAttachments,
-      },
-    });
+    const { ctxPayload, chatTarget, imessageTo, historySnapshot } =
+      await buildIMessageInboundContext({
+        cfg,
+        decision: contextDecision,
+        message,
+        previousTimestamp,
+        remoteHost,
+        historyLimit,
+        groupHistories,
+        channelHistory,
+        dmHistory,
+        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+          .buildContext,
+        media: {
+          facts: mediaAttachments,
+        },
+      });
 
     const updateTarget = chatTarget || imessageTo;
     const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
@@ -1287,6 +1337,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyKey: decision.historyKey,
             historyMap: groupHistories,
             limit: historyLimit,
+            consumeSnapshot:
+              decision.isGroup && decision.historyKey && historySnapshot
+                ? () =>
+                    channelHistory.consume({
+                      historyKey: decision.historyKey ?? "",
+                      limit: historyLimit,
+                      snapshot: historySnapshot,
+                    })
+                : undefined,
           },
           delivery,
           dispatcherOptions: {

@@ -292,13 +292,14 @@ async function saveFeishuResponseMedia(params: {
   maxBytes: number;
   contentType?: string;
   fileName?: string;
+  subdir?: string;
 }): Promise<SavedMedia> {
-  const { response, maxBytes, contentType, fileName } = params;
+  const { response, maxBytes, contentType, fileName, subdir = "inbound" } = params;
   if (Buffer.isBuffer(response)) {
-    return saveMediaBuffer(response, contentType, "inbound", maxBytes, fileName);
+    return saveMediaBuffer(response, contentType, subdir, maxBytes, fileName);
   }
   if (response instanceof ArrayBuffer) {
-    return saveMediaBuffer(Buffer.from(response), contentType, "inbound", maxBytes, fileName);
+    return saveMediaBuffer(Buffer.from(response), contentType, subdir, maxBytes, fileName);
   }
   const responseWithOptionalFields = response as FeishuDownloadResponse & {
     code?: number;
@@ -316,7 +317,7 @@ async function saveFeishuResponseMedia(params: {
     return saveMediaBuffer(
       responseWithOptionalFields.data,
       contentType,
-      "inbound",
+      subdir,
       maxBytes,
       fileName,
     );
@@ -325,13 +326,13 @@ async function saveFeishuResponseMedia(params: {
     return saveMediaBuffer(
       Buffer.from(responseWithOptionalFields.data),
       contentType,
-      "inbound",
+      subdir,
       maxBytes,
       fileName,
     );
   }
   const save = (stream: AsyncIterable<unknown>, ct = contentType, mb = maxBytes, fn = fileName) =>
-    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, FEISHU_MEDIA_HTTP_TIMEOUT_MS);
+    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, FEISHU_MEDIA_HTTP_TIMEOUT_MS, subdir);
   if (typeof response.getReadableStream === "function") {
     return save(response.getReadableStream());
   }
@@ -363,6 +364,7 @@ async function saveMessageResourceWithType(params: {
   type: FeishuMessageResourceDownloadType;
   maxBytes: number;
   originalFilename?: string;
+  subdir?: string;
 }): Promise<SaveMessageResourceResult> {
   const response = await params.client.im.messageResource.get({
     path: { message_id: params.messageId, file_key: params.fileKey },
@@ -380,6 +382,7 @@ async function saveMessageResourceWithType(params: {
       (params.originalFilename
         ? recoverUtf8FileNameFromLatin1Header(params.originalFilename)
         : undefined),
+    subdir: params.subdir,
   });
   return { saved, ...meta };
 }
@@ -392,8 +395,9 @@ export async function saveMessageResourceFeishu(params: {
   accountId?: string;
   maxBytes: number;
   originalFilename?: string;
+  subdir?: string;
 }): Promise<SaveMessageResourceResult> {
-  const { cfg, messageId, fileKey, type, accountId, maxBytes, originalFilename } = params;
+  const { cfg, messageId, fileKey, type, accountId, maxBytes, originalFilename, subdir } = params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
@@ -408,6 +412,7 @@ export async function saveMessageResourceFeishu(params: {
       type,
       maxBytes,
       originalFilename,
+      subdir,
     });
   } catch (err) {
     if (type !== "file" || !isHttpStatusError(err, 502)) {
@@ -421,6 +426,7 @@ export async function saveMessageResourceFeishu(params: {
         type: "media",
         maxBytes,
         originalFilename,
+        subdir,
       });
     } catch {
       throw err;

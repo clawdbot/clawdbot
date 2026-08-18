@@ -7,6 +7,7 @@ import type {
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -511,6 +512,7 @@ async function dispatchMessage(params: {
   channelRuntime?: PluginRuntime["channel"];
   botOpenId?: string;
   directPreDispatchTarget?: string;
+  channelHistory?: ReturnType<typeof createChannelHistoryWindow>;
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -537,6 +539,7 @@ async function dispatchMessage(params: {
     botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
+    channelHistory: params.channelHistory,
   });
   return runtime;
 }
@@ -1681,6 +1684,166 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("records denied human group PDF context without allowing that sender to activate", async () => {
+    const channelHistory = createChannelHistoryWindow({ historyMap: new Map() });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "worksheet.pdf",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "worksheet.pdf",
+      path: "/tmp/channel-history/worksheet.pdf",
+      size: 3,
+      contentType: "application/pdf",
+    });
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groupPolicy: "open",
+        groupSenderAllowFrom: ["ou-allowed"],
+        contextVisibility: "all",
+        groups: { "oc-group": { requireMention: true } },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-denied-pdf-context",
+        senderOpenId: "ou-classmate",
+        senderType: "user",
+        chatId: "oc-group",
+        chatType: "group",
+        messageType: "file",
+        content: JSON.stringify({ file_key: "pdf-key", file_name: "worksheet.pdf" }),
+      }),
+      channelHistory,
+    });
+
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("channel-history");
+    expect(channelHistory.snapshot({ historyKey: "oc-group", limit: 50 }).entries).toEqual([
+      expect.objectContaining({
+        messageId: "msg-denied-pdf-context",
+        media: [
+          expect.objectContaining({
+            path: "/tmp/channel-history/worksheet.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("retains admitted group text when Feishu history media download fails", async () => {
+    const channelHistory = createChannelHistoryWindow({ historyMap: new Map() });
+    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("download unavailable"));
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groupPolicy: "open",
+        groupSenderAllowFrom: ["ou-allowed"],
+        contextVisibility: "all",
+        groups: { "oc-group": { requireMention: true } },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-denied-pdf-download-failure",
+        senderOpenId: "ou-classmate",
+        senderType: "user",
+        chatId: "oc-group",
+        chatType: "group",
+        messageType: "file",
+        content: JSON.stringify({ file_key: "pdf-key", file_name: "worksheet.pdf" }),
+      }),
+      channelHistory,
+    });
+
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(channelHistory.snapshot({ historyKey: "oc-group", limit: 50 }).entries).toEqual([
+      expect.objectContaining({
+        messageId: "msg-denied-pdf-download-failure",
+      }),
+    ]);
+  });
+
+  it("does not fetch denied group media when context visibility is allowlist-only", async () => {
+    const channelHistory = createChannelHistoryWindow({ historyMap: new Map() });
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groupPolicy: "open",
+        groupSenderAllowFrom: ["ou-allowed"],
+        contextVisibility: "allowlist",
+        groups: { "oc-group": { requireMention: true } },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-denied-private-pdf",
+        senderOpenId: "ou-classmate",
+        senderType: "user",
+        chatId: "oc-group",
+        chatType: "group",
+        messageType: "file",
+        content: JSON.stringify({ file_key: "private-pdf", file_name: "private.pdf" }),
+      }),
+      channelHistory,
+    });
+
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockDownloadMessageResourceFeishu).not.toHaveBeenCalled();
+    expect(channelHistory.snapshot({ historyKey: "oc-group", limit: 50 }).entries).toEqual([]);
+  });
+
+  it("dispatches a mentioned turn with exactly one captured group-history snapshot", async () => {
+    const channelHistory = createChannelHistoryWindow({ historyMap: new Map() });
+    await channelHistory.recordWithMedia({
+      historyKey: "oc-group",
+      limit: 50,
+      messageId: "msg-prior-pdf",
+      entry: {
+        sender: "Classmate",
+        body: "<media:document>",
+        timestamp: Date.now(),
+        messageId: "msg-prior-pdf",
+      },
+      media: [
+        {
+          path: "/tmp/channel-history/prior.pdf",
+          contentType: "application/pdf",
+          kind: "document",
+        },
+      ],
+    });
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groupPolicy: "open",
+        groupSenderAllowFrom: ["ou-allowed"],
+        contextVisibility: "all",
+        groups: { "oc-group": { requireMention: true } },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-mention-after-pdf",
+        senderOpenId: "ou-allowed",
+        senderType: "user",
+        chatId: "oc-group",
+        chatType: "group",
+        text: "@_bot summarize it",
+        message: {
+          mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }],
+        },
+      }),
+      botOpenId: "ou-bot",
+      channelHistory,
+    });
+
+    const context = mockCallArg<{ InboundHistory?: unknown[] }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.InboundHistory).toEqual([
+      expect.objectContaining({
+        messageId: "msg-prior-pdf",
+        media: [expect.objectContaining({ path: "/tmp/channel-history/prior.pdf" })],
+      }),
+    ]);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("verifies app-scoped bot mention ids before admitting bot-authored events", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     const baseFeishuConfig = {
@@ -2227,7 +2390,7 @@ describe("handleFeishuMessage command authorization", () => {
       };
     }>(mockTranscribeFirstAudio, 0, 0);
     expect(transcribeRequest.ctx?.media).toEqual([
-      { path: "/tmp/inbound-voice.ogg", contentType: "audio/ogg", kind: "audio" },
+      { path: "/tmp/inbound-voice.ogg", contentType: "audio/ogg", kind: "audio", sizeBytes: 5 },
     ]);
     expect(transcribeRequest.ctx?.ChatType).toBe("direct");
     expect(transcribeRequest.cfg?.channels?.feishu?.dmPolicy).toBe("open");

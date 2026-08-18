@@ -1,6 +1,12 @@
 // Feishu plugin module implements monitor.account behavior.
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import {
+  createChannelHistoryPersistence,
+  createChannelHistoryWindow,
+  type ChannelHistoryWindow,
+  type PersistedChannelHistory,
+} from "openclaw/plugin-sdk/reply-history";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -173,6 +179,7 @@ type RegisterEventHandlersContext = {
   channelRuntime: PluginRuntime["channel"];
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
+  channelHistory: ChannelHistoryWindow;
   fireAndForget?: boolean;
   vcAutoJoin: boolean;
   /** Owning account signal; retrying handlers must propagate it. */
@@ -285,8 +292,16 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget, abortSignal } =
-    context;
+  const {
+    cfg,
+    accountId,
+    channelRuntime,
+    runtime,
+    chatHistories,
+    channelHistory,
+    fireAndForget,
+    abortSignal,
+  } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -310,6 +325,7 @@ function registerEventHandlers(
       accountId,
       runtime,
       chatHistories,
+      channelHistory,
       fireAndForget,
       handleMessage: handleFeishuMessage,
       resolveDebounceText: ({ event, botOpenId, botName }) =>
@@ -389,6 +405,7 @@ function registerEventHandlers(
             runtime,
             channelRuntime,
             chatHistories,
+            channelHistory,
             accountId,
           });
           await promise;
@@ -420,6 +437,7 @@ function registerEventHandlers(
             runtime,
             channelRuntime,
             chatHistories,
+            channelHistory,
             accountId,
           });
           await promise;
@@ -548,6 +566,18 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
         }) as Lark.EventDispatcher)
       : eventDispatcher;
     const chatHistories = new Map<string, HistoryEntry[]>();
+    const historyStateStore = getFeishuRuntime().state.openSyncKeyedStore<PersistedChannelHistory>({
+      namespace: "channel-history-v1",
+      maxEntries: 1000,
+      defaultTtlMs: 24 * 60 * 60_000,
+    });
+    const channelHistory = createChannelHistoryWindow({
+      historyMap: chatHistories,
+      persistence: {
+        store: createChannelHistoryPersistence(historyStateStore),
+        keyPrefix: accountId,
+      },
+    });
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
     const channelRuntime = params.channelRuntime?.inbound
       ? params.channelRuntime
@@ -559,6 +589,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       channelRuntime,
       runtime,
       chatHistories,
+      channelHistory,
       fireAndForget: params.fireAndForget ?? true,
       vcAutoJoin: account.config.vcAutoJoin === true,
       abortSignal,

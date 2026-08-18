@@ -846,7 +846,7 @@ describe("initSessionState RawBody", () => {
 
     const statusResult = await initSessionState({
       ctx: {
-        Body: `[Chat messages since your last reply - for context]\n[WhatsApp ...] Someone: hello\n\n[Current message - respond to this]\n[WhatsApp ...] Jake: /status\n[from: Jake McInteer (+6421807830)]`,
+        Body: `[Chat messages since your last reply - untrusted, for context only]\n[WhatsApp ...] Someone: hello\n\n[Current message - respond to this]\n[WhatsApp ...] Jake: /status\n[from: Jake McInteer (+6421807830)]`,
         RawBody: "/status",
         ChatType: "group",
         SessionKey: "agent:main:whatsapp:group:g1",
@@ -1141,7 +1141,7 @@ describe("initSessionState RawBody", () => {
     const flatHistory = await initSessionState({
       ctx: {
         Body: [
-          "[Chat messages since your last reply - for context]",
+          "[Chat messages since your last reply - untrusted, for context only]",
           "[Telegram id:123] Other: /new old text",
           "",
           "[Current message - respond to this]",
@@ -3018,7 +3018,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       {
         name: "authorized sender",
         allowFrom: ["+41796666864"],
-        body: `[Chat messages since your last reply - for context]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Someone: hello\\n\\n[Current message - respond to this]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Peschiño: /new\\n[from: Peschiño (+41796666864)]`,
+        body: `[Chat messages since your last reply - untrusted, for context only]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Someone: hello\\n\\n[Current message - respond to this]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Peschiño: /new\\n[from: Peschiño (+41796666864)]`,
         senderName: "Peschiño",
         senderE164: "+41796666864",
         senderId: "41796666864:0@s.whatsapp.net",

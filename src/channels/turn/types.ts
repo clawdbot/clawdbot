@@ -289,6 +289,8 @@ export type ChannelTurnHistoryFinalizeOptions = {
   historyKey?: string;
   historyMap?: Map<string, HistoryEntry[]>;
   limit?: number;
+  /** Consumes exactly the immutable history snapshot included in this turn. */
+  consumeSnapshot?: () => MaybePromise<void>;
 };
 
 /** Options for recording history when an inbound event is dropped before dispatch. */

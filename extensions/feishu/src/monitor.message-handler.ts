@@ -1,3 +1,4 @@
+import type { ChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 // Feishu plugin module implements monitor.message handler behavior.
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -19,6 +20,7 @@ type FeishuMessageReceiveHandlerContext = {
   accountId: string;
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
+  channelHistory?: ChannelHistoryWindow;
   fireAndForget?: boolean;
   handleMessage: (params: {
     cfg: ClawdbotConfig;
@@ -28,6 +30,7 @@ type FeishuMessageReceiveHandlerContext = {
     runtime?: RuntimeEnv;
     channelRuntime?: PluginRuntime["channel"];
     chatHistories?: Map<string, HistoryEntry[]>;
+    channelHistory?: ChannelHistoryWindow;
     accountId?: string;
     processingClaim?: FeishuMessageProcessingClaim;
     messageDedupeKey?: string;
@@ -173,6 +176,7 @@ export function createFeishuMessageReceiveHandler({
   accountId,
   runtime,
   chatHistories,
+  channelHistory,
   fireAndForget,
   handleMessage,
   resolveDebounceText: resolveText,
@@ -225,6 +229,7 @@ export function createFeishuMessageReceiveHandler({
         runtime,
         channelRuntime,
         chatHistories,
+        channelHistory,
         accountId,
         processingClaim,
         messageDedupeKey,

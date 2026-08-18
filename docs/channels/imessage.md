@@ -339,6 +339,8 @@ If disabling SIP is not acceptable for your threat model:
     - with no configured patterns, mention gating cannot be enforced
     - control commands from authorized senders bypass mention gating
 
+    Mention gating controls activation, not context visibility. For admitted local groups, messages that do not mention the agent are retained in a bounded, restart-safe pending window. When a later message activates the group session, OpenClaw supplies that text plus managed local image and document references as explicitly untrusted context. The window is consumed only after a successful reply; a failed turn keeps it for recovery. Remote-host attachment paths remain text-only pending context because they are not local managed references on the gateway host.
+
     Per-group `systemPrompt`:
 
     Each entry under `channels.imessage.groups.*` accepts an optional `systemPrompt` string, injected into the agent's system prompt on every turn that handles a message in that group. Resolution mirrors `channels.whatsapp.groups`:

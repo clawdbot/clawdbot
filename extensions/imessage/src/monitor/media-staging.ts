@@ -159,6 +159,7 @@ export async function stageIMessageAttachments(
   params: {
     maxBytes: number;
     allowedRoots?: readonly string[];
+    subdir?: string;
     deps?: StageIMessageAttachmentsDeps;
   },
 ): Promise<StagedIMessageAttachments> {
@@ -186,7 +187,7 @@ export async function stageIMessageAttachments(
       const saved = await save(
         media.buffer,
         media.contentType,
-        "inbound",
+        params.subdir ?? "inbound",
         params.maxBytes,
         media.originalFilename,
       );
@@ -195,6 +196,7 @@ export async function stageIMessageAttachments(
         path: saved.path,
         contentType,
         kind: kindFromMime(contentType) ?? "unknown",
+        sizeBytes: saved.size,
       });
     } catch (err) {
       unavailableCount += 1;

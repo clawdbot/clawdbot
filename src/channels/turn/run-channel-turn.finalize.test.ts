@@ -439,6 +439,43 @@ describe("channel turn finalize", () => {
     expect(historyMap.get("room-1")).toStrictEqual([]);
   });
 
+  it("consumes a persistent history snapshot only after successful dispatch", async () => {
+    const consumeSnapshot = vi.fn(async () => {});
+    const base = {
+      channel: "test",
+      routeSessionKey: "agent:main:test:group:room-1",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(),
+      history: {
+        isGroup: true,
+        historyKey: "room-1",
+        limit: 50,
+        consumeSnapshot,
+      },
+    };
+
+    await expect(
+      runPreparedChannelTurn({
+        ...base,
+        runDispatch: vi.fn(async () => {
+          throw new Error("model failed");
+        }),
+      }),
+    ).rejects.toThrow("model failed");
+    expect(consumeSnapshot).not.toHaveBeenCalled();
+
+    await runPreparedChannelTurn({
+      ...base,
+      recordInboundSession: createRecordInboundSession(),
+      runDispatch: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      })),
+    });
+    expect(consumeSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("cleans up pre-created dispatchers when session recording fails", async () => {
     const events: string[] = [];
     const recordError = new Error("session store failed");

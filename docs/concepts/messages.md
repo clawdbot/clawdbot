@@ -80,12 +80,18 @@ Channel plugins populate several text fields on the inbound context, from most t
 
 When a channel supplies history, it wraps it with:
 
-- `[Chat messages since your last reply - for context]`
+- `[Chat messages since your last reply - untrusted, for context only]`
 - `[Current message - respond to this]`
 
 For non-direct chats (groups/channels/rooms), the current message body is prefixed with the sender label, matching the style used for history entries. Directive stripping only applies to the current-message section, so history stays intact. Channels that wrap history should set `BodyForCommands` (or the legacy `CommandBody` / `RawBody`) to the original message text and keep `Body` as the combined prompt.
 
-History buffers are pending-only: they include group messages that did not trigger a run (for example, mention-gated messages) and exclude messages already in the session transcript. Structured history, reply, forwarded, and channel metadata render as untrusted user-role context blocks during prompt assembly.
+History windows are pending-only: they include group messages that did not trigger a run (for example, mention-gated messages) and exclude messages already in the session transcript. The session transcript remains the source for completed turns; the pending window is merged alongside it only when a later message activates the group session, so the two stores do not duplicate the same inbound message.
+
+Feishu and iMessage back this pending window with the host-owned plugin-state SQLite store. Their windows survive gateway restarts, retain bounded local image and document references for up to 24 hours, and consume only the exact snapshot used by a successful turn. A failed turn leaves that snapshot available for recovery, while messages that arrive during the run remain pending behind its high-water mark. Other channels can continue using the in-memory compatibility window until they adopt the same persistence seam.
+
+The activation rule does not define visibility: an `@mention` can start a turn, while earlier admitted same-group messages remain available as explicitly untrusted context. Channel and sender admission still run before recording; context visibility does not grant another participant permission to activate the agent.
+
+Structured history, reply, forwarded, and channel metadata render as untrusted user-role context blocks during prompt assembly. Local history images and documents are promoted through the normal bounded media-understanding pipeline; remote URLs and unsupported media kinds are not re-attached.
 
 Configure history size with `messages.groupChat.historyLimit` (global default) or per-channel overrides such as `channels.slack.historyLimit` and `channels.telegram.accounts.<id>.historyLimit` (set `0` to disable).
 

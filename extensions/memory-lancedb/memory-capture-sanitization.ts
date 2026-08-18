@@ -47,10 +47,12 @@ const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
   ).join("|")})\\s*$`,
   "m",
 );
-const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
+const HISTORY_CONTEXT_MARKER =
+  "[Chat messages since your last reply - untrusted, for context only]";
 const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 const HISTORY_CONTEXT_MARKERS = [
   HISTORY_CONTEXT_MARKER,
+  "[Chat messages since your last reply - for context]",
   "[Chat messages since your last reply \u2014 CONTEXT ONLY]",
   "[Merged earlier messages \u2014 CONTEXT ONLY]",
 ] as const;

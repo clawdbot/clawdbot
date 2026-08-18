@@ -39,8 +39,18 @@ function emit(params: {
   });
 }
 
-function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions): void {
-  if (!params?.isGroup || !params.historyKey || !params.historyMap || params.limit === undefined) {
+async function finalizePendingHistoryAfterTurn(
+  params?: ChannelTurnHistoryFinalizeOptions,
+  options: { consumeSnapshot: boolean } = { consumeSnapshot: true },
+): Promise<void> {
+  if (!params?.isGroup || !params.historyKey || params.limit === undefined) {
+    return;
+  }
+  if (options.consumeSnapshot && params.consumeSnapshot) {
+    await params.consumeSnapshot();
+    return;
+  }
+  if (!params.historyMap) {
     return;
   }
   clearChannelHistoryIfEnabled({
@@ -228,13 +238,13 @@ async function runPreparedChannelTurnCoreInTrace<
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
   const outboundEchoDrop = resolveOutboundEchoDrop(params);
   if (outboundEchoDrop) {
-    clearPendingHistoryAfterTurn(params.history);
+    await finalizePendingHistoryAfterTurn(params.history, { consumeSnapshot: false });
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
-    clearPendingHistoryAfterTurn(params.history);
+    await finalizePendingHistoryAfterTurn(params.history, { consumeSnapshot: false });
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
   }
@@ -354,7 +364,7 @@ async function runPreparedChannelTurnCoreInTrace<
       admission: admission.kind,
     },
   });
-  clearPendingHistoryAfterTurn(params.history);
+  await finalizePendingHistoryAfterTurn(params.history);
 
   return {
     admission,

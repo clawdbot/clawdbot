@@ -77,6 +77,8 @@ openclaw pairing approve feishu <CODE>
 - Set `true` or `false` explicitly to override; per-group override: `channels.feishu.groups.<chat_id>.requireMention`.
 - Broadcast-only `@all` and `@_all` are not treated as bot mentions. A message that mentions both `@all` and the bot directly still counts as a bot mention.
 
+Mention gating controls activation, not context visibility. For admitted groups, Feishu keeps a bounded restart-safe pending window of same-group human messages, including local image and document references. Earlier messages are marked as untrusted context when a later permitted sender mentions the bot. `contextVisibility: "allowlist"` keeps denied senders out of that window; `contextVisibility: "all"` can include them as context without allowing them to activate the agent.
+
 ## Group configuration examples
 
 ### Allow all groups, no @mention required

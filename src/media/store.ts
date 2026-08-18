@@ -30,6 +30,8 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
+/** Media retained for the bounded, restart-safe channel context window. */
+export const CHANNEL_HISTORY_MEDIA_SUBDIR = "channel-history";
 
 // The outgoing tree is owned by the SQLite managed-media reaper: originals
 // there are referenced by durable chat-history records, and the legacy
@@ -40,6 +42,8 @@ const OUTBOUND_STAGING_SUBDIR = "outbound";
 // Match delivery-queue orphan grace: staged files get a full day to reach
 // every direct, streamed, fan-out, or queue-owned delivery path.
 const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
+/** Matches the default persisted channel-history time window. */
+export const CHANNEL_HISTORY_MEDIA_TTL_MS = 24 * 60 * 60_000;
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
@@ -252,6 +256,7 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
     if (
       !entry.isDirectory() ||
       entry.name === PLAYBACK_TRANSCODE_SUBDIR ||
+      entry.name === CHANNEL_HISTORY_MEDIA_SUBDIR ||
       entry.name === MANAGED_OUTGOING_SUBDIR
     ) {
       continue;
@@ -268,6 +273,19 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
       await fs.rmdir(scopedDir).catch(() => {});
     }
   }
+}
+
+/** Prunes only media owned by the persistent channel-history window. */
+export async function pruneChannelHistoryMedia(): Promise<void> {
+  const historyDir = resolveMediaScopedDir(
+    CHANNEL_HISTORY_MEDIA_SUBDIR,
+    "pruneChannelHistoryMedia",
+  );
+  await openMediaStore(MAX_BYTES, historyDir).pruneExpired({
+    ttlMs: CHANNEL_HISTORY_MEDIA_TTL_MS,
+    recursive: true,
+    pruneEmptyDirs: true,
+  });
 }
 
 async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {

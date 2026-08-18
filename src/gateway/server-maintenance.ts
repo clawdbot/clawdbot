@@ -14,7 +14,12 @@ import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sql
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
-import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
+import {
+  cleanOldMedia,
+  pruneChannelHistoryMedia,
+  pruneOutboundMedia,
+  prunePlaybackTranscodeCache,
+} from "../media/store.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import {
@@ -432,10 +437,13 @@ export function startGatewayMaintenanceTimers(params: {
     if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
-    const cleanup =
+    const transientCleanup =
       typeof ttlMs === "number"
         ? cleanOldMedia(ttlMs, { recursive: true, pruneEmptyDirs: true })
         : pruneOutboundMedia();
+    const cleanup = Promise.all([transientCleanup, pruneChannelHistoryMedia()]).then(
+      () => undefined,
+    );
     mediaCleanupInFlight = cleanup
       .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);

@@ -59,7 +59,10 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
-import { appendRecentHistoryImageContext } from "./history-media.js";
+import {
+  appendRecentHistoryImageContext,
+  promoteRecentInboundHistoryMedia,
+} from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -683,6 +686,7 @@ export async function tryDispatchAcpReplyCore(params: {
   };
   let admittedRunContext: AdmittedRunContext | undefined;
   try {
+    promoteRecentInboundHistoryMedia(params.ctx);
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
       auditTerminalOutcome = "blocked";

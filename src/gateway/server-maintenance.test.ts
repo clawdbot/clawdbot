@@ -12,6 +12,7 @@ import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
+const pruneChannelHistoryMediaMock = vi.fn(async () => {});
 const pruneOutboundMediaMock = vi.fn(async () => {});
 const prunePlaybackTranscodeCacheMock = vi.fn(async () => {});
 const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
@@ -49,6 +50,7 @@ vi.mock("../media/store.js", async () => {
   return {
     ...actual,
     cleanOldMedia: cleanOldMediaMock,
+    pruneChannelHistoryMedia: pruneChannelHistoryMediaMock,
     pruneOutboundMedia: pruneOutboundMediaMock,
     prunePlaybackTranscodeCache: prunePlaybackTranscodeCacheMock,
   };
@@ -173,6 +175,7 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
+    pruneChannelHistoryMediaMock.mockReset().mockResolvedValue(undefined);
     pruneOutboundMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
     pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
@@ -214,11 +217,13 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(1);
+    expect(pruneChannelHistoryMediaMock).toHaveBeenCalledTimes(1);
     expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(1);
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(prunePlaybackTranscodeCacheMock).toHaveBeenCalledTimes(2);
+    expect(pruneChannelHistoryMediaMock).toHaveBeenCalledTimes(2);
     expect(pruneOutboundMediaMock).toHaveBeenCalledTimes(2);
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
 

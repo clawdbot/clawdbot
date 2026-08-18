@@ -36,6 +36,11 @@ describe("cleanOldMedia managed-subtree retention", () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const mediaDir = await store.ensureMediaDir();
     const inbound = await store.saveMediaBuffer(Buffer.from("inbound"), "image/png");
+    const channelHistory = await store.saveMediaBuffer(
+      Buffer.from("channel history"),
+      "application/pdf",
+      store.CHANNEL_HISTORY_MEDIA_SUBDIR,
+    );
     const historyOriginal = await store.saveMediaBuffer(
       Buffer.from("history original"),
       "image/png",
@@ -75,14 +80,21 @@ describe("cleanOldMedia managed-subtree retention", () => {
     await fs.writeFile(legacyRecordPath, "{}");
     const past = Date.now() - 60 * 60_000;
     await Promise.all(
-      [inbound.path, historyOriginal.path, legacyOrphanPath, legacyRecordPath].map((filePath) =>
-        fs.utimes(filePath, past / 1000, past / 1000),
-      ),
+      [
+        inbound.path,
+        channelHistory.path,
+        historyOriginal.path,
+        legacyOrphanPath,
+        legacyRecordPath,
+      ].map((filePath) => fs.utimes(filePath, past / 1000, past / 1000)),
     );
 
     await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
 
     await expect(fs.stat(inbound.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(channelHistory.path)).resolves.toMatchObject({
+      size: channelHistory.size,
+    });
     await expect(fs.stat(historyOriginal.path)).resolves.toMatchObject({
       size: historyOriginal.size,
     });
@@ -98,6 +110,11 @@ describe("cleanOldMedia managed-subtree retention", () => {
 
     expect(cleanup.deletedFileCount).toBe(0);
     await expect(fs.stat(legacyOrphanPath)).resolves.toMatchObject({ size: 15 });
+
+    const expiredHistory = Date.now() - store.CHANNEL_HISTORY_MEDIA_TTL_MS - 1_000;
+    await fs.utimes(channelHistory.path, expiredHistory / 1000, expiredHistory / 1000);
+    await store.pruneChannelHistoryMedia();
+    await expect(fs.stat(channelHistory.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("retires only stale outbound staging and its trusted HTML provenance", async () => {

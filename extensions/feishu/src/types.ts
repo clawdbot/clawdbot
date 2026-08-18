@@ -91,6 +91,7 @@ export interface FeishuProbeResult extends BaseProbeResult {
 export type FeishuMediaInfo = {
   path?: string;
   contentType?: string;
+  sizeBytes?: number;
   kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 

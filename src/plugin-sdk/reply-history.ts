@@ -6,8 +6,12 @@
  */
 export type { HistoryEntry, HistoryMediaEntry } from "../auto-reply/reply/history.types.js";
 export {
+  createChannelHistoryPersistence,
   createChannelHistoryWindow,
+  type ChannelHistoryPersistence,
+  type ChannelHistorySnapshot,
   type ChannelHistoryWindow,
+  type PersistedChannelHistory,
 } from "../channels/turn/history-window.js";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,

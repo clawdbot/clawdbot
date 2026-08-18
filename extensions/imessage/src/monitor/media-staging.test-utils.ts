@@ -39,7 +39,12 @@ describe("stageIMessageAttachments", () => {
       ),
     ).resolves.toEqual({
       attachments: [
-        { path: "/state/media/inbound/saved.png", contentType: "image/png", kind: "image" },
+        {
+          path: "/state/media/inbound/saved.png",
+          contentType: "image/png",
+          kind: "image",
+          sizeBytes: 9,
+        },
       ],
       unavailableCount: 0,
     });

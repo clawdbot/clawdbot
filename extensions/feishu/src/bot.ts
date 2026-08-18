@@ -15,10 +15,13 @@ import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { CHANNEL_HISTORY_MEDIA_SUBDIR } from "openclaw/plugin-sdk/media-store";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
+  type ChannelHistoryWindow,
+  type ChannelHistorySnapshot,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -290,6 +293,7 @@ export async function handleFeishuMessage(params: {
   runtime?: RuntimeEnv;
   channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
+  channelHistory?: ChannelHistoryWindow;
   accountId?: string;
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
@@ -303,6 +307,7 @@ export async function handleFeishuMessage(params: {
     runtime,
     channelRuntime,
     chatHistories,
+    channelHistory: channelHistoryOverride,
     accountId,
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
@@ -311,6 +316,9 @@ export async function handleFeishuMessage(params: {
 
   // Resolve account with merged config
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
+  const channelHistory =
+    channelHistoryOverride ??
+    (chatHistories ? createChannelHistoryWindow({ historyMap: chatHistories }) : undefined);
   const feishuCfg = account.config;
 
   const log = runtime?.log ?? console.log;
@@ -570,6 +578,55 @@ export async function handleFeishuMessage(params: {
   // epoch string; fall back to Date.now() when absent or malformed.
   const messageCreateTimeMs =
     parseStrictNonNegativeInteger(event.message.create_time) ?? Date.now();
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "feishu",
+    accountId: account.accountId,
+  });
+  const recordGroupContext = async () => {
+    if (
+      !isGroup ||
+      ctx.senderType !== "user" ||
+      broadcastAgents ||
+      !channelHistory ||
+      !groupHistoryKey
+    ) {
+      return;
+    }
+    try {
+      await channelHistory.recordWithMedia({
+        historyKey: groupHistoryKey,
+        limit: historyLimit,
+        entry: {
+          sender: ctx.senderOpenId,
+          body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+          timestamp: messageCreateTimeMs,
+          messageId: ctx.messageId,
+        },
+        media: async () =>
+          toInboundMediaFactsWithMetadata(
+            await resolveFeishuMediaList({
+              cfg,
+              messageId: ctx.messageId,
+              messageType: event.message.message_type,
+              content: event.message.content,
+              maxBytes: (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024,
+              subdir: CHANNEL_HISTORY_MEDIA_SUBDIR,
+              log,
+              accountId: account.accountId,
+            }),
+          ),
+        mediaMaxBytes: (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024,
+        messageId: ctx.messageId,
+      });
+    } catch (err) {
+      // recordWithMedia writes the text entry before resolving media. Keep that
+      // admitted context and never turn an attachment download failure into a dispatch.
+      log(
+        `feishu[${account.accountId}]: retained text-only group history for ${ctx.messageId} after media failure: ${String(err)}`,
+      );
+    }
+  };
 
   let requireMention = false; // DMs never require mention; groups may override below
   if (isGroup) {
@@ -637,6 +694,15 @@ export async function handleFeishuMessage(params: {
     });
     if (groupSenderActivationIngress.senderAccess.decision !== "allow") {
       log(`feishu: sender ${ctx.senderOpenId} not in group ${ctx.chatId} sender allowlist`);
+      if (
+        evaluateSupplementalContextVisibility({
+          mode: contextVisibilityMode,
+          kind: "history",
+          senderAllowed: false,
+        }).include
+      ) {
+        await recordGroupContext();
+      }
       return;
     }
     if (groupSenderActivationIngress.ingress.admission !== "dispatch") {
@@ -645,17 +711,14 @@ export async function handleFeishuMessage(params: {
       // the mentioned handler's broadcast dispatch writes the turn directly into all
       // agent sessions — buffering here would cause duplicate replay when this account
       // later becomes active via the channel history window.
-      if (!broadcastAgents && chatHistories && groupHistoryKey) {
-        createChannelHistoryWindow({ historyMap: chatHistories }).record({
-          historyKey: groupHistoryKey,
-          limit: historyLimit,
-          entry: {
-            sender: ctx.senderOpenId,
-            body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
-            timestamp: messageCreateTimeMs,
-            messageId: ctx.messageId,
-          },
-        });
+      if (
+        evaluateSupplementalContextVisibility({
+          mode: contextVisibilityMode,
+          kind: "history",
+          senderAllowed: true,
+        }).include
+      ) {
+        await recordGroupContext();
       }
       return;
     }
@@ -957,12 +1020,6 @@ export async function handleFeishuMessage(params: {
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
-    const contextVisibilityMode = resolveChannelContextVisibilityMode({
-      cfg: effectiveCfg,
-      channel: "feishu",
-      accountId: account.accountId,
-    });
-
     // Do not enqueue inbound user previews as system events.
     // System events are prepended to future prompts and can be misread as
     // authoritative transcript turns.
@@ -1153,8 +1210,9 @@ export async function handleFeishuMessage(params: {
     let combinedBody = body;
     const historyKey = groupHistoryKey;
 
-    if (isGroup && historyKey && chatHistories) {
-      const channelHistory = createChannelHistoryWindow({ historyMap: chatHistories });
+    let historySnapshot: ChannelHistorySnapshot | undefined;
+    if (isGroup && historyKey && channelHistory) {
+      historySnapshot = channelHistory.snapshot({ historyKey, limit: historyLimit });
       combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: historyLimit,
@@ -1168,14 +1226,16 @@ export async function handleFeishuMessage(params: {
             body: entry.body,
             envelope: envelopeOptions,
           }),
+        snapshot: historySnapshot,
       });
     }
 
     const inboundHistory =
-      isGroup && historyKey && historyLimit > 0 && chatHistories
-        ? createChannelHistoryWindow({ historyMap: chatHistories }).buildInboundHistory({
+      isGroup && historyKey && historyLimit > 0 && channelHistory
+        ? channelHistory.buildInboundHistory({
             historyKey,
             limit: historyLimit,
+            snapshot: historySnapshot,
           })
         : undefined;
 
@@ -1563,10 +1623,11 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: failed to commit broadcast replay guard: ${String(err)}`,
           ),
         onAdopted: () => {
-          if (isGroup && historyKey && chatHistories) {
-            createChannelHistoryWindow({ historyMap: chatHistories }).clear({
+          if (isGroup && historyKey && channelHistory) {
+            channelHistory.consume({
               historyKey,
               limit: historyLimit,
+              snapshot: historySnapshot ?? { entries: [] },
             });
           }
         },
@@ -1903,6 +1964,15 @@ export async function handleFeishuMessage(params: {
               historyKey,
               historyMap: chatHistories,
               limit: historyLimit,
+              consumeSnapshot:
+                isGroup && historyKey && channelHistory && historySnapshot
+                  ? () =>
+                      channelHistory.consume({
+                        historyKey,
+                        limit: historyLimit,
+                        snapshot: historySnapshot,
+                      })
+                  : undefined,
             },
             dispatcherOptions,
             delivery,

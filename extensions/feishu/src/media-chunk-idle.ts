@@ -73,11 +73,12 @@ export function saveMediaStreamWithIdleTimeout(
   maxBytes: number,
   fileName: string | undefined,
   chunkTimeoutMs: number,
+  subdir = "inbound",
 ): Promise<SavedMedia> {
   return saveMediaStream(
     withChunkIdleTimeout(stream, chunkTimeoutMs),
     contentType,
-    "inbound",
+    subdir,
     maxBytes,
     fileName,
   );

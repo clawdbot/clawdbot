@@ -69,6 +69,7 @@ import type {
   InternalGetReplyOptions as BaseInternalGetReplyOptions,
   ReplySessionBinding,
 } from "./get-reply.types.js";
+import { promoteRecentInboundHistoryMedia } from "./history-media.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -337,6 +338,10 @@ export async function getReplyFromConfig(
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
+  // Pending group history is untrusted prompt context, but its managed local
+  // media references still need to pass through the ordinary attachment
+  // understanding pipeline. Promotion is bounded and idempotent.
+  promoteRecentInboundHistoryMedia(finalized);
   const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
     const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
     const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;

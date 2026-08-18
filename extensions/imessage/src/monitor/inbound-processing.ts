@@ -29,7 +29,12 @@ import {
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import {
+  createChannelHistoryWindow,
+  type ChannelHistorySnapshot,
+  type ChannelHistoryWindow,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -390,7 +395,11 @@ type IMessageInboundReactionDecision = {
 };
 
 type IMessageInboundDecision =
-  | { kind: "drop"; reason: string }
+  | {
+      kind: "drop";
+      reason: string;
+      history?: { historyKey: string; entry: HistoryEntry };
+    }
   | { kind: "pairing"; senderId: string }
   | IMessageInboundReactionDecision
   | IMessageInboundDispatchDecision;
@@ -840,19 +849,23 @@ export async function resolveIMessageInboundDecision(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     params.logVerbose?.(`imessage: skipping group message (no mention)`);
-    createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
-      historyKey: historyKey ?? "",
-      limit: params.historyLimit,
-      entry: historyKey
+    return {
+      kind: "drop",
+      reason: "no mention",
+      ...(historyKey
         ? {
-            sender: senderNormalized,
-            body: [bodyText, formatMediaPlaceholderText(mediaFacts)].filter(Boolean).join("\n"),
-            timestamp: createdAt,
-            messageId: params.message.id ? String(params.message.id) : undefined,
+            history: {
+              historyKey,
+              entry: {
+                sender: senderNormalized,
+                body: [bodyText, formatMediaPlaceholderText(mediaFacts)].filter(Boolean).join("\n"),
+                timestamp: createdAt,
+                messageId: params.message.id ? String(params.message.id) : undefined,
+              },
+            },
           }
-        : null,
-    });
-    return { kind: "drop", reason: "no mention" };
+        : {}),
+    };
   }
 
   // Per-chat_id `systemPrompt` wins; fall back to the `groups["*"]` wildcard
@@ -902,6 +915,7 @@ export async function buildIMessageInboundContext(params: {
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  channelHistory?: ChannelHistoryWindow;
   dmHistory?: IMessageDmHistoryContext;
   buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
@@ -910,6 +924,7 @@ export async function buildIMessageInboundContext(params: {
   chatTarget?: string;
   imessageTo: string;
   inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
+  historySnapshot?: ChannelHistorySnapshot;
 }> {
   const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
@@ -963,11 +978,17 @@ export async function buildIMessageInboundContext(params: {
   });
 
   let combinedBody = body;
+  const channelHistory =
+    params.channelHistory ?? createChannelHistoryWindow({ historyMap: params.groupHistories });
+  let historySnapshot: ChannelHistorySnapshot | undefined;
   if (!decision.isGroup && params.dmHistory?.body) {
     combinedBody = `${params.dmHistory.body}\n\n${combinedBody}`;
   }
   if (decision.isGroup && decision.historyKey) {
-    const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
+    historySnapshot = channelHistory.snapshot({
+      historyKey: decision.historyKey,
+      limit: params.historyLimit,
+    });
     combinedBody = channelHistory.buildPendingContext({
       historyKey: decision.historyKey,
       limit: params.historyLimit,
@@ -982,6 +1003,7 @@ export async function buildIMessageInboundContext(params: {
           senderLabel: entry.sender,
           envelope: envelopeOptions,
         }),
+      snapshot: historySnapshot,
     });
   }
 
@@ -1002,9 +1024,10 @@ export async function buildIMessageInboundContext(params: {
     !decision.isGroup && params.dmHistory?.inboundHistory
       ? params.dmHistory.inboundHistory
       : decision.isGroup && decision.historyKey && params.historyLimit > 0
-        ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
+        ? channelHistory.buildInboundHistory({
             historyKey: decision.historyKey,
             limit: params.historyLimit,
+            snapshot: historySnapshot,
           })
         : undefined;
 
@@ -1076,7 +1099,14 @@ export async function buildIMessageInboundContext(params: {
     },
   });
 
-  return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
+  return {
+    ctxPayload,
+    fromLabel,
+    chatTarget,
+    imessageTo,
+    inboundHistory,
+    historySnapshot,
+  };
 }
 
 function buildIMessageEchoScope(params: {

@@ -377,7 +377,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
     - config: `channels.whatsapp.historyLimit`, fallback `messages.groupChat.historyLimit`
     - `0` disables
 
-    Injection markers: `[Chat messages since your last reply - for context]` and `[Current message - respond to this]`.
+    Injection markers: `[Chat messages since your last reply - untrusted, for context only]` and `[Current message - respond to this]`.
 
   </Accordion>
 

@@ -139,8 +139,18 @@ describe("iMessage monitor attachment policy", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not stage local attachments for messages dropped by inbound policy", async () => {
-    stageIMessageAttachmentsMock.mockResolvedValue({ attachments: [], unavailableCount: 0 });
+  it("stages admitted no-mention attachments into persistent channel history", async () => {
+    stageIMessageAttachmentsMock.mockResolvedValue({
+      attachments: [
+        {
+          path: "/state/media/channel-history/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          sizeBytes: 123,
+        },
+      ],
+      unavailableCount: 0,
+    });
     readChannelAllowFromStoreMock.mockResolvedValue([]);
 
     const attachmentPath = "/Users/openclaw/Library/Messages/Attachments/AA/BB/photo.heic";
@@ -202,7 +212,244 @@ describe("iMessage monitor attachment policy", () => {
     });
 
     await vi.waitFor(() => expect(readChannelAllowFromStoreMock).toHaveBeenCalled());
+    expect(stageIMessageAttachmentsMock).toHaveBeenCalledOnce();
+    expect(stageIMessageAttachmentsMock).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ subdir: "channel-history" }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it("does not stage attachments for a group rejected by channel policy", async () => {
+    let onNotification:
+      | ((message: { method: string; params: unknown }) => void | Promise<void>)
+      | undefined;
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      onNotification = params?.onNotification;
+      return {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 2,
+                guid: "rejected-media-policy-guid",
+                chat_id: 456,
+                sender: "+15550002222",
+                is_from_me: false,
+                is_group: true,
+                text: "blocked group",
+                attachments: [
+                  {
+                    original_path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
+                    mime_type: "application/pdf",
+                    missing: false,
+                  },
+                ],
+              },
+            },
+          });
+        }),
+        stop: vi.fn(async () => {}),
+      } as never;
+    });
+
+    await monitorIMessageProvider({
+      includeAttachments: true,
+      config: {
+        channels: {
+          imessage: {
+            includeAttachments: true,
+            attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+            dmPolicy: "open",
+            groupPolicy: "disabled",
+          },
+        },
+        session: { mainKey: "main" },
+      } as never,
+    });
+
     expect(stageIMessageAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it("carries a no-mention PDF into the next mentioned turn from the same group", async () => {
+    stageIMessageAttachmentsMock.mockImplementation(async (_attachments, options) =>
+      options.subdir === "channel-history"
+        ? {
+            attachments: [
+              {
+                path: "/state/media/channel-history/worksheet.pdf",
+                contentType: "application/pdf",
+                kind: "document",
+                sizeBytes: 529_000,
+              },
+            ],
+            unavailableCount: 0,
+          }
+        : { attachments: [], unavailableCount: 0 },
+    );
+    let onNotification:
+      | ((message: { method: string; params: unknown }) => void | Promise<void>)
+      | undefined;
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      onNotification = params?.onNotification;
+      return {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 10,
+                guid: "pdf-before-mention-guid",
+                chat_id: 789,
+                sender: "+15550003333",
+                is_from_me: false,
+                is_group: true,
+                text: "This is the worksheet",
+                attachments: [
+                  {
+                    original_path: "/Users/openclaw/Library/Messages/Attachments/worksheet.pdf",
+                    mime_type: "application/pdf",
+                    missing: false,
+                  },
+                ],
+              },
+            },
+          });
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 11,
+                guid: "mention-after-pdf-guid",
+                chat_id: 789,
+                sender: "+15550003333",
+                is_from_me: false,
+                is_group: true,
+                text: "@openclaw summarize the questions",
+                attachments: [],
+              },
+            },
+          });
+        }),
+        stop: vi.fn(async () => {}),
+      } as never;
+    });
+
+    await monitorIMessageProvider({
+      includeAttachments: true,
+      config: {
+        channels: {
+          imessage: {
+            includeAttachments: true,
+            attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+            dmPolicy: "open",
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+        session: { mainKey: "main" },
+      } as never,
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledOnce();
+    const dispatch = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0];
+    expect(dispatch?.ctx.InboundHistory).toEqual([
+      expect.objectContaining({
+        messageId: "10",
+        media: [
+          expect.objectContaining({
+            path: "/state/media/channel-history/worksheet.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("retains no-mention text when channel-history media staging fails", async () => {
+    stageIMessageAttachmentsMock
+      .mockRejectedValueOnce(new Error("staging unavailable"))
+      .mockResolvedValue({ attachments: [], unavailableCount: 0 });
+    let onNotification:
+      | ((message: { method: string; params: unknown }) => void | Promise<void>)
+      | undefined;
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      onNotification = params?.onNotification;
+      return {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 20,
+                guid: "history-media-failure-guid",
+                chat_id: 790,
+                sender: "+15550004444",
+                is_from_me: false,
+                is_group: true,
+                text: "The worksheet is attached",
+                attachments: [
+                  {
+                    original_path: "/Users/openclaw/Library/Messages/Attachments/worksheet.pdf",
+                    mime_type: "application/pdf",
+                    missing: false,
+                  },
+                ],
+              },
+            },
+          });
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 21,
+                guid: "mention-after-history-media-failure-guid",
+                chat_id: 790,
+                sender: "+15550004444",
+                is_from_me: false,
+                is_group: true,
+                text: "@openclaw what was attached?",
+                attachments: [],
+              },
+            },
+          });
+        }),
+        stop: vi.fn(async () => {}),
+      } as never;
+    });
+
+    await monitorIMessageProvider({
+      includeAttachments: true,
+      config: {
+        channels: {
+          imessage: {
+            includeAttachments: true,
+            attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+            dmPolicy: "open",
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+        session: { mainKey: "main" },
+      } as never,
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledOnce();
+    const dispatch = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0];
+    expect(dispatch?.ctx.InboundHistory).toEqual([
+      expect.objectContaining({
+        messageId: "20",
+        body: expect.stringContaining("The worksheet is attached"),
+      }),
+    ]);
   });
 
   it.each([

@@ -23,6 +23,7 @@ export type ChannelInboundMediaInput = {
   durationMs?: number | null;
   width?: number | null;
   height?: number | null;
+  sizeBytes?: number | null;
   transcribed?: boolean | null;
   messageId?: string | null;
 };
@@ -166,6 +167,7 @@ export function toHistoryMediaEntries(
       url: entry.url,
       contentType: entry.contentType,
       kind: entry.kind,
+      sizeBytes: entry.sizeBytes ?? undefined,
       messageId: entry.messageId,
     };
     if (entry.durationMs) {

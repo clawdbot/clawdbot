@@ -356,6 +356,7 @@ async function resolveSavedFeishuMedia(params: {
     | { buffer: Buffer; contentType?: string; fileName?: string };
   maxBytes: number;
   originalFilename?: string;
+  subdir?: string;
 }) {
   if ("saved" in params.result) {
     return params.result.saved;
@@ -366,7 +367,7 @@ async function resolveSavedFeishuMedia(params: {
   return await core.channel.media.saveMediaBuffer(
     params.result.buffer,
     contentType,
-    "inbound",
+    params.subdir ?? "inbound",
     params.maxBytes,
     params.result.fileName ?? params.originalFilename,
   );
@@ -398,8 +399,9 @@ export async function resolveFeishuMediaList(params: {
   maxBytes: number;
   log?: (msg: string) => void;
   accountId?: string;
+  subdir?: string;
 }): Promise<FeishuMediaInfo[]> {
-  const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
+  const { cfg, messageId, messageType, content, maxBytes, log, accountId, subdir } = params;
   const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) {
     return [];
@@ -427,11 +429,13 @@ export async function resolveFeishuMediaList(params: {
           type: "image",
           accountId,
           maxBytes,
+          ...(subdir ? { subdir } : {}),
         });
-        const saved = await resolveSavedFeishuMedia({ result, maxBytes });
+        const saved = await resolveSavedFeishuMedia({ result, maxBytes, subdir });
         out.push({
           path: saved.path,
           contentType: saved.contentType,
+          sizeBytes: saved.size,
           kind: "image",
         });
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
@@ -451,15 +455,18 @@ export async function resolveFeishuMediaList(params: {
           accountId,
           maxBytes,
           originalFilename: media.fileName,
+          ...(subdir ? { subdir } : {}),
         });
         const saved = await resolveSavedFeishuMedia({
           result,
           maxBytes,
           originalFilename: media.fileName,
+          subdir,
         });
         out.push({
           path: saved.path,
           contentType: saved.contentType,
+          sizeBytes: saved.size,
           kind: "video",
         });
         log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
@@ -489,15 +496,18 @@ export async function resolveFeishuMediaList(params: {
       accountId,
       maxBytes,
       originalFilename: mediaKeys.fileName,
+      ...(subdir ? { subdir } : {}),
     });
     const saved = await resolveSavedFeishuMedia({
       result,
       maxBytes,
       originalFilename: mediaKeys.fileName,
+      subdir,
     });
     out.push({
       path: saved.path,
       contentType: saved.contentType,
+      sizeBytes: saved.size,
       kind: resolveFeishuMediaKind(messageType),
     });
     log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);

@@ -4,10 +4,10 @@ import { normalizeHistoryMediaEntries, recordPendingHistoryEntryWithMedia } from
 import type { HistoryEntry } from "./history.types.js";
 
 describe("history media recording", () => {
-  it("keeps only bounded local image media", () => {
+  it("keeps only bounded local image and document media", () => {
     expect(
       normalizeHistoryMediaEntries({
-        limit: 2,
+        limit: 3,
         messageId: "msg-1",
         media: [
           { path: "/tmp/a.png", contentType: "image/png" },
@@ -19,6 +19,12 @@ describe("history media recording", () => {
       }),
     ).toEqual([
       { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
+      {
+        path: "/tmp/c.pdf",
+        contentType: "application/pdf",
+        kind: "document",
+        messageId: "msg-1",
+      },
       { path: "C:\\tmp\\d.jpg", kind: "image", messageId: "msg-1" },
     ]);
   });
@@ -101,7 +107,7 @@ describe("history media recording", () => {
     { path: "/tmp/telegram-document.png", contentType: undefined },
     { path: "/tmp/telegram-document.png", contentType: "application/pdf" },
     { path: "/tmp/telegram-document.png", contentType: "image/png" },
-  ])("never records authoritative documents with MIME $contentType as history images", (media) => {
+  ])("records authoritative documents with MIME $contentType as documents", (media) => {
     expect(
       normalizeHistoryMediaEntries({
         media: [
@@ -111,7 +117,32 @@ describe("history media recording", () => {
           },
         ],
       }),
-    ).toEqual([]);
+    ).toEqual([
+      {
+        ...media,
+        kind: "document",
+        messageId: undefined,
+      },
+    ]);
+  });
+
+  it("enforces the aggregate history attachment byte budget", () => {
+    expect(
+      normalizeHistoryMediaEntries({
+        maxBytes: 10,
+        media: [
+          { path: "/tmp/a.pdf", kind: "document", sizeBytes: 8 },
+          { path: "/tmp/b.png", kind: "image", sizeBytes: 4 },
+        ],
+      }),
+    ).toEqual([
+      {
+        path: "/tmp/a.pdf",
+        kind: "document",
+        sizeBytes: 8,
+        messageId: undefined,
+      },
+    ]);
   });
 
   it.each(["application/pdf", "application/zip", "text/plain"] as const)(
