@@ -26,7 +26,6 @@ import {
   createTargetedScriptLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
-  shouldRunCanvasA2uiNativeResourceCheck,
   shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
@@ -2108,70 +2107,6 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it("checks native A2UI resources when the copied resource tree changes", () => {
-    const result = detectChangedLanes([
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
-    ]);
-    const plan = createChangedCheckPlan(result);
-
-    expectLanes(result.lanes, {
-      apps: true,
-    });
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it("checks native A2UI resources when bundle inputs or generated outputs change", () => {
-    const result = detectChangedLanes([
-      "extensions/canvas/package.json",
-      "extensions/canvas/src/host/a2ui/.bundle.hash",
-      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
-      "pnpm-lock.yaml",
-    ]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it.each([
-    "apps/android/app/build.gradle.kts",
-    "apps/ios/project.yml",
-    "apps/linux/src-tauri/build.rs",
-    "apps/linux/src-tauri/src/canvas.rs",
-  ])("checks native A2UI ownership when %s changes", (ownerPath) => {
-    const result = detectChangedLanes([ownerPath]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
   });
 
   it.each([

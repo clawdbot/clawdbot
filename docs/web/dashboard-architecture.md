@@ -362,8 +362,8 @@ false`, never in a stable release (first appeared in 2026.7.2 betas). No
   binding gating, rate limits), byte-frozen approval.
 - **Widget hosting moves from `extensions/canvas` to core.** The canvas doc
   store, document wrapper, HTTP serving, and the `show_widget` tool become core
-  (`src/canvas/`); the plugin keeps the node-canvas control tool (`canvas`) and
-  A2UI. The `pluginSurfaceUrls["canvas"]` advertisement and
+  (`src/canvas/`); the plugin keeps the macOS node-panel presenter and the A2UI
+  dashboard content kind. The `pluginSurfaceUrls["canvas"]` advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
   stable. Discord Activities register a contextual presenter behind core's
   canonical `show_widget` tool.
@@ -383,7 +383,7 @@ Independent worktrees, Codex-built, review+land sequentially. Land-then-fix.
 | #   | Branch                               | Scope                                                                                                                                                                              | Depends on                       |
 | --- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | T1  | `claude/dashboard-remove-workspaces` | Delete workspaces plugin + UI + docs + i18n keys; doctor cleanup rule                                                                                                              | —                                |
-| T2  | `claude/dashboard-canvas-core`       | Promote widget hosting + `show_widget` to core; canvas plugin keeps node tool; zero behavior change                                                                                | —                                |
+| T2  | `claude/dashboard-canvas-core`       | Promote widget hosting + `show_widget` to core; Canvas plugin keeps the node-panel presenter and A2UI dashboard kind; zero behavior change                                         | —                                |
 | T3  | `claude/dashboard-domain`            | Agent-DB tables (schema bump), `board.*` RPCs + events, `dashboard` tool, `show_widget` pin/name/manifest args, tier-1 notices, reset-keeps-board                                  | T2                               |
 | T4  | `claude/dashboard-ui`                | Board face + tab strip + fluid auto-compact grid + chat dock (left/right/bottom/hidden) + transcript pin affordance + sidebar board face + reset confirm                           | T3 (mock-first via dev fixtures) |
 | T5  | `claude/dashboard-capabilities`      | Grant store/UI + byte freezing; move `html` widgets onto the shared sandbox host; host tools (`openclaw.prompt.send/state.emit/data.read/cron.trigger`); `net` CSP; authoring shim | T3, T4                           |

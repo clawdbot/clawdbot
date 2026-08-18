@@ -326,7 +326,6 @@ export type OpenClawGatewayDiscoveryAdvertiseContext = {
   gatewayTlsEnabled: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable: boolean;
-  canvasPort?: number;
   tailnetDns?: string;
   sshPort?: number;
   cliPath?: string;

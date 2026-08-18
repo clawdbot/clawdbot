@@ -1,16 +1,15 @@
 /**
- * HTTP handler for serving bundled A2UI assets through Canvas host routes.
+ * HTTP handler for serving bundled A2UI renderer assets.
  */
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { A2UI_PATH, injectCanvasRuntime, isA2uiPath } from "./a2ui-shared.js";
+import { A2UI_PATH, isA2uiPath } from "./a2ui-shared.js";
 import { resolveFileWithinRoot } from "./file-resolver.js";
 
-export { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./a2ui-shared.js";
+export { A2UI_PATH, CANVAS_HOST_PATH } from "./a2ui-shared.js";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
@@ -18,6 +17,12 @@ let cachedA2uiResolvedAtMs = 0;
 const A2UI_ROOT_RETRY_NULL_AFTER_MS = 10_000;
 
 type A2uiRootResolver = () => Promise<string | null>;
+type A2uiHttpRequest = { method?: string; url?: string };
+type A2uiHttpResponse = {
+  statusCode: number;
+  setHeader(name: string, value: number | string | readonly string[]): void;
+  end(chunk?: Buffer | string): void;
+};
 
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -44,10 +49,8 @@ async function resolveA2uiRoot(): Promise<string | null> {
 
   for (const dir of candidates) {
     try {
-      const indexPath = path.join(dir, "index.html");
       const bundlePath = path.join(dir, "a2ui.bundle.js");
       const v09BundlePath = path.join(dir, "a2ui-v0.9.bundle.js");
-      await fs.stat(indexPath);
       await fs.stat(bundlePath);
       await fs.stat(v09BundlePath);
       return dir;
@@ -90,10 +93,9 @@ async function resolveA2uiRootReal(): Promise<string | null> {
 }
 
 async function handleA2uiHttpRequestWithRootResolver(
-  req: IncomingMessage,
-  res: ServerResponse,
+  req: A2uiHttpRequest,
+  res: A2uiHttpResponse,
   resolveRootReal: A2uiRootResolver,
-  options: { liveReload?: boolean },
 ): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -140,14 +142,13 @@ async function handleA2uiHttpRequestWithRootResolver(
 
     if (mime === "text/html") {
       const buf = await result.handle.readFile({ encoding: "utf8" });
-      const body = injectCanvasRuntime(buf, options);
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       if (req.method === "HEAD") {
-        res.setHeader("Content-Length", String(Buffer.byteLength(body)));
+        res.setHeader("Content-Length", String(Buffer.byteLength(buf)));
         res.end();
         return true;
       }
-      res.end(body);
+      res.end(buf);
       return true;
     }
 
@@ -166,9 +167,8 @@ async function handleA2uiHttpRequestWithRootResolver(
 
 /** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  options: { liveReload?: boolean } = {},
+  req: A2uiHttpRequest,
+  res: A2uiHttpResponse,
 ): Promise<boolean> {
-  return await handleA2uiHttpRequestWithRootResolver(req, res, resolveA2uiRootReal, options);
+  return await handleA2uiHttpRequestWithRootResolver(req, res, resolveA2uiRootReal);
 }

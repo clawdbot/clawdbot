@@ -1512,7 +1512,6 @@
     "build:plugin-sdk:strict-smoke": "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
     "build:strict-smoke": "pnpm plugins:assets:build && node --import tsx scripts/tsdown-build.mts && node --import tsx scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/build-stamp.mts && node --import tsx scripts/runtime-postbuild-stamp.mts && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
     "canvas:a2ui:bundle": "node --import tsx scripts/bundle-a2ui.mts",
-    "canvas:a2ui:native:check": "node --import tsx scripts/sync-native-a2ui.mts --check",
     "channels:catalog:check": "node scripts/write-official-channel-catalog.mjs --check",
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",

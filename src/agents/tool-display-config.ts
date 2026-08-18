@@ -189,22 +189,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
           label: "navigate",
           detailKeys: ["url", "node", "nodeId"],
         },
-        eval: {
-          label: "eval",
-          detailKeys: ["javaScript", "node", "nodeId"],
-        },
-        snapshot: {
-          label: "snapshot",
-          detailKeys: ["format", "node", "nodeId"],
-        },
-        a2ui_push: {
-          label: "A2UI push",
-          detailKeys: ["jsonlPath", "node", "nodeId"],
-        },
-        a2ui_reset: {
-          label: "A2UI reset",
-          detailKeys: ["node", "nodeId"],
-        },
       },
     },
     dashboard: {

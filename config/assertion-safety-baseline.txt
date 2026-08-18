@@ -141,10 +141,9 @@ extensions/buzz/src/setup-verify.ts	5
 extensions/buzz/src/types.ts	2
 extensions/byteplus/video-generation-provider.ts	1
 extensions/canvas/src/a2ui-jsonl.ts	1
-extensions/canvas/src/cli.ts	4
+extensions/canvas/src/cli.ts	2
 extensions/canvas/src/config-migration.ts	2
-extensions/canvas/src/host/server.ts	1
-extensions/canvas/src/tool.ts	3
+extensions/canvas/src/tool.ts	1
 extensions/chutes/models.ts	1
 extensions/chutes/oauth.ts	2
 extensions/clawrouter/index.ts	1
@@ -637,7 +636,6 @@ extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	4
 extensions/line/src/webhook-utils.ts	1
 extensions/line/src/webhook.ts	1
-extensions/linux-canvas/src/commands.ts	1
 extensions/litellm/onboard.ts	1
 extensions/llama-cpp/src/embedding-provider.ts	1
 extensions/llm-task/doctor-contract-api.ts	1

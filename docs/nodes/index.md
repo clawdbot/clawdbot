@@ -1,19 +1,20 @@
 ---
-summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/device/notifications/system"
+summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for camera/screen/device/notifications/system and the macOS widget panel"
 read_when:
   - Pairing iOS/watchOS/Android nodes to a gateway
-  - Using node canvas/camera for agent context
+  - Using node camera or screen capture for agent context
+  - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
 ---
 
-A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
+A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
-adds native Canvas, camera, screen, notification, and computer-control commands
+adds native widget-panel, camera, screen, notification, and computer-control commands
 to the same node-host command surface used by `openclaw node run`. Do not start a
 second CLI node on that Mac; the app runs the matching CLI node-host runtime as
 an internal worker and remains the sole Gateway connection and node identity.
@@ -564,10 +565,10 @@ Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`
 Low-level (raw RPC):
 
 ```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+openclaw nodes invoke --node <idOrNameOrIp> --command device.info --params '{}'
 ```
 
-`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (canvas, camera, screen, location, below).
+`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (camera, screen, location, below).
 
 Long-running streaming node commands use additive `node.invoke.progress`
 events. Each event carries the invoke ID, a zero-based sequence number, and a
@@ -600,7 +601,16 @@ Default allowlists by platform (before plugin defaults and `commands.allow`/`com
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, Android advertises mobile UI commands only while Accessibility Control is enabled, and desktop nodes advertise `computer.act` only while their local Computer Control fulfiller is enabled. The current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
+Plugin-owned defaults extend the platform table only for the plugin's supported
+surface:
+
+| Plugin | Platform | Commands allowed by default                        |
+| ------ | -------- | -------------------------------------------------- |
+| Canvas | macOS    | `canvas.present`, `canvas.hide`, `canvas.navigate` |
+
+The Canvas commands present hosted widget documents in the macOS app's native
+panel. iOS, Android, Windows, Linux, and unknown platforms do not receive Canvas
+plugin defaults.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -671,46 +681,26 @@ Per-agent exec node override:
 }
 ```
 
-## Screenshots (canvas snapshots)
-
-If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
-
-CLI helper (writes to a temp file and prints the saved path):
+## macOS widget panel
 
 ```bash
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
-```
-
-### Canvas controls
-
-```bash
-openclaw nodes canvas present --node <idOrNameOrIp> --target https://example.com
+openclaw nodes canvas present --node <idOrNameOrIp>
 openclaw nodes canvas hide --node <idOrNameOrIp>
-openclaw nodes canvas navigate https://example.com --node <idOrNameOrIp>
-openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
+openclaw nodes canvas navigate "/__openclaw__/canvas/documents/<document-id>/index.html" --node <idOrNameOrIp>
 ```
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
-- `canvas eval` accepts inline JS (`--js`) or a positional arg.
-
-### A2UI (Canvas)
-
-```bash
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
-```
-
-Notes:
-
-- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
-- Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
-- iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
-- macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
-- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
+- `canvas present` accepts the existing optional target plus
+  `--x/--y/--width/--height` placement arguments.
+- `canvas navigate` accepts a hosted widget-document path or an app-local
+  Canvas URL. The macOS app resolves hosted paths through its current scoped
+  Canvas capability URL.
+- The agent-facing path is [`show_widget`](/tools/show-widget) with
+  `presentation.target: "node_panel"`; use the CLI helpers for direct operator
+  control.
+- A2UI renders on [session dashboards](/web/dashboards), not through node
+  Canvas commands.
 
 ## Photos + videos (node camera)
 
@@ -733,7 +723,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 
 Notes:
 
-- The node must be **foregrounded** for `canvas.*` and `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
+- The node must be **foregrounded** for `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
 - Nodes clamp clip duration to keep the base64 payload manageable (see [Camera capture](/nodes/camera) for exact per-platform limits). The `nodes` agent tool additionally caps requested `durationMs` at 300000 (5 minutes) before forwarding the call; the node itself enforces the tighter limit.
 - Android will prompt for `CAMERA`/`RECORD_AUDIO` permissions when possible; denied permissions fail with `*_PERMISSION_REQUIRED`.
 

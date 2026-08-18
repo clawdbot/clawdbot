@@ -585,18 +585,12 @@ importers:
       '@lit/context':
         specifier: 1.1.6
         version: 1.1.6
-      chokidar:
-        specifier: 5.0.0
-        version: 5.0.0
       lit:
         specifier: 3.3.3
         version: 3.3.3
       typebox:
         specifier: 1.3.6
         version: 1.3.6
-      ws:
-        specifier: 8.21.1
-        version: 8.21.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1104,16 +1098,6 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
-
-  extensions/linux-canvas:
-    dependencies:
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
 
   extensions/linux-node:
     dependencies:

@@ -89,7 +89,9 @@ The core tool uses these required fields on every destination:
   Self-contained HTML or SVG. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
 </ParamField>
 
-The core tool also accepts these optional dashboard placement fields, including when Discord is the presentation destination:
+Discord also accepts optional `button_label` text for the Activity launch button. The Canvas schema intentionally omits this Discord-only field.
+
+The core `show_widget` tool also accepts these optional dashboard placement fields, including when Discord is the presentation destination:
 
 - `pin`: also place the widget on the session dashboard.
 - `name`: stable widget name; defaults to a slug of `title`.
@@ -105,7 +107,7 @@ If current-channel presentation fails, core falls back inline only when the orig
 
 ## Show on a device
 
-When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected macOS Canvas node, and opens its native panel at that document. The tool result names the selected Mac.
+When a widget presenter plugin is active, `presentation.target` also offers `node_panel`. OpenClaw creates the same hosted widget document, selects a connected widget-panel-capable Mac, and opens its native panel at that document. The tool result names the selected Mac.
 
 If no eligible Mac is connected or the node command fails, the widget still appears inline in chat and the result explains how to recover. Pair a Mac running OpenClaw or open the macOS app, then retry. Widgets shown in a native panel are render-only in this first version; widget actions remain disabled there.
 
@@ -155,5 +157,5 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 
 - [Control UI hosted embeds](/web/control-ui#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
-- [Canvas node controls](/plugins/reference/canvas)
+- [macOS widget panel](/platforms/mac/canvas)
 - [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)

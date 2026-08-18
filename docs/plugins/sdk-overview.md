@@ -625,7 +625,7 @@ api.registerCli(
     descriptors: [
       {
         name: "canvas",
-        description: "Capture or render canvas content from a paired node",
+        description: "Present hosted widgets on a paired Mac",
         hasSubcommands: true,
       },
     ],
