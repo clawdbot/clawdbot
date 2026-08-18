@@ -26,11 +26,15 @@ export type DiffLine = {
 
 export type DiffStat = { added: number; removed: number };
 
+type LineDiffResult =
+  | { kind: "complete"; lines: DiffLine[]; stat: DiffStat }
+  | { kind: "truncated"; lines: DiffLine[] };
+
 /** Bound diff rendering work; oversized inputs degrade to a truncation marker. */
 const MAX_DIFF_INPUT_LINES = 600;
 export const MAX_DIFF_RENDER_LINES = 400;
 
-export function diffStat(lines: readonly DiffLine[]): DiffStat {
+function diffStat(lines: readonly DiffLine[]): DiffStat {
   let added = 0;
   let removed = 0;
   for (const line of lines) {
@@ -47,18 +51,23 @@ export function diffStat(lines: readonly DiffLine[]): DiffStat {
  * Parse the edit tool's display diff (`generateDiffString` output):
  * `+457 text`, `-455 text`, ` 456 text`, and `     ...` skip markers.
  */
-export function parseDiffDetailsString(diff: string): DiffLine[] | null {
+export function parseDiffDetailsString(diff: string): LineDiffResult | null {
   const trimmed = diff.trim();
   if (!trimmed) {
     return null;
   }
   const lines: DiffLine[] = [];
+  let truncated = false;
   for (const raw of diff.split("\n")) {
     if (!raw) {
       continue;
     }
-    const skipMatch = raw.match(/^\s*\.\.\.(?:\(truncated\)\.\.\.)?\s*$/);
-    if (skipMatch) {
+    if (/^\s*\.\.\.\(truncated\)\.\.\.\s*$/.test(raw)) {
+      truncated = true;
+      lines.push({ kind: "skip", text: "" });
+      continue;
+    }
+    if (/^\s*\.\.\.\s*$/.test(raw)) {
       lines.push({ kind: "skip", text: "" });
       continue;
     }
@@ -78,10 +87,16 @@ export function parseDiffDetailsString(diff: string): DiffLine[] | null {
     });
     if (lines.length > MAX_DIFF_RENDER_LINES) {
       lines.push({ kind: "skip", text: "" });
+      truncated = true;
       break;
     }
   }
-  return lines.some((line) => line.kind === "add" || line.kind === "del") ? lines : null;
+  if (!lines.some((line) => line.kind === "add" || line.kind === "del")) {
+    return null;
+  }
+  return truncated
+    ? { kind: "truncated", lines }
+    : { kind: "complete", lines, stat: diffStat(lines) };
 }
 
 function splitDiffLines(text: string): string[] {
@@ -165,11 +180,15 @@ export function computeLineDiff(
   oldText: string,
   newText: string,
   options?: { compactUnchanged?: boolean },
-): DiffLine[] {
+): LineDiffResult {
   const allOldLines = splitDiffLines(oldText);
   const allNewLines = splitDiffLines(newText);
   const inputTruncated =
     allOldLines.length > MAX_DIFF_INPUT_LINES || allNewLines.length > MAX_DIFF_INPUT_LINES;
+  const inputsEqual =
+    allOldLines.length === allNewLines.length &&
+    allOldLines.every((line, index) => line === allNewLines[index]);
+  const comparisonTruncated = inputTruncated && !inputsEqual;
   const oldLines = allOldLines.slice(0, MAX_DIFF_INPUT_LINES);
   const newLines = allNewLines.slice(0, MAX_DIFF_INPUT_LINES);
   const n = oldLines.length;
@@ -226,7 +245,10 @@ export function computeLineDiff(
     }
     j++;
   }
-  return compactLineDiff(lines, inputTruncated, options?.compactUnchanged === true);
+  const preview = compactLineDiff(lines, comparisonTruncated, options?.compactUnchanged === true);
+  return comparisonTruncated
+    ? { kind: "truncated", lines: preview }
+    : { kind: "complete", lines: preview, stat: diffStat(lines) };
 }
 
 /** All-added preview for freshly written files, numbered from line 1. */
@@ -251,33 +273,45 @@ export function countTextLines(content: string): number {
  * where each `edits[i]` produced its own local diff.
  */
 export function joinDiffSections(
-  sections: ReadonlyArray<DiffLine[]>,
+  sections: ReadonlyArray<LineDiffResult>,
   options?: { truncated?: boolean; maxLines?: number },
-): DiffLine[] {
+): LineDiffResult {
   const maxLines = options?.maxLines ?? MAX_DIFF_RENDER_LINES;
   const joined: DiffLine[] = [];
-  let truncated = options?.truncated === true;
+  const comparisonTruncated =
+    options?.truncated === true || sections.some((section) => section.kind === "truncated");
+  let previewTruncated = comparisonTruncated;
   for (const section of sections) {
-    if (section.length === 0) {
+    if (section.lines.length === 0) {
       continue;
     }
     if (joined.length > 0) {
       if (joined.length >= maxLines) {
-        truncated = true;
+        previewTruncated = true;
         break;
       }
       joined.push({ kind: "skip", text: "" });
     }
     const remaining = maxLines - joined.length;
-    if (section.length > remaining) {
-      joined.push(...section.slice(0, remaining));
-      truncated = true;
+    if (section.lines.length > remaining) {
+      joined.push(...section.lines.slice(0, remaining));
+      previewTruncated = true;
       break;
     }
-    joined.push(...section);
+    joined.push(...section.lines);
   }
-  if (truncated && joined.at(-1)?.kind !== "skip") {
+  if (previewTruncated && joined.at(-1)?.kind !== "skip") {
     joined.push({ kind: "skip", text: "" });
   }
-  return joined;
+  if (comparisonTruncated) {
+    return { kind: "truncated", lines: joined };
+  }
+  const stat = sections.reduce(
+    (sum, section) => ({
+      added: sum.added + (section.kind === "complete" ? section.stat.added : 0),
+      removed: sum.removed + (section.kind === "complete" ? section.stat.removed : 0),
+    }),
+    { added: 0, removed: 0 },
+  );
+  return { kind: "complete", lines: joined, stat };
 }

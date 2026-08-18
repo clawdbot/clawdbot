@@ -120,6 +120,9 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       await expect.poll(() => changes.getAttribute("aria-pressed")).toBe("true");
       await page.locator(".sw-diff__row--add", { hasText: "Publish package." }).waitFor();
       await page.locator(".sw-diff__row--del", { hasText: "Publish release." }).waitFor();
+      expect((await page.locator(".sw-diff__stat").textContent())?.replace(/\s+/gu, "")).toBe(
+        "+1-1",
+      );
       const inspectRequests = await gateway.getRequests("skills.proposals.inspect");
       expect(new Set(inspectRequests.map(inspectedProposalId))).toEqual(
         new Set([latest.id, previous.id]),
@@ -141,6 +144,68 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
         fullPage: true,
         path: path.join(artifactDir, "02-full-body.png"),
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("directs late-only changes to the full body without showing zero totals", async () => {
+    const previous = appliedProposal("proposal-long-v1", "2026-08-16T10:00:00.000Z");
+    const latest = appliedProposal("proposal-long-v2", "2026-08-17T10:00:00.000Z");
+    const previousLines = Array.from({ length: 700 }, (_, index) => `Procedure line ${index}`);
+    const latestLines = [...previousLines];
+    latestLines[650] = "Changed procedure outside preview";
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "skills.proposals.inspect": {
+          cases: [
+            {
+              match: { proposalId: latest.id },
+              response: inspectResponse(latest, latestLines.join("\n"), "v2"),
+            },
+            {
+              match: { proposalId: previous.id },
+              response: inspectResponse(previous, previousLines.join("\n"), "v1"),
+            },
+          ],
+        },
+        "skills.proposals.list": {
+          proposals: [latest, previous],
+          schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          updatedAt: latest.updatedAt,
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}skills/workshop`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("skills.proposals.list");
+      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator(".sw-lifecycle-tab", { hasText: "Applied" }).click();
+
+      const notice = page.locator(".sw-diff__notice");
+      await notice.waitFor();
+      expect(await notice.textContent()).toContain("The changed region is outside this preview.");
+      expect(await notice.textContent()).toContain("Switch to Full body");
+      expect(await page.locator(".sw-diff__stat").count()).toBe(0);
+      await page.screenshot({
+        animations: "disabled",
+        fullPage: true,
+        path: path.join(artifactDir, "03-late-change.png"),
+      });
+
+      await page.getByRole("button", { name: "Full body", exact: true }).click();
+      await expect
+        .poll(() => page.locator(".sw-body-card").textContent())
+        .toContain("Changed procedure outside preview");
     } finally {
       await context.close();
     }

@@ -207,6 +207,32 @@ describe("Skill Workshop applied history", () => {
     expect(modeButton(page, "Changes")?.getAttribute("aria-pressed")).toBe("false");
   });
 
+  it.each([
+    ["late-only", null, "The changed region is outside this preview."],
+    ["partial", 500, "Some changed regions are outside this preview."],
+  ])("labels %s revision comparisons as incomplete", async (_label, visibleIndex, message) => {
+    const previousBody = Array.from({ length: 700 }, (_, index) => `line ${index}`);
+    const latestBody = [...previousBody];
+    if (visibleIndex !== null) {
+      latestBody[visibleIndex] = "changed inside preview";
+    }
+    latestBody[650] = "changed outside preview";
+    const proposals = appliedProposals();
+    proposals[2]!.body = previousBody.join("\n");
+    proposals[3]!.body = latestBody.join("\n");
+
+    const page = await mountAppliedPage(inspectRequest(), proposals);
+    await vi.waitFor(
+      () => {
+        expect(page.querySelector(".sw-diff__notice")?.textContent).toContain(message);
+      },
+      { interval: 1 },
+    );
+
+    expect(page.querySelector(".sw-diff__stat")).toBeNull();
+    expect(page.querySelector(".sw-body-card")?.textContent).toContain("Full body");
+  });
+
   it("shows the oldest revision as a full body with no diff toggle", async () => {
     const page = await mountAppliedPage(inspectRequest(), appliedProposals());
     await vi.waitFor(() => expect(historyItems(page)).toHaveLength(4), { interval: 1 });
