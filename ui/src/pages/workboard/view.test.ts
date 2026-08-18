@@ -1318,6 +1318,69 @@ describe("renderWorkboard", () => {
     ]);
   });
 
+  it("hands an unconfigured assignee to the configured default runtime agent", async () => {
+    const sessionKey = "agent:default-agent:subagent:workboard-default-card-1";
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "agent") {
+          return { sessionKey, runId: "run-1" };
+        }
+        if (method === "tasks.list") {
+          return {
+            tasks: [
+              {
+                id: "task-1",
+                taskId: "task-1",
+                status: "running",
+                childSessionKey: sessionKey,
+                runId: "run-1",
+              },
+            ],
+          };
+        }
+        return {
+          card: createWorkboardCard({
+            agentId: "default-agent",
+            status: "running",
+            sessionKey,
+            runId: "run-1",
+          }),
+        };
+      }),
+    };
+    const onOpenSession = vi.fn();
+    const { state, container, renderView } = createWorkboardView({
+      client: client as unknown as GatewayBrowserClient,
+      agentsList: {
+        defaultId: "default-agent",
+        mainKey: "agent:default-agent:main",
+        scope: "test",
+        agents: [{ id: "default-agent", name: "Default Agent" }],
+      },
+      onOpenSession,
+    });
+    state.cards = [
+      createWorkboardCard({
+        title: "Resume with current context",
+        agentId: "removed-agent",
+      }),
+    ];
+    renderView();
+
+    buttonByLabel(container, "Run default agent")?.click();
+    await vi.waitFor(() => expect(onOpenSession).toHaveBeenCalledWith(sessionKey));
+    expect(client.request).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({ agentId: "default-agent", sessionKey }),
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: { status: "running", agentId: "default-agent" },
+      }),
+    );
+  });
+
   it("shows unfinished parent dependencies without blocking stale local starts", () => {
     const { state, container, renderView } = createWorkboardView({
       onRequestUpdate: () => undefined,

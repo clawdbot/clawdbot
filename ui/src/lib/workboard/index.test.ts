@@ -3150,6 +3150,61 @@ describe("workboard controller", () => {
     expect(client.request.mock.calls[3]?.[1]).toHaveProperty("patch.execution", null);
   });
 
+  it("includes the card id and recent comments in the task prompt", async () => {
+    const card = makeCard({
+      notes: "Waiting for the site URL.",
+      metadata: {
+        comments: [
+          { id: "comment-2", body: "https://example.com/site", createdAt: 3 },
+          { id: "comment-1", body: "The URL is ready; review related sites too.", createdAt: 2 },
+        ],
+      },
+    });
+    const client = createClient({
+      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.update": { card: { ...card, status: "running" } },
+    });
+
+    await startCard(client, { card });
+
+    const prompt = (requestCalls(client, "agent")[0]?.[1] as { message?: string }).message ?? "";
+    expect(prompt).toContain("Card ID: card-1");
+    expect(prompt).toContain("Waiting for the site URL.");
+    expect(prompt).toContain("Recent comments (oldest to newest):");
+    expect(prompt.indexOf("The URL is ready; review related sites too.")).toBeLessThan(
+      prompt.indexOf("https://example.com/site"),
+    );
+  });
+
+  it("bounds task prompt comments while retaining the newest context", async () => {
+    const card = makeCard({
+      metadata: {
+        comments: [
+          ...Array.from({ length: 12 }, (_, index) => ({
+            id: `comment-${index}`,
+            body: `older-${index}-${"y".repeat(1000)}`,
+            createdAt: index,
+          })),
+          { id: "comment-newest", body: `newest-${"x".repeat(1000)}`, createdAt: 20 },
+        ],
+      },
+    });
+    const client = createClient({
+      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.update": { card: { ...card, status: "running" } },
+    });
+
+    await startCard(client, { card });
+
+    const prompt = (requestCalls(client, "agent")[0]?.[1] as { message?: string }).message ?? "";
+    expect(prompt).toContain("newest-");
+    expect(prompt).toContain("…");
+    expect(prompt).not.toContain("older-0");
+    expect(prompt.length).toBeLessThan(5400);
+  });
+
   it("keeps bounded task session labels on a UTF-16 boundary", async () => {
     const title = `${"a".repeat(499)}🚀tail`;
     const client = createClient({
@@ -3205,6 +3260,76 @@ describe("workboard controller", () => {
         sessionKey: expectedSessionKey,
       }),
     );
+  });
+
+  it("hands an unconfigured assignee to an explicit runtime agent", async () => {
+    const expectedSessionKey = "agent:default-agent:subagent:workboard-default-card-1";
+    const staleAssigned = makeCard({ agentId: "removed-agent" });
+    const running = {
+      ...staleAssigned,
+      agentId: "default-agent",
+      status: "running",
+      sessionKey: expectedSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    const client = createClient({
+      agent: { sessionKey: expectedSessionKey, runId: "run-1" },
+      "tasks.list": {
+        tasks: [makeTask({ childSessionKey: expectedSessionKey })],
+      },
+      "workboard.cards.update": { card: running },
+    });
+
+    await startCard(client, {
+      card: staleAssigned,
+      runAgentId: "default-agent",
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: { status: "running", agentId: "default-agent" },
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({
+        agentId: "default-agent",
+        sessionKey: expectedSessionKey,
+      }),
+    );
+    expect(getWorkboardState(host).cards[0]?.agentId).toBe("default-agent");
+  });
+
+  it("restores an unconfigured assignee when the runtime handoff fails", async () => {
+    const staleAssigned = makeCard({ agentId: "removed-agent" });
+    const running = {
+      ...staleAssigned,
+      agentId: "default-agent",
+      status: "running",
+    } satisfies WorkboardCard;
+    const client = createSequencedClient({
+      "workboard.cards.update": [{ card: running }, { card: staleAssigned }],
+      agent: [new Error("gateway disconnected")],
+    });
+
+    const sessionKey = await startCard(client, {
+      card: staleAssigned,
+      runAgentId: "default-agent",
+    });
+
+    expect(sessionKey).toBeNull();
+    expect(client.request).toHaveBeenNthCalledWith(
+      3,
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: expect.objectContaining({ status: "todo", agentId: "removed-agent" }),
+      }),
+    );
+    expect(getWorkboardState(host).cards[0]?.agentId).toBe("removed-agent");
   });
 
   // Cards persist whatever agent id they were created with, so the worker key

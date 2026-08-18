@@ -18,6 +18,7 @@ import {
   type WorkboardExecutionMode,
   type WorkboardStatus,
 } from "../../lib/workboard/index.ts";
+import { findCardAgent } from "./agent-filter.ts";
 import { openEditModal } from "./view-card-modal.ts";
 import {
   canMutate,
@@ -312,6 +313,11 @@ export function renderStartExecutionButton(
         ? t("workboard.runEngine", { engine: engineName })
         : t("workboard.openEngine", { engine: engineName })
       : t("workboard.runDefaultAgent");
+  const explicitAgentId = card.agentId?.trim();
+  const runAgentId =
+    props.agentsList && explicitAgentId && !findCardAgent(card, props.agentsList)
+      ? props.agentsList.defaultId?.trim() || null
+      : undefined;
   const button = html`
     <button
       class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${options.iconOnly
@@ -325,6 +331,7 @@ export function renderStartExecutionButton(
           host: props.host,
           client: props.client,
           card,
+          runAgentId,
           ...(engine ? { engine } : {}),
           mode,
           requestUpdate: props.onRequestUpdate,

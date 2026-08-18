@@ -39,6 +39,10 @@ const WORKBOARD_ENGINE_MODELS = {
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
+// Match the native Workboard worker context so Control UI starts receive the
+// same bounded slice of the newest operator comments.
+const WORKBOARD_PROMPT_COMMENT_LIMIT = 12;
+const WORKBOARD_PROMPT_COMMENT_MAX_CHARS = 400;
 
 function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
   return engine === "codex"
@@ -49,9 +53,24 @@ function engineModel(engine: WorkboardExecutionEngine | null | undefined): strin
 }
 
 function buildCardPrompt(card: WorkboardCard): string {
-  const lines = [`Work on this OpenClaw Workboard card: ${card.title}`];
+  const lines = [`Work on this OpenClaw Workboard card: ${card.title}`, `Card ID: ${card.id}`];
   if (card.notes?.trim()) {
     lines.push("", card.notes.trim());
+  }
+  const comments = (card.metadata?.comments ?? [])
+    .map((comment) => ({ body: comment.body.trim(), createdAt: comment.createdAt }))
+    .filter((comment) => comment.body)
+    .toSorted((left, right) => left.createdAt - right.createdAt)
+    .slice(-WORKBOARD_PROMPT_COMMENT_LIMIT);
+  if (comments.length > 0) {
+    lines.push("", "Recent comments (oldest to newest):");
+    for (const comment of comments) {
+      const body =
+        comment.body.length <= WORKBOARD_PROMPT_COMMENT_MAX_CHARS
+          ? comment.body
+          : `${truncateUtf16Safe(comment.body, WORKBOARD_PROMPT_COMMENT_MAX_CHARS - 1).trimEnd()}…`;
+      lines.push(`- ${body}`);
+    }
   }
   if (card.labels.length > 0) {
     lines.push("", `Labels: ${card.labels.join(", ")}`);
@@ -93,11 +112,11 @@ function sanitizeSessionSegment(value: string | undefined, fallback: string): st
   return (sanitized || fallback).slice(0, 96);
 }
 
-function buildCardTaskSessionKey(card: WorkboardCard): string {
+function buildCardTaskSessionKey(card: WorkboardCard, runAgentId?: string | null): string {
   const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
   const cardId = sanitizeSessionSegment(card.id, "card");
   const suffix = `subagent:workboard-${boardId}-${cardId}`;
-  const agentId = card.agentId?.trim();
+  const agentId = normalizeString(runAgentId === undefined ? card.agentId : runAgentId);
   // Unassigned cards stay unscoped on purpose: the gateway canonicalizes a bare
   // suffix onto the configured default agent, while normalizeAgentId maps an
   // empty id to "main" and would target the wrong agent when the default differs.
@@ -227,6 +246,7 @@ export async function startWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   card: WorkboardCard;
+  runAgentId?: string | null;
   engine?: WorkboardExecutionEngine;
   mode?: WorkboardExecutionMode;
   requestUpdate?: () => void;
@@ -255,6 +275,11 @@ export async function startWorkboardCard(params: {
   let preflightCard: WorkboardCard | null = null;
   let createdSessionKey: string | null = null;
   let createdRunId: string | undefined;
+  const originalAgentId = normalizeString(params.card.agentId);
+  const runAgentId =
+    params.runAgentId === undefined ? originalAgentId : normalizeString(params.runAgentId);
+  const shouldReassignRunAgent =
+    params.runAgentId !== undefined && originalAgentId !== null && originalAgentId !== runAgentId;
   try {
     const shouldClearManualSchedule =
       mode === "manual" && params.card.metadata?.automation?.scheduledAt !== undefined;
@@ -266,7 +291,10 @@ export async function startWorkboardCard(params: {
     if (mode === "autonomous") {
       const preflightPayload = await params.client.request("workboard.cards.update", {
         id: params.card.id,
-        patch: { status: nextCardStatus },
+        patch: {
+          status: nextCardStatus,
+          ...(shouldReassignRunAgent ? { agentId: runAgentId } : {}),
+        },
       });
       preflightCard = normalizeCardPayload(preflightPayload);
       if (preflightCard) {
@@ -277,8 +305,8 @@ export async function startWorkboardCard(params: {
     const created =
       mode === "autonomous"
         ? await params.client.request("agent", {
-            sessionKey: buildCardTaskSessionKey(card),
-            ...(card.agentId ? { agentId: card.agentId } : {}),
+            sessionKey: buildCardTaskSessionKey(card, runAgentId),
+            ...(runAgentId ? { agentId: runAgentId } : {}),
             label: buildCardSessionLabel(card),
             ...(model ? { model } : {}),
             message: buildCardPrompt(card),
@@ -287,7 +315,7 @@ export async function startWorkboardCard(params: {
             idempotencyKey: buildCardRunIdempotencyKey(card),
           })
         : await requestSessionCreate(params.client, {
-            ...(card.agentId ? { agentId: card.agentId } : {}),
+            ...(runAgentId ? { agentId: runAgentId } : {}),
             label: buildCardSessionLabel(card),
             ...(model ? { model } : {}),
           });
@@ -297,7 +325,7 @@ export async function startWorkboardCard(params: {
         : isRecord(created) && typeof created.key === "string" && created.key.trim()
           ? created.key.trim()
           : mode === "autonomous"
-            ? buildCardTaskSessionKey(card)
+            ? buildCardTaskSessionKey(card, runAgentId)
             : null;
     const runId =
       isRecord(created) && typeof created.runId === "string" && created.runId.trim()
@@ -321,6 +349,7 @@ export async function startWorkboardCard(params: {
       id: params.card.id,
       patch: {
         status: nextCardStatus,
+        ...(shouldReassignRunAgent ? { agentId: runAgentId } : {}),
         ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
         ...(sessionKey ? { sessionKey } : {}),
         runId: runId ?? null,
@@ -364,6 +393,7 @@ export async function startWorkboardCard(params: {
           id: params.card.id,
           patch: {
             status: params.card.status,
+            ...(shouldReassignRunAgent ? { agentId: params.card.agentId ?? null } : {}),
             startedAt: params.card.startedAt ?? null,
             completedAt: params.card.completedAt ?? null,
             ...(params.card.execution !== undefined ? { execution: params.card.execution } : {}),
