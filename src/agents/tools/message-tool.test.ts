@@ -188,6 +188,9 @@ type RunMessageActionInput = {
   params?: Record<string, unknown>;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
   runId?: string;
   messageActionAuthorization?: {
     requesterAccountId?: string;
@@ -5131,6 +5134,9 @@ describe("message tool sandbox passthrough", () => {
       sessionId: "session-1",
       requesterAccountId: "trusted-account",
       requesterSenderId: "trusted-sender",
+      requesterSenderName: "Trusted Sender",
+      requesterSenderUsername: "trusted-user",
+      requesterSenderE164: "+15551234567",
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "trusted-current",
@@ -5159,6 +5165,9 @@ describe("message tool sandbox passthrough", () => {
 
     expect(call?.requesterAccountId).toBe("trusted-account");
     expect(call?.requesterSenderId).toBe("trusted-sender");
+    expect(call?.requesterSenderName).toBe("Trusted Sender");
+    expect(call?.requesterSenderUsername).toBe("trusted-user");
+    expect(call?.requesterSenderE164).toBe("+15551234567");
     expect(call?.toolContext).toMatchObject({
       currentChannelProvider: "discord",
       currentChannelId: "forged-current",

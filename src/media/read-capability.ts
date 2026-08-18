@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
+import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
@@ -55,8 +56,25 @@ function isAgentScopedHostMediaReadAllowed(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  // Sender/group policy only applies when a concrete group override exists.
-  if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {
+  const hasRequesterIdentity = Boolean(
+    params.requesterSenderId ||
+    params.requesterSenderName ||
+    params.requesterSenderUsername ||
+    params.requesterSenderE164,
+  );
+  const senderPolicy = hasRequesterIdentity
+    ? resolveSenderToolPolicy({
+        config: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        messageProvider: params.messageProvider,
+        senderId: params.requesterSenderId,
+        senderName: params.requesterSenderName,
+        senderUsername: params.requesterSenderUsername,
+        senderE164: params.requesterSenderE164,
+      })
+    : undefined;
+  if (!isToolAllowedByPolicies("read", [groupPolicy, senderPolicy])) {
     return false;
   }
   return true;

@@ -5,6 +5,7 @@
  */
 import { resolveToolsBySender } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseSessionDeliveryRoute } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -12,6 +13,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 type SenderToolPolicyParams = {
   config?: OpenClawConfig;
   agentId?: string;
+  sessionKey?: string | null;
   messageProvider?: string | null;
   senderId?: string | null;
   senderName?: string | null;
@@ -27,8 +29,11 @@ export function resolveSenderToolPolicy(
   if (!cfg) {
     return undefined;
   }
+  // The requester session is authoritative when a message action targets a different channel.
+  const messageProvider =
+    parseSessionDeliveryRoute(params.sessionKey)?.channel ?? params.messageProvider;
   const sender = {
-    messageProvider: params.messageProvider,
+    messageProvider,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

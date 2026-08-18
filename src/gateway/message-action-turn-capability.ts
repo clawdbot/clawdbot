@@ -21,6 +21,9 @@ type AgentRuntimeMessageActionContextBase = {
   sourceReplySessionKey?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
 };
 
@@ -35,6 +38,18 @@ export type AgentRuntimeMessageActionContext = AgentRuntimeMessageActionContextB
         sourceReplyToolCallId?: string;
       }
   );
+
+export function selectMessageActionRequesterIdentity(
+  context: AgentRuntimeMessageActionContext | undefined,
+) {
+  return {
+    requesterAccountId: context?.requesterAccountId,
+    requesterSenderId: context?.requesterSenderId,
+    requesterSenderName: context?.requesterSenderName,
+    requesterSenderUsername: context?.requesterSenderUsername,
+    requesterSenderE164: context?.requesterSenderE164,
+  };
+}
 
 type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   agentId: string;
@@ -112,6 +127,9 @@ export function mintMessageActionTurnCapability(params: {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
   expiresWithRun?: boolean;
   ttlMs?: number;
@@ -140,6 +158,9 @@ export function mintMessageActionTurnCapability(params: {
     sourceReplySessionKey: normalizeOptionalString(params.sourceReplySessionKey),
     requesterAccountId: normalizeOptionalString(params.requesterAccountId),
     requesterSenderId: normalizeOptionalString(params.requesterSenderId),
+    requesterSenderName: normalizeOptionalString(params.requesterSenderName),
+    requesterSenderUsername: normalizeOptionalString(params.requesterSenderUsername),
+    requesterSenderE164: normalizeOptionalString(params.requesterSenderE164),
     toolContext: copyToolContext(params.toolContext),
   });
   return token;
@@ -180,6 +201,9 @@ export function resolveMessageActionTurnCapability(params: {
     sourceReplySessionKey: capability.sourceReplySessionKey,
     requesterAccountId: capability.requesterAccountId,
     requesterSenderId: capability.requesterSenderId,
+    requesterSenderName: capability.requesterSenderName,
+    requesterSenderUsername: capability.requesterSenderUsername,
+    requesterSenderE164: capability.requesterSenderE164,
     toolContext: copyToolContext(capability.toolContext),
   };
 }
