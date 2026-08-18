@@ -398,7 +398,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         face: board.face,
         dock: board.dock,
         canChangeDock: canChangeBoardDock,
-        fullscreenControl: this.boardFullscreen.renderButton(),
+        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
         onSelectMode: (mode) => {
           if (mode === "chat") {
             void this.boardFullscreen.exit();

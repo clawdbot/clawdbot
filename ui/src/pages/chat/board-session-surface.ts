@@ -4,10 +4,9 @@ import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
+import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import { ensureBoardViewElement } from "../../lib/board/view-loader.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
@@ -36,6 +35,8 @@ type BoardSessionSurfaceProps = {
   workboardCardChip?: WorkboardCardChipProps | null;
 };
 
+let boardViewLoad: Promise<unknown> | null = null;
+
 export function ensureWorkboardCardChipElement(): Promise<void> {
   return ensureCustomElementDefined(
     "openclaw-workboard-card-chip",
@@ -43,7 +44,16 @@ export function ensureWorkboardCardChipElement(): Promise<void> {
   );
 }
 
-export { ensureBoardViewElement };
+export async function ensureBoardViewElement(): Promise<boolean> {
+  if (customElements.get("openclaw-board-view")) {
+    return false;
+  }
+  boardViewLoad ??= isMockBoardEnabled()
+    ? import("../../components/board-view-placeholder.ts")
+    : import("../../components/board/board-view.ts");
+  await boardViewLoad;
+  return true;
+}
 
 type BoardViewMode = "chat" | "split" | "dashboard";
 

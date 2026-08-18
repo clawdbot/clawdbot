@@ -12,7 +12,6 @@ import {
   type BoardProvider,
   type BoardProviderLease,
 } from "../../lib/board/provider.ts";
-import { ensureBoardViewElement } from "../../lib/board/view-loader.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -21,6 +20,7 @@ import {
 } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board-document.css";
+import "./board-view.ts";
 
 type DashboardDocumentState =
   | "loading"
@@ -52,11 +52,6 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   private unsubscribeSnapshot: (() => void) | null = null;
   private unsubscribeEvents: (() => void) | null = null;
   private bindingGeneration = 0;
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    void ensureBoardViewElement().then(() => this.requestUpdate());
-  }
 
   override disconnectedCallback(): void {
     this.releaseProvider();

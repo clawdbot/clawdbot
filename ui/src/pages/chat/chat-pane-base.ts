@@ -194,18 +194,22 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     gateway: () => this.context?.gateway,
     sessionKey: () => this.state?.sessionKey,
   });
-  protected readonly boardFullscreen = new FullscreenController(this, {
-    section: () => this.querySelector<HTMLElement>(".chat-pane-primary-column"),
-    onChange: () => this.requestUpdate(),
-    onError: (message) => this.publishHeaderError(message),
-    buttonClass: "btn btn--ghost btn--icon chat-icon-btn board-fullscreen-button",
-    buttonSelector: ".board-fullscreen-button",
-    iconClass: "board-fullscreen-button__icon",
-    enterLabel: () => t("chat.board.enterFullscreen"),
-    exitLabel: () => t("chat.board.exitFullscreen"),
-    unavailableLabel: () => t("chat.board.fullscreenUnavailable"),
-    errorMessage: (error) => t("chat.board.fullscreenFailed", { error: formatUiError(error) }),
-  });
+  private boardFullscreenController: FullscreenController | null = null;
+  protected get boardFullscreen(): FullscreenController {
+    this.boardFullscreenController ??= new FullscreenController(this, {
+      section: () => this.querySelector<HTMLElement>(".chat-pane-primary-column"),
+      onChange: () => this.requestUpdate(),
+      onError: (message) => this.publishHeaderError(message),
+      buttonClass: "btn btn--ghost btn--icon chat-icon-btn board-fullscreen-button",
+      buttonSelector: ".board-fullscreen-button",
+      iconClass: "board-fullscreen-button__icon",
+      enterLabel: () => t("chat.board.enterFullscreen"),
+      exitLabel: () => t("chat.board.exitFullscreen"),
+      unavailableLabel: () => t("chat.board.fullscreenUnavailable"),
+      errorMessage: (error) => t("chat.board.fullscreenFailed", { error: formatUiError(error) }),
+    });
+    return this.boardFullscreenController;
+  }
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
