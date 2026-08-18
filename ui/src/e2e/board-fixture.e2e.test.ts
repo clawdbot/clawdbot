@@ -218,6 +218,53 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
   }
 
+  it("reveals widget chrome only from the centered top trigger", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    try {
+      const page = await context.newPage();
+      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+      const widget = page.locator('[data-widget-name="service-pulse"]');
+      const chrome = widget.locator(".board-widget__bar");
+      const bounds = await widget.boundingBox();
+      if (!bounds) {
+        throw new Error("board fixture widget has no layout bounds");
+      }
+
+      await page.mouse.move(0, 0);
+      await page.mouse.move(bounds.x + 24, bounds.y + 20, { steps: 12 });
+      await page.waitForTimeout(500);
+      expect(await chrome.evaluate((element) => getComputedStyle(element).visibility)).toBe(
+        "hidden",
+      );
+
+      const centeredBounds = await widget.boundingBox();
+      if (!centeredBounds) {
+        throw new Error("board fixture widget lost its layout bounds");
+      }
+      await page.mouse.move(centeredBounds.x + centeredBounds.width / 2, centeredBounds.y + 20, {
+        steps: 12,
+      });
+      await page.waitForTimeout(500);
+      const centers = await chrome.evaluate((element) => {
+        const owner = element.closest<HTMLElement>(".board-widget");
+        if (!owner) {
+          throw new Error("widget chrome has no owner");
+        }
+        const chromeBounds = element.getBoundingClientRect();
+        const widgetBounds = owner.getBoundingClientRect();
+        return {
+          chrome: chromeBounds.left + chromeBounds.width / 2,
+          widget: widgetBounds.left + widgetBounds.width / 2,
+          visibility: getComputedStyle(element).visibility,
+        };
+      });
+      expect(centers.visibility).toBe("visible");
+      expect(Math.abs(centers.chrome - centers.widget)).toBeLessThanOrEqual(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("follows live system color-scheme changes", async () => {
     const context = await browser.newContext({ colorScheme: "dark" });
     try {

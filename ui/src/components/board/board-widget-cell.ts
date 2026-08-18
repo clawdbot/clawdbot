@@ -434,6 +434,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         @focus=${() => callbacks.focusChanged(widget.name)}
         @keydown=${(event: KeyboardEvent) => this.handleKeyDown(event, widget, callbacks)}
       >
+        <span class="board-widget__hover-zone" aria-hidden="true"></span>
         <header class="board-widget__bar">
           ${readOnly
             ? nothing

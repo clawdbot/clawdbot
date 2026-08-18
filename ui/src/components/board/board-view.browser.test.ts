@@ -133,19 +133,22 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
-    // Chrome is a compact top-left pill, not a full-width strip: it must not
-    // stretch across the card, so widget-owned top-right actions stay clear.
+    // Chrome is a compact centered pill, not a full-width strip: it must not
+    // stretch across the card, so widget-owned corner actions stay clear.
     const barBounds = bar!.getBoundingClientRect();
     const widgetBounds = widget!.getBoundingClientRect();
     expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
-    expect(barBounds.left - widgetBounds.left).toBeLessThan(widgetBounds.right - barBounds.right);
+    expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
+      widgetBounds.left + widgetBounds.width / 2,
+      0,
+    );
 
     sink.focus();
     expect(widget!.matches(":focus-within")).toBe(false);
     await vi.waitFor(() => expectChromeHidden(widget!, bar!));
   });
 
-  it("reserves the top-right action corner even for narrow long-titled widgets", async () => {
+  it("keeps centered chrome bounded for narrow long-titled widgets", async () => {
     const view = await mount();
     view.snapshot = {
       ...structuredClone(source),
@@ -165,10 +168,12 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
-    // The interactive pill reserves a widget-owned right-hand region and none
-    // of its children may overflow the capped box into that corner.
+    // The centered interactive pill stays inside the widget and none of its
+    // children may overflow the capped box into widget-owned content.
     const widgetBounds = widget!.getBoundingClientRect();
-    expect(widgetBounds.right - bar!.getBoundingClientRect().right).toBeGreaterThanOrEqual(88);
+    const barBounds = bar!.getBoundingClientRect();
+    expect(barBounds.left).toBeGreaterThan(widgetBounds.left);
+    expect(barBounds.right).toBeLessThan(widgetBounds.right);
     for (const child of bar!.children) {
       expect(child.getBoundingClientRect().right).toBeLessThanOrEqual(
         bar!.getBoundingClientRect().right + 1,
