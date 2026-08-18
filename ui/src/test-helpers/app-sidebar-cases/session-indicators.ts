@@ -134,6 +134,12 @@ describe("AppSidebar session indicators", () => {
       throw new Error("expected avatar row");
     }
     row.channelAvatarUrl = missingUrl;
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
 
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
@@ -158,11 +164,16 @@ describe("AppSidebar session indicators", () => {
     gatewayHarness.gateway.connection.token = "avatar-token";
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
 
-    // The pruned avatar 404s and its absence is cached under the old URL.
+    // The pruned avatar 404s and its absence is cached under the old URL; the
+    // owner chip must keep the lead slot occupied instead of an empty circle.
     await waitForFast(() => {
       expect(fetchMock).toHaveBeenCalled();
     });
-    expect(sidebar.querySelector(`[data-session-key="${avatarKey}"] .channel-avatar`)).toBeNull();
+    const missingRow = sidebar.querySelector(`[data-session-key="${avatarKey}"]`);
+    expect(missingRow?.querySelector(".channel-avatar")).toBeNull();
+    await waitForFast(() => {
+      expect(missingRow?.querySelector(".session-owner-chip")).not.toBeNull();
+    });
 
     // A restored/replaced backing image arrives as a new route revision; the
     // mounted row must fetch the new URL instead of reusing the sticky 404.
@@ -181,6 +192,47 @@ describe("AppSidebar session indicators", () => {
       restoredUrl,
       expect.objectContaining({ headers: { Authorization: "Bearer avatar-token" } }),
     );
+    // Once the avatar renders, the chip fallback yields to the real image.
+    expect(
+      sidebar.querySelector(`[data-session-key="${avatarKey}"] .session-owner-chip`),
+    ).toBeNull();
+  });
+
+  it("keeps the owner chip when avatar auth is not ready", async () => {
+    const avatarKey = "agent:main:avatar-auth-pending";
+    const sessions = createSessionsHarness("main", [avatarKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const row = result.sessions.find((sessionRow) => sessionRow.key === avatarKey);
+    if (!row) {
+      throw new Error("expected avatar row");
+    }
+    row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}`;
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    // No handshake and no token/password: the loader must not fetch, and the
+    // row must show the owner chip rather than an empty circle.
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const pendingSnapshot = gatewayHarness.gateway.snapshot as { hello: unknown };
+    pendingSnapshot.hello = null;
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+
+    const pendingRow = sidebar.querySelector(`[data-session-key="${avatarKey}"]`);
+    expect(pendingRow?.querySelector("openclaw-channel-avatar")).not.toBeNull();
+    expect(pendingRow?.querySelector(".channel-avatar")).toBeNull();
+    await waitForFast(() => {
+      expect(pendingRow?.querySelector(".session-owner-chip")).not.toBeNull();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps Home activity and its active composer draft in the trailing endcap", async () => {

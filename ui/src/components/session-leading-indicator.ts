@@ -210,14 +210,29 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
+  const ownerId = !session.isChild ? ownerActor?.id?.trim() : undefined;
+  const ownerChip =
+    ownerId && ownerActor
+      ? renderSessionOwnerChip(
+          ownerActor,
+          "row",
+          attribution,
+          ownerViewing,
+          participants,
+          participantCount,
+        )
+      : undefined;
   if (session.channelAvatarUrl) {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
+        // The owner chip stays visible until a usable avatar blob loads, so a
+        // slow, unauthenticated, or 404 route never leaves an empty lead slot.
         content: html`<openclaw-channel-avatar
           .routeUrl=${session.channelAvatarUrl}
           .authTokens=${avatarAuth?.authTokens ?? []}
           .authReady=${avatarAuth?.authReady ?? false}
+          .fallback=${ownerChip ?? nothing}
         ></openclaw-channel-avatar>`,
         running: false,
         circular: true,
@@ -225,25 +240,18 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
-  if (!session.isChild && ownerActor?.id?.trim()) {
+  if (ownerChip) {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(
-          ownerActor,
-          "row",
-          attribution,
-          ownerViewing,
-          participants,
-          participantCount,
-        ),
+        content: ownerChip,
         running: false,
         circular: true,
       }),
       trailingIndicator,
       // Single source for facepile dedup: only the identity actually shown in
       // the lead may be excluded, else attention/archived rows hide a viewer.
-      renderedOwnerId: ownerActor.id,
+      renderedOwnerId: ownerId,
     };
   }
   return {

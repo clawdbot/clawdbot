@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -8,6 +8,8 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) routeUrl: string | null = null;
   @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
+  /** Shown while no avatar blob is usable (loading, missing auth, 404). */
+  @property({ attribute: false }) fallback: TemplateResult | typeof nothing = nothing;
   @state() private undecodableRouteUrl: string | null = null;
   private readonly loader = new AuthenticatedAvatarRouteLoader(
     () => {
@@ -34,7 +36,7 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
         ? this.loader.resolve(routeUrl, this.authTokens)
         : null;
     if (!blobUrl) {
-      return nothing;
+      return this.fallback;
     }
     return html`<img
       class="channel-avatar"
