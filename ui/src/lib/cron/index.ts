@@ -531,11 +531,10 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
 }
 
 function upsertLocalCronJob(state: CronState, updatedJob: CronJob) {
-  const existing = state.cronJobs.some((job) => job.id === updatedJob.id);
+  const index = state.cronJobs.findIndex((job) => job.id === updatedJob.id);
   // Exact mutation/get responses retain editor authority when the filtered page omits the job.
-  state.cronJobs = existing
-    ? state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job))
-    : [...state.cronJobs, updatedJob];
+  state.cronJobs =
+    index >= 0 ? state.cronJobs.with(index, updatedJob) : [...state.cronJobs, updatedJob];
 }
 
 function isCronJobChangedError(error: unknown): boolean {

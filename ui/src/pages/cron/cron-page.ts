@@ -387,9 +387,7 @@ class CronPage extends OpenClawLightDomElement {
       modelSuggestions: this.cronModelSuggestions,
     });
     const canManage = this.canManageCron;
-    const editingJob = this.cron.cronEditingJobId
-      ? this.cron.cronJobs.find((job) => job.id === this.cron.cronEditingJobId)
-      : undefined;
+    const editingJob = this.cron.cronJobs.find((job) => job.id === this.cron.cronEditingJobId);
     return html`
       <section class="content-header">
         <div>
