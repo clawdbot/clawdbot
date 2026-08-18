@@ -7,11 +7,11 @@ import {
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import {
-  convertPcmToMulaw8k,
+  createStreamingPcmResampler,
   mulawToPcm,
+  pcmToMulaw,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   RealtimeVoiceSessionLifecycle,
-  resamplePcm,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceSessionConnection,
@@ -74,6 +74,14 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   private socket: OpenAIQuicksilverSocket | undefined;
   private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
+  private readonly inboundTelephonyResampler = createStreamingPcmResampler(
+    8_000,
+    OPENAI_QUICKSILVER_SAMPLE_RATE,
+  );
+  private readonly outboundTelephonyResampler = createStreamingPcmResampler(
+    OPENAI_QUICKSILVER_SAMPLE_RATE,
+    8_000,
+  );
   private activeDelegations = new Set<string>();
   private readonly flowId = randomUUID();
   private readonly requestIds: OpenAIQuicksilverRequestIds = {
@@ -416,11 +424,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       const pcm = Buffer.from(canonical, "base64");
-      this.config.onAudio(
+      const output =
         this.config.audioFormat?.encoding === "g711_ulaw"
-          ? convertPcmToMulaw8k(pcm, OPENAI_QUICKSILVER_SAMPLE_RATE)
-          : pcm,
-      );
+          ? pcmToMulaw(this.outboundTelephonyResampler.process(pcm))
+          : pcm;
+      if (output.length > 0) {
+        this.config.onAudio(output);
+      }
       this.config.onEvent?.({ direction: "server", type: "output_audio.delta" });
       return;
     }
@@ -468,8 +478,11 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private sendAudioNow(audio: Buffer): void {
     const pcm =
       this.config.audioFormat?.encoding === "g711_ulaw"
-        ? resamplePcm(mulawToPcm(audio), 8_000, OPENAI_QUICKSILVER_SAMPLE_RATE)
+        ? this.inboundTelephonyResampler.process(mulawToPcm(audio))
         : audio;
+    if (pcm.length === 0) {
+      return;
+    }
     this.sendEvent({ type: "input_audio.append", audio: pcm.toString("base64") });
   }
 

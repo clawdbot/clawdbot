@@ -447,13 +447,13 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
 
     const inputEvent = sentEvents(harness.socket).at(-1);
     expect(inputEvent?.type).toBe("input_audio.append");
-    expect(Buffer.from(String(inputEvent?.audio), "base64")).toHaveLength(960);
+    expect(Buffer.from(String(inputEvent?.audio), "base64")).toHaveLength(870);
 
     harness.socket.serverEvent({
       type: "output_audio.delta",
       audio: Buffer.alloc(960).toString("base64"),
     });
-    expect(harness.onAudio).toHaveBeenCalledWith(Buffer.alloc(160, 0xff));
+    expect(harness.onAudio).toHaveBeenCalledWith(Buffer.alloc(155, 0xff));
   });
 
   it("uses session context for forced consult results without a provider delegation", async () => {
