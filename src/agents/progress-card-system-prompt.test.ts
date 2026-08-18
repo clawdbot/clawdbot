@@ -16,6 +16,7 @@ function append(params: {
   config?: Parameters<typeof appendProgressCardSystemPrompt>[0]["config"];
   extraSystemPrompt?: string;
   sessionKey?: string;
+  toolsAllow?: string[];
 }) {
   return appendProgressCardSystemPrompt({
     agentId: "main",
@@ -24,6 +25,7 @@ function append(params: {
     modelId: "gpt-5.6-sol",
     provider: "openai",
     sessionKey: params.sessionKey ?? "agent:main:work",
+    toolsAllow: params.toolsAllow,
   });
 }
 
@@ -34,6 +36,27 @@ describe("progress card system prompt", () => {
 
   it("injects the exact instruction when every adoption gate passes", async () => {
     await expect(append({})).resolves.toBe(SENTENCE);
+  });
+
+  it.each([
+    {
+      name: "the progress-card kill switch is disabled",
+      params: { config: { tools: { updatePlan: false } } },
+    },
+    {
+      name: "progress_card is denied",
+      params: { config: { tools: { deny: ["progress_card"] } } },
+    },
+    {
+      name: "the configured profile excludes progress_card",
+      params: { config: { tools: { profile: "messaging" as const } } },
+    },
+    {
+      name: "the runtime allowlist excludes progress_card",
+      params: { toolsAllow: ["read"] },
+    },
+  ])("suppresses the instruction when $name", async ({ params }) => {
+    await expect(append(params)).resolves.toBeUndefined();
   });
 
   it.each([

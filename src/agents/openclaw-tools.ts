@@ -104,10 +104,7 @@ export function createOpenClawTools(
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
     toolBindings?: Readonly<Record<string, unknown>>;
-    /**
-     * The durable store session key for the live run when it differs from the
-     * sandbox/policy session key used to construct the tool set.
-     */
+    /** Durable store key when it differs from the sandbox/policy session key. */
     runSessionKey?: string;
     agentChannel?: string;
     runId?: string;
@@ -139,6 +136,7 @@ export function createOpenClawTools(
     clientCaps?: string[];
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
+    runtimeToolAllowlist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
     cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
     cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
@@ -211,10 +209,7 @@ export function createOpenClawTools(
     sessionId?: string;
     /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
     conversationRecall?: ConversationRecallContext;
-    /**
-     * Explicit one-shot local CLI runs should not keep plugin-owned process
-     * resources alive after emitting their result.
-     */
+    /** One-shot local CLI runs release plugin-owned resources after their result. */
     oneShotCliRun?: boolean;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
@@ -460,8 +455,9 @@ export function createOpenClawTools(
     sessionLinkBase,
   };
   const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
+    ...options,
+    agentId: sessionAgentId,
     config: resolvedConfig,
-    pluginToolDenylist: options?.pluginToolDenylist,
   })
     ? createProgressCardTool({
         agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,

@@ -360,6 +360,25 @@ describe("openclaw-tools progress_card gating", () => {
     expect(includeProgressCard).toBe(true);
   });
 
+  it.each([
+    {
+      name: "a configured profile",
+      options: { config: { tools: { profile: "messaging" as const } } },
+    },
+    {
+      name: "the runtime allowlist",
+      options: { runtimeToolAllowlist: ["read"] },
+    },
+  ])("omits progress_card when $name excludes it", ({ options }) => {
+    expect(
+      createFastToolNames({
+        ...options,
+        modelProvider: "openai",
+        modelId: "gpt-5.6-sol",
+      }),
+    ).not.toContain("progress_card");
+  });
+
   it("leaves normal deny policy enforcement to the assembled tool set", () => {
     const tools = createFastToolNames({
       config: {} as OpenClawConfig,

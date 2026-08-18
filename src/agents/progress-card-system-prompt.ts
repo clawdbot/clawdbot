@@ -4,6 +4,7 @@ import {
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../infra/device-pairing.js";
+import { shouldIncludeProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 const PROGRESS_CARD_SYSTEM_PROMPT =
@@ -43,8 +44,23 @@ export async function appendProgressCardSystemPrompt(params: {
   modelId: string;
   provider: string;
   sessionKey?: string;
+  toolsAllow?: string[];
 }): Promise<string | undefined> {
-  if (isAgentMainSession(params) || !(await hasPairedCardRenderer())) {
+  // This boundary covers kill-switch, global/provider/agent/profile policy, and runtime allow.
+  // Group, sender, sandbox, subagent, inherited, and plugin deny layers resolve during assembly.
+  const progressCardToolAvailable = shouldIncludeProgressCardToolForOpenClawTools({
+    agentId: params.agentId,
+    agentSessionKey: params.sessionKey,
+    config: params.config,
+    modelId: params.modelId,
+    modelProvider: params.provider,
+    runtimeToolAllowlist: params.toolsAllow,
+  });
+  if (
+    !progressCardToolAvailable ||
+    isAgentMainSession(params) ||
+    !(await hasPairedCardRenderer())
+  ) {
     return params.extraSystemPrompt;
   }
   const provider = params.provider.trim().toLowerCase();

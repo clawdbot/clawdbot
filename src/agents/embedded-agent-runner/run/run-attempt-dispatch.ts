@@ -265,6 +265,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     modelId: runtime.modelId,
     provider: runtime.provider,
     sessionKey: params.sessionKey,
+    toolsAllow: params.toolsAllow,
   });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
