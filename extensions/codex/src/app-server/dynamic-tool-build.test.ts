@@ -1680,9 +1680,11 @@ describe("Codex app-server dynamic tool build", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const onToolOutcome = vi.fn();
+    const isTurnTainted = vi.fn(() => true);
     const allocateToolOutcomeOrdinal = vi.fn(() => 0);
     params.disableTools = false;
     params.onToolOutcome = onToolOutcome;
+    params.isTurnTainted = isTurnTainted;
     params.allocateToolOutcomeOrdinal = allocateToolOutcomeOrdinal;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
@@ -1695,6 +1697,7 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(factoryOptions[0]).toMatchObject({
       onToolOutcome,
+      isTurnTainted,
       allocateToolOutcomeOrdinal,
     });
   });

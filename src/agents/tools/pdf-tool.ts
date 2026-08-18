@@ -491,6 +491,7 @@ export function createPdfTool(options?: {
         filename: string;
         resolvedPath: string;
         rewrittenFrom?: string;
+        remoteSource?: boolean;
       }> = [];
 
       for (const pdfRaw of pdfInputs) {
@@ -576,6 +577,7 @@ export function createPdfTool(options?: {
           buffer: media.buffer,
           filename,
           resolvedPath,
+          ...(isHttpUrl ? { remoteSource: true } : {}),
           ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
@@ -635,7 +637,14 @@ export function createPdfTool(options?: {
             ),
           };
 
-      return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+      // Per-invocation taint: only http(s) PDFs are externally controlled
+      // (a prompt-injection vector). Local paths and file:// keep the default
+      // trusted classification so local workflows are not over-tainted.
+      const anyRemoteSource = loadedPdfs.some((p) => p.remoteSource);
+      return {
+        ...buildTextToolResult(result, { native: result.native, ...pdfDetails }),
+        ...(anyRemoteSource ? { resultContentSource: "network" as const } : {}),
+      };
     },
   };
 }

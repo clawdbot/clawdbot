@@ -2333,15 +2333,21 @@ describe("agentLoop tool termination", () => {
   });
 
   it.each([
-    { source: "network" as const, tainted: true },
-    { source: undefined, tainted: false },
+    { resultSource: "network" as const, toolSource: undefined, tainted: true },
+    { resultSource: undefined, toolSource: "network" as const, tainted: true },
+    { resultSource: undefined, toolSource: undefined, tainted: false },
   ])(
-    "persists $source tool-result taint through the assistant turn",
-    async ({ source, tainted }) => {
+    "persists per-invocation $resultSource and static $toolSource tool-result taint through the assistant turn",
+    async ({ resultSource, toolSource, tainted }) => {
       let turn = 0;
       const tool: AgentTool = {
         ...makeTool("fetch", []),
-        ...(source ? { resultContentSource: source } : {}),
+        ...(toolSource ? { resultContentSource: toolSource } : {}),
+        execute: async () => ({
+          content: [{ type: "text", text: "fetch result" }],
+          details: { name: "fetch" },
+          ...(resultSource ? { resultContentSource: resultSource } : {}),
+        }),
       };
       const streamFn: StreamFn = () => {
         turn += 1;
@@ -2788,6 +2794,7 @@ describe("agentLoop tool termination", () => {
       content: [{ type: "text" as const, text: "sent" }],
       details: { phase: "original" },
       extra,
+      resultContentSource: "network" as const,
     };
     const tool: AgentTool = {
       name: "patched",
@@ -2808,18 +2815,18 @@ describe("agentLoop tool termination", () => {
       return stream;
     };
 
-    const events = await collectEvents(
-      agentLoop(
-        [{ role: "user", content: "run", timestamp: 1 }],
-        { systemPrompt: "", messages: [], tools: [tool] },
-        {
-          ...config,
-          afterToolCall: async () => ({ details: { phase: "patched" }, terminate: true }),
-        },
-        undefined,
-        streamFn,
-      ),
+    const stream = agentLoop(
+      [{ role: "user", content: "run", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [tool] },
+      {
+        ...config,
+        afterToolCall: async () => ({ details: { phase: "patched" }, terminate: true }),
+      },
+      undefined,
+      streamFn,
     );
+    const events = await collectEvents(stream);
+    const messages = await stream.result();
     const endEvent = events.find(
       (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
         event.type === "tool_execution_end",
@@ -2831,6 +2838,14 @@ describe("agentLoop tool termination", () => {
       extra,
       terminate: true,
     });
+    expect(
+      (
+        messages.find((message) => message.role === "toolResult") as unknown as Record<
+          string,
+          unknown
+        >
+      )["__openclaw"],
+    ).toEqual({ resultContentSource: "network" });
   });
 
   it("marks policy-blocked tool calls as not executed", async () => {

@@ -1598,6 +1598,10 @@ async function finalizeExecutedToolCall(
 ): Promise<FinalizedToolCallOutcome> {
   let result = executed.result;
   let isError = executed.isError;
+  // Capture provenance before hooks can replace the displayed result. The remote
+  // content was already exposed in this turn, so a hook failure must not turn a
+  // tainted call into a trusted memory write.
+  const resultContentSource = resolveToolResultContentSource(result, prepared.tool);
 
   if (executed.executionStarted && config.afterToolCall) {
     try {
@@ -1636,10 +1640,12 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(executed.executionStarted &&
-      !executed.callerCancelled &&
-      prepared.tool.resultContentSource
-        ? { resultContentSource: prepared.tool.resultContentSource }
+      // Preserve main's caller-cancellation guard: provenance is only stamped
+      // when the tool actually ran and the caller did not abort it, but resolve
+      // the source per-invocation (result wins over the static tool marker) so
+      // mixed-source tools classify each call precisely.
+      ...(executed.executionStarted && !executed.callerCancelled && resultContentSource
+        ? { resultContentSource }
         : {}),
     },
     finalArgs,
@@ -1887,6 +1893,20 @@ function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undef
 
 function toolResultTaintsTurn(message: ToolResultMessage): boolean {
   return readTurnTaintMetadata(message)?.resultContentSource === "network";
+}
+
+/**
+ * Resolves the effective content source for a finalized tool result. A
+ * per-invocation value returned by the tool's execute (on the result object)
+ * wins over the static tool-level `resultContentSource`, so a tool that only
+ * fetches remote content for some inputs (http(s) media vs local path) can
+ * classify each call precisely instead of over-tainting local inputs.
+ */
+function resolveToolResultContentSource(
+  result: AgentToolResult<unknown>,
+  tool: AgentTool,
+): ToolResultContentSource | undefined {
+  return result.resultContentSource ?? tool.resultContentSource;
 }
 
 function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {

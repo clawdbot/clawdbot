@@ -6,6 +6,8 @@ import type {
 
 /** OpenClaw-only dynamic-tool facts that never cross into the Codex protocol. */
 export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
+  /** Per-invocation provenance retained for OpenClaw's mirrored transcript only. */
+  resultContentSource?: "network";
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
   transcriptDetails?: unknown;
@@ -25,6 +27,21 @@ export function withDynamicToolTranscriptDetails<T extends CodexDynamicToolRunti
     enumerable: false,
     value: details,
   });
+  return response;
+}
+
+/** Retains result provenance without adding it to Codex's response payload. */
+export function withDynamicToolResultContentSource<T extends CodexDynamicToolRuntimeResponse>(
+  response: T,
+  resultContentSource: "network" | undefined,
+): T {
+  if (resultContentSource) {
+    Object.defineProperty(response, "resultContentSource", {
+      configurable: true,
+      enumerable: false,
+      value: resultContentSource,
+    });
+  }
   return response;
 }
 

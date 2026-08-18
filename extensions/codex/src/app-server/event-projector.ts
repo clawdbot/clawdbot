@@ -361,17 +361,20 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  recordDynamicToolResult(params: {
-    callId: string;
-    tool: string;
-    asyncStarted?: boolean;
-    terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
-    success: boolean;
-    terminalType?: "blocked" | "completed" | "error";
-    sideEffectEvidence?: boolean;
-    contentItems: CodexDynamicToolCallOutputContentItem[];
-    details?: unknown;
-  }): void {
+  recordDynamicToolResult(
+    params: {
+      callId: string;
+      tool: string;
+      asyncStarted?: boolean;
+      terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
+      success: boolean;
+      terminalType?: "blocked" | "completed" | "error";
+      sideEffectEvidence?: boolean;
+      contentItems: CodexDynamicToolCallOutputContentItem[];
+      details?: unknown;
+    },
+    resultContentSource?: "network",
+  ): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
     const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);

@@ -102,6 +102,7 @@ describe("conversation tools", () => {
     expect(list.outputSchema).toBe(ConversationListResultSchema);
     expect(send.outputSchema).toBe(ConversationSendResultSchema);
     expect(turn.outputSchema).toBe(ConversationTurnResultSchema);
+    expect(turn.resultContentSource).toBe("network");
     expect(Value.Check(list.outputSchema!, listResult.details)).toBe(true);
     expect(Value.Check(send.outputSchema!, sendResult.details)).toBe(true);
     expect(Value.Check(turn.outputSchema!, turnResult.details)).toBe(true);

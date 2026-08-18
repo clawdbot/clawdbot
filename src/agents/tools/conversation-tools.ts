@@ -190,6 +190,9 @@ export function createConversationsTurnTool(
   return {
     label: "Conversation Turn",
     name: "conversations_turn",
+    // The peer reply is externally controlled text (a prompt-injection vector),
+    // so the turn must be tainted and subsequent memory writes quarantined.
+    resultContentSource: "network",
     displaySummary: "Send and wait for the correlated peer reply.",
     description:
       "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",

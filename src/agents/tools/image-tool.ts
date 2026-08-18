@@ -1123,14 +1123,22 @@ export function createImageTool(options?: {
           buffer: media.buffer,
           mimeType,
           resolvedImage,
+          ...(isHttpUrl ? { remoteSource: true } : {}),
           ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 
-      if (imageRoute.kind === "native") {
-        return await buildNativeImageToolResult(loadedImages, options?.config);
-      }
+      // Per-invocation taint: only http(s) images are externally controlled
+      // (a prompt-injection vector via the visual description). Local paths,
+      // file://, and data: keep the default trusted classification.
+      const anyRemoteImageSource = loadedImages.some((img) => img.remoteSource);
 
+      if (imageRoute.kind === "native") {
+        const nativeResult = await buildNativeImageToolResult(loadedImages, options?.config);
+        return anyRemoteImageSource
+          ? { ...nativeResult, resultContentSource: "network" as const }
+          : nativeResult;
+      }
       // Do not issue a paid vision-provider call for an already-aborted run.
       signal?.throwIfAborted();
       // Text-only runs delegate image understanding to the configured fallback model.
@@ -1148,7 +1156,10 @@ export function createImageTool(options?: {
         preparedModelRuntime: options?.preparedModelRuntime,
       });
 
-      return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+      return {
+        ...buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages)),
+        ...(anyRemoteImageSource ? { resultContentSource: "network" as const } : {}),
+      };
     },
   };
 }

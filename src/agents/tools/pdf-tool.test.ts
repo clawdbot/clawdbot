@@ -463,11 +463,12 @@ describe("createPdfTool", () => {
       };
       const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
-      await tool.execute("t1", {
+      const result = await tool.execute("t1", {
         prompt: "summarize",
         pdf: "http://198.18.0.153/doc.pdf",
       });
 
+      expect(result.resultContentSource).toBe("network");
       const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
       expectFields(loadOptions, {
@@ -577,6 +578,7 @@ describe("createPdfTool", () => {
       });
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      expect(result.resultContentSource).toBeUndefined();
       expectFields(result.details, {
         native: true,
         model: ANTHROPIC_PDF_MODEL,
