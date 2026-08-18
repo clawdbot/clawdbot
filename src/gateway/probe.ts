@@ -11,6 +11,7 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceTokenReadOnly,
@@ -20,6 +21,12 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
+import {
+  gatewayEdgeAuthValueForTarget,
+  normalizeEdgeAuthHeadersConfig,
+  resolveEdgeAuthHeaders,
+  type EdgeAuthHeadersConfig,
+} from "./edge-auth.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
 
@@ -254,6 +261,7 @@ export async function probeGateway(opts: {
   /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
   suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
+  config?: OpenClawConfig;
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
@@ -318,6 +326,14 @@ export async function probeGateway(opts: {
     return makeDeviceRequiredShortCircuitResult(opts.url);
   }
   const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: opts.config ?? {}, targetUrl: opts.url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: opts.config ?? {},
+    value: edgeAuthConfig,
+    env: opts.env ?? process.env,
+  });
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -407,6 +423,7 @@ export async function probeGateway(opts: {
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
+      edgeAuthHeaders,
       tlsFingerprint: opts.tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,

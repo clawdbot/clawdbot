@@ -339,6 +339,13 @@ export function resolveGatewayDisconnectState(
       remediation: failure.remediation,
     };
   }
+  if (failure.kind === "identity-proxy") {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "identity-aware proxy rejected connection",
+      remediation: failure.remediation,
+    };
+  }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
     activityStatus: failure.remediation ? "gateway authentication needs attention" : "idle",
@@ -873,7 +880,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   } else {
     const { GatewayChatClient } = await import("./gateway-chat.js");
     client = opts.boundGateway
-      ? GatewayChatClient.connectBound({ config, ...opts.boundGateway })
+      ? await GatewayChatClient.connectBound({ config, ...opts.boundGateway })
       : await GatewayChatClient.connect({
           url: opts.url,
           token: opts.token,

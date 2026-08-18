@@ -1099,6 +1099,33 @@ describe("runSetupWizard", () => {
     });
   });
 
+  it("passes configured remote edge auth to the setup reachability probe", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      config: expect.objectContaining({
+        gateway: config.gateway,
+      }),
+      token: undefined,
+    });
+  });
+
   it("keeps a configured remote token authoritative over an environment password", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce(
       configSnapshot({
@@ -1180,6 +1207,7 @@ describe("runSetupWizard", () => {
             url: "wss://stored.example.com:18789",
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
             password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
           },
         },
       },
@@ -1215,6 +1243,7 @@ describe("runSetupWizard", () => {
             url: "wss://flag.example.com:18789",
             token: undefined,
             password: undefined,
+            edgeAuth: undefined,
           },
         }),
       }),

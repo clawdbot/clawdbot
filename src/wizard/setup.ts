@@ -384,7 +384,7 @@ async function runSetupWizardOnce(
                 : remoteUrlChanged
                   ? { token: undefined }
                   : {}),
-              ...(remoteUrlChanged ? { password: undefined } : {}),
+              ...(remoteUrlChanged ? { password: undefined, edgeAuth: undefined } : {}),
             },
           },
         };
@@ -416,6 +416,7 @@ async function runSetupWizardOnce(
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
+        ...(remoteSeedConfig.gateway?.remote?.edgeAuth ? { config: remoteSeedConfig } : {}),
         token: remoteProbeAuth?.auth.token,
         ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })

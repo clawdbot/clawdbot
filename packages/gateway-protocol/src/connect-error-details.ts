@@ -507,7 +507,35 @@ const SCOPE_MISMATCH_REMEDIATION =
   "`openclaw devices approve --latest`, approve the printed request, then reconnect.";
 const RATE_LIMITED_REMEDIATION =
   "Wait for the temporary authentication lockout to expire, then retry.";
+const IDENTITY_PROXY_REMEDIATION =
+  "An identity-aware proxy rejected the WebSocket upgrade. Configure gateway.remote.edgeAuth for the configured Gateway origin, then reconnect. See https://docs.openclaw.ai/gateway/remote#gateway-behind-an-identity-aware-proxy.";
+const CLOUDFLARE_ACCESS_REMEDIATION =
+  "Cloudflare Access detected: configure its token header or service-token headers in gateway.remote.edgeAuth.";
+const IDENTITY_PROXY_HTTP_STATUSES = new Set([301, 302, 303, 307, 308, 401, 403]);
 const GATEWAY_CLOSED_MESSAGE_PATTERN = /\bgateway closed \(\d+\):/i;
+
+function readIdentityProxyRejection(details: unknown): { cloudflareAccess: boolean } | null {
+  if (!isProtocolRecord(details)) {
+    return null;
+  }
+  if (
+    details.reason !== "websocket-upgrade-rejected" ||
+    typeof details.httpStatus !== "number" ||
+    !IDENTITY_PROXY_HTTP_STATUSES.has(details.httpStatus)
+  ) {
+    return null;
+  }
+  const location = normalizeOptionalProtocolString(details.location);
+  if (!location) {
+    return { cloudflareAccess: false };
+  }
+  try {
+    const hostname = new URL(location).hostname.toLowerCase().replace(/\.+$/u, "");
+    return { cloudflareAccess: hostname.endsWith(".cloudflareaccess.com") };
+  } catch {
+    return { cloudflareAccess: false };
+  }
+}
 
 /** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
 export function classifyGatewayConnectFailure(input: {
@@ -534,6 +562,16 @@ export function classifyGatewayConnectFailure(input: {
           ? formatConnectPairingRequiredMessage(input.details)
           : (userMessage ?? "device pairing required"),
       remediation: PAIRING_APPROVAL_REMEDIATION,
+    };
+  }
+  const identityProxy = readIdentityProxyRejection(input.details);
+  if (identityProxy) {
+    return {
+      kind: "identity-proxy" as const,
+      userMessage: userMessage ?? "identity-aware proxy rejected websocket upgrade",
+      remediation: identityProxy.cloudflareAccess
+        ? `${IDENTITY_PROXY_REMEDIATION}\n${CLOUDFLARE_ACCESS_REMEDIATION}`
+        : IDENTITY_PROXY_REMEDIATION,
     };
   }
   const deviceIdentityRequired =
