@@ -65,16 +65,9 @@ function base64DataValue(code: number): number {
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  // Single validating pass. An output buffer is materialized only after the
-  // first whitespace character is seen: already-canonical input (any standard
-  // encoder's output) is returned unchanged with zero allocations, and input
-  // containing whitespace costs exactly one buffer bounded by the input
-  // length, regardless of how the whitespace is distributed. (Appending per
-  // character instead — `current += char` — allocated one V8 cons-string node
-  // per input character, all live at once: hundreds of MB of transient heap
-  // for attachment-sized payloads. Collecting whitespace-delimited runs as
-  // string slices is not bounded either: input alternating data characters
-  // and whitespace retains one slice object per run.)
+  // Single validating pass; the output buffer is allocated lazily on the first
+  // whitespace and bounded by the input length, so canonical input returns
+  // unchanged with zero allocations and no input shape multiplies intermediates.
   let out: Buffer | undefined;
   let outLen = 0;
   let padding = 0;
