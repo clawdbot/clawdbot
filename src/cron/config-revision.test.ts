@@ -134,9 +134,7 @@ describe("resolveCronJobConfigRevision", () => {
     expect(resolveCronJobConfigRevision(explicitlyCleared)).toBe(
       resolveCronJobConfigRevision(inherited),
     );
-    expect(resolveCronJobConfigRevision(retargeted)).toBe(
-      resolveCronJobConfigRevision(inherited),
-    );
+    expect(resolveCronJobConfigRevision(retargeted)).toBe(resolveCronJobConfigRevision(inherited));
   });
 
   it("is stable across the SQLite store round-trip", async () => {
