@@ -850,7 +850,7 @@ describe("cron controller", () => {
     expect(state.cronJobs).toEqual([updatedJob]);
   });
 
-  it("commits authoritative toggle state before a deferred jobs reconciliation", async () => {
+  it("commits authoritative toggle state and advances an open editor revision", async () => {
     const loadedJob = createCronJob({
       id: "job-authoritative-toggle",
       name: "Toggle job",
@@ -864,7 +864,7 @@ describe("cron controller", () => {
       configRevision: "revision-toggled",
     };
     const listResponse = createDeferred<CronJobsListResult>();
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
         return updatedJob;
       }
@@ -877,6 +877,8 @@ describe("cron controller", () => {
       return {};
     });
     const state = createStateWithRequest(request, { cronJobs: [loadedJob] });
+    startCronEdit(state, loadedJob);
+    state.cronForm.name = "Unsaved rename";
 
     const toggle = toggleCronJob(state, loadedJob, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
@@ -887,9 +889,20 @@ describe("cron controller", () => {
       patch: { enabled: false },
     });
     expect(state.cronJobs).toEqual([updatedJob]);
+    expect(state.cronEditingConfigRevision).toBe("revision-toggled");
+    expect(state.cronForm.name).toBe("Unsaved rename");
 
     listResponse.resolve(cronJobsListResponse([updatedJob]));
     await expect(toggle).resolves.toBe(true);
+
+    await addCronJob(state);
+    const updateCalls = request.mock.calls.filter(([method]) => method === "cron.update");
+    expect(updateCalls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        expectedConfigRevision: "revision-toggled",
+        patch: expect.objectContaining({ name: "Unsaved rename" }),
+      }),
+    );
   });
 
   it("removes confirmed jobs locally before a failed reconciliation", async () => {

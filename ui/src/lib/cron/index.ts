@@ -1299,6 +1299,9 @@ export async function toggleCronJob(
       patch: { enabled },
     });
     replaceLocalCronJob(state, updatedJob);
+    if (state.cronEditingJobId === updatedJob.id) {
+      state.cronEditingConfigRevision = requireCronConfigRevision(updatedJob.configRevision);
+    }
     updated = true;
     await reloadCronJobsSnapshot(state);
   });
