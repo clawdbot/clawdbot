@@ -96,7 +96,17 @@ function isRetryableSendDisconnectError(error: unknown): boolean {
   if (isWhatsAppSocketOperationTimeoutError(error)) {
     return false;
   }
-  return /closed|reset|timed\s*out|disconnect|no active socket/i.test(formatError(error));
+  // A timeout does not prove the socket died and may have occurred after the
+  // message was delivered, so it is not retried; this matches
+  // shouldClearSocketRefAfterSendFailure, which also excludes it. A timeout in
+  // the text wins over a disconnect keyword (e.g. "timed out after socket
+  // closed") to avoid replaying a possibly-delivered message. Covers "timed
+  // out", "timeout", "TimeoutError", and ETIMEDOUT spellings.
+  const text = formatError(error);
+  if (/timed\s*out|timeout|ETIMEDOUT/i.test(text)) {
+    return false;
+  }
+  return /closed|reset|disconnect|no active socket/i.test(text);
 }
 
 function shouldClearSocketRefAfterSendFailure(error: unknown): boolean {
