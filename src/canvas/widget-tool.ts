@@ -87,6 +87,7 @@ type ShowWidgetToolOptions = {
   agentSessionKey?: string;
   stateDir?: string;
   callGateway?: InProcessGatewayCaller;
+  inlineHostEnabled?: boolean;
 };
 
 function slugWidgetName(title: string): string {
@@ -137,12 +138,13 @@ function assertPinnedWidgetDocumentSize(html: string): void {
 /** Creates a self-contained widget hosted by OpenClaw core. */
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
   const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
+  const inlineHostEnabled = options.inlineHostEnabled !== false;
   const registeredKinds = listBoardWidgetContentKinds(currentPluginRegistry());
   const kinds = ["html", ...registeredKinds] as const;
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. Show a widget on the user's current surface; kind defaults to html${registeredKinds.length ? ` and registered kinds are ${registeredKinds.join(", ")}` : ""}. Set pin=true to also place it on this session's dashboard; use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), and openclaw.cron.trigger(jobId). \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.`,
+    description: `Visual helps? Make widget. Do not wait for ask. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. Show a widget on the user's current surface; kind defaults to html${registeredKinds.length ? ` and registered kinds are ${registeredKinds.join(", ")}` : ""}. ${inlineHostEnabled ? "Set pin=true to also place it on this session's dashboard" : "Inline hosting is disabled; set pin=true to place it on this session's dashboard"}; use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), and openclaw.cron.trigger(jobId). \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.`,
     parameters: showWidgetToolSchema(kinds),
     requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
     execute: async (_toolCallId, args) => {
@@ -186,24 +188,30 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           throw new WidgetHtmlInputError(`invalid ${kind} widget source: ${String(error)}`);
         }
       }
-      const inlineBody = registration
-        ? registration.definition.composeDocument({
-            source: widgetCode,
+      if (!inlineHostEnabled && !shouldPin) {
+        throw new WidgetHtmlInputError(
+          "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
+        );
+      }
+      const wrappedDocument = inlineHostEnabled
+        ? buildWidgetDocument(
             title,
-            resourceUrls: Object.fromEntries(
-              registration.definition.resources.paths.map((resourcePath) => [
-                resourcePath,
-                resourcePath,
-              ]),
-            ),
-            promptGranted: false,
-          })
-        : widgetCode;
-      const wrappedDocument = buildWidgetDocument(
-        title,
-        inlineBody,
-        registration ? { scriptOrigins: ["'self'"] } : {},
-      );
+            registration
+              ? registration.definition.composeDocument({
+                  source: widgetCode,
+                  title,
+                  resourceUrls: Object.fromEntries(
+                    registration.definition.resources.paths.map((resourcePath) => [
+                      resourcePath,
+                      resourcePath,
+                    ]),
+                  ),
+                  promptGranted: false,
+                })
+              : widgetCode,
+            registration ? { scriptOrigins: ["'self'"] } : {},
+          )
+        : undefined;
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
       if (pinSessionKey) {
@@ -248,9 +256,16 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const widget = snapshot.widgets.find(
           (candidate) => candidate.name === snapshot.resolvedWidgetName,
         );
-        pinnedText = `; pinned to dashboard tab ${widget?.tabId ?? tab ?? "main"} as ${
+        pinnedText = `pinned to dashboard tab ${widget?.tabId ?? tab ?? "main"} as ${
           snapshot.resolvedWidgetName
         }${size ? ` (${size})` : ""}`;
+      }
+      if (!wrappedDocument) {
+        return jsonResult({
+          status: "pinned",
+          boardWidgetName: pinnedWidgetName,
+          text: `Widget ${pinnedText}`,
+        });
       }
       // Pin first: placement validation can fail, and a rejected board write
       // must not materialize or prune the bounded inline-document store.
@@ -277,7 +292,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           url: document.entryUrl,
           ...(pinnedWidgetName ? { boardWidgetName: pinnedWidgetName } : {}),
         },
-        text: `Widget hosted at ${document.entryUrl}${pinnedText}`,
+        text: `Widget hosted at ${document.entryUrl}${pinnedText ? `; ${pinnedText}` : ""}`,
       });
     },
   };

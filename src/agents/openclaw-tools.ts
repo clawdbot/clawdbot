@@ -228,7 +228,6 @@ export function createOpenClawTools(
     ModelAwareToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config;
-  const sessionLinkBase = resolveControlUiSessionLinkBase(resolvedConfig);
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
@@ -452,7 +451,7 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     config: resolvedConfig,
     callGateway: effectiveCallGateway,
-    sessionLinkBase,
+    sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
   };
   const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
     ...options,
@@ -549,6 +548,7 @@ export function createOpenClawTools(
             sessionId: options?.sessionId,
             agentId: sessionAgentId,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           }),
         ]),
     ...collectPresentOpenClawTools([heartbeatTool]),
@@ -719,13 +719,12 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
   if (!options?.disablePluginTools) {
-    const existingToolNames = new Set(tools.map((tool) => tool.name));
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({
         options: { ...options, activeProjectKeys },
         resolvedConfig,
-        existingToolNames,
+        existingToolNames: new Set(tools.map((tool) => tool.name)),
       }),
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
