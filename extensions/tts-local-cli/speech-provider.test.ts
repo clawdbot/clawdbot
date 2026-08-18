@@ -328,38 +328,21 @@ describe("buildCliSpeechProvider", () => {
     }
   });
 
-  it("keeps Ogg Opus native for voice-note targets", async () => {
-    const audio = createOggFirstPage(Buffer.from("OpusHeadnative-audio"));
-    const fixture = createRawAudioFixture([...audio]);
-    try {
-      const result = await synthesize({
-        providerConfig: baseProviderConfig(fixture.script, {
-          args: [fixture.script, "--text", "{{Text}}"],
-          outputFormat: "opus",
-        }),
-        target: "voice-note",
-      });
-
-      expect(result).toEqual({
-        audioBuffer: audio,
-        outputFormat: "opus",
-        fileExtension: ".ogg",
-        voiceCompatible: true,
-      });
-      expect(runFfmpegMock).not.toHaveBeenCalled();
-    } finally {
-      rmSync(fixture.dir, { recursive: true, force: true });
-    }
-  });
-
   it.each([
-    { transport: "stdout", outputArgs: [] },
     {
+      codec: "OpusHead",
+      packet: Buffer.from("OpusHeadnative-audio"),
+      transport: "stdout",
+      outputArgs: [],
+    },
+    {
+      codec: "Vorbis",
+      packet: Buffer.from("\x01vorbis-not-OpusHead"),
       transport: "templated file",
       outputArgs: ["--out", "{{OutputDir}}/{{OutputBase}}.ogg"],
     },
-  ])("converts Ogg Vorbis from $transport to Opus for voice notes", async (testCase) => {
-    const audio = createOggFirstPage(Buffer.from("\x01vorbis-not-OpusHead"));
+  ])("converts Ogg $codec from $transport to Opus for voice notes", async (testCase) => {
+    const audio = createOggFirstPage(testCase.packet);
     const fixture = createRawAudioFixture([...audio]);
     try {
       const result = await synthesize({

@@ -189,16 +189,7 @@ function detectAudioFormat(buffer: Buffer): SourceFormat | null {
   if (hasMpegFrameHeader(buffer, 0) || (prefix.startsWith("ID3") && hasId3v2MpegFrame(buffer))) {
     return "mp3";
   }
-  if (!prefix.startsWith("OggS")) {
-    return null;
-  }
-  const segmentCount = buffer[26] ?? 0;
-  const firstSegmentLength = buffer[27] ?? 0;
-  const firstPacketOffset = 27 + segmentCount;
-  const firstPacketPrefix = buffer.toString("ascii", firstPacketOffset, firstPacketOffset + 8);
-  return segmentCount > 0 && firstSegmentLength >= 8 && firstPacketPrefix === "OpusHead"
-    ? "opus"
-    : "ogg";
+  return prefix.startsWith("OggS") ? "ogg" : null;
 }
 
 function getFileExt(format: SourceFormat): string {
