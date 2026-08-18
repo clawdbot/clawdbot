@@ -3570,7 +3570,12 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain('CODEX_PLUGIN_SPEC="npm-pack:$container_path"');
     expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
     expectTextToIncludeAll(runner, [
-      "message(action=send) with final=false",
+      "'continuesSourceReplyProgress'",
+      'FOLLOWTHROUGH_PROGRESS_FINAL_MODE="explicit"',
+      'FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"',
+      'FOLLOWTHROUGH_PROGRESS_INSTRUCTION="with final=false"',
+      'FOLLOWTHROUGH_PROGRESS_INSTRUCTION="without passing final"',
+      "message(action=send) $FOLLOWTHROUGH_PROGRESS_INSTRUCTION",
       "final=true and send exactly",
     ]);
     expect(runner).not.toContain("--timeout 420");
