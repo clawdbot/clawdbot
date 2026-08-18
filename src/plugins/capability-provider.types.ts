@@ -52,7 +52,8 @@ export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 export type WorkerMachineOption = Readonly<{
   id: string;
   label: string;
-  description?: string;
+  cpu?: number;
+  memoryGb?: number;
   default?: boolean;
 }>;
 
@@ -163,7 +164,7 @@ export class WorkerProviderError extends Error {
 export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
-  listMachineOptions?: (profile: WorkerProfile) => readonly WorkerMachineOption[];
+  listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
   /** Omission advertises no placement support; placement providers declare one transport mode. */
   supportedExecutionModes?: readonly [WorkerExecutionMode];
   /**

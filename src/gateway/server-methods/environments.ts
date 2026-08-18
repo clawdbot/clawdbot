@@ -2,7 +2,6 @@ import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-
 import {
   type DesktopObserveParams,
   type EnvironmentSummary,
-  type WorkerMachineOption,
   ErrorCodes,
   errorShape,
   validateDesktopLaunchParams,
@@ -214,14 +213,6 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     return [];
   }
 }
-function projectWorkerMachineOption(option: WorkerMachineOption): WorkerMachineOption {
-  return {
-    id: option.id,
-    label: option.label,
-    ...(option.description === undefined ? {} : { description: option.description }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  };
-}
 export function listWorkerProfiles(context: GatewayRequestContext) {
   if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
     return [];
@@ -240,7 +231,7 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
     summaries.map(async (summary) => {
       try {
         const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
-        const machines = options?.map(projectWorkerMachineOption) ?? [];
+        const machines = options ?? [];
         return machines.length > 0
           ? { id: summary.id, providerId: summary.providerId, machines }
           : summary;

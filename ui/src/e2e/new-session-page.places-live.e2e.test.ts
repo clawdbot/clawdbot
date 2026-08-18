@@ -56,10 +56,11 @@ suite.define(() => {
                 {
                   id: "standard",
                   label: "Standard",
-                  description: "Balanced capacity",
+                  cpu: 32,
+                  memoryGb: 64,
                   default: true,
                 },
-                { id: "fast", label: "Fast", description: "More compute" },
+                { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
               ],
             },
           ],
@@ -80,9 +81,9 @@ suite.define(() => {
       const standard = place.locator('[data-value="machine:standard"]');
       const fast = place.locator('[data-value="machine:fast"]');
       await expect.poll(() => standard.getAttribute("aria-pressed")).toBe("true");
-      await expect.poll(() => standard.textContent()).toContain("Balanced capacity");
+      await expect.poll(() => standard.textContent()).toContain("32 vCPU · 64 GB");
       await expect.poll(() => standard.textContent()).toContain("Default");
-      await expect.poll(() => fast.textContent()).toContain("More compute");
+      await expect.poll(() => fast.textContent()).toContain("64 vCPU · 128 GB");
 
       await fast.click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");

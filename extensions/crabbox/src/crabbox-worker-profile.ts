@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { WorkerProviderError, type WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  WorkerProviderError,
+  type WorkerMachineOption,
+  type WorkerProfile,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export { nonEmptyString };
@@ -42,11 +46,17 @@ type CrabboxProfile = {
 };
 
 const CRABBOX_MACHINE_OPTIONS = [
-  { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
-  { id: "fast", label: "Fast", description: "General maintainer testing" },
-  { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
-  { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+  { id: "standard", label: "Standard" },
+  { id: "fast", label: "Fast" },
+  { id: "large", label: "Large" },
+  { id: "beast", label: "Beast" },
 ] as const;
+
+export type CrabboxMachineShape = Readonly<{
+  class: string;
+  cpu?: number;
+  memoryGb?: number;
+}>;
 
 type IsExecutable = (candidate: string) => boolean;
 
@@ -148,18 +158,32 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   };
 }
 
-export function listCrabboxMachineOptions(profile: WorkerProfile) {
-  const configuredClass = parseCrabboxProfile(profile).class;
-  const options = CRABBOX_MACHINE_OPTIONS.map((option) =>
-    option.id === configuredClass
-      ? {
-          id: option.id,
-          label: option.label,
-          description: option.description,
-          default: true,
-        }
-      : option,
-  );
+export function listCrabboxMachineOptions(
+  configuredClass: string,
+  shapes: readonly CrabboxMachineShape[] | undefined,
+): readonly WorkerMachineOption[] {
+  // Built by assignment rather than conditional spread: oxlint's no-map-spread
+  // rejects spreading to shape objects inside a map callback.
+  const options = CRABBOX_MACHINE_OPTIONS.map((option) => {
+    const shape = shapes?.find((candidate) => candidate.class === option.id);
+    const result: {
+      id: string;
+      label: string;
+      cpu?: number;
+      memoryGb?: number;
+      default?: boolean;
+    } = { id: option.id, label: option.label };
+    if (shape?.cpu !== undefined) {
+      result.cpu = shape.cpu;
+    }
+    if (shape?.memoryGb !== undefined) {
+      result.memoryGb = shape.memoryGb;
+    }
+    if (option.id === configuredClass) {
+      result.default = true;
+    }
+    return result;
+  });
   if (options.some((option) => option.id === configuredClass)) {
     return options;
   }
@@ -168,7 +192,6 @@ export function listCrabboxMachineOptions(profile: WorkerProfile) {
     {
       id: configuredClass,
       label: configuredClass,
-      description: "Configured instance type",
       default: true,
     },
   ];

@@ -233,7 +233,8 @@ describe("worker environment protocol schemas", () => {
               {
                 id: "standard",
                 label: "Standard",
-                description: "Cheap smoke checks and small repos",
+                cpu: 32,
+                memoryGb: 64,
                 default: true,
               },
             ],
@@ -260,7 +261,7 @@ describe("worker environment protocol schemas", () => {
           {
             id: "aws",
             providerId: "crabbox",
-            machines: [{ id: "standard", label: "Standard", cpu: 32 }],
+            machines: [{ id: "standard", label: "Standard", cpu: 0 }],
           },
         ],
       }),
