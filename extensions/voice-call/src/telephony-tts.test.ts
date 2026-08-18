@@ -3,11 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { VoiceCallTtsConfig } from "./config.js";
-import {
-  createTelephonyTtsProvider,
-  type TelephonyTtsRuntime,
-  UnsupportedTelephonyTtsOutputFormatError,
-} from "./telephony-tts.js";
+import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "./telephony-tts.js";
 
 function createCoreConfig(): OpenClawConfig {
   const tts: VoiceCallTtsConfig = {
@@ -89,10 +85,10 @@ describe("createTelephonyTtsProvider", () => {
     });
 
     const synthesis = provider.synthesizeForTelephony("hello");
-    await expect(synthesis).rejects.toBeInstanceOf(UnsupportedTelephonyTtsOutputFormatError);
-    await expect(synthesis).rejects.toThrow(
-      'Unsupported telephony TTS output format "mp3" from provider "example-provider"',
-    );
+    await expect(synthesis).rejects.toMatchObject({
+      name: "UnsupportedTelephonyTtsOutputFormatError",
+      message: 'Unsupported telephony TTS output format "mp3" from provider "example-provider"',
+    });
   });
 
   it("uses shared preparation for the surface override and request text", async () => {

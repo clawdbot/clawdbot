@@ -43,7 +43,7 @@ export type TelephonyTtsProvider = {
 /** Default timeout for one telephony synthesis request. */
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
-export class UnsupportedTelephonyTtsOutputFormatError extends Error {
+class UnsupportedTelephonyTtsOutputFormatError extends Error {
   constructor(
     readonly outputFormat: string,
     readonly provider: string,
