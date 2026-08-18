@@ -1078,13 +1078,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
+    // The read RPC has no service argument, so preserve the inbound direct
+    // conversation through its exact chat GUID instead of a bare handle.
+    const readTarget =
+      !decision.isGroup && decision.chatGuid ? `chat_guid:${decision.chatGuid}` : typingTarget;
 
-    if (supportsRead && sendReadReceipts && typingTarget) {
+    if (supportsRead && sendReadReceipts && readTarget) {
       // Read receipts are best-effort channel UI. Do not put them on the
       // critical path before model dispatch; slow private-API reads otherwise
       // make accepted iMessage turns feel stuck before the agent starts. Use
       // a short-lived client so a stuck read cannot block monitor-client typing.
-      void markIMessageChatRead(typingTarget, {
+      void markIMessageChatRead(readTarget, {
         cfg,
         accountId: accountInfo.accountId,
         cliPath,

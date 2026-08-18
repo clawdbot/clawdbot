@@ -410,9 +410,10 @@ describe("iMessage monitor last-route updates", () => {
           expect.any(Object),
         );
       });
+      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { to: DEFAULT_SENDER };
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "read",
-        expect.objectContaining({ to: DEFAULT_SENDER }),
+        expect.objectContaining(expectedReadTarget),
         expect.any(Object),
       );
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
