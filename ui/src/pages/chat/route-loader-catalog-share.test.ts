@@ -5,6 +5,16 @@ import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
+const SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "beam",
+  hostId: "gateway",
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const;
 
 function catalogContext(
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
@@ -27,7 +37,7 @@ function beamCatalog(sessions: Array<{ threadId: string; name: string }>, nextCu
         id: "beam",
         label: "Beam",
         capabilities: { continueSession: false, archive: false },
-        shareRoute: { routeSegment: "beam", hostId: "gateway" },
+        shareRoute: SHARE_ROUTE,
         hosts: [
           {
             hostId: "gateway",
@@ -50,6 +60,39 @@ function beamCatalog(sessions: Array<{ threadId: string; name: string }>, nextCu
 }
 
 describe("catalog share route resolution", () => {
+  it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
+    const shareRoute = { ...SHARE_ROUTE, routeSegment: "shared-sessions" } as const;
+    const request = vi.fn(async () => {
+      const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
+      return {
+        catalogs: [
+          {
+            ...result.catalogs[0],
+            id: "external",
+            label: "External",
+            shareRoute,
+          },
+        ],
+      };
+    });
+
+    await expect(
+      loadChatRoute(
+        catalogContext(request),
+        { pathname: "/shared-sessions/0123456789ab", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: buildCatalogSessionKey({
+        catalogId: "external",
+        hostId: "gateway",
+        threadId: fullId,
+      }),
+    });
+  });
+
   it("resolves a base-path share independently of the default agent id", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.catalog.list") {
@@ -158,6 +201,39 @@ describe("catalog share route resolution", () => {
     await expect(
       loadChatRoute(
         duplicated,
+        { pathname: "/beam/0123456789ab", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ kind: "route-error" });
+  });
+
+  it("keeps paginated empty results ambiguous and rejects duplicate declared hosts", async () => {
+    const paginated = catalogContext(vi.fn(async () => beamCatalog([], "more")));
+    await expect(
+      loadChatRoute(
+        paginated,
+        { pathname: "/beam/0123456789ab", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ kind: "ambiguous", candidates: [], truncated: true });
+
+    const duplicateHost = catalogContext(
+      vi.fn(async () => {
+        const result = beamCatalog([{ threadId: fullId, name: "First" }]);
+        const catalog = result.catalogs[0];
+        if (!catalog) {
+          throw new Error("catalog fixture missing");
+        }
+        return {
+          catalogs: [{ ...catalog, hosts: [...catalog.hosts, { ...catalog.hosts[0] }] }],
+        };
+      }),
+    );
+    await expect(
+      loadChatRoute(
+        duplicateHost,
         { pathname: "/beam/0123456789ab", search: "", hash: "" },
         "chat",
         new AbortController().signal,

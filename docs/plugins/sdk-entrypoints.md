@@ -168,6 +168,38 @@ export default definePluginEntry({
   with the new row. Keep source identity independent of naming, preserve existing
   labels and snapshots on reuse or recovery, and do not resync native renames.
 
+  A provider may declare one readable transcript route with `shareRoute`. This
+  is a closed contract, not a free-form routing hint:
+
+  ```ts
+  const shareRoute = {
+    kind: "thread-id-prefix",
+    routeSegment: "my-sessions",
+    hostId: "gateway",
+    identifierAlphabet: "lowercase-hex",
+    fullLength: 32,
+    minPrefixLength: 12,
+    lookup: "catalog-list-search-by-thread-id-prefix",
+    ambiguity: "multiple-results-or-next-cursor",
+  } as const;
+  ```
+
+  The provider must return lowercase hexadecimal `threadId` values of exactly
+  32 characters on the declared host. When `list(...)` receives a `search`
+  value that is a valid 12-32 character prefix, that host must return only rows
+  whose `threadId` starts with the prefix. Return every match up to the requested
+  limit and set `nextCursor` when more may exist. The Control UI resolves only
+  one result with no next page; multiple rows or `nextCursor` are explicitly
+  ambiguous and never select the first row.
+
+  `routeSegment` must not use the first segment of a built-in Control UI route
+  or alias, and it must be unique across active session catalogs. Invalid,
+  unsupported, reserved, or multiply owned descriptors fail closed; catalog
+  sessions remain available through the generic
+  `/chat/<agent>?catalog=...&host=...&thread=...` URL. Keep one plugin-owned
+  descriptor constant and reuse it for registration, prefix lookup, and URL
+  generation so those obligations cannot drift.
+
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
   `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
   validation, node payload validation, host projection, adopted-session

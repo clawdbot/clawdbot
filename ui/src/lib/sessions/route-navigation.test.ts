@@ -10,6 +10,17 @@ import {
   sessionNavigationTarget,
 } from "./route-navigation.ts";
 
+const SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "beam",
+  hostId: "gateway",
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const;
+
 describe("sessionNavigationTarget", () => {
   it("defaults generic opens to chat and honors a stored dashboard preference", () => {
     expect(resolveSessionPreferredFace(undefined)).toBe("chat");
@@ -54,13 +65,30 @@ describe("sessionNavigationTarget", () => {
       }),
       fallbackAgentId: "main",
       basePath: "/openclaw",
-      catalogShareRoute: { routeSegment: "beam", hostId: "gateway" },
+      catalogShareRoute: SHARE_ROUTE,
     });
 
     expect(target).toEqual({
       href: "/openclaw/beam/0123456789ab",
       options: { pathname: "/openclaw/beam/0123456789ab" },
     });
+  });
+
+  it("keeps generic catalog URLs when a descriptor collides with a built-in route", () => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: buildCatalogSessionKey({
+        catalogId: "external",
+        hostId: "gateway",
+        threadId: "0123456789abcdef0123456789abcdef",
+      }),
+      fallbackAgentId: "main",
+      catalogShareRoute: { ...SHARE_ROUTE, routeSegment: "plugin" },
+    });
+
+    expect(target.href).toBe(
+      "/chat/main?catalog=external&host=gateway&thread=0123456789abcdef0123456789abcdef",
+    );
   });
 
   it("requires the destination face while preserving catalog identity", () => {

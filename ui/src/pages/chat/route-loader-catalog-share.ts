@@ -1,10 +1,11 @@
 import {
   buildControlUiCatalogSharePath,
+  isControlUiCatalogShareId,
   matchControlUiCatalogSharePath,
 } from "@openclaw/session-url-contract/share";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { INTERNAL_SESSION_PATH_PARAM, isSessionRouteId } from "../../app-route-paths.ts";
+import { INTERNAL_SESSION_PATH_PARAM, isReservedAppRouteSegment } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,7 +19,7 @@ function targetFromLocation(context: ApplicationContext, location: RouteLocation
     matchControlUiCatalogSharePath({ pathname, basePath: context.basePath });
   const internalPath = new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM);
   const target = (internalPath ? matchPath(internalPath) : null) ?? matchPath(location.pathname);
-  return target && !isSessionRouteId(target.routeSegment) ? target : null;
+  return target && !isReservedAppRouteSegment(target.routeSegment) ? target : null;
 }
 
 function routeError(message: string): Extract<ChatRouteData, { kind: "route-error" }> {
@@ -43,7 +44,7 @@ export async function loadCatalogShareRouteFromLocation(
     });
     const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
-      ...(target.valid ? { search: target.shortId } : {}),
+      search: target.shortId,
       limitPerHost: 2,
     });
     signal.throwIfAborted();
@@ -55,37 +56,35 @@ export async function loadCatalogShareRouteFromLocation(
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
     const shareRoute = catalog.shareRoute;
-    if (!target.valid) {
+    if (!isControlUiCatalogShareId(shareRoute, target.shortId)) {
       return routeError(t("chat.sessionRoute.catalogShareInvalid", { catalog: catalog.label }));
     }
     if (catalog.error) {
       return routeError(catalog.error.message);
     }
-    const host = catalog.hosts.find((candidate) => candidate.hostId === shareRoute.hostId);
+    const matchingHosts = catalog.hosts.filter(
+      (candidate) => candidate.hostId === shareRoute.hostId,
+    );
+    const host = matchingHosts.length === 1 ? matchingHosts[0] : undefined;
     if (!host) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
     if (host?.error) {
       return routeError(host.error.message);
     }
-    const matches = host.sessions.filter((session) =>
-      session.threadId.toLowerCase().startsWith(target.shortId),
+    const matches = host.sessions.filter(
+      (session) =>
+        isControlUiCatalogShareId(shareRoute, session.threadId) &&
+        session.threadId.length === shareRoute.fullLength &&
+        session.threadId.startsWith(target.shortId),
     );
-    if (matches.length === 0) {
-      return routeError(
-        t("chat.sessionRoute.catalogShareNotFound", {
-          catalog: catalog.label,
-          shortId: target.shortId,
-        }),
-      );
-    }
     if (matches.length > 1 || host.nextCursor) {
       const candidates = matches.flatMap((session) => {
         const href = buildControlUiCatalogSharePath({
-          routeSegment: shareRoute.routeSegment,
+          shareRoute,
           threadId: session.threadId,
           basePath: context.basePath,
-          shortIdLength: 32,
+          prefixLength: shareRoute.fullLength,
         });
         return href
           ? [
@@ -106,15 +105,23 @@ export async function loadCatalogShareRouteFromLocation(
         face: "chat",
       };
     }
+    if (matches.length === 0) {
+      return routeError(
+        t("chat.sessionRoute.catalogShareNotFound", {
+          catalog: catalog.label,
+          shortId: target.shortId,
+        }),
+      );
+    }
     const session = matches[0];
     if (!session) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
     if (
       !buildControlUiCatalogSharePath({
-        routeSegment: shareRoute.routeSegment,
+        shareRoute,
         threadId: session.threadId,
-        shortIdLength: 32,
+        prefixLength: shareRoute.fullLength,
       })
     ) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));

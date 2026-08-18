@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, BEAM_ROUTE_SEGMENT, type BeamStoredSession } from "./types.js";
+import { BEAM_HOST_ID, BEAM_SESSION_SHARE_ROUTE, type BeamStoredSession } from "./types.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -87,11 +87,12 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
   return {
     id: "beam",
     label: "Beam",
-    shareRoute: { routeSegment: BEAM_ROUTE_SEGMENT, hostId: BEAM_HOST_ID },
+    shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {
       const search = params.search?.trim().toLowerCase();
-      const shareId = search && isControlUiCatalogShareId(search) ? search : undefined;
+      const shareId =
+        search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
       const sessions = (await store.list())
         .filter(
           (session) =>

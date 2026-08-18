@@ -6,6 +6,17 @@ import {
   controlUiSessionSlug,
 } from "./index.js";
 
+const SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "beam",
+  hostId: "gateway",
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const;
+
 type ChatParams = Omit<Parameters<typeof buildControlUiSessionPath>[0], "namespace">;
 
 const UUID_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -85,8 +96,8 @@ describe("buildControlUiCatalogSharePath", () => {
   ])("builds a lowercase 12-character share id for $label", ({ basePath, expected }) => {
     expect(
       buildControlUiCatalogSharePath({
-        routeSegment: "beam",
-        threadId: "0123456789ABCDEF0123456789ABCDEF",
+        shareRoute: SHARE_ROUTE,
+        threadId: "0123456789abcdef0123456789abcdef",
         basePath,
       }),
     ).toBe(expected);
@@ -95,20 +106,27 @@ describe("buildControlUiCatalogSharePath", () => {
   it("can retain the full id for an unambiguous fallback", () => {
     expect(
       buildControlUiCatalogSharePath({
-        routeSegment: "beam",
+        shareRoute: SHARE_ROUTE,
         threadId: "0123456789abcdef0123456789abcdef",
-        shortIdLength: 32,
+        prefixLength: SHARE_ROUTE.fullLength,
       }),
     ).toBe("/beam/0123456789abcdef0123456789abcdef");
   });
 
   it.each([
-    { routeSegment: "Beam", threadId: "0123456789abcdef0123456789abcdef" },
-    { routeSegment: "beam/extra", threadId: "0123456789abcdef0123456789abcdef" },
-    { routeSegment: "beam", threadId: "0123456789ab" },
-    { routeSegment: "beam", threadId: "not-hex" },
-  ])("rejects invalid catalog share input %#", (params) => {
-    expect(buildControlUiCatalogSharePath(params)).toBeNull();
+    {
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "Beam" },
+      threadId: "0123456789abcdef0123456789abcdef",
+    },
+    {
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "beam/extra" },
+      threadId: "0123456789abcdef0123456789abcdef",
+    },
+    { shareRoute: SHARE_ROUTE, threadId: "0123456789ab" },
+    { shareRoute: SHARE_ROUTE, threadId: "0123456789ABCDEF0123456789ABCDEF" },
+    { shareRoute: SHARE_ROUTE, threadId: "not-hex" },
+  ])("rejects invalid catalog share input %#", ({ shareRoute, threadId }) => {
+    expect(buildControlUiCatalogSharePath({ shareRoute, threadId })).toBeNull();
   });
 });
 

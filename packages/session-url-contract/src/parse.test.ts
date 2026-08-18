@@ -300,7 +300,6 @@ describe("matchControlUiCatalogSharePath", () => {
     expect(matchControlUiCatalogSharePath({ pathname, basePath })).toEqual({
       routeSegment: "beam",
       shortId,
-      valid: true,
     });
   });
 
@@ -310,11 +309,10 @@ describe("matchControlUiCatalogSharePath", () => {
     "/beam/0123456789abcdef0123456789abcdef0",
     "/beam/not-hex-value",
     "/beam/0123456789ab/extra",
-  ])("classifies strict invalid form %s", (pathname) => {
+  ])("parses the route owner before descriptor validation for %s", (pathname) => {
     expect(matchControlUiCatalogSharePath({ pathname })).toEqual({
       routeSegment: "beam",
       shortId: pathname.slice("/beam/".length),
-      valid: false,
     });
   });
 

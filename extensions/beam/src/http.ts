@@ -8,7 +8,7 @@ import {
   readJsonWebhookBodyOrReject,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import type { BeamStore } from "./store.js";
-import { BEAM_MAX_BODY_BYTES, BEAM_ROUTE_SEGMENT, parseBeamUpload } from "./types.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status;
@@ -108,7 +108,7 @@ export function createBeamRequestHandler(params: {
         ok: true,
         beamId: parsed.value.beamId,
         url: buildControlUiCatalogSharePath({
-          routeSegment: BEAM_ROUTE_SEGMENT,
+          shareRoute: BEAM_SESSION_SHARE_ROUTE,
           threadId: parsed.value.beamId,
           basePath: params.resolveControlUiBasePath(),
         }),

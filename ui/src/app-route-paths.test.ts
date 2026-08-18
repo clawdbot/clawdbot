@@ -108,6 +108,10 @@ describe("Dynamic route startup bridge", () => {
     expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
     expect(routeIdFromPath("/settings/about")).toBe("about");
     expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
+    expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/usage/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/settings/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/openclaw/skills/0123456789ab", "/openclaw")).toBeNull();
   });
 
   it("registers the Updates settings path", () => {

@@ -1,12 +1,41 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  SessionCatalogShareRouteSchema,
   SessionsCatalogHostEventSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
   SessionsCatalogStartTerminalParamsSchema,
   SessionsCatalogStartTerminalResultSchema,
 } from "./sessions-catalog.js";
+
+const SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "shared-sessions",
+  hostId: "gateway",
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const;
+
+describe("SessionCatalogShareRouteSchema", () => {
+  it("accepts only the closed prefix-search contract", () => {
+    expect(Value.Check(SessionCatalogShareRouteSchema, SHARE_ROUTE)).toBe(true);
+    for (const invalid of [
+      { ...SHARE_ROUTE, kind: "future-route" },
+      { ...SHARE_ROUTE, identifierAlphabet: "hex" },
+      { ...SHARE_ROUTE, fullLength: 64 },
+      { ...SHARE_ROUTE, minPrefixLength: 8 },
+      { ...SHARE_ROUTE, lookup: "arbitrary-search" },
+      { ...SHARE_ROUTE, ambiguity: "first-result" },
+      { ...SHARE_ROUTE, unexpected: true },
+    ]) {
+      expect(Value.Check(SessionCatalogShareRouteSchema, invalid)).toBe(false);
+    }
+  });
+});
 
 describe("SessionsCatalogListResultSchema", () => {
   it("accepts a closed catalog result with hosts", () => {
@@ -25,6 +54,7 @@ describe("SessionsCatalogListResultSchema", () => {
               },
               openTerminal: true,
             },
+            shareRoute: SHARE_ROUTE,
             hosts: [
               {
                 hostId: "gateway:local",

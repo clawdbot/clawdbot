@@ -1,21 +1,34 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeControlUiBasePath } from "./grammar.js";
 
-export const CONTROL_UI_CATALOG_SHARE_SHORT_ID_LENGTH = 12;
-export const CONTROL_UI_CATALOG_SHARE_FULL_ID_LENGTH = 32;
-
-const CATALOG_SHARE_ID_RE = /^[0-9a-f]{12,32}$/u;
-const CATALOG_SHARE_THREAD_ID_RE = /^[0-9a-f]{32}$/iu;
+const LOWERCASE_HEX_RE = /^[0-9a-f]+$/u;
 const CATALOG_SHARE_ROUTE_SEGMENT_RE = /^[a-z][a-z0-9-]*$/u;
+
+export type ControlUiCatalogShareRoute = {
+  kind: "thread-id-prefix";
+  routeSegment: string;
+  hostId: string;
+  identifierAlphabet: "lowercase-hex";
+  fullLength: 32;
+  minPrefixLength: 12;
+  lookup: "catalog-list-search-by-thread-id-prefix";
+  ambiguity: "multiple-results-or-next-cursor";
+};
 
 export type ControlUiCatalogSharePathMatch = {
   routeSegment: string;
   shortId: string;
-  valid: boolean;
 };
 
-export function isControlUiCatalogShareId(value: string): boolean {
-  return CATALOG_SHARE_ID_RE.test(value);
+export function isControlUiCatalogShareId(
+  shareRoute: ControlUiCatalogShareRoute,
+  value: string,
+): boolean {
+  return (
+    value.length >= shareRoute.minPrefixLength &&
+    value.length <= shareRoute.fullLength &&
+    LOWERCASE_HEX_RE.test(value)
+  );
 }
 
 export function isControlUiCatalogShareRouteSegment(value: string): boolean {
@@ -43,30 +56,31 @@ export function matchControlUiCatalogSharePath(params: {
   return {
     routeSegment,
     shortId,
-    valid: idSegments.length === 1 && isControlUiCatalogShareId(shortId),
   };
 }
 
 export function buildControlUiCatalogSharePath(params: {
-  routeSegment: string;
+  shareRoute: ControlUiCatalogShareRoute;
   threadId: string;
   basePath?: string;
-  shortIdLength?: number;
+  prefixLength?: number;
 }): string | null {
   const threadId = normalizeNullableString(params.threadId);
+  const shareRoute = params.shareRoute;
   if (
     !threadId ||
-    !isControlUiCatalogShareRouteSegment(params.routeSegment) ||
-    !CATALOG_SHARE_THREAD_ID_RE.test(threadId)
+    !isControlUiCatalogShareRouteSegment(shareRoute.routeSegment) ||
+    threadId.length !== shareRoute.fullLength ||
+    !LOWERCASE_HEX_RE.test(threadId)
   ) {
     return null;
   }
   const length = Math.min(
-    CONTROL_UI_CATALOG_SHARE_FULL_ID_LENGTH,
+    shareRoute.fullLength,
     Math.max(
-      CONTROL_UI_CATALOG_SHARE_SHORT_ID_LENGTH,
-      Math.floor(params.shortIdLength ?? CONTROL_UI_CATALOG_SHARE_SHORT_ID_LENGTH),
+      shareRoute.minPrefixLength,
+      Math.floor(params.prefixLength ?? shareRoute.minPrefixLength),
     ),
   );
-  return `${normalizeControlUiBasePath(params.basePath)}/${params.routeSegment}/${threadId.toLowerCase().slice(0, length)}`;
+  return `${normalizeControlUiBasePath(params.basePath)}/${shareRoute.routeSegment}/${threadId.slice(0, length)}`;
 }

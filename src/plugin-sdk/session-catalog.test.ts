@@ -6,6 +6,7 @@ import {
   sessionCatalogPaging,
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogFamilyOptions,
+  type SessionCatalogProvider,
   type SessionCatalogSession,
 } from "./session-catalog.js";
 
@@ -27,6 +28,32 @@ const session = (threadId: string): SessionCatalogSession => ({
 });
 
 describe("session catalog SDK", () => {
+  it("exposes the closed share-route contract to external providers", () => {
+    const shareRoute = {
+      kind: "thread-id-prefix",
+      routeSegment: "shared-sessions",
+      hostId: "gateway",
+      identifierAlphabet: "lowercase-hex",
+      fullLength: 32,
+      minPrefixLength: 12,
+      lookup: "catalog-list-search-by-thread-id-prefix",
+      ambiguity: "multiple-results-or-next-cursor",
+    } as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
+    const provider = {
+      id: "external",
+      label: "External",
+      shareRoute,
+      async list() {
+        return [];
+      },
+      async read({ hostId, threadId }) {
+        return { hostId, threadId, items: [] };
+      },
+    } satisfies SessionCatalogProvider;
+
+    expect(provider.shareRoute).toEqual(shareRoute);
+  });
+
   it("owns canonical list/read parameter and cursor parsing", () => {
     const cursor = sessionCatalogPaging.encodeCursor(2);
     expect(
