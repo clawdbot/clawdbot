@@ -1,6 +1,6 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot } from "../config/config.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -42,6 +42,31 @@ function formatInvalidConfigRepairHint(
     : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
 }
 
+export function ensureValidConfigSnapshotForCli(
+  snapshot: ConfigFileSnapshot,
+  runtime: RuntimeEnv,
+  options: { json?: boolean } = {},
+): boolean {
+  if (snapshot.valid) {
+    return true;
+  }
+  if (options.json) {
+    writeRuntimeJson(runtime, {
+      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
+      issues: normalizeConfigIssues(snapshot.issues),
+    });
+    runtime.exit(1);
+    return false;
+  }
+  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
+  for (const line of renderConfigValidationIssueLines(snapshot)) {
+    runtime.error(line);
+  }
+  runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
+  runtime.exit(1);
+  return false;
+}
+
 export async function loadValidConfig(
   runtime: RuntimeEnv = defaultRuntime,
   options: { observe?: boolean; json?: boolean } = {},
@@ -50,24 +75,14 @@ export async function loadValidConfig(
     options.observe === false
       ? await readConfigFileSnapshot({ observe: false })
       : await readConfigFileSnapshot();
-  if (snapshot.valid) {
-    return snapshot;
-  }
-  if (options.json) {
-    writeRuntimeJson(runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
-    runtime.exit(1);
-    return snapshot;
-  }
-  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
-  for (const line of renderConfigValidationIssueLines(snapshot)) {
-    runtime.error(line);
-  }
-  runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
-  runtime.exit(1);
+  ensureValidConfigSnapshotForCli(snapshot, runtime, options);
   return snapshot;
+}
+
+export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
+  const prepared = await readConfigFileSnapshotForWrite();
+  ensureValidConfigSnapshotForCli(prepared.snapshot, runtime);
+  return prepared;
 }
 
 export { formatInvalidConfigRepairHint };

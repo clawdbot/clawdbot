@@ -1,6 +1,7 @@
 // Covers config validation policy decisions and warning behavior.
 import { describe, expect, it, vi } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { validateConfigObjectRaw, validateConfigObjectRawWithPlugins } from "./validation.js";
 
 vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: () => [],
@@ -52,7 +53,93 @@ function requireIssue<T extends { path: string }>(issues: T[], path: string): T 
   return issue;
 }
 
+function createSecretFixturePlugin(): PluginManifestRecord {
+  return {
+    id: "secret-fixture",
+    channels: [],
+    cliBackends: [],
+    configContracts: {
+      secretInputs: { paths: [{ path: "credential", expected: "string" }] },
+    },
+    configSchema: { type: "object", additionalProperties: true },
+    hooks: [],
+    manifestPath: "/tmp/secret-fixture/openclaw.plugin.json",
+    origin: "bundled",
+    providers: [],
+    rootDir: "/tmp/secret-fixture",
+    skills: [],
+    source: "/tmp/secret-fixture/index.js",
+  };
+}
+
 describe("config validation SecretRef policy guards", () => {
+  it("rejects an impossible SecretRef on a disabled registry-declared plugin target", () => {
+    const refId = "PLUGIN_PRIVATE_CREDENTIAL";
+    const plugin = createSecretFixturePlugin();
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        plugins: {
+          entries: {
+            "secret-fixture": {
+              enabled: false,
+              config: {
+                credential: { source: "exec", provider: "shared", id: refId },
+              },
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            shared: { source: "file", path: "/tmp/unused-secrets.json", mode: "json" },
+          },
+        },
+      },
+      { pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [plugin] } } },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "plugins.entries.secret-fixture.config.credential");
+      expect(issue.message).toContain(
+        'Secret provider "shared" has source "file" but ref requests "exec"',
+      );
+      expect(JSON.stringify(result.issues)).not.toContain(refId);
+    }
+  });
+
+  it.each(["env", "store"] as const)(
+    "allows the %s default alias to shadow another-source provider entry",
+    (source) => {
+      const result = validateConfigObjectRawWithPlugins(
+        {
+          plugins: {
+            entries: {
+              "secret-fixture": {
+                enabled: false,
+                config: {
+                  credential: { source, provider: "shared", id: "PLUGIN_PRIVATE_CREDENTIAL" },
+                },
+              },
+            },
+          },
+          secrets: {
+            defaults: { [source]: "shared" },
+            providers: {
+              shared: { source: "file", path: "/tmp/unused-secrets.json", mode: "json" },
+            },
+          },
+        },
+        {
+          pluginMetadataSnapshot: {
+            manifestRegistry: { diagnostics: [], plugins: [createSecretFixturePlugin()] },
+          },
+        },
+      );
+
+      expect(result.ok).toBe(true);
+    },
+  );
+
   it("surfaces a policy error for hooks.token SecretRef objects", () => {
     const result = validateConfigObjectRaw({
       hooks: {
