@@ -1233,6 +1233,63 @@ function createInstallRollbackHarness(
 }
 
 describe("mac elevation host command contract", () => {
+  it("reads complete codesign metadata without SIGPIPE and preserves codesign failure", () => {
+    const root = tempDirs.make("openclaw-elevation-codesign-metadata-");
+    const binDir = path.join(root, "bin");
+    const fakeApp = path.join(root, "OpenClaw.app");
+    mkdirSync(binDir);
+    mkdirSync(fakeApp);
+    const codesign = path.join(binDir, "codesign");
+    writeExecutable(
+      codesign,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
+        "printf '%s\\n' 'Authority=Developer ID Certification Authority' >&2",
+        "printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
+        'if [[ "$*" == *"--arch arm64"* ]]; then',
+        "  printf '%s\\n' 'CDHash=ARM64HASH' >&2",
+        'elif [[ "$*" == *"--arch x86_64"* ]]; then',
+        "  printf '%s\\n' 'CDHash=X8664HASH' >&2",
+        "else",
+        "  printf '%s\\n' 'CDHash=UNSCOPEDHASH' >&2",
+        "fi",
+        "for _ in $(seq 1 10000); do printf '%s\\n' 'Padding=0123456789abcdef' >&2; done",
+        '[[ "${CODESIGN_FAIL_AFTER_OUTPUT:-0}" != "1" ]] || exit 7',
+        "",
+      ].join("\n"),
+    );
+    const script = readFileSync(scriptPath, "utf8");
+    const start = script.indexOf("codesign_metadata_value() {");
+    const end = script.indexOf("entitlements_for()", start);
+    const helpers = script.slice(start, end);
+    const run = (command: string, failAfterOutput = false) =>
+      spawnSync("/bin/bash", ["-c", `set -euo pipefail\n${helpers}\n${command}`, "bash", fakeApp], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODESIGN_FAIL_AFTER_OUTPUT: failAfterOutput ? "1" : "0",
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+
+    const values = run(
+      'printf "%s\\n" "$(codesign_value "$1" Authority)" "$(codesign_value_for_arch "$1" CDHash arm64)" "$(codesign_value_for_arch "$1" CDHash x86_64)"',
+    );
+    expect(values.status, values.stderr).toBe(0);
+    expect(values.stdout.trim().split("\n")).toEqual([
+      "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+      "ARM64HASH",
+      "X8664HASH",
+    ]);
+
+    const failed = run('codesign_value_for_arch "$1" CDHash arm64', true);
+    expect(failed.status).toBe(1);
+    expect(failed.stdout).toBe("");
+  });
+
   it("documents package and transactional lifecycle commands without probing macOS", () => {
     const result = spawnSync("bash", [scriptPath, "--help"], {
       cwd: process.cwd(),
