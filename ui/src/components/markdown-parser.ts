@@ -3,7 +3,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { formatGitHubLinkLabel } from "./github-link-target.ts";
+import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -106,6 +106,26 @@ function parseWebLinkHref(href: string): URL | null {
     return null;
   }
   return url.protocol === "https:" || url.protocol === "http:" ? url : null;
+}
+
+function formatGitHubLinkLabel(url: URL): string {
+  const segments = url.pathname.split("/").filter(Boolean);
+  const item = parseGitHubItemPath(url);
+  if (item) {
+    return segments.length === 4 && !url.search && !url.hash ? `#${item.number}` : url.href;
+  }
+  if (segments.length === 2) {
+    return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
+  }
+  if (segments[2] === "blob" && segments.length > 4) {
+    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (filename) {
+      return filename;
+    }
+  }
+  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
+  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  return ["github.com", ...path].join("/");
 }
 
 function isFileLinkBoundaryBefore(value: string, index: number): boolean {
