@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { collectChannelSchemaMetadataCore } from "../config/channel-config-metadata.js";
+import {
+  MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
+  collectChannelSchemaMetadataCore,
+} from "../config/channel-config-metadata.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -1749,7 +1752,9 @@ describe("loadPluginManifestRegistry", () => {
         manifestOnly: { help: "manifest hint" },
       },
     });
-    expect(collectChannelSchemaMetadataCore(registry)).toEqual([
+    expect(
+      collectChannelSchemaMetadataCore(registry, MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY),
+    ).toEqual([
       {
         id: "alpha",
         label: "Alpha",
