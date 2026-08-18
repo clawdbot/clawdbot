@@ -66,7 +66,9 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       response.setHeader("Content-Type", "text/javascript; charset=utf-8");
       response.end(rendererBundle);
     });
-    await new Promise<void>((resolve) => rendererServer.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      rendererServer.listen(0, "127.0.0.1", resolve);
+    });
     const rendererAddress = rendererServer.address();
     if (!rendererAddress || typeof rendererAddress === "string") {
       throw new Error("A2UI renderer server did not bind");
@@ -82,13 +84,19 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
   }, 120_000);
 
   afterAll(async () => {
-    for (const context of contexts) await context.close();
+    for (const context of contexts) {
+      await context.close();
+    }
     await browser?.close();
     if (sandboxServer) {
-      await new Promise<void>((resolve) => sandboxServer.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        sandboxServer.close(() => resolve());
+      });
     }
     if (rendererServer) {
-      await new Promise<void>((resolve) => rendererServer.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        rendererServer.close(() => resolve());
+      });
     }
     await controlUi?.close();
   });
@@ -130,7 +138,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     const boot = JSON.stringify({ messages, actionTier: "state" }).replaceAll("<", "\\u003c");
     const documentHtml = buildWidgetDocument(
       "A2UI controls",
-      `<script>globalThis.__openclawA2UIBoot=${boot};</script><style>html,body{height:100%;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script src="${rendererUrl}"></script>`,
+      `<script>globalThis.openclawA2UIBoot=${boot};</script><style>html,body{height:100%;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script src="${rendererUrl}"></script>`,
       { scriptOrigins: [rendererOrigin] },
     );
     const frameUrl = `${origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/a2ui-controls/index.html?bt=ticket`;
@@ -183,7 +191,9 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       .poll(
         async () => {
           const child = outerFrame?.childFrames()[0];
-          if (!child) return false;
+          if (!child) {
+            return false;
+          }
           try {
             return await child.evaluate(() =>
               Boolean(

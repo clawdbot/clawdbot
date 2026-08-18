@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
-import { registerPluginBoardWidgetContentKind } from "../../plugins/board-widget-content-kinds.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -35,19 +35,15 @@ function registeredWidgetRegistry() {
     }) =>
       `<main>${source}</main><script src="${resourceUrls["/__openclaw__/diagram/app.js"]}"></script>`,
   );
-  registerPluginBoardWidgetContentKind({
-    record,
-    registry,
-    definition: {
-      kind: "diagram",
-      label: "Diagram",
-      resources: {
-        surface: "diagram",
-        paths: ["/__openclaw__/diagram/app.js"],
-      },
-      validateSource,
-      composeDocument,
+  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+    kind: "diagram",
+    label: "Diagram",
+    resources: {
+      surface: "diagram",
+      paths: ["/__openclaw__/diagram/app.js"],
     },
+    validateSource,
+    composeDocument,
   });
   registry.plugins.push(record);
   return { registry, validateSource, composeDocument };
@@ -102,7 +98,11 @@ describe("board registered widget content kinds", () => {
       });
 
       const board = await invoke("board.get", { sessionKey: "session" });
-      const widget = (board.mock.calls[0]?.[1] as BoardSnapshot).widgets[0]!;
+      const snapshot = board.mock.calls[0]?.[1];
+      if (!snapshot) {
+        throw new Error("board.get did not return a snapshot");
+      }
+      const widget = (snapshot as BoardSnapshot).widgets[0]!;
       expect(widget).toMatchObject({
         kindLabel: "Diagram",
         frameUrl: expect.stringContaining("/__openclaw__/board/"),
@@ -115,8 +115,11 @@ describe("board registered widget content kinds", () => {
       );
       expect(composeDocument).toHaveBeenCalledOnce();
     } finally {
-      if (previous) setActivePluginRegistry(previous);
-      else resetPluginRuntimeStateForTest();
+      if (previous) {
+        setActivePluginRegistry(previous);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
     }
   });
 
@@ -157,7 +160,11 @@ describe("board registered widget content kinds", () => {
       content: { kind: "registered", contentKind: "diagram", source: "diagram:prompt" },
       declared: { tools: ["prompt"] },
     });
-    const pending = (put.mock.calls[0]?.[1] as BoardSnapshot).widgets[0]!;
+    const putSnapshot = put.mock.calls[0]?.[1];
+    if (!putSnapshot) {
+      throw new Error("board.widget.put did not return a snapshot");
+    }
+    const pending = (putSnapshot as BoardSnapshot).widgets[0]!;
     expect(pending.grantState).toBe("pending");
     await invoke("board.widget.grant", {
       sessionKey: "session",
@@ -167,7 +174,11 @@ describe("board registered widget content kinds", () => {
       instanceId: pending.instanceId,
     });
     const board = await invoke("board.get", { sessionKey: "session" });
-    const widget = (board.mock.calls[0]?.[1] as BoardSnapshot).widgets[0]!;
+    const snapshot = board.mock.calls[0]?.[1];
+    if (!snapshot) {
+      throw new Error("board.get did not return a snapshot");
+    }
+    const widget = (snapshot as BoardSnapshot).widgets[0]!;
 
     resolveAuthorizedBoardWidgetView(store, widget.viewTicket!);
 

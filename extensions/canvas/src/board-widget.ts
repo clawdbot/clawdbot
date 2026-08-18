@@ -17,7 +17,7 @@ function bootScript(messages: unknown[], promptGranted: boolean): string {
     .replaceAll("<", "\\u003c")
     .replaceAll("\u2028", "\\u2028")
     .replaceAll("\u2029", "\\u2029");
-  return `<script>globalThis.__openclawA2UIBoot=${boot};</script>`;
+  return `<script>globalThis.openclawA2UIBoot=${boot};</script>`;
 }
 
 function resourceScript(path: string, url: string): string {

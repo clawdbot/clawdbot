@@ -21,7 +21,7 @@ function isGatewayLocalPath(value: string): boolean {
 }
 
 /** Validates and publishes one runtime board-widget content kind. */
-export function registerPluginBoardWidgetContentKind(params: {
+function registerPluginBoardWidgetContentKind(params: {
   record: PluginRecord;
   registry: PluginRegistry;
   definition: PluginBoardWidgetContentKind;
@@ -78,6 +78,11 @@ export function registerPluginBoardWidgetContentKind(params: {
       resources: { surface, paths: [...paths] },
     },
   });
+}
+
+export function createPluginBoardWidgetContentKindRegistrar(registry: PluginRegistry) {
+  return (record: PluginRecord, definition: PluginBoardWidgetContentKind) =>
+    registerPluginBoardWidgetContentKind({ record, registry, definition });
 }
 
 export function resolveBoardWidgetContentKind(

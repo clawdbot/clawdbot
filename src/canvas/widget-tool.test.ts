@@ -8,7 +8,7 @@ import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
-import { registerPluginBoardWidgetContentKind } from "../plugins/board-widget-content-kinds.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -111,18 +111,16 @@ describe("show_widget", () => {
       enabled: true,
       configSchema: false,
     });
-    registerPluginBoardWidgetContentKind({
-      record,
-      registry,
-      definition: {
-        kind: "diagram",
-        label: "Diagram",
-        resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
-        validateSource(source) {
-          if (!source.startsWith("diagram:")) throw new Error("diagram prefix required");
-        },
-        composeDocument: ({ source }) => `<main>${source}</main>`,
+    createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+      kind: "diagram",
+      label: "Diagram",
+      resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
+      validateSource(source) {
+        if (!source.startsWith("diagram:")) {
+          throw new Error("diagram prefix required");
+        }
       },
+      composeDocument: ({ source }) => `<main>${source}</main>`,
     });
     setActivePluginRegistry(registry);
     const stateDir = await createStateDir();

@@ -1,7 +1,6 @@
 import { basicCatalog } from "@a2ui/lit/v0_9";
 /** A2UI v0.9 Lit host used by sandboxed board documents. */
 import { MessageProcessor } from "@a2ui/web_core/v0_9";
-import "@a2ui/lit/v0_9";
 import { css, html, LitElement } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
@@ -18,7 +17,7 @@ const routeBoardAction = async (action) => {
   if (!api?.state?.emit) {
     return false;
   }
-  if (globalThis.__openclawA2UIBoot?.actionTier === "prompt" && api.prompt?.send) {
+  if (globalThis.openclawA2UIBoot?.actionTier === "prompt" && api.prompt?.send) {
     await api.prompt.send(actionText(action));
   } else {
     await api.state.emit({ eventType: "a2ui.action", action });
@@ -79,7 +78,7 @@ class OpenClawA2UIV09Host extends LitElement {
       reset: () => this.reset(),
       getSurfaces: () => this.surfaces.map(([id]) => id),
     };
-    const bootMessages = globalThis.__openclawA2UIBoot?.messages;
+    const bootMessages = globalThis.openclawA2UIBoot?.messages;
     if (Array.isArray(bootMessages)) {
       this.applyMessages(bootMessages);
     }

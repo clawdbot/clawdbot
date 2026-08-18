@@ -381,7 +381,7 @@ class OpenClawA2UIHost extends LitElement {
       globalThis.addEventListener(eventName, this.#statusListener);
     }
     this.#syncSurfaces();
-    const bootMessages = globalThis.__openclawA2UIBoot?.messages;
+    const bootMessages = globalThis.openclawA2UIBoot?.messages;
     if (Array.isArray(bootMessages)) {
       this.applyMessages(bootMessages);
     }
@@ -510,7 +510,7 @@ class OpenClawA2UIHost extends LitElement {
     const boardApi = globalThis.openclaw;
     if (boardApi?.state?.emit) {
       const request =
-        globalThis.__openclawA2UIBoot?.actionTier === "prompt" && boardApi.prompt?.send
+        globalThis.openclawA2UIBoot?.actionTier === "prompt" && boardApi.prompt?.send
           ? boardApi.prompt.send(
               Object.keys(context).length
                 ? `A2UI action ${name}: ${JSON.stringify(context)}`
@@ -519,7 +519,7 @@ class OpenClawA2UIHost extends LitElement {
           : boardApi.state.emit({ eventType: "a2ui.action", action: userAction });
       void Promise.resolve(request).then(
         () => this.#handleActionStatus({ detail: { id: actionId, ok: true } }),
-        (error) =>
+        (/** @type {unknown} */ error) =>
           this.#handleActionStatus({
             detail: { id: actionId, ok: false, error: String(error?.message ?? error) },
           }),

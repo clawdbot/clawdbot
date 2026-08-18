@@ -199,9 +199,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             promptGranted: false,
           })
         : widgetCode;
-      const wrappedDocument = buildWidgetDocument(title, inlineBody, {
-        ...(registration ? { scriptOrigins: ["'self'"] } : {}),
-      });
+      const wrappedDocument = buildWidgetDocument(
+        title,
+        inlineBody,
+        registration ? { scriptOrigins: ["'self'"] } : {},
+      );
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
       if (pinSessionKey) {

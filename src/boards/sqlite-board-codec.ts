@@ -19,6 +19,7 @@ import {
   resolveBoardWidgetPutParams,
   type BoardWidgetHtmlViewMetadata,
   type BoardWidgetNameIdentityMarker,
+  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
 
 export type SelectedBoardTabRow = Selectable<BoardTabRow>;
@@ -69,7 +70,7 @@ type ParsedRegisteredPluginContent = {
   pluginKind: string;
   source: string;
 };
-export type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginContent;
+type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginContent;
 
 export function parseManifest(value: string): ParsedBoardManifest {
   const parsed = JSON.parse(value) as {
@@ -353,6 +354,38 @@ export function parsePluginContent(value: string): ParsedPluginContent {
         pluginKind: parsed.pluginKind,
         ...(parsed.props !== undefined ? { props: parsed.props } : {}),
       };
+}
+
+export function rowToRegisteredDocument(
+  row: Pick<
+    SelectedBoardWidgetRow,
+    | "content_kind"
+    | "descriptor_json"
+    | "title"
+    | "revision"
+    | "sha256"
+    | "grant_state"
+    | "manifest"
+  >,
+): BoardWidgetRegisteredDocument | undefined {
+  if (row.content_kind !== "plugin" || row.descriptor_json === null) {
+    return undefined;
+  }
+  const content = parsePluginContent(row.descriptor_json);
+  const manifest = parseManifest(row.manifest);
+  if (!("source" in content) || !manifest.registeredInstanceId) {
+    return undefined;
+  }
+  return {
+    pluginKind: content.pluginKind,
+    source: content.source,
+    ...(row.title !== null ? { title: row.title } : {}),
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: manifest.registeredInstanceId,
+    grantState: effectiveGrantState(row.grant_state, manifest),
+    ...(manifest.declared ? { declared: manifest.declared } : {}),
+  };
 }
 
 export function rowToTab(row: SelectedBoardTabRow): BoardTab {
