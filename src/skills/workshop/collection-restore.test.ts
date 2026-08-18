@@ -235,6 +235,39 @@ describe("skill collection backup and restore", () => {
     );
   });
 
+  it("restores ownership for a dropped Workshop skill", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "foo", description: "Workshop procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [{ action: "drop", name: "foo", reason: "Temporarily removed" }],
+    });
+
+    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
+
+    expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
+      expect.objectContaining({ name: "foo", workshopOwned: true }),
+    ]);
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...(await readCollectionReceipt()),
+        plan: [
+          {
+            action: "write",
+            name: "foo",
+            description: "Restored procedure",
+            content: "# Restored and mutable\n",
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ written: ["foo"] });
+  });
+
   it("restores a legacy backup that predates ownership narrowing", async () => {
     await writeWorkshopOwnedSkills([
       { name: "owned", description: "Workshop procedure", body: "# Owned original\n" },

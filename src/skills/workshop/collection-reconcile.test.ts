@@ -129,6 +129,49 @@ describe("skill collection reconciliation", () => {
     ]);
   });
 
+  it("releases ownership when a dropped skill path is recreated by the user", async () => {
+    await writeWorkshopOwnedSkills([
+      { name: "foo", description: "Workshop procedure", body: "# Workshop\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [{ action: "drop", name: "foo", reason: "No longer needed" }],
+    });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "foo", description: "Operator procedure", body: "# Operator\n" },
+    ]);
+
+    expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
+      expect.objectContaining({ name: "foo", workshopOwned: false }),
+    ]);
+    const receipt = await readCollectionReceipt();
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        plan: [
+          {
+            action: "write",
+            name: "foo",
+            description: "Workshop rewrite",
+            content: "# Rewritten\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: foo");
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        plan: [{ action: "drop", name: "foo", reason: "Remove replacement" }],
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: foo");
+  });
+
   it.runIf(process.platform !== "win32")(
     "keeps trusted external symlink targets outside the autonomous collection",
     async () => {

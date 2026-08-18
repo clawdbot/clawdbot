@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT
+  status_reason TEXT,
+  claim_released_time INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT
+  status_reason TEXT,
+  claim_released_time INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
@@ -127,6 +129,7 @@ export function ensureSkillWorkshopSchema(options: SkillWorkshopStoreOptions = {
     ({ db }) => {
       // sqlite-allow-raw -- Feature-local additive schema DDL; proposal rows use Kysely.
       db.exec(SCHEMA_SQL);
+      ensureColumn(db, "skill_workshop_proposals", "claim_released_time INTEGER");
     },
     dbOptions,
     { operationLabel: "skill-workshop.schema.ensure" },

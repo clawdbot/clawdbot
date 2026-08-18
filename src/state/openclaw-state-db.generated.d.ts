@@ -1336,6 +1336,7 @@ export interface SkillWorkshopProposalRollbacks {
 
 export interface SkillWorkshopProposals {
   applied_at: string | null;
+  claim_released_time: number | null;
   created_at: string;
   draft_hash: string;
   kind: string;

@@ -15,6 +15,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import type { SkillCollectionReconcileResult } from "./collection-contracts.js";
+import { releaseWorkshopOwnershipClaims } from "./ownership.js";
 import {
   databaseOptions,
   ensureSkillWorkshopSchema,
@@ -157,6 +158,7 @@ export function recordSkillCollectionReviewSuccess(
   nowMs: number,
   result: SkillCollectionReconcileResult,
   options: SkillWorkshopStoreOptions = {},
+  droppedSkillDirs: readonly string[] = [],
 ): void {
   ensureSkillWorkshopSchema(options);
   runOpenClawStateWriteTransaction(({ db }) => {
@@ -204,6 +206,7 @@ export function recordSkillCollectionReviewSuccess(
         dropped_json: JSON.stringify(result.dropped),
       }),
     );
+    releaseWorkshopOwnershipClaims(db, resolvedWorkspaceDir, droppedSkillDirs, nowMs);
     const retainedReviewIds = kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select("review_id")
