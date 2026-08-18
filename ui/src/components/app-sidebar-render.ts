@@ -288,9 +288,11 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           </span>
           <span class="sidebar-recent-sessions__label-text">${label}</span>
           ${collapsed
-            ? html`<span class="sidebar-session-group-count sidebar-online__count"
-                >${users.length}</span
-              >`
+            ? html`<openclaw-viewer-facepile
+                class="sidebar-online__facepile"
+                .staticUsers=${users}
+                .maxVisible=${users.length}
+              ></openclaw-viewer-facepile>`
             : nothing}
         </button>
       </div>

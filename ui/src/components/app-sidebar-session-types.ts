@@ -291,9 +291,9 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
     if (raw == null) {
-      // First run: the Coding zone starts collapsed so dev sessions stay muted
-      // until the user opts in; expanding persists an empty entry for "work".
-      return new Set(["work"]);
+      // First run: Coding stays muted and Online uses its compact avatar row
+      // until the user expands either section.
+      return new Set(["work", "online"]);
     }
     const parsed: unknown = JSON.parse(raw);
     return new Set(
@@ -302,7 +302,7 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
         : [],
     );
   } catch {
-    return new Set(["work"]);
+    return new Set(["work", "online"]);
   }
 }
 

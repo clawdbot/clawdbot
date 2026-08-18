@@ -192,6 +192,11 @@ describe("AppSidebar viewer presence", () => {
     );
     expect(onlineToggle?.getAttribute("aria-expanded")).toBe("false");
     expect(sidebar.querySelector(".sidebar-online__person")).toBeNull();
+    const facepile = sidebar.querySelector<HTMLElement>(".sidebar-online openclaw-viewer-facepile");
+    await (facepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
+    expect(facepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
+      "1",
+    );
   });
 
   it("renders the self user's avatar route in the footer identity chip", async () => {

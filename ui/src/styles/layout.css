@@ -2463,8 +2463,9 @@ body.update-dialog-open .sidebar-update-card__status {
   gap: 2px;
 }
 
-.sidebar-online__count {
-  margin-left: 2px;
+.sidebar-online__facepile {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .sidebar-online__person {

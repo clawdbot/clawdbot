@@ -144,20 +144,34 @@ suite.define(() => {
 
         const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, releaseKey));
         expect(response?.status()).toBe(200);
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
-        await expect
-          .poll(() => page.locator('[data-online-user-id="profile-bob"]').getAttribute("class"))
-          .toContain("sidebar-online__person--away");
         const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
-        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
+        await expect
+          .poll(() =>
+            page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
+          )
+          .toBe("2");
         await mkdir(outputDir, { recursive: true });
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "01-sidebar-online-expanded-light.png"),
+          path: path.join(outputDir, "01-sidebar-online-compact-light.png"),
         });
 
         await onlineToggle.focus();
         await page.keyboard.press("Enter");
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+        await expect
+          .poll(() => page.locator('[data-online-user-id="profile-bob"]').getAttribute("class"))
+          .toContain("sidebar-online__person--away");
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await page.locator(".sidebar").screenshot({
+          animations: "disabled",
+          path: path.join(outputDir, "02-sidebar-online-expanded-light.png"),
+        });
+
+        await onlineToggle.focus();
+        await page.keyboard.press("Space");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(0);
         expect(
@@ -167,10 +181,6 @@ suite.define(() => {
           }),
         ).toEqual(expect.arrayContaining(["work", "online"]));
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-        await page.locator(".sidebar").screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "02-sidebar-online-collapsed-light.png"),
-        });
 
         await page.reload();
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
@@ -178,7 +188,7 @@ suite.define(() => {
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "03-sidebar-online-collapsed-dark.png"),
+          path: path.join(outputDir, "03-sidebar-online-compact-dark.png"),
         });
         await onlineToggle.focus();
         await page.keyboard.press("Space");
