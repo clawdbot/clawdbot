@@ -370,6 +370,21 @@ openclaw-activity-page {
   font-size: 9px;
 }
 
+.activity-feed__session-avatar {
+  position: relative;
+  display: inline-flex;
+}
+
+.activity-feed__run-dot {
+  top: -2px;
+  right: auto;
+  bottom: auto;
+  left: -2px;
+  border-color: var(--card);
+  background: var(--accent);
+  animation: pulse-subtle 1.8s ease-in-out infinite;
+}
+
 .activity-feed__session-main {
   display: grid;
   gap: 3px;
@@ -399,10 +414,40 @@ openclaw-activity-page {
   white-space: nowrap;
 }
 
+.activity-feed__session-headline,
+.activity-feed__session-owner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__session-headline[data-health="grinding"] {
+  color: var(--accent);
+}
+
+.activity-feed__session-headline[data-health="stuck"],
+.activity-feed__session-headline[data-health="waiting-on-user"] {
+  color: var(--warn);
+}
+
+.activity-feed__session-headline[data-health="failed"] {
+  color: var(--danger);
+}
+
 .activity-feed__session-time {
+  display: flex;
+  max-width: 260px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
+}
+
+.activity-feed__session-owner {
+  max-width: 140px;
 }
 
 .activity-feed__identity {

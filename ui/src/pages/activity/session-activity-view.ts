@@ -249,6 +249,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
   const owner = sessionActivityOwner(row);
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
+  const headline = row.hasActiveRun === true ? row.observerDigest?.headline.trim() : "";
   const scope = row.channel
     ? t("activityFeed.channelLabel", { value: row.channel })
     : row.agentId
@@ -260,21 +261,38 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
     href=${sessionHref(context, row)}
     @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
   >
-    <openclaw-viewer-avatar
-      .user=${owner}
-      .markAsViewer=${false}
-      variant="footer"
-    ></openclaw-viewer-avatar>
+    <span class="activity-feed__session-avatar">
+      ${row.hasActiveRun === true
+        ? html`<span
+            class="activity-feed__presence-dot activity-feed__run-dot"
+            aria-hidden="true"
+          ></span>`
+        : nothing}
+      <openclaw-viewer-avatar
+        .user=${owner}
+        .markAsViewer=${false}
+        variant="footer"
+      ></openclaw-viewer-avatar>
+    </span>
     <span class="activity-feed__session-main">
       <span class="activity-feed__session-title">${resolveSessionDisplayName(row.key, row)}</span>
       <span class="activity-feed__session-meta">
-        <span>${ownerName}</span>${scope
+        ${headline
+          ? html`<span
+              class="activity-feed__session-headline"
+              data-health=${row.observerDigest?.health ?? nothing}
+              >${headline}</span
+            >`
+          : html`<span>${ownerName}</span>`}${scope
           ? html`<span class="activity-feed__session-scope">${scope}</span>`
           : nothing}
       </span>
     </span>
     <span class="activity-feed__session-time">
-      ${activityAt > 0 ? formatRelativeTimestamp(activityAt, { fallback: "" }) : nothing}
+      ${headline ? html`<span class="activity-feed__session-owner">${ownerName}</span>` : nothing}
+      ${activityAt > 0
+        ? html`<span>${formatRelativeTimestamp(activityAt, { fallback: "" })}</span>`
+        : nothing}
     </span>
   </a>`;
 }

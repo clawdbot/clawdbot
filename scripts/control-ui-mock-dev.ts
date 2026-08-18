@@ -327,6 +327,20 @@ function buildActivitySessionRows(baseTime: number) {
   const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
   return fixtures.map(([key, label, owner, age]) =>
     sessionRow(`agent:activity:${key}`, label, baseTime - age, {
+      ...(key === "archive-audit"
+        ? {
+            activeRunIds: ["mock-activity-live-run"],
+            hasActiveRun: true,
+            observerDigest: {
+              headline: "Waiting on a fictional mock approval",
+              health: "waiting-on-user",
+              revision: 1,
+              runId: "mock-activity-live-run",
+              updatedAt: baseTime - age,
+            },
+            status: "running",
+          }
+        : {}),
       createdActor: owner,
       hasAutomation: automationKeys.has(key),
       owner: { actor: owner },

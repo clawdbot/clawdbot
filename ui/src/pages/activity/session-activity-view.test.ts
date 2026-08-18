@@ -189,3 +189,51 @@ describe("session activity automation grouping", () => {
     }
   });
 });
+
+describe("session activity live status", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("uses the recorded active run and observer digest for the row status", () => {
+    const now = Date.now();
+    const owner = { id: "owner", label: "Owner" };
+    const observerDigest = {
+      headline: "  Waiting on a fake approval  ",
+      health: "waiting-on-user" as const,
+      revision: 1,
+      runId: "fake-run",
+      updatedAt: now,
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [
+            row("Active session", owner, now, { hasActiveRun: true, observerDigest }),
+            row("Inactive session", owner, now - 1_000, {
+              observerDigest,
+              status: "running",
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const active = container.querySelector('[data-activity-session="Active session"]');
+    const inactive = container.querySelector('[data-activity-session="Inactive session"]');
+    expect(active?.querySelector(".activity-feed__run-dot")).not.toBeNull();
+    expect(active?.querySelector(".activity-feed__session-headline")?.textContent?.trim()).toBe(
+      "Waiting on a fake approval",
+    );
+    expect(
+      active?.querySelector(".activity-feed__session-headline")?.getAttribute("data-health"),
+    ).toBe("waiting-on-user");
+    expect(active?.textContent).toContain("Owner");
+    expect(inactive?.querySelector(".activity-feed__run-dot")).toBeNull();
+    expect(inactive?.querySelector(".activity-feed__session-headline")).toBeNull();
+  });
+});
