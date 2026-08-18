@@ -38,7 +38,7 @@ type ChatPaneLayoutRenderParams = {
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
-  fullMessageLoader: SidebarFullMessageLoader;
+  fullMessageLoader: SidebarFullMessageLoader | null;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;
   catalog: boolean;
