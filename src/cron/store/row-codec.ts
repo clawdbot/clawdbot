@@ -162,7 +162,12 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     // Legacy destination-only config remains untouched for doctor; runtime defaults to announce.
     runtimeConfig.delivery = deliveryFromJson({ ...runtimeConfig.delivery, mode: "announce" });
   }
-  const precheck = normalizeCronJobPrecheck(runtimeConfig.precheck);
+  let precheck;
+  try {
+    precheck = normalizeCronJobPrecheck(runtimeConfig.precheck);
+  } catch {
+    precheck = undefined;
+  }
   return {
     ...runtimeConfig,
     id: row.job_id,

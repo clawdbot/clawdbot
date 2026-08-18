@@ -2274,7 +2274,6 @@ src/cli/config-set-input.ts	2
 src/cli/connect-cli.ts	1
 src/cli/cron-cli/list-jobs.ts	4
 src/cli/cron-cli/register.cron-add.ts	1
-src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/shared.ts	8
 src/cli/daemon-cli/launchd-recovery.ts	1

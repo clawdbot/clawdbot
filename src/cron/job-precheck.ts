@@ -4,6 +4,7 @@ import {
   evaluateShellAllowlistWithAuthorization,
   resolveExecApprovalsLocked,
   resolveExecModePolicy,
+  maxAsk,
   minSecurity,
   type ExecAsk,
   type ExecMode,
@@ -355,12 +356,14 @@ export async function authorizeCronJobPrecheckCommand(params: {
     modePolicy.security,
     normalizeExecSecurity(approvals.agent.security) ?? "deny",
   );
-  const effectiveAsk: ExecAsk =
+  // Approvals may only tighten ask (system-run maxAsk), never weaken tools.exec.ask.
+  const approvalsAsk: ExecAsk =
     approvals.agent.ask === "off" ||
     approvals.agent.ask === "on-miss" ||
     approvals.agent.ask === "always"
       ? approvals.agent.ask
       : modePolicy.ask;
+  const effectiveAsk: ExecAsk = maxAsk(modePolicy.ask, approvalsAsk);
 
   if (hostSecurity === "deny") {
     return {

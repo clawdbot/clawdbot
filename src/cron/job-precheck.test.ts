@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const resolveExecApprovalsLocked = vi.hoisted(() => vi.fn());
+vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+  return {
+    ...actual,
+    resolveExecApprovalsLocked: (...args: unknown[]) => resolveExecApprovalsLocked(...args),
+  };
+});
 import {
   PRECHECK_NO_WORK_REASON,
   PRECHECK_SKIPPED_ERROR_REASON,
@@ -169,6 +178,14 @@ const AUTH_FULL = {
 };
 
 describe("authorizeCronJobPrecheckCommand", () => {
+  beforeEach(() => {
+    resolveExecApprovalsLocked.mockReset();
+    resolveExecApprovalsLocked.mockResolvedValue({
+      agent: { security: "full", ask: "off" },
+      allowlist: [],
+    });
+  });
+
   it("denies when triggers are disabled", async () => {
     const result = await authorizeCronJobPrecheckCommand({
       command: "exit 0",
@@ -234,6 +251,24 @@ describe("authorizeCronJobPrecheckCommand", () => {
   });
 
   it("denies unattended precheck when tools.exec.ask is always (ClawSweeper P1)", async () => {
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "echo WORK_NEEDED",
+      authz: {
+        triggersEnabled: true,
+        toolsExec: { ask: "always", security: "full" },
+      },
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toMatch(/ask=always/i);
+    }
+  });
+
+  it("does not let approvals-file ask=off weaken tools.exec.ask=always (maxAsk)", async () => {
+    resolveExecApprovalsLocked.mockResolvedValueOnce({
+      agent: { security: "full", ask: "off" },
+      allowlist: [],
+    });
     const result = await authorizeCronJobPrecheckCommand({
       command: "echo WORK_NEEDED",
       authz: {
