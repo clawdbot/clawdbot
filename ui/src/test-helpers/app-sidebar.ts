@@ -75,6 +75,7 @@ export type SidebarLifecycleState = HTMLElement & {
     home: string;
     entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
   }>;
+  inspectSessionGroupRepository(path?: string): Promise<"git" | "not_git" | "unavailable">;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
@@ -318,6 +319,10 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    captureConnectionScope: () => scopedSessions?.captureConnectionScope() ?? null,
+    isConnectionScopeCurrent: (
+      scope: Parameters<SessionCapability["isConnectionScopeCurrent"]>[0],
+    ) => scopedSessions?.isConnectionScopeCurrent(scope) ?? false,
     subscribe(listener: (next: SessionState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);

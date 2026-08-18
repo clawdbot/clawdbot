@@ -42,7 +42,6 @@ type SessionOrganizerOperations = typeof import("./session-organizer-operations.
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
 type SessionGroupDefaultsDialogOpener =
   (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
-
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
@@ -530,6 +529,7 @@ export class SessionOrganizerController {
         group,
         defaults,
         listDirectory: (path) => this.host.listSessionGroupFolders(path),
+        inspectRepository: (path) => this.host.inspectSessionGroupRepository(path),
         submit: async (nextDefaults) => {
           const scope = this.host.sessionData.beginSessionMutation();
           if (!scope || !this.host.sessionGroupDefaults(group)) {
