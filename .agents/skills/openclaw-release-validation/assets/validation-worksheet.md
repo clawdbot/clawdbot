@@ -25,8 +25,10 @@ the affected surface.
 ## Surface notes
 
 > [!NOTE]
-> Add notes under **Notes** for each surface you tested. Leave untested note
-> sections empty. Start with **Priority for this release** when possible.
+> Add notes under **Notes** for each surface you tested. Notes sections start
+> completely empty; leave untested ones empty. They are the source for the final
+> release-analysis comment. Start with **Priority for this release** when
+> possible.
 >
 > This surface catalog and its maturity labels are derived from the live
 > [OpenClaw maturity scorecard]({{SCORECARD_URL}}) and
@@ -39,11 +41,11 @@ the affected surface.
 
 ## Priority for this release
 
-<!-- Campaign creator: generate exactly five priority surface sections from the live scorecard, then remove this comment. -->
+<!-- Campaign creator: generate exactly five priority surface sections using the table-and-empty-Notes format in SKILL.md, then remove this comment. -->
 
 ## Other surfaces
 
-<!-- Campaign creator: generate every remaining live scorecard surface here, then remove this comment. -->
+<!-- Campaign creator: generate every remaining live scorecard surface using the table-and-empty-Notes format in SKILL.md, then remove this comment. -->
 
 ## Final feedback
 

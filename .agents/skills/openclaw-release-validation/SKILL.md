@@ -54,13 +54,33 @@ When the issue does not exist, become the campaign creator:
    expose a fake-precision score.
 5. Generate one section for every live scorecard surface. Put the five selected
    surfaces under **Priority for this release** and all remaining surfaces under
-   **Other surfaces**. Format each heading as
-   `### [<surface>](<taxonomy-url>) — <maturity-label>`. Then add
-   `#### What changed` and `#### Notes`. Add `#### Recommended testing` when
-   release changes justify a targeted exercise; every priority surface must
-   include it. When no release item is relevant, write
-   `No notable changes in this release.` under **What changed** and omit
-   **Recommended testing**.
+   **Other surfaces**. Format every section exactly like this:
+
+   ```md
+   ### [<surface>](taxonomy-url)
+
+   |                         |                       |
+   | ----------------------- | --------------------- |
+   | **Maturity score**      | <maturity-label>      |
+   | **What changed**        | <release-theme>       |
+   | **Recommended testing** | <exercise-or-em-dash> |
+
+   #### Notes
+   ```
+
+   Keep `#### Notes` truly empty: add no placeholder text or hidden comment.
+   Use `No notable changes in this release.` and an em dash in the last two
+   table rows when no release item is relevant. Escape table pipes and keep each
+   cell concise. Every priority surface must have a real recommended exercise.
+
+   Make every **Recommended testing** cell a bounded operator workflow: name the
+   exact action, the observable pass condition, and a runnable OCM-scoped command
+   or concrete URL when the surface has one. Use `<br>` inside a cell when a
+   command and pass condition need separation. For example, onboarding should
+   name `ocm @<test-env> -- onboard`, the TUI should name
+   `ocm @<test-env> -- tui`, and channel health should name
+   `ocm @<test-env> -- channels status --probe`. Avoid broad prompts that bundle
+   unrelated features or say only to "use," "exercise," or "verify" a surface.
 
    For each **What changed**, synthesize the dominant themes across the
    surface's complete group instead of listing a few fixes. Do not include
@@ -156,9 +176,10 @@ to look for, then wait for their result. Take control only when explicitly
 asked. Do not turn the checklist into an automated scenario runner.
 
 A surface counts as tested only when tester-authored text appears beneath its
-`#### Notes`. **What changed** and **Recommended testing** never count as test
-evidence. An empty or comment-only note area means untouched. Add candidate
-problems found during surface testing to that surface's notes.
+`#### Notes`. The **Maturity score**, **What changed**, and **Recommended
+testing** table rows are campaign guidance, never test evidence. An empty Notes
+section means untouched. Add candidate problems found during surface testing to
+that surface's notes.
 
 ## 6. Finish and publish
 
@@ -168,9 +189,10 @@ When the tester says `finish validation`:
    feedback.
 2. Stop the copied gateway and restore any source gateway stopped for channel
    ownership. Ask before destroying the disposable environment.
-3. Build one GitHub issue comment containing only candidate identity, source
-   version/commit, surface names with non-empty note sections, upgrade
-   findings, tester feedback, and the yes/no promotion vote.
+3. Synthesize one final release-analysis comment from candidate identity, source
+   version/commit, upgrade findings, tester feedback, the yes/no promotion vote,
+   and only the surfaces with non-empty Notes sections. Use the tester's Notes as
+   the source of observed results; do not report the guidance table as evidence.
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.
 5. Post the comment once with `gh` and show the tester its URL.
