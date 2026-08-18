@@ -272,7 +272,7 @@ export function renderActivityGroup(
               }
             }}
           >
-            <span class="chat-activity-group__icon">${icons.squareTerminal}</span>
+            <span class="chat-activity-group__icon">${icons.listTree}</span>
             <span class="chat-tool-disclosure__content">
               <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span

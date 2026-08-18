@@ -288,9 +288,9 @@ function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): strin
 }
 
 const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
-  command: "terminal",
+  command: "squareTerminal",
   read: "fileText",
-  edit: "penLine",
+  edit: "pencil",
   write: "fileCode",
   search: "search",
   fetch: "globe",
