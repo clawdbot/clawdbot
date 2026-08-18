@@ -10,7 +10,7 @@ import {
   normalizeUniqueStringEntries,
   readNonEmptyStringPreservingWhitespace as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRawCopilotModelRun } from "./attempt-config.js";
+import { isRawCopilotModelRun } from "./attempt-mode.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
 const COPILOT_HARNESS_IDENTITY =

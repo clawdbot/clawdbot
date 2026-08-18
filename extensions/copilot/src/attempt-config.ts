@@ -316,11 +316,6 @@ function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: strin
   }
   return { input: ["image"] };
 }
-export function isRawCopilotModelRun(
-  params: Pick<AttemptParamsLike, "modelRun" | "promptMode">,
-): boolean {
-  return params.modelRun === true || params.promptMode === "none";
-}
 export { readNonEmptyString };
 export function readResolvedAttemptPath(value: unknown): string | undefined {
   const raw = readNonEmptyString(value)?.trim();

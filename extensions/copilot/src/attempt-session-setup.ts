@@ -3,11 +3,8 @@ import {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessLlmInputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createSessionConfig,
-  isRawCopilotModelRun,
-  type resolvePoolAcquire,
-} from "./attempt-config.js";
+import { createSessionConfig, type resolvePoolAcquire } from "./attempt-config.js";
+import { isRawCopilotModelRun } from "./attempt-mode.js";
 import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AttemptParamsLike,
