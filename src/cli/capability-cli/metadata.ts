@@ -63,7 +63,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider", "--method"],
+    flags: ["--provider", "--method", "--agent"],
     resultShape: "interactive auth result",
   },
   {
@@ -77,7 +77,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.status",
     description: "Show configured model auth state.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "model status summary",
   },
   {

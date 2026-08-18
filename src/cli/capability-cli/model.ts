@@ -385,11 +385,11 @@ async function buildModelProviders(rawAgentId?: string) {
   return [...grouped.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-async function runModelAuthStatus() {
+async function runModelAuthStatus(agent: string) {
   const captured: string[] = [];
   const { modelsStatusCommand } = await import("../../commands/models/list.status-command.js");
   await modelsStatusCommand(
-    { json: true },
+    { json: true, agent },
     {
       log: (...args) => captured.push(args.join(" ")),
       error: (message) => {
@@ -404,10 +404,9 @@ async function runModelAuthStatus() {
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-async function runModelAuthLogout(provider: string, agent?: string) {
+async function runModelAuthLogout(provider: string, agent: string) {
   const cfg = getRuntimeConfig();
-  const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model auth logout");
-  const agentDir = resolveAgentDir(cfg, agentId);
+  const agentDir = resolveAgentDir(cfg, agent);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
@@ -530,20 +529,33 @@ export function registerModelCapabilityCommands(capability: Command): void {
       });
     });
 
-  const modelAuth = model.command("auth").description("Provider auth helpers");
+  const modelAuth = model
+    .command("auth")
+    .description("Provider auth helpers")
+    .option("--agent <id>", "Agent id (default: configured default agent)");
+
+  const resolveModelAuthAgent = (command: Command, rawAgentId: unknown, surface: string) =>
+    resolveCapabilityProviderAgentId(
+      getRuntimeConfig(),
+      resolveCapabilityAgentOption(command, rawAgentId),
+      surface,
+    );
 
   modelAuth
     .command("login")
     .description("Run provider auth login")
     .requiredOption("--provider <id>", "Provider id")
     .option("--method <id>", "Provider auth method id")
-    .action(async (opts) => {
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const agent = resolveModelAuthAgent(command, opts.agent, "infer model auth login");
         const { modelsAuthLoginCommand } = await import("../../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
             provider: String(opts.provider),
             method: opts.method ? String(opts.method) : undefined,
+            agent,
           },
           defaultRuntime,
         );
@@ -563,7 +575,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runModelAuthLogout(
           String(opts.provider),
-          resolveCapabilityAgentOption(command, opts.agent),
+          resolveModelAuthAgent(command, opts.agent, "infer model auth logout"),
         );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
@@ -574,10 +586,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
   modelAuth
     .command("status")
     .description("Show configured auth state")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthStatus();
+        const result = await runModelAuthStatus(
+          resolveModelAuthAgent(command, opts.agent, "infer model auth status"),
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
         );

@@ -31,6 +31,17 @@ function runCapabilityWithParentAgent(
   return runCap("capability", domain, "--agent", agent, action, ...argv);
 }
 
+function runModelAuthWithAgent(
+  position: "parent" | "leaf",
+  action: "login" | "logout" | "status",
+  agent: string,
+  ...argv: string[]
+): Promise<void> {
+  return position === "parent"
+    ? runCap("capability", "model", "--agent", agent, "auth", action, ...argv)
+    : runCap("capability", "model", "auth", action, "--agent", agent, ...argv);
+}
+
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
   mocks.resolveApiKeyForProviderCore.mockResolvedValueOnce({
     apiKey: mode === "token" ? "profile-openai-token" : "profile-openai-key",
@@ -249,6 +260,7 @@ const mocks = vi.hoisted(() => ({
       runtime.log(JSON.stringify({ ok: true, providers: [{ id: "openai" }] }));
     },
   ),
+  modelsAuthLoginCommand: vi.fn(),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -347,7 +359,7 @@ vi.mock("../agents/memory-search.js", () => ({
 }));
 
 vi.mock("../commands/models/auth.js", () => ({
-  modelsAuthLoginCommand: vi.fn(),
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
 }));
 
 vi.mock("../commands/models/list.status-command.js", () => ({
@@ -654,6 +666,7 @@ describe("capability cli", () => {
         diagnostics: [],
       }));
     mocks.modelsStatusCommand.mockClear();
+    mocks.modelsAuthLoginCommand.mockClear();
   });
 
   async function runModelRunWithModel(model: string, transport: "local" | "gateway") {
@@ -3668,7 +3681,7 @@ describe("capability cli", () => {
   });
 
   it("removes model auth profiles from the selected agent store", async () => {
-    mocks.loadConfig.mockReturnValue({ agents: { entries: { poe: {} } } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { poe: {} }, ownership: "explicit" } });
     mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
 
     await runCapability(
@@ -3691,6 +3704,71 @@ describe("capability cli", () => {
       removedProfiles: ["openai:default"],
     });
   });
+
+  it.each(["parent", "leaf"] as const)(
+    "routes %s --agent through model auth login",
+    async (position) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await runModelAuthWithAgent(position, "login", "beta", "--provider", "openai");
+
+      expect(mocks.modelsAuthLoginCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "openai", agent: "beta" }),
+        mocks.runtime,
+      );
+    },
+  );
+
+  it.each(["parent", "leaf"] as const)(
+    "routes %s --agent through model auth status",
+    async (position) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await runModelAuthWithAgent(position, "status", "beta", "--json");
+
+      expect(mocks.modelsStatusCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ json: true, agent: "beta" }),
+        expect.any(Object),
+      );
+    },
+  );
+
+  it.each(["parent", "leaf"] as const)(
+    "routes %s --agent through model auth logout",
+    async (position) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+      mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
+
+      await runModelAuthWithAgent(position, "logout", "beta", "--provider", "openai", "--json");
+
+      expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/agent-beta");
+    },
+  );
+
+  it.each([
+    { position: "parent" as const, agent: "", message: "--agent must not be blank" },
+    { position: "leaf" as const, agent: "retired", message: 'Unknown agent id "retired"' },
+  ])(
+    "rejects invalid $position model auth agent '$agent' before dispatch",
+    async ({ position, agent, message }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await expect(runModelAuthWithAgent(position, "status", agent, "--json")).rejects.toThrow(
+        "exit 1",
+      );
+
+      expectRuntimeErrorContains(message);
+      expect(mocks.modelsStatusCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails logout if the auth store update does not complete", async () => {
     mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
