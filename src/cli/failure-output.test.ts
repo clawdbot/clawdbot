@@ -1,6 +1,6 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { GatewayCredentialsRequiredError } from "../gateway/call.js";
+import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
 import {
   ExpectedCliError,
   formatCliFailureLines,
@@ -155,6 +155,20 @@ describe("formatCliFailureLines", () => {
         new GatewayCredentialsRequiredError({
           method: "device.pair.list",
           configPath: "/tmp/openclaw.json",
+        }),
+    },
+    {
+      label: "unreachable gateway",
+      createError: () =>
+        new GatewayTransportError({
+          kind: "closed",
+          message:
+            "Gateway not reachable at ws://127.0.0.1:51078 (ECONNREFUSED).\nStart it with `openclaw gateway run` or check `openclaw gateway status`.",
+          connectionDetails: {
+            url: "ws://127.0.0.1:51078",
+            urlSource: "local loopback",
+            message: "Gateway target: ws://127.0.0.1:51078",
+          },
         }),
     },
   ])(

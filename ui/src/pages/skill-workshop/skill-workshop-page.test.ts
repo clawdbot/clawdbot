@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
 import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
 import { page as skillWorkshopRoute } from "./route.ts";
@@ -21,6 +22,9 @@ type SkillWorkshopPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
 };
+
+const PAGE_LOAD_METHODS = ["skills.proposals.list", "skills.proposals.historyStatus"];
+const HISTORY_SCAN_METHODS = [...PAGE_LOAD_METHODS, "skills.proposals.historyScan"];
 
 function waitForSkillWorkshop(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
@@ -61,6 +65,8 @@ function createContext(
   request: ReturnType<typeof vi.fn>,
   options?: {
     gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
+    methods?: string[];
+    scopes?: string[];
     sessions?: ApplicationContext["sessions"];
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
   },
@@ -71,7 +77,7 @@ function createContext(
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
     assistantAgentId: "research",
     sessionKey: "global",
     lastError: null,
@@ -210,7 +216,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
     expect(firstRequest).not.toHaveBeenCalled();
 
-    page.context = createContext(secondRequest);
+    page.context = createContext(secondRequest, { methods: PAGE_LOAD_METHODS });
     page.requestUpdate();
     await page.updateComplete;
 
@@ -281,7 +287,9 @@ describe("SkillWorkshopPage lifecycle", () => {
       }
       return {};
     });
-    const context = createContext(request);
+    const context = createContext(request, {
+      methods: [...PAGE_LOAD_METHODS, "skills.proposals.inspect"],
+    });
     const options = {
       signal: new AbortController().signal,
       shouldRun: () => true,
@@ -317,7 +325,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.context = createContext(request);
+    page.context = createContext(request, { methods: PAGE_LOAD_METHODS });
     document.body.append(page);
     await page.updateComplete;
 
@@ -346,7 +354,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.context = createContext(request);
+    page.context = createContext(request, { methods: PAGE_LOAD_METHODS });
     document.body.append(page);
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
@@ -365,6 +373,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const request = vi.fn(() => manifest.promise);
     let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
     const context = createContext(request, {
+      methods: PAGE_LOAD_METHODS,
       gatewaySubscribe: (listener) => {
         gatewayListener = listener;
         return () => undefined;
@@ -447,7 +456,10 @@ describe("SkillWorkshopPage lifecycle", () => {
     const revision = page.handleRevisionRequest("revise it", proposal, "research");
     await waitForSkillWorkshop(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
 
-    const newContext = createContext(vi.fn(async () => ({})));
+    const newContext = createContext(
+      vi.fn(async () => ({})),
+      { methods: PAGE_LOAD_METHODS },
+    );
     page.context = newContext;
     page.requestUpdate();
     await page.updateComplete;
@@ -492,10 +504,6 @@ describe("SkillWorkshopPage lifecycle", () => {
       vi.fn(async () => ({})),
       { sessions },
     );
-    context.gateway.snapshot.hello = {
-      type: "hello-ok",
-      protocol: 4,
-    } as ApplicationGatewaySnapshot["hello"];
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -551,6 +559,8 @@ describe("SkillWorkshopPage lifecycle", () => {
     const context = createContext(
       vi.fn(async () => ({})),
       {
+        methods: ["sessions.create"],
+        scopes: ["operator.write"],
         sessions,
         gatewaySubscribe: (listener) => {
           gatewayListener = listener;
@@ -558,10 +568,6 @@ describe("SkillWorkshopPage lifecycle", () => {
         },
       },
     );
-    context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["sessions.create"] },
-    } as ApplicationGatewaySnapshot["hello"];
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -632,12 +638,8 @@ describe("SkillWorkshopPage lifecycle", () => {
     } as unknown as ApplicationContext["sessions"];
     const context = createContext(
       vi.fn(async () => ({})),
-      { sessions },
+      { methods: ["sessions.create"], scopes: ["operator.read"], sessions },
     );
-    context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.create"] },
-    } as ApplicationGatewaySnapshot["hello"];
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -701,7 +703,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.context = createContext(oldRequest);
+    page.context = createContext(oldRequest, { methods: HISTORY_SCAN_METHODS });
     document.body.append(page);
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
@@ -737,7 +739,7 @@ describe("SkillWorkshopPage lifecycle", () => {
             proposals: [],
           },
     );
-    const newContext = createContext(newRequest);
+    const newContext = createContext(newRequest, { methods: PAGE_LOAD_METHODS });
     newContext.agentSelection.state.selectedId = "writer";
     page.context = newContext;
     page.requestUpdate();
@@ -777,7 +779,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.context = createContext(firstRequest);
+    page.context = createContext(firstRequest, { methods: HISTORY_SCAN_METHODS });
     document.body.append(page);
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
@@ -798,7 +800,12 @@ describe("SkillWorkshopPage lifecycle", () => {
       }),
     );
 
-    const otherContext = createContext(vi.fn(async () => scanStatus));
+    const otherContext = createContext(
+      vi.fn(async () => scanStatus),
+      {
+        methods: PAGE_LOAD_METHODS,
+      },
+    );
     otherContext.agentSelection.state.selectedId = "writer";
     page.context = otherContext;
     page.requestUpdate();
@@ -819,7 +826,7 @@ describe("SkillWorkshopPage lifecycle", () => {
         proposals: [],
       });
     });
-    page.context = createContext(returnedRequest);
+    page.context = createContext(returnedRequest, { methods: PAGE_LOAD_METHODS });
     page.requestUpdate();
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
@@ -861,7 +868,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.context = createContext(request);
+    page.context = createContext(request, { methods: HISTORY_SCAN_METHODS });
     document.body.append(page);
     await page.updateComplete;
     await waitForSkillWorkshop(() =>
@@ -914,7 +921,11 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     page.data = skillWorkshopRouteData(loadedState);
     page.context = createContext(
       vi.fn(async () => ({})),
-      { runtimeConfig, gatewaySubscribe: options?.gatewaySubscribe },
+      {
+        methods: ["config.patch"],
+        runtimeConfig,
+        gatewaySubscribe: options?.gatewaySubscribe,
+      },
     );
     document.body.append(page);
     return page;

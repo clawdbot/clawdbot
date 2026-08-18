@@ -928,6 +928,7 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private setGroupBy(mode: SessionsGroupBy) {
     this.groupBy = mode;
+    this.page = 0;
     saveStoredGroupBy(mode);
   }
 

@@ -41,6 +41,8 @@ const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
   "Review",
   // Tasks: no background tasks, nothing to inspect.
   "Tasks",
+  // Discussion: no external URL, nothing to open.
+  "Discussion",
 ]);
 
 function coldOpenScenario(): ControlUiMockGatewayScenario {
@@ -67,7 +69,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       },
       "environments.list": { environments: [] },
       "session.discussion.info": {
-        openUrl: "https://discussion.example/session",
         state: "open",
       },
       "sessions.files.list": {
@@ -282,7 +283,7 @@ suite.define(() => {
   it("preserves the production header-action shapes for Side chat and Discussion", async () => {
     const context = await suite.newBrowserContext({ serviceWorkers: "block" });
     const page = await context.newPage();
-    const choices = await openColdSidebar(page);
+    const choices = await openColdSidebar(page, populatedColdOpenScenario());
 
     await choices.filter({ hasText: "Side chat" }).click();
     const contentActions = page.locator(".side-panel__action-group--content");

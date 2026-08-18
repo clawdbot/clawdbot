@@ -38,6 +38,10 @@ import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-to
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import {
+  attachEmbeddedMessageDeliveryFact,
+  projectEmbeddedMessageDeliveryFact,
+} from "../embedded-agent-message-delivery.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import {
   readGatewayCallOptions,
@@ -704,13 +708,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
       );
       const toolResult = getToolResult(result);
+      const messageDelivery = projectEmbeddedMessageDeliveryFact(result);
       const normalizationNotice = result.kind === "send" ? result.normalization?.notice : undefined;
       if (normalizationNotice) {
         const normalizedResult = toolResult ?? jsonResult(result.payload);
-        return {
-          ...normalizedResult,
-          content: [...normalizedResult.content, { type: "text", text: normalizationNotice }],
-        };
+        return attachEmbeddedMessageDeliveryFact(
+          {
+            ...normalizedResult,
+            content: [...normalizedResult.content, { type: "text", text: normalizationNotice }],
+          },
+          messageDelivery,
+        );
       }
       if (
         action === "poll-vote" &&
@@ -739,9 +747,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
       if (toolResult) {
-        return toolResult;
+        return attachEmbeddedMessageDeliveryFact(toolResult, messageDelivery);
       }
-      return jsonResult(result.payload);
+      return attachEmbeddedMessageDeliveryFact(jsonResult(result.payload), messageDelivery);
     },
   };
 }

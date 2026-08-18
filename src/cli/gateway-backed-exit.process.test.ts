@@ -3,48 +3,34 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { isLoopbackIpAddress, isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  buildMinimalGatewayHelloOkPayload,
-  closeMinimalGatewayServer,
-  parseMinimalGatewayRequestFrame,
-  sendMinimalGatewayConnectChallenge,
-  sendMinimalGatewayResponse,
-} from "../gateway/minimal-gateway.test-helpers.js";
 import {
   loadOriginDeviceTokenReadOnly,
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import {
-  pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
-} from "../infra/network-interfaces.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
+import {
+  closeActiveGatewayServers,
+  EMPTY_STABILITY_SNAPSHOT,
+  startAgentTurnGateway,
+  startCronListGateway,
+  startGatewayStabilityRpcServer,
+  startNodePairingGateway,
+  startRateLimitedGateway,
+} from "./gateway-backed-exit.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
-const activeServers = new Set<WebSocketServer>();
 const UNREACHABLE_GATEWAY_URL = "ws://127.0.0.1:9";
-const EMPTY_STABILITY_SNAPSHOT = {
-  capacity: 100,
-  count: 0,
-  dropped: 0,
-  events: [],
-  summary: { byType: {} },
-};
-
 afterEach(async () => {
   await Promise.all(
     Array.from(activeChildren, async (child) => {
@@ -56,207 +42,8 @@ afterEach(async () => {
     }),
   );
   activeChildren.clear();
-  await Promise.all(Array.from(activeServers, closeMinimalGatewayServer));
-  activeServers.clear();
+  await closeActiveGatewayServers();
 });
-
-async function startCronListGateway(token: string): Promise<{ url: string }> {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["cron.list"],
-            auth: { role: "operator", scopes: ["operator.admin"] },
-          }),
-        );
-        return;
-      }
-      if (frame.method === "cron.list") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          jobs: [],
-          snapshotRevision: "test-revision",
-          total: 0,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-          deliveryPreviews: {},
-        });
-      }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}` };
-}
-
-async function startRateLimitedGateway(): Promise<{ url: string }> {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id || frame.method !== "connect") {
-        return;
-      }
-      const message = "unauthorized: too many failed authentication attempts (retry later)";
-      ws.send(
-        JSON.stringify({
-          type: "res",
-          id: frame.id,
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message,
-            retryable: true,
-            retryAfterMs: 60_000,
-            details: {
-              code: "AUTH_RATE_LIMITED",
-              authReason: "rate_limited",
-              recommendedNextStep: "wait_then_retry",
-            },
-          },
-        }),
-        () => ws.close(1008, message),
-      );
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}` };
-}
-
-async function startNodePairingGateway(
-  token: string,
-  issuedDeviceToken?: string,
-): Promise<{
-  calls: string[];
-  url: string;
-}> {
-  const calls: string[] = [];
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["node.pair.list", "node.pair.approve"],
-            auth: {
-              role: "operator",
-              scopes: ["operator.admin"],
-              ...(issuedDeviceToken ? { deviceToken: issuedDeviceToken } : {}),
-            },
-          }),
-        );
-        return;
-      }
-      if (typeof frame.method !== "string") {
-        return;
-      }
-      calls.push(frame.method);
-      if (frame.method === "node.pair.list") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          pending: [{ requestId: "request-1", nodeId: "node-1", commands: [] }],
-          paired: [],
-        });
-        return;
-      }
-      if (frame.method === "node.pair.approve") {
-        sendMinimalGatewayResponse(ws, frame.id, { approved: true });
-      }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  return { calls, url: `ws://127.0.0.1:${address.port}` };
-}
-
-async function startGatewayStabilityRpcServer(
-  token: string,
-  issuedDeviceToken: string,
-): Promise<{
-  authTokens: Array<string | undefined>;
-  calls: string[];
-  url: string;
-}> {
-  const authTokens: Array<string | undefined> = [];
-  const calls: string[] = [];
-  const wss = new WebSocketServer({ host: "0.0.0.0", port: 0 });
-  activeServers.add(wss);
-  wss.on("connection", (ws) => {
-    sendMinimalGatewayConnectChallenge(ws);
-    ws.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        authTokens.push(frame.params?.auth?.token);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["diagnostics.stability", "status"],
-            auth: {
-              role: "operator",
-              scopes: ["operator.admin"],
-              deviceToken: issuedDeviceToken,
-            },
-          }),
-        );
-        return;
-      }
-      if (typeof frame.method !== "string") {
-        return;
-      }
-      calls.push(frame.method);
-      if (frame.method === "diagnostics.stability") {
-        sendMinimalGatewayResponse(ws, frame.id, EMPTY_STABILITY_SNAPSHOT);
-        return;
-      }
-      if (frame.method === "status") {
-        sendMinimalGatewayResponse(ws, frame.id, {
-          runtimeVersion: "2026.8.17-test",
-          status: "ok",
-        });
-      }
-    });
-  });
-  await once(wss, "listening");
-  const address = wss.address() as AddressInfo;
-  // A private non-loopback target keeps shared-secret auth from bypassing device identity.
-  const host = pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
-    family: "IPv4",
-    matches: (candidate) =>
-      isPrivateOrLoopbackIpAddress(candidate) && !isLoopbackIpAddress(candidate),
-  });
-  if (!host) {
-    throw new Error("test host has no non-loopback private IPv4 address");
-  }
-  return { authTokens, calls, url: `ws://${host}:${address.port}` };
-}
 
 async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
   const snapshot: Record<string, string> = {};
@@ -422,6 +209,44 @@ async function runIsolatedGatewayCli(params: {
 }
 
 describe("gateway-backed CLI process exit", () => {
+  it.each([
+    { status: "ok" as const, text: "pong", exitCode: 0 },
+    { status: "error" as const, text: "provider failed", exitCode: 1 },
+  ])(
+    "exits $exitCode after an agent turn reports $status",
+    async ({ status, text, exitCode }) => {
+      const root = tempDirs.make(`openclaw-agent-turn-${status}-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const gateway = await startAgentTurnGateway({ status, text });
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: {
+            mode: "remote",
+            remote: { url: gateway.url, token: gateway.token },
+          },
+        }),
+      );
+
+      const result = await runIsolatedGatewayCli({
+        args: ["agent", "--agent", "main", "--message", "ping", "--json"],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: exitCode, signal: null, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status,
+        summary: status === "ok" ? "completed" : "failed",
+        result: { payloads: [{ text }] },
+      });
+    },
+    30_000,
+  );
+
   it.each([
     {
       label: "root-health-json",
@@ -689,6 +514,106 @@ describe("gateway-backed CLI process exit", () => {
       });
       expect(gateway.calls).toEqual(["status"]);
       expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
+    },
+    30_000,
+  );
+
+  it.each([
+    { label: "list", args: ["devices", "list", "--timeout", "250"] },
+    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
+    {
+      label: "remove",
+      args: ["devices", "remove", "test-device", "--timeout", "250"],
+    },
+    {
+      label: "clear",
+      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
+    },
+    {
+      label: "approve",
+      args: ["devices", "approve", "test-request", "--timeout", "250"],
+    },
+    {
+      label: "reject",
+      args: ["devices", "reject", "test-request", "--timeout", "250"],
+    },
+    {
+      label: "rename",
+      args: [
+        "devices",
+        "rename",
+        "--device",
+        "test-device",
+        "--name",
+        "Test Device",
+        "--timeout",
+        "250",
+      ],
+    },
+    {
+      label: "rotate",
+      args: [
+        "devices",
+        "rotate",
+        "--device",
+        "test-device",
+        "--role",
+        "operator",
+        "--timeout",
+        "250",
+      ],
+      machineOutput: true,
+    },
+    {
+      label: "revoke",
+      args: [
+        "devices",
+        "revoke",
+        "--device",
+        "test-device",
+        "--role",
+        "operator",
+        "--timeout",
+        "250",
+      ],
+      machineOutput: true,
+    },
+  ])(
+    "renders an unreachable gateway as expected guidance for devices $label",
+    async ({ label, args, machineOutput }) => {
+      const root = tempDirs.make(`openclaw-devices-${label}-transport-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const port = await getFreePort();
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          gateway: { mode: "local", port, auth: { mode: "token", token: "test-token" } },
+        })}\n`,
+        "utf8",
+      );
+
+      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
+
+      expect(result).toMatchObject({ code: 1, signal: null });
+      if (machineOutput) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Gateway not reachable") },
+        });
+      } else {
+        expect(result.stdout).toBe("");
+      }
+      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
+      expect(result.stderr).toContain(
+        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      );
+      expect(result.stderr).not.toContain("The CLI command failed");
+      expect(result.stderr).not.toContain("Could not start the CLI");
+      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+      expect(result.stderr).not.toContain("Stack:");
+      expect(result.stderr).not.toContain("openclaw doctor");
     },
     30_000,
   );

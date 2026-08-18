@@ -171,7 +171,10 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promise<void> {
+export async function refreshChatModelCatalogOnDemand(
+  host: ChatPageHost,
+  opts?: { refresh?: boolean },
+): Promise<void> {
   if (!host.client || !host.connected) {
     return;
   }
@@ -189,6 +192,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   try {
     const models = await loadModels(client, {
       agentId,
+      ...(opts?.refresh ? { refresh: true } : {}),
       rejectOnFailure: true,
     });
     if (ownsRequest()) {

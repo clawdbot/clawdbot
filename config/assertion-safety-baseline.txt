@@ -1683,7 +1683,7 @@ src/agents/agent-bundle-lsp-runtime.ts	4
 src/agents/agent-bundle-mcp-combined.ts	2
 src/agents/agent-bundle-mcp-manager-api.ts	2
 src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
-src/agents/agent-bundle-mcp-materialize.ts	4
+src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	9
 src/agents/agent-command-restart-recovery.ts	4
@@ -1806,7 +1806,6 @@ src/agents/embedded-agent-helpers/images.ts	8
 src/agents/embedded-agent-helpers/openai.ts	21
 src/agents/embedded-agent-helpers/turns.ts	23
 src/agents/embedded-agent-live-edit-diff.ts	3
-src/agents/embedded-agent-message-tool-source-reply.ts	15
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
 src/agents/embedded-agent-runner/cache-ttl.ts	2
@@ -1828,11 +1827,11 @@ src/agents/embedded-agent-runner/history.ts	3
 src/agents/embedded-agent-runner/message-visibility.ts	13
 src/agents/embedded-agent-runner/model-context-tokens.ts	1
 src/agents/embedded-agent-runner/model.compat.ts	1
-src/agents/embedded-agent-runner/model.configured-fallback.ts	2
-src/agents/embedded-agent-runner/model.configured-overrides.ts	3
+src/agents/embedded-agent-runner/model.configured-fallback.ts	1
+src/agents/embedded-agent-runner/model.configured-overrides.ts	2
 src/agents/embedded-agent-runner/model.inline-provider.ts	2
 src/agents/embedded-agent-runner/model.provider-hooks.ts	10
-src/agents/embedded-agent-runner/model.registry-resolution.ts	7
+src/agents/embedded-agent-runner/model.registry-resolution.ts	6
 src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
@@ -2902,7 +2901,7 @@ src/gateway/agent-turn/internal-facade.ts	4
 src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
-src/gateway/call.ts	7
+src/gateway/call.ts	6
 src/gateway/channel-health-monitor.ts	6
 src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4

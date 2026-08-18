@@ -393,6 +393,26 @@ export async function executeNodeHostCommand(
 
     if (!inlineApprovedByAsk) {
       // Human approval may complete after this tool call returns, so follow-up delivery owns invocation.
+      const approvalRoute = await execHostShared.createExecApprovalRequestRoute({
+        warnings: params.warnings,
+        approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+        createApprovalSlug,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceAccountId: params.turnSourceAccountId,
+        register: registerNodeApproval,
+        askFallback,
+        resolveTimedOut: async () => {
+          const fallback = await resolveCurrentTimeoutFallback();
+          return {
+            approvedByAsk: fallback.approvedByAsk,
+            deniedReason: fallback.deniedReason,
+            context: fallback,
+          };
+        },
+        requiresExplicitApproval: (fallback) =>
+          fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+        requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+      });
       const {
         approvalId,
         approvalSlug,
@@ -402,35 +422,9 @@ export async function executeNodeHostCommand(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
-      } = await execHostShared.createAndRegisterDefaultExecApprovalRequest({
-        warnings: params.warnings,
-        approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-        createApprovalSlug,
-        turnSourceChannel: params.turnSourceChannel,
-        turnSourceAccountId: params.turnSourceAccountId,
-        register: registerNodeApproval,
-      });
-      if (
-        execHostShared.shouldResolveExecApprovalUnavailableInline({
-          unavailableReason,
-          preResolvedDecision,
-        })
-      ) {
-        const inlineDecision = await execHostShared.resolveExecApprovalDecisionState({
-          decision: preResolvedDecision ?? null,
-          askFallback,
-          resolveTimedOut: async () => {
-            const fallback = await resolveCurrentTimeoutFallback();
-            return {
-              approvedByAsk: fallback.approvedByAsk,
-              deniedReason: fallback.deniedReason,
-              context: fallback,
-            };
-          },
-          requiresExplicitApproval: (fallback) =>
-            fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
-          requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
-        });
+      } = approvalRoute;
+      if (approvalRoute.kind === "inline") {
+        const inlineDecision = approvalRoute.state;
         const currentFallback = inlineDecision.timeoutContext;
         if (inlineDecision.deniedReason || !inlineDecision.approvedByAsk) {
           throw new Error(
@@ -444,14 +438,10 @@ export async function executeNodeHostCommand(
           );
         }
         inlineApprovedByAsk = inlineDecision.approvedByAsk;
-        inlineApprovalSource = preResolvedDecision === null ? "ask-fallback" : undefined;
-        if (inlineApprovalSource) {
-          inlineDispatchAuthority = "ask-fallback";
-          inlineFallbackPolicy = currentFallback;
-        } else {
-          inlineDispatchAuthority = "human-approval";
-        }
-        inlineApprovalDecision = inlineApprovalSource ? null : "allow-once";
+        inlineApprovalSource = "ask-fallback";
+        inlineDispatchAuthority = "ask-fallback";
+        inlineFallbackPolicy = currentFallback;
+        inlineApprovalDecision = null;
         inlineApprovalId = approvalId;
       } else {
         const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
@@ -478,27 +468,10 @@ export async function executeNodeHostCommand(
         let nodeInvocationCompleted = false;
 
         void (async () => {
-          let decision: string | null | undefined;
-          try {
-            decision = await execHostShared.resolveApprovalDecisionOrUndefined({
-              approvalId,
-              preResolvedDecision,
-              onFailure: () => void sendApprovalRequestFailedFollowup(),
-            });
-          } catch (error) {
-            // Detached run cancellation has no awaiting tool caller to catch it.
-            if (isExecApprovalRunAbortedError(error)) {
-              return;
-            }
-            await sendApprovalRequestFailedFollowup();
-            return;
-          }
-          if (decision === undefined || params.signal?.aborted) {
-            return;
-          }
-
-          const resolvedDecision = await execHostShared.resolveExecApprovalDecisionState({
-            decision,
+          const approvalOutcome = await execHostShared.resolveExecApprovalWaitOutcome({
+            approvalId,
+            preResolvedDecision,
+            signal: params.signal,
             askFallback,
             resolveTimedOut: async () => {
               const fallback = await resolveCurrentTimeoutFallback();
@@ -512,6 +485,14 @@ export async function executeNodeHostCommand(
               fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
             requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
           });
+          if (approvalOutcome.kind !== "resolved") {
+            if (approvalOutcome.kind === "request-failed") {
+              await sendApprovalRequestFailedFollowup();
+            }
+            return;
+          }
+
+          const { decision, state: resolvedDecision } = approvalOutcome;
           const { approvedByAsk, deniedReason } = resolvedDecision;
           const currentFallback = resolvedDecision.timeoutContext;
           const approvalSource = decision === null ? "ask-fallback" : undefined;
@@ -615,17 +596,19 @@ export async function executeNodeHostCommand(
               `Exec denied (node=${target.nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
             );
           }
-        })().catch(async (error: unknown): Promise<void> => {
-          // Once dispatch starts, a delivery failure cannot mean execution was denied.
-          if (
-            nodeInvocationStarted ||
-            params.signal?.aborted ||
-            isExecApprovalRunAbortedError(error)
-          ) {
-            return;
-          }
-          await sendApprovalRequestFailedFollowup();
-        });
+        })()
+          .catch(async (error: unknown): Promise<void> => {
+            // Once dispatch starts, a delivery failure cannot mean execution was denied.
+            if (
+              nodeInvocationStarted ||
+              params.signal?.aborted ||
+              isExecApprovalRunAbortedError(error)
+            ) {
+              return;
+            }
+            await sendApprovalRequestFailedFollowup();
+          })
+          .catch(() => undefined);
 
         return execHostShared.buildExecApprovalPendingToolResult({
           host: "node",

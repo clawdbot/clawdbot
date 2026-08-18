@@ -273,7 +273,7 @@ describe("voice-call CLI status fallback", () => {
       {},
       {
         serve: { port: 3334, path: "/voice/webhook" },
-        tailscale: { mode: "off", path: "/voice/webhook" },
+        tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
         realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
         streaming: { enabled: true, streamPath: "/voice/stream" },
       },
@@ -301,6 +301,7 @@ describe("voice-call CLI status fallback", () => {
 
     expect(tailscaleMocks.setup).toHaveBeenCalledWith({
       mode: "funnel",
+      port: 443,
       routes: [
         {
           path: "/edge/custom/webhook",
@@ -329,7 +330,7 @@ describe("voice-call CLI status fallback", () => {
       {},
       {
         serve: { port: 3334, path: "/voice/webhook" },
-        tailscale: { mode: "off", path: "/voice/webhook" },
+        tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
         realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
         streaming: { enabled: false },
       },
@@ -352,7 +353,7 @@ describe("voice-call CLI status fallback", () => {
       {},
       {
         serve: { port: 3334, path: "/voice/webhook" },
-        tailscale: { mode: "off", path: "/voice/webhook" },
+        tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
         realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
         streaming: { enabled: true, streamPath: "/voice/stream" },
       },
@@ -366,8 +367,8 @@ describe("voice-call CLI status fallback", () => {
 
     expect(tailscaleMocks.cleanup.mock.calls).toEqual(
       ["/voice/webhook", "/voice/stream/realtime", "/voice/stream"].flatMap((exposurePath) => [
-        [{ mode: "serve", path: exposurePath }],
-        [{ mode: "funnel", path: exposurePath }],
+        [{ mode: "serve", port: 443, path: exposurePath }],
+        [{ mode: "funnel", port: 443, path: exposurePath }],
       ]),
     );
     expect(JSON.parse(capturer.output())).toMatchObject({

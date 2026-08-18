@@ -417,6 +417,51 @@ describe("validateProviderConfig", () => {
   });
 });
 
+describe("Tailscale external HTTPS port", () => {
+  it.each([
+    {
+      name: "Serve on an arbitrary valid port",
+      input: { tailscale: { mode: "serve", port: 4545 } },
+    },
+    { name: "legacy Funnel on 8443", input: { tailscale: { mode: "funnel", port: 8443 } } },
+    {
+      name: "unified Funnel on 10000",
+      input: {
+        tailscale: { port: 10000 },
+        tunnel: { provider: "tailscale-funnel" },
+      },
+    },
+  ])("accepts $name", ({ input }) => {
+    expect(VoiceCallConfigSchema.safeParse(input).success).toBe(true);
+  });
+
+  it.each([0, 1.5, 65_536])("rejects invalid HTTPS port %s", (port) => {
+    expect(VoiceCallConfigSchema.safeParse({ tailscale: { port } }).success).toBe(false);
+  });
+
+  it.each([
+    { name: "legacy mode", input: { tailscale: { mode: "funnel", port: 4545 } } },
+    {
+      name: "unified provider",
+      input: {
+        tailscale: { port: 4545 },
+        tunnel: { provider: "tailscale-funnel" },
+      },
+    },
+  ])("rejects unsupported Funnel port for $name", ({ input }) => {
+    const result = VoiceCallConfigSchema.safeParse(input);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["tailscale", "port"],
+          message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",
+        }),
+      );
+    }
+  });
+});
+
 describe("resolveVoiceCallConfig session routing", () => {
   it("enables the pre-answer stale call reaper by default", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
@@ -783,6 +828,9 @@ describe("normalizeVoiceCallConfig", () => {
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
+    expect(normalized.realtime.instructions).toContain("openclaw_end_call");
+    expect(normalized.realtime.instructions).toContain("speak any final words first");
+    expect(normalized.tailscale.port).toBe(443);
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toStrictEqual([]);
   });

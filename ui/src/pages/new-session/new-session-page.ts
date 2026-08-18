@@ -607,6 +607,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           draftAvailable: this.submission.canStartAsDraft(),
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
+          requestUpdate: () => this.requestUpdate(),
           submitting: this.submission.submitting,
           textareaController: this.submission.composerTextarea,
           messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
