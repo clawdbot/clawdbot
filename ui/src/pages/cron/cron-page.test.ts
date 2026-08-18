@@ -169,6 +169,90 @@ afterEach(() => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("keeps conflict detail attached to the authoritative job outside active filters", async () => {
+    const staleJob: CronJob = {
+      id: "filtered-conflict-job",
+      name: "Loaded name",
+      description: "Loaded description",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 1,
+      configRevision: "revision-stale",
+      schedule: { kind: "cron", expr: "0 9 * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "digest" },
+      state: {},
+    };
+    const authoritativeJob: CronJob = {
+      ...staleJob,
+      name: "Authoritative name",
+      description: "Latest Gateway definition",
+      updatedAtMs: 2,
+      configRevision: "revision-current",
+    };
+    const conflict = Object.assign(new Error("cron job definition changed"), {
+      details: { code: "CRON_JOB_CHANGED" },
+    });
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        const scheduleKind = (params as { scheduleKind?: string } | undefined)?.scheduleKind;
+        return scheduleKind === "every" ? cronListResponse([]) : cronListResponse([staleJob]);
+      }
+      if (method === "cron.update") {
+        throw conflict;
+      }
+      if (method === "cron.get") {
+        return authoritativeJob;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]') as HTMLElement).click();
+    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(staleJob.id));
+
+    page.cron.cronJobsScheduleKindFilter = "every";
+    page.requestUpdate();
+    await page.updateComplete;
+    const name = page.querySelector("#cron-name") as HTMLInputElement;
+    name.value = "My stale edit";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
+
+    await waitForCronPage(() =>
+      expect(page.cron.cronEditingConfigRevision).toBe("revision-current"),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ scheduleKind: "every" }),
+    );
+    expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
+    expect(page.cron.cronJobs).toEqual([authoritativeJob]);
+    expect(page.cron.cronJobsTotal).toBe(0);
+    expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe(
+      authoritativeJob.name,
+    );
+    expect(page.querySelector(".cron-detail-title")?.textContent).toContain(authoritativeJob.name);
+    expect(page.querySelector('[data-test-id="cron-detail-description"]')?.textContent).toContain(
+      authoritativeJob.description,
+    );
+    expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
+  });
+
   it.each([
     { scenario: "legacy absent authentication", scopes: undefined, canManage: true },
     { scenario: "read-only authentication", scopes: ["operator.read"], canManage: false },

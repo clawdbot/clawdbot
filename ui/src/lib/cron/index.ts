@@ -532,7 +532,7 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
 
 function upsertLocalCronJob(state: CronState, updatedJob: CronJob) {
   const existing = state.cronJobs.some((job) => job.id === updatedJob.id);
-  // Exact mutation/get responses pin the authoritative editor row even when active filters omit it.
+  // Exact mutation/get responses retain editor authority when the filtered page omits the job.
   state.cronJobs = existing
     ? state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job))
     : [...state.cronJobs, updatedJob];

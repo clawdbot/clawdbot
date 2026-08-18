@@ -92,6 +92,7 @@ type CronProps = {
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
   editingJobId: string | null;
+  editingJob: CronJob | undefined;
   createOpen: boolean;
   listTab: CronListTab;
   detailTab: CronDetailTab;
@@ -930,8 +931,7 @@ function renderSuggestions(props: CronProps) {
 // ── Detail view ──
 
 function renderDetailView(props: CronProps, mode: CronPanelMode) {
-  const selectedJob =
-    mode === "job" ? props.jobs.find((job) => job.id === props.editingJobId) : undefined;
+  const selectedJob = mode === "job" ? props.editingJob : undefined;
   const hasDetailTabs = mode === "job" && Boolean(selectedJob);
   const showHistory = mode === "job" && props.detailTab === "history";
   const children = [
