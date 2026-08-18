@@ -942,6 +942,7 @@ exit 1
           PATH: `${tempDir}${path.delimiter}${hostPath}`,
           OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
           OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+          OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
         },
         undefined,
         "; ",
