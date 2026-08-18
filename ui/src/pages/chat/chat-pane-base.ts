@@ -23,7 +23,9 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
+import { FullscreenController } from "../../components/fullscreen-controller.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
+import { t } from "../../i18n/index.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -31,6 +33,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -190,6 +193,18 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
     sessionKey: () => this.state?.sessionKey,
+  });
+  protected readonly boardFullscreen = new FullscreenController(this, {
+    section: () => this.querySelector<HTMLElement>(".chat-pane-primary-column"),
+    onChange: () => this.requestUpdate(),
+    onError: (message) => this.publishHeaderError(message),
+    buttonClass: "btn btn--ghost btn--icon chat-icon-btn board-fullscreen-button",
+    buttonSelector: ".board-fullscreen-button",
+    iconClass: "board-fullscreen-button__icon",
+    enterLabel: () => t("chat.board.enterFullscreen"),
+    exitLabel: () => t("chat.board.exitFullscreen"),
+    unavailableLabel: () => t("chat.board.fullscreenUnavailable"),
+    errorMessage: (error) => t("chat.board.fullscreenFailed", { error: formatUiError(error) }),
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
