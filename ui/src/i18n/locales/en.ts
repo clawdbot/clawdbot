@@ -3375,6 +3375,7 @@ export const en: TranslationMap = {
     yesterday: "Yesterday",
     unknownDate: "Unknown date",
     noSessions: "No sessions match these filters.",
+    automationGroup: "{count} automation sessions",
     channelLabel: "Channel: {value}",
     agentLabel: "Agent: {value}",
     online: "Online",

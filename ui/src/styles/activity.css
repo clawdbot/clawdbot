@@ -316,6 +316,47 @@ openclaw-activity-page {
   border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
+.activity-feed__automation-group {
+  width: 100%;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.activity-feed__session + .activity-feed__automation-group {
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.activity-feed__automation-group:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.activity-feed__automation-group-icon,
+.activity-feed__automation-group-chevron {
+  display: inline-flex;
+}
+
+.activity-feed__automation-group-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.activity-feed__automation-group-chevron svg {
+  width: 18px;
+  height: 18px;
+  transition: transform var(--duration-fast) ease;
+}
+
+.activity-feed__automation-group[aria-expanded="true"]
+  .activity-feed__automation-group-chevron
+  svg {
+  transform: rotate(90deg);
+}
+
 .activity-feed__session:hover,
 .activity-feed__session:focus-visible {
   background: var(--bg-hover);

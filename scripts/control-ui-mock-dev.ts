@@ -324,9 +324,11 @@ function buildActivitySessionRows(baseTime: number) {
     ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
     ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
   ] as const;
+  const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
   return fixtures.map(([key, label, owner, age]) =>
     sessionRow(`agent:activity:${key}`, label, baseTime - age, {
       createdActor: owner,
+      hasAutomation: automationKeys.has(key),
       owner: { actor: owner },
     }),
   );

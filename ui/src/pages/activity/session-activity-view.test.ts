@@ -7,7 +7,12 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
-function row(key: string, owner: { id: string; label?: string }, updatedAt: number) {
+function row(
+  key: string,
+  owner: { id: string; label?: string },
+  updatedAt: number,
+  overrides: Partial<GatewaySessionRow> = {},
+) {
   const actor = { type: "human" as const, ...owner };
   return {
     key,
@@ -16,6 +21,7 @@ function row(key: string, owner: { id: string; label?: string }, updatedAt: numb
     updatedAt,
     createdActor: actor,
     owner: { actor },
+    ...overrides,
   } satisfies GatewaySessionRow;
 }
 
@@ -33,6 +39,8 @@ function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0
     presenceViewers: [] as PresenceViewer[],
     retainedIdentity: null,
     rows: [] as GatewaySessionRow[],
+    expandedAutomationDays: new Set<string>(),
+    onAutomationDayToggle: vi.fn(),
     onFiltersChange: vi.fn(),
     ...overrides,
   };
@@ -108,5 +116,76 @@ describe("session activity people filter", () => {
       query: "release",
       time: "30d",
     });
+  });
+});
+
+describe("session activity automation grouping", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("collapses two automation sessions, keeps one inline, and bypasses grouping for filters", () => {
+    const current = new Date();
+    const now = new Date(
+      current.getFullYear(),
+      current.getMonth(),
+      current.getDate(),
+      12,
+    ).getTime();
+    const owner = { id: "owner", label: "Owner" };
+    const regular = row("Regular session", owner, now);
+    const automationOne = row("Automation one", owner, now - 1_000, { hasAutomation: true });
+    const automationTwo = row("Automation two", owner, now - 2_000, { hasAutomation: true });
+    const onAutomationDayToggle = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({ rows: [regular, automationOne, automationTwo], onAutomationDayToggle }),
+      ),
+      container,
+    );
+
+    const group = container.querySelector<HTMLButtonElement>("[data-activity-automation-group]");
+    expect(group?.textContent).toContain("2 automation sessions");
+    expect(group?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(1);
+    const dayKey = group?.dataset.activityAutomationGroup;
+    expect(dayKey).toBeTruthy();
+    group?.click();
+    expect(onAutomationDayToggle).toHaveBeenCalledWith(dayKey);
+
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [regular, automationOne, automationTwo],
+          expandedAutomationDays: new Set([dayKey!]),
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(3);
+
+    render(renderSessionActivityView(props({ rows: [regular, automationOne] })), container);
+    expect(container.querySelector("[data-activity-automation-group]")).toBeNull();
+    expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(2);
+
+    for (const filteredProps of [
+      { filters: { personId: null, query: "Automation", time: "7d" as const } },
+      {
+        filters: { personId: "owner", query: "", time: "7d" as const },
+        retainedIdentity: { id: "owner", name: "Owner", watchedSessions: [] },
+      },
+    ]) {
+      render(
+        renderSessionActivityView(
+          props({ rows: [automationOne, automationTwo], ...filteredProps }),
+        ),
+        container,
+      );
+      expect(container.querySelector("[data-activity-automation-group]")).toBeNull();
+      expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(2);
+    }
   });
 });

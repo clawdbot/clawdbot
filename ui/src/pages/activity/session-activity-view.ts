@@ -30,10 +30,12 @@ import {
 
 type SessionActivityViewProps = {
   context: ApplicationContext;
+  expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
   retainedIdentity: PresenceViewer | null;
   rows: readonly GatewaySessionRow[];
+  onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
 };
 
@@ -277,6 +279,41 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
   </a>`;
 }
 
+function renderDaySessions(
+  props: SessionActivityViewProps,
+  day: ReturnType<typeof projectSessionActivity>["days"][number],
+) {
+  if (props.filters.query || props.filters.personId) {
+    return day.sessions.map((row) => renderSessionLink(props.context, row));
+  }
+  // GatewaySessionRow.hasAutomation records that an enabled cron job is bound to the session;
+  // grouping must consume that fact directly rather than infer automation from titles or keys.
+  const automation = day.sessions.filter((row) => row.hasAutomation === true);
+  if (automation.length < 2) {
+    return day.sessions.map((row) => renderSessionLink(props.context, row));
+  }
+  const expanded = props.expandedAutomationDays.has(day.key);
+  return html`
+    ${day.sessions
+      .filter((row) => row.hasAutomation !== true)
+      .map((row) => renderSessionLink(props.context, row))}
+    <button
+      type="button"
+      class="activity-feed__session activity-feed__automation-group"
+      data-activity-automation-group=${day.key}
+      aria-expanded=${String(expanded)}
+      @click=${() => props.onAutomationDayToggle(day.key)}
+    >
+      <span class="activity-feed__automation-group-icon" aria-hidden="true">${icons.clock}</span>
+      <span>${t("activityFeed.automationGroup", { count: String(automation.length) })}</span>
+      <span class="activity-feed__automation-group-chevron" aria-hidden="true"
+        >${icons.chevronRight}</span
+      >
+    </button>
+    ${expanded ? automation.map((row) => renderSessionLink(props.context, row)) : nothing}
+  `;
+}
+
 function renderIdentityHeader(
   context: ApplicationContext,
   identity: PresenceViewer,
@@ -410,9 +447,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                 ? projection.days.map(
                     (day) => html`<section class="activity-feed__day">
                       <h3>${dayLabel(day.timestamp)}</h3>
-                      <div class="activity-feed__sessions">
-                        ${day.sessions.map((row) => renderSessionLink(props.context, row))}
-                      </div>
+                      <div class="activity-feed__sessions">${renderDaySessions(props, day)}</div>
                     </section>`,
                   )
                 : html`<section class="activity-feed__empty" role="status">

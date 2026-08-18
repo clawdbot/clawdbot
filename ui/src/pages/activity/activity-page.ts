@@ -74,6 +74,7 @@ class ActivityPage extends OpenClawLightDomElement {
   };
   @state() private toolFilter = "";
   @state() private expandedIds = new Set<string>();
+  @state() private expandedAutomationDays = new Set<string>();
   @state() private autoFollow = true;
   @state() private runInspector: RunInspectorState = { status: "empty" };
   @state() private presencePayload: PresencePayload | undefined;
@@ -517,10 +518,20 @@ class ActivityPage extends OpenClawLightDomElement {
         ${mode === "sessions"
           ? renderSessionActivityView({
               context: this.context,
+              expandedAutomationDays: this.expandedAutomationDays,
               filters,
               presenceViewers,
               retainedIdentity,
               rows: sessionRows,
+              onAutomationDayToggle: (dayKey) => {
+                const next = new Set(this.expandedAutomationDays);
+                if (next.has(dayKey)) {
+                  next.delete(dayKey);
+                } else {
+                  next.add(dayKey);
+                }
+                this.expandedAutomationDays = next;
+              },
               onFiltersChange: (next) =>
                 this.context.navigate("activity", { search: sessionActivitySearch(next) }),
             })
