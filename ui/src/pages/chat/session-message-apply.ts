@@ -3,8 +3,8 @@ import {
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
 
