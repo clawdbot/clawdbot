@@ -14,4 +14,9 @@ describe("prompt template arguments", () => {
     expect(substituteArgs("Args: $ARGUMENTS", args)).toBe("Args: price $$ and $& here");
     expect(substituteArgs("Args: $@", args)).toBe("Args: price $$ and $& here");
   });
+
+  it("resolves every placeholder in one pass so inserted arguments are never re-expanded", () => {
+    expect(substituteArgs("$1 $@", ["$ARGUMENTS", "safe"])).toBe("$ARGUMENTS $ARGUMENTS safe");
+    expect(substituteArgs("$1 ${@:2:1}", ["$@", "$ARGUMENTS", "safe"])).toBe("$@ $ARGUMENTS");
+  });
 });
