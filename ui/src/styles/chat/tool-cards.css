@@ -114,9 +114,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
   margin-inline-start: -3px;
   color: var(--muted);
   opacity: 0.55;
@@ -125,16 +125,9 @@
     transform 150ms ease-out;
 }
 
-.chat-activity-group__summary .chat-tool-row__chevron,
-.chat-activity-group__summary .chat-tool-row__chevron svg {
+.chat-tool-row__chevron svg {
   width: 14px;
   height: 14px;
-  flex-basis: 14px;
-}
-
-.chat-tool-row__chevron svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-tool-row--file {
