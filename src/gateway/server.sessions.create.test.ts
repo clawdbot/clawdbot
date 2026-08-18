@@ -1686,19 +1686,34 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
     new Error("synthetic post-commit initial-turn failure"),
   );
   try {
-    await expect(
-      directSessionReq(
-        "sessions.create",
-        {
-          agentId: "main",
-          key,
-          message: "start the committed session",
-          worktree: true,
-          worktreeName: "post-commit-worktree",
+    const created = await directSessionReq<{
+      key: string;
+      runError: { code: string; message: string };
+      runStarted: boolean;
+      sessionId: string;
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        key,
+        message: "start the committed session",
+        worktree: true,
+        worktreeName: "post-commit-worktree",
+      },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(created).toMatchObject({
+      ok: true,
+      payload: {
+        key,
+        runError: {
+          code: "UNAVAILABLE",
+          message: "synthetic post-commit initial-turn failure",
         },
-        { client: { connect: { scopes: ["operator.admin"] } } as never },
-      ),
-    ).rejects.toThrow("synthetic post-commit initial-turn failure");
+        runStarted: false,
+        sessionId: expect.any(String),
+      },
+    });
 
     expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
       sessionId: expect.any(String),

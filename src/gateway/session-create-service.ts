@@ -255,7 +255,7 @@ type TrustedInitialSessionEntry = {
   pluginExtensions?: SessionEntry["pluginExtensions"];
 };
 
-type CreateGatewaySessionResult =
+type GatewaySessionCommitResult =
   | {
       ok: true;
       key: string;
@@ -265,6 +265,12 @@ type CreateGatewaySessionResult =
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape };
+
+type CreateGatewaySessionResult =
+  | (Extract<GatewaySessionCommitResult, { ok: true }> & {
+      postCommit: { status: "completed" } | { status: "failed"; error: unknown };
+    })
+  | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export async function createGatewaySession(params: {
   cfg: OpenClawConfig;
@@ -740,6 +746,7 @@ export async function createGatewaySession(params: {
         entry: projectPublicSessionEntry(resetResult.entry),
         resolved: resetResult.resolved,
         resetExisting: true,
+        postCommit: { status: "completed" },
       };
     }
   }
@@ -759,7 +766,7 @@ export async function createGatewaySession(params: {
           parentSessionKey: canonicalParentSessionKey,
         }
       : undefined;
-  const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
+  const createChildSession = async (): Promise<GatewaySessionCommitResult> => {
     params.commitGuard?.();
     let currentParentSessionEntry = parentSessionEntry;
     if (
@@ -1345,9 +1352,20 @@ export async function createGatewaySession(params: {
       }
     },
   });
-  if (result.ok && !result.resetExisting && createdContext) {
-    await params.afterCreate?.(createdContext);
+  if (!result.ok) {
+    return result;
   }
-  return result;
+  if (result.resetExisting || !createdContext || !params.afterCreate) {
+    return { ...result, postCommit: { status: "completed" } };
+  }
+  // The row, transcript, and prepared lifecycle are already durable here. A
+  // fallible initializer must report that committed identity instead of making
+  // callers infer that creation never happened and retry the key.
+  try {
+    await params.afterCreate(createdContext);
+    return { ...result, postCommit: { status: "completed" } };
+  } catch (error) {
+    return { ...result, postCommit: { status: "failed", error } };
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
