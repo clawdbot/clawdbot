@@ -179,7 +179,7 @@ class SessionMenu extends OpenClawLightDomElement {
       });
       return;
     }
-    const owner = sessionOwnerAssignmentFromMenuValue(value, this.selfOwner);
+    const owner = sessionOwnerAssignmentFromMenuValue(value);
     if (owner) {
       this.runAction({ kind: "assign-owner", owner });
     }

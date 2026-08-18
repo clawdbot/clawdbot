@@ -7,13 +7,7 @@ import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionOwnerAssignment = Pick<SessionOwnerOption, "type" | "id">;
 
-export function sessionOwnerAssignmentFromMenuValue(
-  value: string,
-  selfOwner: SessionOwnerOption | null,
-): SessionOwnerAssignment | null {
-  if (value === "assign-owner:self") {
-    return selfOwner;
-  }
+export function sessionOwnerAssignmentFromMenuValue(value: string): SessionOwnerAssignment | null {
   if (!value.startsWith("assign-owner:")) {
     return null;
   }
@@ -34,7 +28,7 @@ export function renderSessionOwnerAssignmentMenu(params: {
     ${params.selfOwner
       ? html`<wa-dropdown-item
           class="session-menu__item"
-          value="assign-owner:self"
+          value=${`assign-owner:${params.selfOwner.type}:${encodeURIComponent(params.selfOwner.id)}`}
           ?disabled=${params.disabled || params.currentOwnerId === params.selfOwner.id}
           title=${title}
         >

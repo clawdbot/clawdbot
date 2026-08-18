@@ -151,15 +151,17 @@ describe("AppSidebar session mutation feedback", () => {
   });
 
   it("assigns owners from the row menu and updates the owner chip", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params: unknown) => {
       if (method !== "sessions.assignOwner") {
         throw new Error(`unexpected method: ${method}`);
       }
+      const owner = (params as { owner: { type: "human"; id: string } }).owner;
+      const label = owner.id === "profile-ada" ? "Ada" : "Bob";
       return {
         ok: true,
         key: "agent:main:a",
         owner: {
-          actor: { type: "human", id: "profile-bob", label: "Bob" },
+          actor: { ...owner, label },
           assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
           assignedAt: 10,
         },
@@ -208,6 +210,31 @@ describe("AppSidebar session mutation feedback", () => {
           .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
           ?.getAttribute("title"),
       ).toBe("Owned by Bob");
+    });
+
+    const selfMenu = await openSessionMenu(sidebar, row.key);
+    const selfItem = selfMenu.querySelector<HTMLElement>(
+      ':scope > wa-dropdown > wa-dropdown-item[value="assign-owner:human:profile-ada"]',
+    );
+    selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: selfItem?.getAttribute("value") } },
+      }),
+    );
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.assignOwner", {
+      key: row.key,
+      agentId: "main",
+      owner: { type: "human", id: "profile-ada" },
+    });
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
+          ?.getAttribute("title"),
+      ).toBe("Owned by Ada");
     });
   });
 

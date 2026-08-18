@@ -131,7 +131,7 @@ function iconChoices(menu: ParentNode): HTMLButtonElement[] {
 }
 
 describe("session menu", () => {
-  it("renders owner radio state and closes before dispatching assignment", async () => {
+  it("dispatches the same canonical owner from the self shortcut and submenu", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const onClose = vi.fn();
     const selfOwner = { type: "human", id: "profile-ada", label: "Ada" } as const;
@@ -148,15 +148,21 @@ describe("session menu", () => {
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    menu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        composed: true,
-        detail: { item: { value: "assign-owner:self" } },
-      }),
-    );
-    expect(onAction).toHaveBeenCalledWith({ kind: "assign-owner", owner: selfOwner });
-    expect(onClose).toHaveBeenCalledOnce();
+    for (const label of ["Assign to me", "Ada"]) {
+      const value = menuItem(menu, label).getAttribute("value");
+      menu.querySelector("wa-dropdown")?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          composed: true,
+          detail: { item: { value } },
+        }),
+      );
+    }
+    expect(onAction.mock.calls).toEqual([
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+    ]);
+    expect(onClose).toHaveBeenCalledTimes(2);
     const closeOrder = onClose.mock.invocationCallOrder[0];
     const actionOrder = onAction.mock.invocationCallOrder[0];
     if (closeOrder === undefined || actionOrder === undefined) {

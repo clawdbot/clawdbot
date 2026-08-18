@@ -103,7 +103,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       }
       return;
     }
-    const owner = sessionOwnerAssignmentFromMenuValue(value, this.selfOwner);
+    const owner = sessionOwnerAssignmentFromMenuValue(value);
     if (owner) {
       this.onAction({ kind: "assign-owner", owner });
       return;

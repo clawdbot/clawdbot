@@ -265,10 +265,10 @@ describe("chat header session menu", () => {
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    select(menu, "assign-owner:self");
+    select(menu, item(menu, "Assign to me").getAttribute("value") ?? "");
     select(menu, "assign-owner:agent:research%3Aone");
     expect(onAction.mock.calls).toEqual([
-      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada", label: "Ada" } }],
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
       [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
     ]);
   });
