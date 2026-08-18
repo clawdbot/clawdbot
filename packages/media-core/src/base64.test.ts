@@ -35,6 +35,27 @@ describe("base64 helpers", () => {
     expect(canonicalizeBase64(wrapped)).toBe(encoded);
   });
 
+  it("canonicalizeBase64 handles one whitespace per character without heap blow-up", () => {
+    // Worst case for any run-collecting cleanup strategy: every data character
+    // is its own whitespace-delimited run (2.7 M runs here). The whole cleanup
+    // must stay bounded by the input length — one output buffer — not by the
+    // number of runs.
+    const encoded = Buffer.alloc(2 * 1024 * 1024, 0xab).toString("base64");
+    const shredded = encoded.split("").join("\n");
+    // heapUsed catches per-run JS objects (slices, rope nodes); arrayBuffers
+    // catches Buffer-backed strategies — bound both.
+    const usedBytes = () => {
+      const usage = process.memoryUsage();
+      return usage.heapUsed + usage.arrayBuffers;
+    };
+    const before = usedBytes();
+
+    expect(canonicalizeBase64(shredded)).toBe(encoded);
+
+    const delta = usedBytes() - before;
+    expect(delta).toBeLessThan(64 * 1024 * 1024);
+  });
+
   it.each([
     {
       name: "canonicalizeBase64 normalizes whitespace and keeps valid base64",

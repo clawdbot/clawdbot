@@ -65,13 +65,18 @@ function base64DataValue(code: number): number {
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  // Validate in a single pass and collect contiguous non-whitespace runs as
-  // slices. Appending per character instead (`current += char`) allocates one
-  // V8 cons-string node (~25 bytes) per input character, all live at once —
-  // enough to OOM the process on multi-megabyte attachment payloads.
-  const runs: string[] = [];
-  let runStart = -1;
-  let cleanedLength = 0;
+  // Single validating pass. An output buffer is materialized only after the
+  // first whitespace character is seen: already-canonical input (any standard
+  // encoder's output) is returned unchanged with zero allocations, and input
+  // containing whitespace costs exactly one buffer bounded by the input
+  // length, regardless of how the whitespace is distributed. (Appending per
+  // character instead — `current += char` — allocated one V8 cons-string node
+  // per input character, all live at once: hundreds of MB of transient heap
+  // for attachment-sized payloads. Collecting whitespace-delimited runs as
+  // string slices is not bounded either: input alternating data characters
+  // and whitespace retains one slice object per run.)
+  let out: Buffer | undefined;
+  let outLen = 0;
   let padding = 0;
   let sawPadding = false;
   let lastDataCode = 0;
@@ -79,9 +84,13 @@ export function canonicalizeBase64(base64: string): string | undefined {
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
     if (code <= 0x20) {
-      if (runStart >= 0) {
-        runs.push(base64.slice(runStart, i));
-        runStart = -1;
+      if (out === undefined) {
+        // First whitespace: backfill the validated prefix [0, i).
+        out = Buffer.allocUnsafe(base64.length - 1);
+        for (let j = 0; j < i; j += 1) {
+          out[j] = base64.charCodeAt(j);
+        }
+        outLen = i;
       }
       continue;
     }
@@ -96,14 +105,12 @@ export function canonicalizeBase64(base64: string): string | undefined {
     } else {
       lastDataCode = code;
     }
-    if (runStart < 0) {
-      runStart = i;
+    if (out !== undefined) {
+      out[outLen] = code;
+      outLen += 1;
     }
-    cleanedLength += 1;
   }
-  if (runStart >= 0) {
-    runs.push(runStart === 0 ? base64 : base64.slice(runStart));
-  }
+  const cleanedLength = out === undefined ? base64.length : outLen;
   if (cleanedLength === 0) {
     return undefined;
   }
@@ -116,8 +123,8 @@ export function canonicalizeBase64(base64: string): string | undefined {
   if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
     return undefined;
   }
-  // Already-canonical input (the common case: encoder output with no
-  // whitespace) is returned as-is without copying.
-  const cleaned = runs.length === 1 ? (runs[0] ?? "") : runs.join("");
+  // Every kept character was validated against the base64 alphabet (ASCII),
+  // so a latin1 decode reproduces them exactly.
+  const cleaned = out === undefined ? base64 : out.subarray(0, outLen).toString("latin1");
   return remainder === 0 ? cleaned : cleaned + "=".repeat(4 - remainder);
 }
