@@ -3953,7 +3953,11 @@ describe("OpenAI Ultra wire capture", () => {
     expect(
       resolveOpenAIUltraUpstreamBaseUrl({
         candidate,
-        cfg: { models: { providers: { openai: { baseUrl: "https://proxy.test/v1" } } } },
+        cfg: {
+          models: {
+            providers: { openai: { baseUrl: "https://proxy.test/v1", models: [] } },
+          },
+        },
       }),
     ).toBe("https://proxy.test/v1");
     expect(resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: {} })).toBe(
@@ -3969,9 +3973,7 @@ function resolveOpenAIUltraUpstreamBaseUrl(params: {
   cfg: OpenClawConfig;
 }): string {
   const providerConfig = params.cfg.models?.providers?.openai;
-  const configuredModel = providerConfig?.models?.find(
-    (model) => model.id === params.candidate.id,
-  );
+  const configuredModel = providerConfig?.models?.find((model) => model.id === params.candidate.id);
   return (
     params.candidate.baseUrl?.trim() ||
     configuredModel?.baseUrl?.trim() ||
