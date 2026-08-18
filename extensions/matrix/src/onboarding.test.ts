@@ -470,7 +470,7 @@ describe("matrix onboarding", () => {
     expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
     expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual(["#ops:example.org"]);
     expect(notes.join("\n")).toContain(
-      "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+      "Use only stable Matrix invite targets for auto-join: !roomId:server (or the suffixless !roomId form on room version 12+), #alias:server, or *.",
     );
     expect(notes.join("\n")).toContain("Invalid: Project Room");
   });

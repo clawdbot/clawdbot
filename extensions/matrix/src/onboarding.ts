@@ -250,7 +250,7 @@ async function configureMatrixInviteAutoJoin(params: {
     if (allowlist.length === 0 || invalidEntries.length > 0) {
       await params.prompter.note(
         [
-          "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+          "Use only stable Matrix invite targets for auto-join: !roomId:server (or the suffixless !roomId form on room version 12+), #alias:server, or *.",
           invalidEntries.length > 0 ? `Invalid: ${invalidEntries.join(", ")}` : undefined,
         ]
           .filter(Boolean)

@@ -471,7 +471,7 @@ async function resolveMatrixMonitorRoomsConfig(params: {
   summarizeMapping("matrix rooms", mapping, unresolved, params.runtime);
   if (unresolved.length > 0) {
     params.runtime.log?.(
-      "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
+      "matrix rooms must be room IDs or aliases (example: !room:server, the suffixless !room form on room version 12+, or #alias:server). Unresolved entries are ignored.",
     );
   }
 
