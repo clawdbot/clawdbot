@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Internal runtime event prompt formatting.
  * Sanitizes background task completion events into protected runtime-context
@@ -62,7 +63,9 @@ function truncateSingleLineField(value: string, maxChars: number, marker: string
     return value;
   }
   const keep = Math.max(0, maxChars - marker.length);
-  return `${value.slice(0, keep).trimEnd()}${marker}`;
+  // truncateUtf16Safe never splits a surrogate pair, so astral characters in
+  // provider/lifecycle error text cannot leave a dangling half in the prompt.
+  return `${truncateUtf16Safe(value, keep).trimEnd()}${marker}`;
 }
 
 function sanitizeMultilineField(value: string, fallback: string): string {
