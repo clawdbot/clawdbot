@@ -530,8 +530,12 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   throw new Error("This automation is missing its configuration revision. Refresh and try again.");
 }
 
-function replaceLocalCronJob(state: CronState, updatedJob: CronJob) {
-  state.cronJobs = state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job));
+function upsertLocalCronJob(state: CronState, updatedJob: CronJob) {
+  const existing = state.cronJobs.some((job) => job.id === updatedJob.id);
+  // Exact mutation/get responses pin the authoritative editor row even when active filters omit it.
+  state.cronJobs = existing
+    ? state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job))
+    : [...state.cronJobs, updatedJob];
 }
 
 function isCronJobChangedError(error: unknown): boolean {
@@ -1246,7 +1250,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           expectedConfigRevision,
           patch: job,
         });
-        replaceLocalCronJob(state, updatedJob);
+        upsertLocalCronJob(state, updatedJob);
       } catch (error) {
         if (!isCronJobChangedError(error)) {
           throw error;
@@ -1254,7 +1258,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         await reloadCronJobsSnapshot(state);
         try {
           const latestJob = await client.request<CronJob>("cron.get", { id: editedJobId });
-          replaceLocalCronJob(state, latestJob);
+          upsertLocalCronJob(state, latestJob);
           startCronEdit(state, latestJob);
           state.cronError =
             "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.";
@@ -1298,7 +1302,7 @@ export async function toggleCronJob(
       expectedConfigRevision: requireCronConfigRevision(job.configRevision),
       patch: { enabled },
     });
-    replaceLocalCronJob(state, updatedJob);
+    upsertLocalCronJob(state, updatedJob);
     if (state.cronEditingJobId === updatedJob.id) {
       state.cronEditingConfigRevision = requireCronConfigRevision(updatedJob.configRevision);
     }

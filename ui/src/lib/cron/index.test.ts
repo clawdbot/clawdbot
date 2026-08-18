@@ -758,6 +758,78 @@ describe("cron controller", () => {
     expect(state.cronError).toContain("latest definition is loaded");
   });
 
+  it("pins the authoritative job when a filtered conflict reload omits it", async () => {
+    const staleJob = createCronJob({
+      id: "job-filtered-conflict",
+      name: "Loaded name",
+      description: "loaded description",
+      configRevision: "revision-stale",
+    });
+    const authoritativeJob = {
+      ...staleJob,
+      name: "Authoritative name",
+      description: "latest definition",
+      updatedAtMs: 2,
+      configRevision: "revision-current",
+    };
+    const savedJob = {
+      ...authoritativeJob,
+      name: "Retried name",
+      updatedAtMs: 3,
+      configRevision: "revision-saved",
+    };
+    const conflict = Object.assign(new Error("cron job definition changed"), {
+      details: { code: "CRON_JOB_CHANGED" },
+    });
+    const updateRevisions: unknown[] = [];
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.update") {
+        updateRevisions.push(requireRecord(payload, "cron.update payload").expectedConfigRevision);
+        if (updateRevisions.length === 1) {
+          throw conflict;
+        }
+        return savedJob;
+      }
+      if (method === "cron.list") {
+        return emptyCronListResponse({ snapshotRevision: "filtered-snapshot" });
+      }
+      if (method === "cron.get") {
+        return authoritativeJob;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, {
+      cronJobs: [staleJob],
+      cronJobsScheduleKindFilter: "every",
+    });
+    startCronEdit(state, staleJob);
+    state.cronForm.name = "My stale edit";
+
+    await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ scheduleKind: "every" }),
+    );
+    expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
+    expect(state.cronJobs).toEqual([authoritativeJob]);
+    expect(state.cronJobsTotal).toBe(0);
+    expect(state.cronEditingJobId).toBe(authoritativeJob.id);
+    expect(state.cronEditingConfigRevision).toBe("revision-current");
+    expect(state.cronForm.name).toBe("Authoritative name");
+    expect(state.cronForm.description).toBe("latest definition");
+
+    state.cronForm.name = "Retried name";
+    await expect(addCronJob(state)).resolves.toEqual({
+      saved: true,
+      jobId: authoritativeJob.id,
+    });
+    expect(updateRevisions).toEqual(["revision-stale", "revision-current"]);
+  });
+
   it("keeps a stale form paired with its frozen revision when conflict refresh fails", async () => {
     const staleJob = createCronJob({
       id: "job-conflict-deferred",
