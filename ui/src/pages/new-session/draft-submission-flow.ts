@@ -106,6 +106,7 @@ export class DraftSubmissionFlow {
   }
 
   restoreMessage(message: string) {
+    this.draftPersistence.noteDraftReplaced();
     this.messageValue = message;
     this.callbacks.requestUpdate();
   }
@@ -115,6 +116,7 @@ export class DraftSubmissionFlow {
     attachments: ChatAttachment[];
     visibility: NewSessionVisibility;
   }) {
+    this.draftPersistence.noteDraftReplaced();
     this.messageValue = state.message;
     this.visibilityValue = state.visibility;
     this.attachmentDraft.restore(state.attachments);
@@ -143,8 +145,7 @@ export class DraftSubmissionFlow {
 
   clearErrorIf(error: string) {
     if (this.error === error) {
-      this.error = null;
-      this.callbacks.requestUpdate();
+      this.clearError();
     }
   }
 
@@ -357,6 +358,7 @@ export class DraftSubmissionFlow {
       this.pendingCloud.restored = false;
     } else {
       this.clearPendingCloudRecovery();
+      this.draftPersistence.noteDraftReplaced();
       this.messageValue = "";
     }
     this.error = null;
