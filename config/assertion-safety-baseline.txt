@@ -3818,7 +3818,7 @@ src/skills/loading/config.ts	1
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/source.ts	1
 src/skills/loading/workspace-skill-loader.ts	2
-src/skills/loading/workspace-skill-sync.runtime.ts	2
+src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/refresh.ts	3
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1

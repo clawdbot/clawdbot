@@ -655,7 +655,7 @@ function evictIdleWorkspaceWatchStates(now: number): void {
   }
 }
 
-export function resolveSkillsWatcherKey(params: {
+function resolveSkillsWatcherKey(params: {
   workspaceDir: string;
   executionSkillsDir?: string;
 }): string {

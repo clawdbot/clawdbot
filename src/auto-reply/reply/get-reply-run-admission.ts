@@ -197,7 +197,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionId,
           isFirstTurnInSession,
           workspaceDir: context.skillsWorkspaceDir,
-          executionSkillsDir: path.join(context.workspaceDir, "skills"),
+          executionSkillsDir: path.join(
+            sessionEntry?.worktree?.canonicalWorkspaceDir ?? context.workspaceDir,
+            "skills",
+          ),
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,

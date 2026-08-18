@@ -443,7 +443,10 @@ async function agentCommandInternal(
             lifecycleGeneration,
             runId,
             workspaceDir,
-            executionSkillsDir: path.join(cwd ?? workspaceDir, "skills"),
+            executionSkillsDir: path.join(
+              sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
+              "skills",
+            ),
             isNewSession,
             isSubagentLaneTurn,
             suppressVisibleSessionEffects,

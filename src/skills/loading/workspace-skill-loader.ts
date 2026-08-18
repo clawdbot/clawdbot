@@ -58,7 +58,7 @@ type LoadedSkillRecord = {
   syncDirName?: string;
 };
 
-export type WorkspaceSkillRoots = {
+type WorkspaceSkillRoots = {
   agentWorkspaceDir: string;
   executionSkillsDir?: string;
 };
