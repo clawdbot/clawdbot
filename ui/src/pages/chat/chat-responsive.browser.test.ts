@@ -1606,6 +1606,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps tool-card header actions visible without hover", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-tool-card">
+            <div class="chat-tool-card__header">
+              <span>ui/src/styles/chat/tool-cards.css</span>
+              <div class="chat-tool-card__actions">
+                <button class="chat-tool-card__action-btn" type="button">${iconSvg()}</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      expect(
+        await page
+          .locator(".chat-tool-card__header > .chat-tool-card__actions")
+          .evaluate((node) => getComputedStyle(node).opacity),
+      ).toBe("1");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it(
     "remeasures a populated composer when the viewport width changes",
     FULL_APP_TEST_OPTIONS,

@@ -65,7 +65,6 @@ import {
   renderToolCard,
   renderToolOutcome,
   renderToolPreview,
-  isRunningToolCard,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -96,8 +95,7 @@ function renderInlineToolCards(
     <div class="chat-tools-inline">
       ${toolCards.map((card, index) => {
         const disclosureId = `${opts.messageKey}:toolcard:${index}`;
-        const expanded =
-          opts.isToolExpanded?.(disclosureId) ?? isRunningToolCard(card, opts.runActive);
+        const expanded = opts.isToolExpanded?.(disclosureId) ?? false;
         return renderToolCard(card, {
           expanded,
           runActive: opts.runActive,
@@ -334,9 +332,7 @@ export function renderGroupedMessage(
   }
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded =
-    opts.isToolMessageExpanded?.(toolMessageDisclosureId) ??
-    toolCards.some((card) => isRunningToolCard(card, opts.runActive));
+  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   // One expanded card already closes with its own outcome line; every other
