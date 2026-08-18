@@ -164,11 +164,12 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
-  // Client's believed active-branch leaf entry id. Legacy targetless steering
-  // requires this immutable fence and may reject; null means an authoritative empty transcript.
+  // Transcript-branch CAS for non-steer interactive sends: the client's displayed
+  // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
+  // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  // Optional for wire compatibility. Modern/durable steer clients should always
-  // send this exact run precondition so a retry cannot move to a successor run.
+  // Optional exact-run fence for steer sends; on mismatch the send rejects
+  // instead of reaching a same-key successor run.
   expectedRunId: Type.Optional(NonEmptyString),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
