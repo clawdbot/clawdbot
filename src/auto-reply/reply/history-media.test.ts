@@ -35,7 +35,7 @@ describe("recent inbound history media", () => {
       ],
     };
 
-    expect(promoteRecentInboundHistoryMedia(ctx)).toHaveLength(2);
+    expect(promoteRecentInboundHistoryMedia(ctx, { pathExists: () => true })).toHaveLength(2);
     expect(ctx.media).toEqual([
       { path: "/media/current.png", contentType: "image/png", kind: "image" },
       {
@@ -53,7 +53,7 @@ describe("recent inbound history media", () => {
         messageId: "m1",
       },
     ]);
-    expect(promoteRecentInboundHistoryMedia(ctx)).toEqual([]);
+    expect(promoteRecentInboundHistoryMedia(ctx, { pathExists: () => true })).toEqual([]);
   });
 
   it("rejects remote, expired, unsupported, and over-budget history media", () => {
@@ -81,8 +81,31 @@ describe("recent inbound history media", () => {
       ],
     };
 
-    expect(resolveRecentInboundHistoryMedia({ ctx, nowMs: now, maxBytes: 3 })).toEqual([
-      expect.objectContaining({ path: "/media/ok.pdf", kind: "document", sizeBytes: 2 }),
-    ]);
+    expect(
+      resolveRecentInboundHistoryMedia({
+        ctx,
+        nowMs: now,
+        maxBytes: 3,
+        pathExists: () => true,
+      }),
+    ).toEqual([expect.objectContaining({ path: "/media/ok.pdf", kind: "document", sizeBytes: 2 })]);
+  });
+
+  it("skips local history media whose managed file has already expired", () => {
+    const ctx: MsgContext = {
+      Timestamp: 1_800_000_000_000,
+      InboundHistory: [
+        {
+          sender: "member",
+          body: "expired file",
+          timestamp: 1_800_000_000_000,
+          media: [{ path: "/media/missing.pdf", kind: "document", sizeBytes: 2 }],
+        },
+      ],
+    };
+
+    expect(resolveRecentInboundHistoryMedia({ ctx, pathExists: () => false })).toEqual([]);
+    expect(promoteRecentInboundHistoryMedia(ctx, { pathExists: () => false })).toEqual([]);
+    expect(ctx.media).toBeUndefined();
   });
 });

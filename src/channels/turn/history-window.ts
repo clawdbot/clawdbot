@@ -10,6 +10,7 @@ import {
   recordChannelHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -17,6 +18,8 @@ type MaybePromise<T> = T | Promise<T>;
 const PERSISTED_HISTORY_SCHEMA_VERSION = 1;
 const DEFAULT_PERSISTED_HISTORY_MAX_BYTES = 48 * 1024;
 const DEFAULT_PERSISTED_HISTORY_TTL_MS = 24 * 60 * 60_000;
+const MAX_WARNED_PERSISTENCE_FAILURES = 1024;
+const log = createSubsystemLogger("channels/turn/history-window");
 
 type PersistedHistoryItem<T extends HistoryEntry> = {
   sequence: number;
@@ -239,8 +242,66 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
 }): ChannelHistoryWindow<T> {
   const { historyMap } = params;
   const persistence = params.persistence;
+  const warnedPersistenceFailures = new Set<string>();
   const persistedKey = (historyKey: string) =>
     persistence?.keyPrefix ? persistence.keyPrefix + ":" + historyKey : historyKey;
+  const warnPersistenceFailure = (failureParams: {
+    key: string;
+    operation: string;
+    error: unknown;
+  }) => {
+    const warningKey = [failureParams.operation, failureParams.key].join("\0");
+    if (warnedPersistenceFailures.has(warningKey)) {
+      return;
+    }
+    if (warnedPersistenceFailures.size >= MAX_WARNED_PERSISTENCE_FAILURES) {
+      warnedPersistenceFailures.clear();
+    }
+    warnedPersistenceFailures.add(warningKey);
+    log.warn(
+      "ignoring unavailable persisted channel history during " +
+        failureParams.operation +
+        ": " +
+        String(failureParams.error),
+    );
+  };
+  const readPersistedState = (readParams: {
+    key: string;
+    operation: string;
+    value: PersistedChannelHistory<T> | undefined;
+  }): PersistedChannelHistory<T> => {
+    try {
+      return assertPersistedHistory(readParams.value);
+    } catch (error) {
+      // Pending channel history is untrusted supplemental context. Corruption
+      // must never turn it into a single point of failure for message dispatch.
+      warnPersistenceFailure({ ...readParams, error });
+      return emptyPersistedHistory<T>();
+    }
+  };
+  const updatePersistedState = (updateParams: {
+    key: string;
+    operation: string;
+    updateValue: (
+      current: PersistedChannelHistory<T> | undefined,
+    ) => PersistedChannelHistory<T> | undefined;
+  }): boolean => {
+    if (!persistence) {
+      return false;
+    }
+    try {
+      return persistence.store.update(updateParams.key, updateParams.updateValue, {
+        ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS,
+      });
+    } catch (error) {
+      warnPersistenceFailure({
+        key: updateParams.key,
+        operation: updateParams.operation,
+        error,
+      });
+      return false;
+    }
+  };
   const snapshot = (historyParams: {
     historyKey: string;
     limit: number;
@@ -252,15 +313,24 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
           : [];
       return { entries };
     }
-    const state = prunePersistedHistory({
-      state: assertPersistedHistory(
-        persistence.store.lookup(persistedKey(historyParams.historyKey)),
-      ),
-      limit: historyParams.limit,
-      maxBytes: persistence.maxBytes ?? DEFAULT_PERSISTED_HISTORY_MAX_BYTES,
-      now: (persistence.now ?? Date.now)(),
-      ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS,
-    });
+    const key = persistedKey(historyParams.historyKey);
+    let state: PersistedChannelHistory<T>;
+    try {
+      state = prunePersistedHistory({
+        state: readPersistedState({
+          key,
+          operation: "snapshot",
+          value: persistence.store.lookup(key),
+        }),
+        limit: historyParams.limit,
+        maxBytes: persistence.maxBytes ?? DEFAULT_PERSISTED_HISTORY_MAX_BYTES,
+        now: (persistence.now ?? Date.now)(),
+        ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS,
+      });
+    } catch (error) {
+      warnPersistenceFailure({ key, operation: "snapshot", error });
+      state = emptyPersistedHistory<T>();
+    }
     const throughSequence = state.items.at(-1)?.sequence;
     return {
       entries: state.items.map((item) => item.entry),
@@ -277,20 +347,24 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
     }
     const recordEntry = recordParams.entry;
     const now = (persistence.now ?? Date.now)();
-    persistence.store.update(
-      persistedKey(recordParams.historyKey),
-      (current) => {
-        const state = assertPersistedHistory(current);
+    const key = persistedKey(recordParams.historyKey);
+    updatePersistedState({
+      key,
+      operation: "record",
+      updateValue: (current) => {
+        const state = readPersistedState({ key, operation: "record", value: current });
         if (
           recordEntry.messageId &&
           state.items.some((item) => item.entry.messageId === recordEntry.messageId)
         ) {
           return state;
         }
-        const entry = {
+        const entryWithTimestamp = {
           ...recordEntry,
           timestamp: recordEntry.timestamp ?? now,
-        } as T; // SAFETY: T extends HistoryEntry; adding an optional field preserves every T field.
+        };
+        // SAFETY: T extends HistoryEntry; adding an optional field preserves every T field.
+        const entry = entryWithTimestamp as T;
         return prunePersistedHistory({
           state: {
             schemaVersion: PERSISTED_HISTORY_SCHEMA_VERSION,
@@ -303,8 +377,7 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
           ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS,
         });
       },
-      { ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS },
-    );
+    });
     return snapshot(recordParams).entries;
   };
 
@@ -360,11 +433,9 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         maxBytes: recordParams.mediaMaxBytes,
         messageId: recordParams.messageId ?? recordParams.entry.messageId,
       });
-      const entryWithMedia =
-        media.length > 0
-          ? // SAFETY: T extends HistoryEntry and media is an optional HistoryEntry field.
-            ({ ...recordParams.entry, media } as T)
-          : recordParams.entry;
+      const recordEntryWithMedia = { ...recordParams.entry, media };
+      // SAFETY: T extends HistoryEntry; media is an optional HistoryEntry field.
+      const entryWithMedia = media.length > 0 ? (recordEntryWithMedia as T) : recordParams.entry;
       return recordPersisted({
         ...recordParams,
         entry: entryWithMedia,
@@ -376,7 +447,7 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         return buildHistoryContextFromEntries({
           entries,
           currentMessage: contextParams.currentMessage,
-          formatEntry: contextParams.formatEntry as (entry: HistoryEntry) => string, // SAFETY: every stored entry is T, which extends HistoryEntry.
+          formatEntry: contextParams.formatEntry,
           lineBreak: contextParams.lineBreak,
           excludeLast: false,
         });
@@ -386,7 +457,7 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         historyKey: contextParams.historyKey,
         limit: contextParams.limit,
         currentMessage: contextParams.currentMessage,
-        formatEntry: contextParams.formatEntry as (entry: HistoryEntry) => string, // SAFETY: every stored entry is T, which extends HistoryEntry.
+        formatEntry: contextParams.formatEntry,
         lineBreak: contextParams.lineBreak,
       });
     },
@@ -407,10 +478,12 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
     consume: (consumeParams) => {
       const throughSequence = consumeParams.snapshot.throughSequence;
       if (persistence && throughSequence !== undefined) {
-        persistence.store.update(
-          persistedKey(consumeParams.historyKey),
-          (current) => {
-            const state = assertPersistedHistory(current);
+        const key = persistedKey(consumeParams.historyKey);
+        updatePersistedState({
+          key,
+          operation: "consume",
+          updateValue: (current) => {
+            const state = readPersistedState({ key, operation: "consume", value: current });
             const items = state.items.filter((item) => item.sequence > throughSequence);
             // Plugin keyed-store update callbacks treat `undefined` as "leave the
             // current row unchanged", not delete. Persist an empty state so the
@@ -418,8 +491,7 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
             // record has a higher sequence and therefore survives this update.
             return { ...state, items };
           },
-          { ttlMs: persistence.ttlMs ?? DEFAULT_PERSISTED_HISTORY_TTL_MS },
-        );
+        });
         return;
       }
       clearChannelHistoryIfEnabled({
@@ -430,7 +502,12 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
     },
     clear: (clearParams) => {
       if (persistence) {
-        persistence.store.delete(persistedKey(clearParams.historyKey));
+        const key = persistedKey(clearParams.historyKey);
+        try {
+          persistence.store.delete(key);
+        } catch (error) {
+          warnPersistenceFailure({ key, operation: "clear", error });
+        }
         return;
       }
       clearChannelHistoryIfEnabled({

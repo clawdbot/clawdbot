@@ -2364,7 +2364,6 @@ src/channels/thread-bindings-policy.ts	2
 src/channels/turn/agent-run-terminal-outcome.ts	1
 src/channels/turn/delivery-result.ts	2
 src/channels/turn/execution.ts	2
-src/channels/turn/history-window.ts	1
 src/channels/turn/lifecycle.ts	3
 src/channels/turn/route-dm-scope.ts	1
 src/channels/turn/run-channel-turn.ts	6

@@ -1,4 +1,5 @@
 // Extracts media attachment references from reply history entries.
+import { existsSync } from "node:fs";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -127,6 +128,7 @@ export function resolveRecentInboundHistoryMedia(params: {
   ttlMs?: number;
   limit?: number;
   maxBytes?: number;
+  pathExists?: (path: string) => boolean;
 }): RecentInboundHistoryMedia[] {
   const nowMs = params.nowMs ?? resolveTimestamp(params.ctx.Timestamp) ?? Date.now();
   const ttlMs = params.ttlMs ?? RECENT_HISTORY_MEDIA_TTL_MS;
@@ -154,7 +156,7 @@ export function resolveRecentInboundHistoryMedia(params: {
     ) {
       const media = expectDefined(mediaEntries[mediaIndex], "history media entry at index");
       const mediaPath = normalizeOptionalString(media.path);
-      if (!mediaPath || isRemotePath(mediaPath)) {
+      if (!mediaPath || isRemotePath(mediaPath) || !(params.pathExists ?? existsSync)(mediaPath)) {
         continue;
       }
       const kind = media.kind;
@@ -196,8 +198,11 @@ export function resolveRecentInboundHistoryMedia(params: {
  * promotion only lets the existing media-understanding pipeline read the
  * managed local reference. Repeated calls are idempotent.
  */
-export function promoteRecentInboundHistoryMedia(ctx: MsgContext): RecentInboundHistoryMedia[] {
-  const historyMedia = resolveRecentInboundHistoryMedia({ ctx });
+export function promoteRecentInboundHistoryMedia(
+  ctx: MsgContext,
+  options: { pathExists?: (path: string) => boolean } = {},
+): RecentInboundHistoryMedia[] {
+  const historyMedia = resolveRecentInboundHistoryMedia({ ctx, pathExists: options.pathExists });
   if (historyMedia.length === 0) {
     return [];
   }

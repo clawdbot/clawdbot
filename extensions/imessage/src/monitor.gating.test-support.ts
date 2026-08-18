@@ -538,7 +538,59 @@ describe("imessage monitor gating + envelope builders", () => {
       dmPolicy: "pairing",
     });
 
-    expect(decision).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
+    expect(decision).toMatchObject({ kind: "drop", reason: "not in groupAllowFrom" });
+  });
+
+  it("retains denied group members as untrusted history only in an explicitly admitted group", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+    cfg.channels.imessage.contextVisibility = "all";
+    cfg.channels.imessage.groups = { "101": { requireMention: true } };
+
+    const decision = await resolveDecision({
+      cfg,
+      message: {
+        id: 39,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "worksheet attached",
+        is_group: true,
+      },
+      groupAllowFrom: ["+15550004444"],
+      groupPolicy: "allowlist",
+    });
+
+    expect(decision).toEqual({
+      kind: "drop",
+      reason: "not in groupAllowFrom",
+      history: {
+        historyKey: "101",
+        entry: {
+          sender: "+15550003333",
+          body: "worksheet attached",
+          messageId: "39",
+        },
+      },
+    });
+
+    cfg.channels.imessage.contextVisibility = "allowlist";
+    const hidden = await resolveDecision({
+      cfg,
+      message: {
+        id: 40,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "private worksheet",
+        is_group: true,
+      },
+      groupAllowFrom: ["+15550004444"],
+      groupPolicy: "allowlist",
+    });
+    expect(hidden).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
   });
 
   it("does not authorize group control commands from conversation allowlist entries", async () => {

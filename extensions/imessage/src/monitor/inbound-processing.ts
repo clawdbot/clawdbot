@@ -28,7 +28,10 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import {
+  evaluateSupplementalContextVisibility,
+  resolveChannelContextVisibilityMode,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   createChannelHistoryWindow,
   type ChannelHistorySnapshot,
@@ -545,6 +548,14 @@ export async function resolveIMessageInboundDecision(params: {
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
+  const historyKey = isGroup
+    ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
+    : undefined;
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "imessage",
+    accountId: params.accountId,
+  });
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
@@ -615,7 +626,35 @@ export async function resolveIMessageInboundDecision(params: {
       }
       if (senderAccess.reasonCode === "group_policy_not_allowlisted") {
         params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
-        return { kind: "drop", reason: "not in groupAllowFrom" };
+        const conversationExplicitlyAdmitted = Boolean(
+          groupListPolicy.groupConfig || groupListPolicy.defaultConfig,
+        );
+        const includeAsUntrustedHistory =
+          conversationExplicitlyAdmitted &&
+          evaluateSupplementalContextVisibility({
+            mode: contextVisibilityMode,
+            kind: "history",
+            senderAllowed: false,
+          }).include;
+        return {
+          kind: "drop",
+          reason: "not in groupAllowFrom",
+          ...(includeAsUntrustedHistory && historyKey
+            ? {
+                history: {
+                  historyKey,
+                  entry: {
+                    sender: senderNormalized,
+                    body: [bodyText, formatMediaPlaceholderText(mediaFacts)]
+                      .filter(Boolean)
+                      .join("\n"),
+                    timestamp: createdAt,
+                    messageId: params.message.id ? String(params.message.id) : undefined,
+                  },
+                },
+              }
+            : {}),
+        };
       }
       params.logVerbose?.(`Blocked iMessage group message (${senderAccess.reasonCode})`);
       return { kind: "drop", reason: senderAccess.reasonCode };
@@ -759,11 +798,6 @@ export async function resolveIMessageInboundDecision(params: {
   }
 
   const replyContext = describeReplyContext(params.message);
-  const contextVisibilityMode = resolveChannelContextVisibilityMode({
-    cfg: params.cfg,
-    channel: "imessage",
-    accountId: params.accountId,
-  });
   const replyContextAllowFrom = Array.from(
     new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
   );
@@ -805,10 +839,6 @@ export async function resolveIMessageInboundDecision(params: {
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
     );
   }
-  const historyKey = isGroup
-    ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
-    : undefined;
-
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
   const requireMention = resolveScopeRequireMention({
     tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),

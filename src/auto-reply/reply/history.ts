@@ -252,12 +252,12 @@ export async function recordChannelHistoryEntryWithMedia<T extends HistoryEntry>
  */
 export const recordPendingHistoryEntryWithMedia = recordChannelHistoryEntryWithMedia;
 
-export function buildChannelPendingHistoryContext(params: {
-  historyMap: Map<string, HistoryEntry[]>;
+export function buildChannelPendingHistoryContext<T extends HistoryEntry>(params: {
+  historyMap: Map<string, T[]>;
   historyKey: string;
   limit: number;
   currentMessage: string;
-  formatEntry: (entry: HistoryEntry) => string;
+  formatEntry: (entry: T) => string;
   lineBreak?: string;
 }): string {
   if (params.limit <= 0) {
@@ -382,10 +382,10 @@ export function clearChannelHistoryIfEnabled(params: {
 export const clearHistoryEntriesIfEnabled = clearChannelHistoryIfEnabled;
 
 /** Builds prompt text from already-recorded history entries. */
-export function buildHistoryContextFromEntries(params: {
-  entries: HistoryEntry[];
+export function buildHistoryContextFromEntries<T extends HistoryEntry>(params: {
+  entries: T[];
   currentMessage: string;
-  formatEntry: (entry: HistoryEntry) => string;
+  formatEntry: (entry: T) => string;
   lineBreak?: string;
   excludeLast?: boolean;
 }): string {

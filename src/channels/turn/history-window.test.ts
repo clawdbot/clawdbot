@@ -249,7 +249,7 @@ describe("createChannelHistoryWindow", () => {
         ],
       },
     },
-  ])("fails closed on $name in persisted history", ({ value }) => {
+  ])("ignores $name without blocking dispatch and heals on the next record", ({ value }) => {
     const persistence = createPersistenceStore();
     persistence.values.set("account:group", value as PersistedChannelHistory);
     const history = createChannelHistoryWindow({
@@ -257,8 +257,19 @@ describe("createChannelHistoryWindow", () => {
       persistence: { store: persistence.store, keyPrefix: "account" },
     });
 
-    expect(() => history.snapshot({ historyKey: "group", limit: 10 })).toThrow(
-      "persisted channel history has an unsupported or corrupt shape",
-    );
+    expect(history.snapshot({ historyKey: "group", limit: 10 }).entries).toEqual([]);
+    history.record({
+      historyKey: "group",
+      limit: 10,
+      entry: { sender: "safe", body: "replacement", messageId: "replacement" },
+    });
+    expect(history.snapshot({ historyKey: "group", limit: 10 }).entries).toEqual([
+      {
+        sender: "safe",
+        body: "replacement",
+        messageId: "replacement",
+        timestamp: expect.any(Number),
+      },
+    ]);
   });
 });
