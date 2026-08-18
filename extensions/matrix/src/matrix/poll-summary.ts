@@ -29,20 +29,33 @@ export function resolveMatrixPollRootEventId(
   return resolvePollReferenceEventId(event.content);
 }
 
+// Bound relation pagination: a malicious or faulty homeserver can keep
+// returning nextBatch forever, and every poll vote otherwise triggers an
+// unbounded O(votes) re-fetch inside the room's serial ingress queue.
+const POLL_RELATIONS_PAGE_LIMIT = 100;
+const POLL_RELATIONS_MAX_PAGES = 10;
+
 async function readAllPollRelations(
   client: MatrixClient,
   roomId: string,
   pollEventId: string,
 ): Promise<MatrixRawEvent[]> {
   const relationEvents: MatrixRawEvent[] = [];
+  const seenBatches = new Set<string>();
   let nextBatch: string | undefined;
-  do {
-    const page = await client.getRelations(roomId, pollEventId, "m.reference", undefined, {
+  for (let page = 0; page < POLL_RELATIONS_MAX_PAGES; page += 1) {
+    const pageResult = await client.getRelations(roomId, pollEventId, "m.reference", undefined, {
       from: nextBatch,
+      limit: POLL_RELATIONS_PAGE_LIMIT,
     });
-    relationEvents.push(...page.events);
-    nextBatch = page.nextBatch ?? undefined;
-  } while (nextBatch);
+    relationEvents.push(...pageResult.events);
+    const batch = pageResult.nextBatch ?? undefined;
+    if (!batch || seenBatches.has(batch)) {
+      break;
+    }
+    seenBatches.add(batch);
+    nextBatch = batch;
+  }
   return relationEvents;
 }
 
