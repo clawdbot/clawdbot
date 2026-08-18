@@ -572,6 +572,25 @@ suite.define(() => {
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
+      await voice.hover();
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
+        .toBe("1");
+      const [runningVoiceBox, runningPickerBox, runningStopBox] = await Promise.all([
+        voice.boundingBox(),
+        microphonePicker.boundingBox(),
+        stop.boundingBox(),
+      ]);
+      expect(runningVoiceBox).not.toBeNull();
+      expect(runningPickerBox).not.toBeNull();
+      expect(runningStopBox).not.toBeNull();
+      if (!runningVoiceBox || !runningPickerBox || !runningStopBox) {
+        throw new Error("expected running composer action layout boxes");
+      }
+      const microphonePickerGap = runningPickerBox.x - (runningVoiceBox.x + runningVoiceBox.width);
+      const stopGap = runningStopBox.x - (runningPickerBox.x + runningPickerBox.width);
+      expect(microphonePickerGap).toBeLessThanOrEqual(1);
+      expect(stopGap).toBeGreaterThanOrEqual(8);
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({

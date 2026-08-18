@@ -3040,7 +3040,7 @@ button.chat-pr__diff {
 .agent-chat__composer-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
@@ -3633,7 +3633,7 @@ button.chat-pr__diff {
   --chat-voice-hover-color: var(--text);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   flex: 0 0 auto;
 }
 
@@ -4053,7 +4053,8 @@ button.chat-pr__diff {
 
   .agent-chat__composer-actions {
     flex-direction: column;
-    gap: 4px;
+    row-gap: 4px;
+    column-gap: 8px;
     margin-left: var(--chat-box-inset);
   }
 
