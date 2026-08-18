@@ -615,6 +615,20 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       expected: { status: "ok", replyText: undefined },
     },
     {
+      name: "prefers an authoritative visible terminal reply over suppressed history",
+      runId: "run-visible-terminal-reply",
+      messages: [forwardedRequest, messageToolMirror("suppressed mirror", {})],
+      wait: {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "authoritative reply" },
+      },
+      expected: {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "authoritative reply" },
+        replyText: "authoritative reply",
+      },
+    },
+    {
       name: "does not let an older turn's message-tool mirror suppress a fresh reply",
       runId: "run-after-older-source-reply",
       messages: [

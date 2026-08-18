@@ -436,9 +436,9 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
     stopAtTranscriptArtifact: true,
     callGateway: params.callGateway,
   });
-  const replyText = hasUpdatedAssistantReplySnapshot(latestReply, params.baseline)
-    ? latestReply.text
-    : undefined;
+  const replyText =
+    (wait.terminalReply?.disposition === "visible" ? wait.terminalReply.text : undefined) ??
+    (hasUpdatedAssistantReplySnapshot(latestReply, params.baseline) ? latestReply.text : undefined);
   return {
     ...wait,
     replyText,
