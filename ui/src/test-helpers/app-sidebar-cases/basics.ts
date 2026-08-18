@@ -364,10 +364,10 @@ describe("AppSidebar brand actions", () => {
     brandButton?.click();
     expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
 
-    const headerButton = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-section="ungrouped"] .sidebar-new-session',
+    const toolbarButton = sidebar.querySelector<HTMLButtonElement>(
+      ".sidebar-session-toolbar .sidebar-new-session",
     );
-    expect(headerButton?.getAttribute("aria-label")).toBe("New session");
+    expect(toolbarButton?.getAttribute("aria-label")).toBe("New session");
   });
 });
 

@@ -15,7 +15,6 @@ import {
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   groupSidebarSessionRows,
-  sidebarSectionHasHeader,
   type SidebarSessionSection,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
@@ -297,6 +296,7 @@ export type SidebarVisibleSections = {
     visibleRowCount: number;
     visibleLimit: number;
     collapsedVisibleRowCount: number;
+    renderHeader: boolean;
   })[];
   expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
@@ -312,8 +312,6 @@ export function partitionSidebarVisibleSections(input: {
   hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
 }): SidebarVisibleSections {
-  const isCollapsed = (sectionId: string) =>
-    sidebarSectionHasHeader(sectionId, input.grouping) && input.collapsedSections.has(sectionId);
   const sections = groupSidebarSessionRows(input.rows, {
     grouping: input.grouping,
     knownGroups: input.knownGroups,
@@ -324,6 +322,11 @@ export function partitionSidebarVisibleSections(input: {
       section.id !== "pinned" &&
       !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),
   );
+  // A lone catch-all sits directly under the global Sessions toolbar. Empty
+  // Coding does not render, while empty custom/Groups sections remain targets.
+  const ungroupedHasPeerHeader = sections.some(
+    (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
+  );
   const expandedRows: SidebarRecentSession[] = [];
   const visibleRows: SidebarRecentSession[] = [];
   // totalRowCount is the pre-pagination size: headers and empty-zone
@@ -331,13 +334,15 @@ export function partitionSidebarVisibleSections(input: {
   const limitedSections: SidebarVisibleSections["sections"] = [];
   for (const section of sections) {
     const totalRowCount = section.rows.length;
+    const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
+    const collapsed = renderHeader && input.collapsedSections.has(section.id);
     const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
     const collapsedVisibleRowCount = limitSidebarSessionRows(
       section.rows,
       SIDEBAR_SESSION_PAGE_SIZE,
     ).length;
     let visibleRowCount = 0;
-    if (!isCollapsed(section.id)) {
+    if (!collapsed) {
       expandedRows.push(...section.rows);
       section.rows = limitSidebarSessionRows(section.rows, visibleLimit);
       visibleRows.push(...section.rows);
@@ -349,6 +354,7 @@ export function partitionSidebarVisibleSections(input: {
         visibleRowCount,
         visibleLimit,
         collapsedVisibleRowCount,
+        renderHeader,
       }),
     );
   }

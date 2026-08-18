@@ -80,10 +80,9 @@ async function captureUiProof(targetPage: Page, fileName: string) {
 }
 
 async function openSidebarSortMenu(targetPage: Page) {
-  const sortThreads = targetPage.getByRole("button", { name: "Sort sessions" });
-  await expect.poll(() => sortThreads.count(), { timeout: 2_000 }).toBe(1);
-  await sortThreads.locator("..").hover();
-  await sortThreads.click();
+  const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
+  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
+  await filterAndSort.click();
   const menu = targetPage.locator(".sidebar-session-sort-menu");
   await menu.waitFor();
   return menu;
@@ -196,7 +195,7 @@ suite.define(() => {
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
   });
 
-  it("keeps grouped single-owner thread actions accessible to keyboard users", async () => {
+  it("keeps global session actions accessible to keyboard users", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -211,10 +210,8 @@ suite.define(() => {
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
-    const threads = currentPage.locator('[data-session-section="ungrouped"]');
-    await expect.poll(() => threads.count(), { timeout: 2_000 }).toBe(1);
-    const sortThreads = threads.getByRole("button", { name: "Sort sessions" });
-    await sortThreads.focus();
+    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort" });
+    await filterAndSort.focus();
     await currentPage.keyboard.press("Enter");
 
     const menu = currentPage.locator(".sidebar-session-sort-menu");
@@ -225,9 +222,12 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator('[data-session-section^="category:"]').count())
       .toBe(0);
+    const threads = currentPage.locator('[data-session-section="ungrouped"]');
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
-    const newThread = threads.getByRole("button", { name: "New session" });
+    const newThread = currentPage
+      .locator(".sidebar-session-toolbar")
+      .getByRole("button", { name: "New session" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");

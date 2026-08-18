@@ -1400,6 +1400,11 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-sessions {
+  --sidebar-inset: 8px;
+  --sidebar-lead: 20px;
+  --sidebar-row-gap: 8px;
+  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1414,6 +1419,63 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-sessions--removal-drop {
   background: color-mix(in srgb, var(--muted) 8%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.sidebar-session-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin-inline: -8px 0;
+  padding: 0 10px 0 var(--sidebar-text-offset);
+}
+
+.sidebar-session-toolbar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-session-toolbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.55;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-toolbar__button:hover,
+.sidebar-session-toolbar__button:focus-visible,
+.sidebar-session-toolbar__button[aria-expanded="true"],
+.sidebar-session-toolbar__button.sidebar-session-sort--filtered {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+  opacity: 1;
+}
+
+.sidebar-session-toolbar__button:disabled {
+  cursor: not-allowed;
+}
+
+.sidebar-session-toolbar__button svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-session-error {
@@ -1435,11 +1497,6 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-sessions {
-  --sidebar-inset: 8px;
-  --sidebar-lead: 20px;
-  --sidebar-row-gap: 8px;
-  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
-
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
@@ -1680,19 +1737,6 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-sort {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
 }
 
 .sidebar-session-sort--filtered::after {
@@ -1705,23 +1749,6 @@ body.update-dialog-open .sidebar-update-card__status {
   background: var(--accent);
   box-shadow: 0 0 0 1.5px var(--bg);
   content: "";
-}
-
-.sidebar-session-sort:hover,
-.sidebar-session-sort[aria-expanded="true"],
-.sidebar-session-sort[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
-}
-
-.sidebar-session-sort svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Group header kebab: hidden until hover/keyboard focus like row actions, but always
