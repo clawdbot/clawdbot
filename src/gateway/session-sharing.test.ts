@@ -122,6 +122,40 @@ describe("session sharing policy", () => {
     });
   });
 
+  it("extracts every message-cut lifecycle target from sessionKey", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:message-cut-target";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-message-cut-target",
+          updatedAt: 1,
+          visibility: "read-only",
+          createdActor: { type: "human", id: "owner" },
+        },
+      );
+      const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+      for (const method of ["sessions.fork", "sessions.rewind", "sessions.branches.switch"]) {
+        expect(
+          resolveSessionMutationAuthorization({
+            client: client({ user: "owner" }),
+            method,
+            requestParams: { sessionKey },
+            context,
+          }),
+        ).toMatchObject({ error: null, authorization: expect.any(Object) });
+        expect(
+          resolveSessionMutationAuthorization({
+            client: client({ user: "outsider" }),
+            method,
+            requestParams: { sessionKey },
+            context,
+          }).error,
+        ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      }
+    });
+  });
+
   it("rechecks group members before committing a defaults update", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       putSessionGroups(["Race"]);
