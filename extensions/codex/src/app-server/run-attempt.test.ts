@@ -4059,6 +4059,95 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumedInstructions).not.toContain(updatedGuidance);
   });
 
+  it("freezes external-cwd agent instructions across supervised materialization", async () => {
+    const { sessionFile, workspaceDir: executionDir } = createRunPaths();
+    const agentWorkspaceDir = path.join(tempDir, "agent-workspace");
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const materializedThreadId = "thread-materialized";
+    const agentsGuidance = "Follow the frozen supervised AGENTS guidance.";
+    const updatedGuidance = "Updated supervised guidance belongs to a new session.";
+    const supervisionPluginConfig = { supervision: { enabled: true } } as const;
+    await fs.mkdir(executionDir, { recursive: true });
+    await fs.mkdir(agentWorkspaceDir, { recursive: true });
+    await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), agentsGuidance);
+    await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
+    const supervisionAppServer = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: supervisionPluginConfig,
+    });
+    await writeExistingBinding(sessionFile, executionDir, {
+      threadId: sourceThreadId,
+      connectionScope: "supervision",
+      supervisionSourceThreadId: sourceThreadId,
+      preserveNativeModel: true,
+      pendingSupervisionBranch: {
+        sourceThreadId,
+        connectionFingerprint: buildCodexAppServerConnectionFingerprint(supervisionAppServer),
+      },
+      conversationSourceTransferComplete: true,
+      historyCoveredThrough: new Date(0).toISOString(),
+    });
+    const materializeHarness = createAppServerHarness(async (method) => {
+      if (method === "thread/read") {
+        return { thread: threadStartResult(sourceThreadId).thread };
+      }
+      if (method === "thread/fork") {
+        return threadStartResult(probeThreadId);
+      }
+      if (method === "thread/start") {
+        return threadStartResult(materializedThreadId);
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    const params = createParams(sessionFile, executionDir);
+    params.bootstrapWorkspaceDir = agentWorkspaceDir;
+    setAgentWorkspaceForTest(params, agentWorkspaceDir);
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: supervisionPluginConfig,
+    });
+    await materializeHarness.waitForMethod("turn/start");
+    await materializeHarness.completeTurn({ threadId: materializedThreadId, turnId: "turn-1" });
+    await run;
+
+    await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), updatedGuidance);
+    const resumeHarness = createAppServerHarness(async (method) => {
+      if (method === "thread/read") {
+        return { thread: threadStartResult(materializedThreadId).thread };
+      }
+      if (method === "thread/resume") {
+        return threadStartResult(materializedThreadId);
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-2");
+      }
+      return {};
+    });
+    const resumeParams = createParams(sessionFile, executionDir);
+    resumeParams.bootstrapWorkspaceDir = agentWorkspaceDir;
+    setAgentWorkspaceForTest(resumeParams, agentWorkspaceDir);
+    const resumedRun = runCodexAppServerAttempt(resumeParams, {
+      pluginConfig: supervisionPluginConfig,
+    });
+    await resumeHarness.waitForMethod("turn/start");
+    await resumeHarness.completeTurn({ threadId: materializedThreadId, turnId: "turn-2" });
+    await resumedRun;
+
+    const threadResume = resumeHarness.requests.find(
+      (request) => request.method === "thread/resume",
+    );
+    if (!threadResume) {
+      throw new Error("expected thread/resume request");
+    }
+    const resumedInstructions =
+      (threadResume.params as { developerInstructions?: string }).developerInstructions ?? "";
+    expect(resumedInstructions).toContain(agentsGuidance);
+    expect(resumedInstructions).not.toContain(updatedGuidance);
+  });
+
   it("injects bounded MEMORY.md when memory tools are unavailable", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const memorySummary = "Memory summary goes here.";
