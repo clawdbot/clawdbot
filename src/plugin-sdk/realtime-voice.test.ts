@@ -2,9 +2,37 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createRealtimeVoiceAudioQueue,
   normalizeRealtimeVoiceResponseOutcome,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
   RealtimeVoiceSessionLifecycle,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
+
+describe("realtimeVoiceAudioDurationMs", () => {
+  it.each([
+    {
+      name: "G.711 μ-law 8 kHz mono",
+      format: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      byteLength: 8_000,
+      durationMs: 1_000,
+    },
+    {
+      name: "PCM16 24 kHz mono",
+      format: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      byteLength: 48_000,
+      durationMs: 1_000,
+    },
+    {
+      name: "one G.711 μ-law sample without rounding",
+      format: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      byteLength: 1,
+      durationMs: 0.125,
+    },
+  ])("calculates $name", ({ format, byteLength, durationMs }) => {
+    expect(realtimeVoiceAudioDurationMs(format, byteLength)).toBe(durationMs);
+  });
+});
 
 function connectLifecycle(
   lifecycle: RealtimeVoiceSessionLifecycle,
