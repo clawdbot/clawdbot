@@ -1,7 +1,4 @@
-import {
-  clampTimerTimeoutMs,
-  MAX_TIMER_TIMEOUT_MS,
-} from "@openclaw/normalization-core/number-coercion";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
@@ -16,6 +13,19 @@ import {
 import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
+/**
+ * Diagnostic recovery ceiling for a local/self-hosted model that resolved
+ * `streamIdleTimeoutMs === 0` (no stream-gap watchdog). This must stay finite:
+ * mapping the no-gap opt-out straight to `MAX_TIMER_TIMEOUT_MS` (~24.8 days)
+ * made a genuinely wedged local call unrecoverable by the normal
+ * stuck-session path (caught in review of #125147's original fix). Three
+ * hours gives generous headroom over the slowest real-world local-model
+ * stall observed in #125147 (~14 min end-to-end, ~6.4 min of silent
+ * `lastProgressAge`) while still bounding recovery, matching this codebase's
+ * existing "long but bounded" local-operation ceiling
+ * (`MAX_JOB_TTL_MS` in bash-process-registry.ts).
+ */
+export const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
 
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
   if (value === null || typeof value !== "object") {
@@ -198,10 +208,13 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     // local model that legitimately opted out of stream-gap policing
     // (`idleTimeoutMs === 0`) still reported no diagnostic ceiling, and stuck-
     // session recovery fell back to the generic threshold and aborted a
-    // silent-but-progressing local model call (#125147).
+    // silent-but-progressing local model call (#125147). The ceiling must
+    // stay finite (`LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS`), not an
+    // effectively-infinite sentinel, so a genuinely wedged local call is
+    // still eventually recovered by the normal stuck-session path.
     const resolvedRequestTimeoutMs =
       ctx.streamIdleTimeoutMs === 0
-        ? MAX_TIMER_TIMEOUT_MS
+        ? LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS
         : typeof ctx.streamIdleTimeoutMs === "number" &&
             Number.isFinite(ctx.streamIdleTimeoutMs) &&
             ctx.streamIdleTimeoutMs > 0

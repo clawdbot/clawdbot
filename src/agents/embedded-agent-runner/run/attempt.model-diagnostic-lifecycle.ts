@@ -59,9 +59,11 @@ export type ModelCallDiagnosticContext = {
    * resolved a local/self-hosted no-gap opt-out — the diagnostic ceiling
    * reported for stuck-session recovery must reflect that opt-out too, or
    * recovery falls back to the generic threshold and aborts a legitimately
-   * silent-but-progressing local model call (#125147). Omit when the caller
-   * has not resolved this policy; the per-call `model.requestTimeoutMs`
-   * field is used instead.
+   * silent-but-progressing local model call (#125147). This is mapped to a
+   * finite ceiling (`LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS`, currently 3
+   * hours), not an unlimited sentinel, so a genuinely wedged local call is
+   * still eventually recovered. Omit when the caller has not resolved this
+   * policy; the per-call `model.requestTimeoutMs` field is used instead.
    */
   streamIdleTimeoutMs?: number;
 };
