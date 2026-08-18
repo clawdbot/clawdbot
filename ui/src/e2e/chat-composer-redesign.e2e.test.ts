@@ -307,6 +307,14 @@ suite.define(() => {
           (await effort.locator(".chat-controls__inline-select-label").textContent())?.trim(),
         )
         .toBe("High");
+      for (const trigger of [model, effort]) {
+        const title = await trigger.getAttribute("title");
+        expect(title).toBeTruthy();
+        await trigger.hover();
+        expect(await trigger.getAttribute("title")).toBe("");
+        await page.mouse.move(0, 0);
+        await expect.poll(() => trigger.getAttribute("title")).toBe(title);
+      }
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))

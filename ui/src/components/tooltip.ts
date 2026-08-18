@@ -24,8 +24,105 @@ function normalizeTooltipText(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-function isHtmlElement(element: Element): element is HTMLElement {
-  return element.namespaceURI === "http://www.w3.org/1999/xhtml";
+function isHtmlElement(element: unknown): element is HTMLElement {
+  return (
+    typeof element === "object" &&
+    element !== null &&
+    "namespaceURI" in element &&
+    element.namespaceURI === "http://www.w3.org/1999/xhtml"
+  );
+}
+
+function hasTooltipOverflow(element: HTMLElement) {
+  return (
+    element.matches("[data-tooltip-overflow]") ||
+    element.scrollWidth > element.clientWidth ||
+    element.scrollHeight > element.clientHeight
+  );
+}
+
+function isTooltipTextRedundant(content: string, trigger: HTMLElement) {
+  const tooltipText = normalizeTooltipText(content);
+  if (!tooltipText || !normalizeTooltipText(trigger.textContent ?? "").includes(tooltipText)) {
+    return false;
+  }
+  /* oxlint-disable unicorn/prefer-dom-node-text-content -- Hidden text must not make a tooltip redundant. */
+  const triggerText = normalizeTooltipText(trigger.innerText);
+  /* oxlint-enable unicorn/prefer-dom-node-text-content */
+  if (!triggerText.includes(tooltipText)) {
+    return false;
+  }
+  if (hasTooltipOverflow(trigger)) {
+    return false;
+  }
+  for (const element of trigger.querySelectorAll("*")) {
+    if (isHtmlElement(element) && hasTooltipOverflow(element)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function installNativeTitleGuard(ownerDocument: Document) {
+  const suppressed = new Map<HTMLElement, string>();
+  const restore = (trigger: HTMLElement) => {
+    const title = suppressed.get(trigger);
+    if (title === undefined) {
+      return;
+    }
+    suppressed.delete(trigger);
+    trigger.removeEventListener("pointerleave", handlePointerLeave);
+    if (trigger.getAttribute("title") === "") {
+      trigger.setAttribute("title", title);
+    }
+  };
+  const handlePointerLeave = (event: Event) => {
+    if (isHtmlElement(event.currentTarget)) {
+      restore(event.currentTarget);
+    }
+  };
+  const handlePointerOver = (event: PointerEvent) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    const path = event.composedPath();
+    if (suppressed.size > 0) {
+      for (const trigger of suppressed.keys()) {
+        if (!path.includes(trigger)) {
+          restore(trigger);
+        }
+      }
+    }
+    for (const candidate of path) {
+      if (!isHtmlElement(candidate)) {
+        continue;
+      }
+      const title = candidate.getAttribute("title");
+      const previous = suppressed.get(candidate);
+      if (previous && title === "") {
+        continue;
+      }
+      if (previous !== undefined) {
+        candidate.removeEventListener("pointerleave", handlePointerLeave);
+        suppressed.delete(candidate);
+      }
+      if (title === null || !isTooltipTextRedundant(title, candidate)) {
+        continue;
+      }
+      suppressed.set(candidate, title);
+      // An empty title also blocks inherited native titles until the pointer
+      // truly leaves this trigger; removing the attribute would expose them.
+      candidate.setAttribute("title", "");
+      candidate.addEventListener("pointerleave", handlePointerLeave, { once: true });
+    }
+  };
+  ownerDocument.addEventListener("pointerover", handlePointerOver, true);
+  return () => {
+    ownerDocument.removeEventListener("pointerover", handlePointerOver, true);
+    for (const trigger of suppressed.keys()) {
+      restore(trigger);
+    }
+  };
 }
 
 class TooltipProvider extends OpenClawLitElement {
@@ -364,7 +461,7 @@ class Tooltip extends OpenClawLitElement {
   };
 
   private scheduleOpen() {
-    if (this.webAwesomeTooltip?.open || this.openTimer !== null || this.isRedundant()) {
+    if (this.webAwesomeTooltip?.open || this.openTimer !== null) {
       return;
     }
     const delay = this.provider?.shouldDelayOpen() === false ? 0 : this.hoverDelay;
@@ -411,15 +508,7 @@ class Tooltip extends OpenClawLitElement {
     if (!trigger) {
       return false;
     }
-    const content = normalizeTooltipText(this.content);
-    const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    const clipsContent =
-      trigger.matches("[data-tooltip-overflow]") ||
-      trigger.querySelector("[data-tooltip-overflow]") !== null ||
-      [trigger, ...trigger.querySelectorAll("*")].some(
-        (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
-      );
-    return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
+    return isTooltipTextRedundant(this.content, trigger);
   }
 
   private syncDescription() {
