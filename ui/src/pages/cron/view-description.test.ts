@@ -62,7 +62,6 @@ describe("cron view saved descriptions", () => {
       });
       const container = renderCronView({
         jobs: [],
-        editingJobId: job.id,
         editingJob: job,
         form: { ...DEFAULT_CRON_FORM, description: "Unsaved description edit" },
       });
@@ -80,7 +79,7 @@ describe("cron view saved descriptions", () => {
     "omits the detail description when the saved description is %j",
     (description) => {
       const job = createCronViewJob("without-description", { description });
-      const container = renderCronView({ jobs: [], editingJobId: job.id, editingJob: job });
+      const container = renderCronView({ jobs: [], editingJob: job });
 
       expect(container.querySelector('[data-test-id="cron-detail-description"]')).toBeNull();
     },

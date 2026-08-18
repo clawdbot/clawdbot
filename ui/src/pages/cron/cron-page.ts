@@ -166,12 +166,9 @@ class CronPage extends OpenClawLightDomElement {
   override updated() {
     // Switching between list and detail (or between two jobs) keeps the same
     // page scroller alive, so reset scroll and the detail tab per target.
-    const mode = this.cron.cronEditingJobId
-      ? "job"
-      : this.cron.cronCreateOpen
-        ? "create"
-        : "overview";
-    const panelKey = `${mode}:${this.cron.cronEditingJobId ?? ""}`;
+    const editingJobId = this.cron.cronEditingJob?.id ?? null;
+    const mode = editingJobId ? "job" : this.cron.cronCreateOpen ? "create" : "overview";
+    const panelKey = `${mode}:${editingJobId ?? ""}`;
     if (panelKey !== this.lastPanelKey) {
       this.lastPanelKey = panelKey;
       this.detailTab = "settings";
@@ -293,9 +290,12 @@ class CronPage extends OpenClawLightDomElement {
     const cronState = this.cron;
     const connectionScope = this.gateway.capture();
     const hadAdminAccess = this.canManageCron;
-    const selectedJob = cronState.cronJobs.find(
-      (entry) => entry.id === job.id && entry.updatedAtMs === job.updatedAtMs,
-    );
+    const selectedJob =
+      cronState.cronEditingJob?.id === job.id
+        ? cronState.cronEditingJob
+        : cronState.cronJobs.find(
+            (entry) => entry.id === job.id && entry.updatedAtMs === job.updatedAtMs,
+          );
     if (!connectionScope || !hadAdminAccess || !selectedJob) {
       return;
     }
@@ -308,7 +308,10 @@ class CronPage extends OpenClawLightDomElement {
       confirmLabel: t("cron.actions.remove"),
       danger: true,
     });
-    const currentJob = cronState.cronJobs.find((entry) => entry.id === selectedJobId);
+    const currentJob =
+      cronState.cronEditingJob?.id === selectedJobId
+        ? cronState.cronEditingJob
+        : cronState.cronJobs.find((entry) => entry.id === selectedJobId);
     // The modal yields while every owner can rotate. Reject stale decisions so
     // an old row can never delete a replacement task on a new page or Gateway.
     if (
@@ -346,18 +349,11 @@ class CronPage extends OpenClawLightDomElement {
 
   private submitForm(options: { runNow?: boolean } = {}) {
     this.runCronAdminTask(async (cronState) => {
-      const editingJobId = cronState.cronEditingJobId;
       const result = await addCronJob(cronState);
       if (!result.saved) {
         return;
       }
-      if (editingJobId) {
-        // Saving an update clears the edit state; re-select the refreshed job so
-        // the detail pane stays on it instead of snapping back to overview.
-        const saved = cronState.cronJobs.find((job) => job.id === editingJobId);
-        if (saved) {
-          startCronEdit(cronState, saved);
-        }
+      if (cronState.cronEditingJob) {
         return;
       }
       if (options.runNow && result.jobId) {
@@ -387,7 +383,6 @@ class CronPage extends OpenClawLightDomElement {
       modelSuggestions: this.cronModelSuggestions,
     });
     const canManage = this.canManageCron;
-    const editingJob = this.cron.cronJobs.find((job) => job.id === this.cron.cronEditingJobId);
     return html`
       <section class="content-header">
         <div>
@@ -419,8 +414,7 @@ class CronPage extends OpenClawLightDomElement {
           jobsLastStatusFilter: this.cron.cronJobsLastStatusFilter,
           jobsSortBy: this.cron.cronJobsSortBy,
           jobsSortDir: this.cron.cronJobsSortDir,
-          editingJobId: this.cron.cronEditingJobId,
-          editingJob,
+          editingJob: this.cron.cronEditingJob,
           createOpen: this.cron.cronCreateOpen,
           listTab: this.listTab,
           detailTab: this.detailTab,
@@ -463,16 +457,7 @@ class CronPage extends OpenClawLightDomElement {
           onClosePanel: () => this.closePanel(),
           onClone: (job) => this.cloneJob(job),
           onToggle: (job, enabled) =>
-            this.runCronAdminTask(async (cronState) => {
-              const updated = await toggleCronJob(cronState, job, enabled);
-              // Header pause/resume must not be undone by a later Save: the
-              // editor form still carries the pre-toggle enabled value. Sync
-              // to the confirmed write, not the jobs cache — the reload can be
-              // queued behind an in-flight list request or fail silently.
-              if (updated && cronState.cronEditingJobId === job.id) {
-                cronState.cronForm = { ...cronState.cronForm, enabled };
-              }
-            }),
+            this.runCronAdminTask((cronState) => toggleCronJob(cronState, job, enabled)),
           onRun: (job, mode) =>
             this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
           onRemove: (job) => void this.removeJob(job),

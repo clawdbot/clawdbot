@@ -196,8 +196,10 @@ describe("CronPage editor state sync", () => {
     });
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "cron.list") {
-        const scheduleKind = (params as { scheduleKind?: string } | undefined)?.scheduleKind;
-        return scheduleKind === "every" ? cronListResponse([]) : cronListResponse([staleJob]);
+        const query = (params as { query?: string } | undefined)?.query;
+        return query === "missing from filtered results"
+          ? cronListResponse([])
+          : cronListResponse([staleJob]);
       }
       if (method === "cron.update") {
         throw conflict;
@@ -225,7 +227,7 @@ describe("CronPage editor state sync", () => {
     (page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]') as HTMLElement).click();
     await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(staleJob.id));
 
-    page.cron.cronJobsScheduleKindFilter = "every";
+    page.cron.cronJobsQuery = "missing from filtered results";
     page.requestUpdate();
     await page.updateComplete;
     const name = page.querySelector("#cron-name") as HTMLInputElement;
@@ -236,12 +238,13 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() =>
       expect(page.cron.cronEditingConfigRevision).toBe("revision-current"),
     );
+    expect(page.cron.cronEditingJob).toEqual(authoritativeJob);
     expect(request).toHaveBeenCalledWith(
       "cron.list",
-      expect.objectContaining({ scheduleKind: "every" }),
+      expect.objectContaining({ query: "missing from filtered results" }),
     );
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
-    expect(page.cron.cronJobs).toEqual([authoritativeJob]);
+    expect(page.cron.cronJobs).toEqual([]);
     expect(page.cron.cronJobsTotal).toBe(0);
     expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe(
       authoritativeJob.name,
@@ -251,6 +254,11 @@ describe("CronPage editor state sync", () => {
       authoritativeJob.description,
     );
     expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
+
+    (page.querySelector('[data-test-id="cron-back"]') as HTMLButtonElement).click();
+    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
+    expect(page.cron.cronEditingJob).toBeNull();
+    expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).toBeNull();
   });
 
   it.each([
