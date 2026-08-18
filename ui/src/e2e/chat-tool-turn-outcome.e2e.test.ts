@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -60,6 +61,84 @@ async function expandCompletedWorkGroups(page: import("playwright").Page) {
 }
 
 suite.define(() => {
+  it("keeps the final activity row anchored while its disclosure opens", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 600, width: 900 } });
+    const page = await context.newPage();
+    const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier prompt ${index + 1}: keep enough transcript above the active row to make the pane scroll.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
+    await installMockGateway(page, {
+      historyMessages: [
+        ...transcriptPrefix,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-anchor",
+              name: "bash",
+              arguments: { command: "pnpm test ui/src/pages/chat" },
+            },
+            {
+              type: "toolCall",
+              id: "call-anchor-read",
+              name: "read",
+              arguments: { path: "ui/src/pages/chat/components/chat-tool-cards.ts" },
+            },
+          ],
+          timestamp: 100,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-anchor",
+          toolName: "bash",
+          content: [{ type: "text", text: "All focused tests passed." }],
+          timestamp: 101,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-anchor-read",
+          toolName: "read",
+          content: [{ type: "text", text: "export function renderToolCard() {}" }],
+          timestamp: 102,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
+    await activity.waitFor();
+    await waitForChatScrollIdle(page);
+    expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
+    const virtualRow = page.locator(".chat-virtual-row").filter({ has: activity });
+    const rowTop = async () =>
+      virtualRow.evaluate((row) => {
+        const thread = row.closest<HTMLElement>(".chat-thread");
+        if (!thread) {
+          throw new Error("Expected activity row inside the chat thread");
+        }
+        return row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      });
+    const topBefore = await rowTop();
+
+    await activity.click();
+    await page.locator(".chat-activity-group__body:not([hidden])").waitFor();
+    await waitForChatScrollIdle(page);
+
+    expect(Math.abs((await rowTop()) - topBefore)).toBeLessThanOrEqual(2);
+    await captureToolActivityProof(page, "activity-disclosure-scroll-anchor");
+    await context.close();
+  });
+
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();

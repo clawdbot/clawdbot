@@ -329,9 +329,13 @@ export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => vo
     return;
   }
   requestAnimationFrame(() => {
-    if (row.isConnected) {
-      scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
-    }
+    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
+    // its end-anchor delta before we restore this disclosure row's position.
+    requestAnimationFrame(() => {
+      if (row.isConnected) {
+        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
+      }
+    });
   });
 }
 

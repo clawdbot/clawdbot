@@ -202,7 +202,7 @@ function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
-        <div class="chat-group tool chat-group--activity">
+        <div class="chat-group tool chat-group--activity chat-group--with-footer">
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
               <button class="chat-inline-disclosure chat-activity-group__summary" type="button" aria-expanded="true">
