@@ -1396,6 +1396,14 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("<available_skills>");
   });
 
+  it("carries the progress-card nudge into thread developer instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.extraSystemPrompt =
+      "During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.";
+
+    expect(buildDeveloperInstructions(params)).toContain(params.extraSystemPrompt);
+  });
+
   it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
