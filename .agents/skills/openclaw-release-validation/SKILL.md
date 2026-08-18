@@ -55,8 +55,8 @@ When the issue does not exist, become the campaign creator:
 5. Generate one section for every live scorecard surface. Put the five selected
    surfaces under **Priority for this release** and all remaining surfaces under
    **Other surfaces**. Format each heading as
-   `### [<surface>](<taxonomy-url>) — <maturity-label>`, then add `#### What
-changed` and `#### Notes`. Add `#### Recommended testing` between them when
+   `### [<surface>](<taxonomy-url>) — <maturity-label>`. Then add
+   `#### What changed` and `#### Notes`. Add `#### Recommended testing` when
    release changes justify a targeted exercise; every priority surface must
    include it. When no release item is relevant, write
    `No notable changes in this release.` under **What changed** and omit
