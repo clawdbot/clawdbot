@@ -15,6 +15,9 @@ import {
   isNativeExecApprovalsSnapshot,
   type ExecApprovalsAllowlistEntry,
   type ExecApprovalsFile,
+  type ExecApprovalsResolvedDefaults,
+  type ExecAsk,
+  type ExecSecurity,
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/index.ts";
 import {
@@ -23,16 +26,6 @@ import {
   type NodeTargetOption,
 } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
-
-type ExecSecurity = "deny" | "allowlist" | "full";
-type ExecAsk = "off" | "on-miss" | "always";
-
-type ExecApprovalsResolvedDefaults = {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  askFallback: ExecSecurity;
-  autoAllowSkills: boolean;
-};
 
 type ExecApprovalsAgentOption = {
   id: string;
@@ -96,13 +89,19 @@ function normalizeAsk(value?: string): ExecAsk {
 
 function resolveExecApprovalsDefaults(
   form: ExecApprovalsFile | null,
+  reported: ExecApprovalsResolvedDefaults | undefined,
+  includeWildcard: boolean,
 ): ExecApprovalsResolvedDefaults {
   const defaults = form?.defaults ?? {};
+  const wildcard = includeWildcard ? (form?.agents?.["*"] ?? {}) : {};
   return {
-    security: normalizeSecurity(defaults.security),
-    ask: normalizeAsk(defaults.ask),
-    askFallback: normalizeSecurity(defaults.askFallback ?? "deny"),
-    autoAllowSkills: defaults.autoAllowSkills ?? false,
+    security: normalizeSecurity(wildcard.security ?? defaults.security ?? reported?.security),
+    ask: normalizeAsk(wildcard.ask ?? defaults.ask ?? reported?.ask),
+    askFallback: normalizeSecurity(
+      wildcard.askFallback ?? defaults.askFallback ?? reported?.askFallback ?? "deny",
+    ),
+    autoAllowSkills:
+      wildcard.autoAllowSkills ?? defaults.autoAllowSkills ?? reported?.autoAllowSkills ?? false,
   };
 }
 
@@ -165,7 +164,6 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
   const fileSnapshot = snapshot && !isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const form = nativePolicy ? null : (props.execApprovalsForm ?? fileSnapshot?.file ?? null);
   const ready = Boolean(form || nativePolicy);
-  const defaults = resolveExecApprovalsDefaults(form);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
   const targetNodes = resolveExecApprovalsNodes(props.nodes);
   const target = props.execApprovalsTarget;
@@ -175,6 +173,11 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
     targetNodeId = null;
   }
   const selectedScope = resolveExecApprovalsScope(props.execApprovalsSelectedAgent, agents);
+  const defaults = resolveExecApprovalsDefaults(
+    form,
+    fileSnapshot?.resolvedDefaults,
+    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE,
+  );
   const selectedAgent =
     selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
       ? (((form?.agents ?? {})[selectedScope] as Record<string, unknown> | undefined) ?? null)

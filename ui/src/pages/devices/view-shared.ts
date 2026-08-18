@@ -41,12 +41,12 @@ export function resolveNodeTargets(
   nodes: Array<Record<string, unknown>>,
   requiredCommands: string[],
 ): NodeTargetOption[] {
-  const required = new Set(requiredCommands);
   const list: NodeTargetOption[] = [];
 
   for (const node of nodes) {
     const commands = Array.isArray(node.commands) ? node.commands : [];
-    const supports = commands.some((cmd) => required.has(String(cmd)));
+    const advertised = new Set(commands.map(String));
+    const supports = requiredCommands.every((command) => advertised.has(command));
     if (!supports) {
       continue;
     }

@@ -344,10 +344,27 @@ describe("node host invoke", () => {
     fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
   });
 
-  it("returns a redacted exec approvals snapshot", async () => {
+  it.each([
+    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
+    {
+      label: "when resolved defaults are not requested",
+      params: { includeResolvedDefaults: false },
+      resolvedDefaults: undefined,
+    },
+    {
+      label: "with resolved defaults when requested",
+      params: { includeResolvedDefaults: true },
+      resolvedDefaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    },
+  ])("returns a redacted exec approvals snapshot $label", async ({ params, resolvedDefaults }) => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
-    const result = await invokeExecApprovals("system.execApprovals.get");
+    const result = await invokeExecApprovals("system.execApprovals.get", params);
     const payload = JSON.parse(result.payloadJSON ?? "{}") as ExecApprovalsSnapshot;
     expect(payload).toEqual({
       path: "/tmp/exec-approvals.json",
@@ -357,6 +374,7 @@ describe("node host invoke", () => {
         version: 1,
         socket: { path: "/tmp/exec-approvals.sock" },
       },
+      ...(resolvedDefaults ? { resolvedDefaults } : {}),
     });
   });
 
