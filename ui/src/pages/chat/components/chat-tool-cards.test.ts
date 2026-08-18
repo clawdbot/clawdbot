@@ -134,7 +134,7 @@ describe("tool-cards", () => {
     container.remove();
   });
 
-  it("keeps an explicitly collapsed running card closed", () => {
+  it("keeps a running card closed by default", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(

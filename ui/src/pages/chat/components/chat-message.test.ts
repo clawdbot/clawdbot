@@ -2428,8 +2428,8 @@ describe("grouped chat rendering", () => {
       ".chat-activity-group__summary",
       HTMLButtonElement,
     );
-    expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
+    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
     expect(activitySummary.getAttribute("aria-label")).toBeNull();
     expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
@@ -2440,37 +2440,6 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
       "Read a file, edited a file",
     );
-  });
-
-  it("keeps an explicitly collapsed running activity group closed", () => {
-    const container = document.createElement("div");
-    const group = createToolGroup(
-      "running-collapsed",
-      [
-        createMessageEntry("running-command", {
-          role: "assistant",
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: false,
-          content: [createToolCall("call-running", "bash", { command: "pnpm test" })],
-        }),
-      ],
-      { isStreaming: true },
-    );
-
-    render(
-      renderActivityGroup([group], {
-        showReasoning: true,
-        showToolCalls: true,
-        runActive: true,
-        isToolMessageExpanded: () => false,
-      }),
-      container,
-    );
-
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(
-      container.querySelector(".chat-activity-group__summary")?.getAttribute("aria-expanded"),
-    ).toBe("false");
   });
 
   it("keeps cross-group activity neutral while retaining failed child badges", () => {

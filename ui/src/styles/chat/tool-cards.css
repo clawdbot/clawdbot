@@ -656,12 +656,6 @@
 }
 
 .chat-tool-card__header > .chat-tool-card__actions {
-  opacity: 0;
-  transition: opacity 120ms ease-out;
-}
-
-.chat-tool-card__header:hover > .chat-tool-card__actions,
-.chat-tool-card__header:focus-within > .chat-tool-card__actions {
   opacity: 1;
 }
 
@@ -677,8 +671,7 @@
 }
 
 @media (pointer: coarse) {
-  .chat-tool-card--flush > .chat-tool-card__actions,
-  .chat-tool-card__header > .chat-tool-card__actions {
+  .chat-tool-card--flush > .chat-tool-card__actions {
     opacity: 1;
   }
 }
