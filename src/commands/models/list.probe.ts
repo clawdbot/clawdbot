@@ -75,14 +75,6 @@ export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
 
-const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/embedded-agent.js"),
-);
-
-function loadEmbeddedRunnerModule() {
-  return embeddedRunnerModuleLoader.load();
-}
-
 /** Widened runner call shape for isolated auth probe generations (see setup-inference-core). */
 type ProbeRunEmbeddedAgentParams = Parameters<
   (typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]
@@ -93,6 +85,16 @@ type ProbeRunEmbeddedAgentParams = Parameters<
 type ProbeRunEmbeddedAgent = (
   params: ProbeRunEmbeddedAgentParams,
 ) => ReturnType<(typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]>;
+
+// The probe only calls runEmbeddedAgent; the widened loader type lets the call
+// request the isolated-read-only runtime generation without a call-site cast.
+const embeddedRunnerModuleLoader = createLazyImportLoader<{
+  runEmbeddedAgent: ProbeRunEmbeddedAgent;
+}>(() => import("../../agents/embedded-agent.js"));
+
+function loadEmbeddedRunnerModule() {
+  return embeddedRunnerModuleLoader.load();
+}
 
 /** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
@@ -856,8 +858,7 @@ async function probeTarget(params: {
         throw new Error("Could not prepare isolated auth probe profile");
       }
     }
-    const runEmbeddedAgent = (await loadEmbeddedRunnerModule())
-      .runEmbeddedAgent as ProbeRunEmbeddedAgent;
+    const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       probeConfig,
       runId,
