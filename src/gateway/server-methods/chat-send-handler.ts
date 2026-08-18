@@ -212,7 +212,6 @@ async function handleChatSendWithOptions(
       attempt: messageInjectionAttempt,
       isAborted: () => activeRunAbort.controller.signal.aborted,
       sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
-      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
       onAborted: finishAbortedChatSend,
       onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
     });

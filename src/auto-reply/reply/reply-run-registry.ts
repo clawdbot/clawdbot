@@ -11,7 +11,6 @@ export type {
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
   ReplyMessageInjectionAttempt,
-  ReplyMessageInjectionOutcome,
   ReplyMessageInjectionTarget,
   ReplyOperation,
   ReplyOperationPhase,
@@ -19,9 +18,8 @@ export type {
   ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 export {
-  abortReplyMessageInjectionTarget,
   beginReplyMessageInjectionTarget,
-  recordAcceptedReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
   resolveReplyBackendQueueMessageMismatch,
 } from "./reply-run-registry.message-injection.js";
 export {

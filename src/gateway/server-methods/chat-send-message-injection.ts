@@ -10,12 +10,10 @@ import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-receive
 import { resolveOriginMessageProvider } from "../../auto-reply/reply/origin-routing.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import {
-  abortReplyMessageInjectionTarget,
   beginReplyMessageInjectionTarget,
-  recordAcceptedReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
   type ReplyBackendQueueMessageOptions,
   type ReplyMessageInjectionAttempt,
-  type ReplyMessageInjectionOutcome,
   type ReplyMessageInjectionTarget,
   type ReplyToolAuthorityOverlay,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -138,14 +136,9 @@ export async function settleChatSendPreAckMessageInjection(params: {
   attempt: ReplyMessageInjectionAttempt | undefined;
   isAborted: () => boolean;
   sessionRoutingChanged: () => boolean;
-  onActiveLeafChanged: () => Promise<void>;
   onAborted: () => void;
   onSessionRoutingChanged: () => void;
 }): Promise<PreAckMessageInjectionResult> {
-  if (params.attempt?.rejectBeforeAck) {
-    await params.onActiveLeafChanged();
-    return { status: "handled" };
-  }
   if (!params.attempt || (await params.attempt.acceptance)) {
     return { status: "continue", attempt: params.attempt };
   }
@@ -160,11 +153,11 @@ export async function settleChatSendPreAckMessageInjection(params: {
   return { status: "continue", attempt: undefined };
 }
 
-/** Finish an irrevocably accepted steer without entering reply dispatch. */
+/** Finish an accepted steer without entering reply dispatch, or return false for fallback. */
 export async function finalizeAcceptedChatSendMessageInjection(params: {
+  attempt: ReplyMessageInjectionAttempt;
   context: GatewayRequestContext;
   ctx: RuntimeMsgContext;
-  outcome: Extract<ReplyMessageInjectionOutcome, { status: "accepted" }>;
   persistUserTurnTranscriptBestEffort: () => Promise<void>;
   session: Pick<
     PreparedChatSendSession,
@@ -172,11 +165,18 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   >;
   startedAt: number;
   target: ReplyMessageInjectionTarget;
-  targetRunId: string | undefined;
-}): Promise<void> {
-  const { context, ctx, outcome, session, target } = params;
+}): Promise<boolean> {
+  const { context, ctx, session } = params;
   const { agentId, cfg, clientRunId, entry, sessionKey, storePath } = session;
   const finalizedCtx = finalizeInboundContext(ctx);
+  const finalization = await finalizeReplyMessageInjectionAttempt({
+    attempt: params.attempt,
+    target: params.target,
+    inboundAudio: hasInboundAudio(finalizedCtx),
+  });
+  if (finalization.status === "rejected") {
+    return false;
+  }
   const channel = normalizeLowercaseStringOrEmpty(
     finalizedCtx.Surface ?? finalizedCtx.Provider ?? "unknown",
   );
@@ -186,17 +186,10 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     finalizedCtx.MessageSid ??
     finalizedCtx.MessageSidFirst ??
     finalizedCtx.MessageSidLast;
-  recordAcceptedReplyMessageInjectionTarget(target, {
-    inboundAudio: hasInboundAudio(finalizedCtx),
-  });
-  // An unconfirmed transcript commit aborts the exact target without replay:
-  // the steer did not take effect, so diagnostics and audit must record the
-  // abort, not a completed injection.
-  const steerAborted = outcome.result?.transcriptCommit === "unconfirmed";
+  const steerAborted = finalization.aborted;
   if (steerAborted) {
-    abortReplyMessageInjectionTarget(target);
     context.logGateway.warn(
-      `active run ${params.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
+      `active run ${finalization.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
     );
   }
   await params.persistUserTurnTranscriptBestEffort();
@@ -260,4 +253,5 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     });
     broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
   }
+  return true;
 }
