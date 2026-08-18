@@ -141,11 +141,7 @@ suite.define(() => {
           };
         });
 
-        const textStarts = [
-          geometry.bulletTextX,
-          geometry.numberedTextX,
-          geometry.taskTextX,
-        ];
+        const textStarts = [geometry.bulletTextX, geometry.numberedTextX, geometry.taskTextX];
         expect(Math.max(...textStarts) - Math.min(...textStarts)).toBeLessThanOrEqual(1);
         expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
         expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
@@ -160,9 +156,7 @@ suite.define(() => {
         expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);
         expect(
           Number.parseFloat(geometry.collapsedSummaryPaddingInlineStart),
-        ).toBeGreaterThanOrEqual(
-          24,
-        );
+        ).toBeGreaterThanOrEqual(24);
         expect(geometry.collapsedSummaryTextX - geometry.detailsX).toBeGreaterThan(24);
         expect(geometry.chevronTransitionDuration).not.toBe("0s");
         expect(Math.abs(geometry.jsonDetailsX - geometry.rootX)).toBeLessThanOrEqual(1);
@@ -250,14 +244,7 @@ suite.define(() => {
           const orderedList = root.querySelector("ol");
           const summary = root.querySelector("details:not(.json-collapse) > summary");
           const details = root.querySelector("details:not(.json-collapse)");
-          if (
-            !checkbox ||
-            !task ||
-            !unorderedList ||
-            !orderedList ||
-            !summary ||
-            !details
-          ) {
+          if (!checkbox || !task || !unorderedList || !orderedList || !summary || !details) {
             throw new Error("Missing RTL Markdown geometry");
           }
           const checkboxRect = checkbox.getBoundingClientRect();

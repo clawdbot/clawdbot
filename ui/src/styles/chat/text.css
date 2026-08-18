@@ -230,8 +230,7 @@
   background: transparent;
 }
 
-:is(.chat-text, .chat-thinking)
-  :where(details:not(.json-collapse) details:not(.json-collapse)) {
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) details:not(.json-collapse)) {
   width: calc(100% - var(--space-3));
   margin-top: var(--space-3);
   margin-inline-start: var(--space-3);
