@@ -219,6 +219,7 @@ async function createOpenAIRealtimeBrowserSession(
               providerConfig: req.providerConfig,
               apiKey,
               callId,
+              audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
               gaSessionPolicy: sessionConfig,
               model,
               voice,

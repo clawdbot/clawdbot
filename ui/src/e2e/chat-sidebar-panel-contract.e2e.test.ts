@@ -301,14 +301,25 @@ suite.define(() => {
         panel.dir = dir;
         const tabBase = node.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
         const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
+        const label = node.querySelector<HTMLElement>(".tabstrip-tab__label");
+        const labelClipper = node.querySelector<HTMLElement>(".tabstrip-tab__tooltip-trigger");
         const close = node.nextElementSibling;
         const trailingGlyph = close?.querySelector<HTMLElement>("svg");
-        if (!(close instanceof HTMLElement) || !tabBase || !leadingGlyph || !trailingGlyph) {
-          throw new Error("Active side-panel tab must render both edge glyphs");
+        if (
+          !(close instanceof HTMLElement) ||
+          !tabBase ||
+          !leadingGlyph ||
+          !label ||
+          !labelClipper ||
+          !trailingGlyph
+        ) {
+          throw new Error("Active side-panel tab must render its label and both edge glyphs");
         }
         const tabBounds = tabBase.getBoundingClientRect();
         const closeBounds = close.getBoundingClientRect();
         const leadingBounds = leadingGlyph.getBoundingClientRect();
+        const labelBounds = label.getBoundingClientRect();
+        const labelClipperBounds = labelClipper.getBoundingClientRect();
         const trailingBounds = trailingGlyph.getBoundingClientRect();
         const rtl = dir === "rtl";
         const tabStyle = getComputedStyle(tabBase);
@@ -320,6 +331,8 @@ suite.define(() => {
           trailing: rtl
             ? trailingBounds.left - closeBounds.left
             : closeBounds.right - trailingBounds.right,
+          labelBlockStartInset: labelBounds.top - labelClipperBounds.top,
+          labelBlockEndInset: labelClipperBounds.bottom - labelBounds.bottom,
           tabOuterRadius: Number.parseFloat(
             rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
           ),
@@ -335,6 +348,14 @@ suite.define(() => {
         };
       }, direction);
       expect(tabPadding.trailing, `${direction} glyph insets`).toBeCloseTo(tabPadding.leading, 0);
+      expect(
+        tabPadding.labelBlockStartInset,
+        `${direction} label block-start containment`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        tabPadding.labelBlockEndInset,
+        `${direction} label block-end containment`,
+      ).toBeGreaterThanOrEqual(0);
       expect(tabPadding.tabJoinRadius, `${direction} tab join`).toBe(0);
       expect(tabPadding.closeJoinRadius, `${direction} close join`).toBe(0);
       expect(tabPadding.tabOuterRadius, `${direction} tab outer`).toBeGreaterThan(0);
