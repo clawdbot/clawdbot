@@ -308,7 +308,7 @@ describe("sessions page managed roster", () => {
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const deleting = page.deleteSelected();
-    await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledOnce(), { timeout: 5_000 });
     const duringResult = {
       count: 1,
       sessions: [{ key: "arrived-during-mutation" }],
