@@ -326,7 +326,8 @@ export async function finalizeCodexAttempt(
   const shouldCaptureSettledTurnFinalizationContext =
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult") &&
-    (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
+    (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed) &&
+    !toolState.yieldDetected;
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
     ? await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,

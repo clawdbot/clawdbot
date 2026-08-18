@@ -4586,6 +4586,63 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+  it("skips settled-turn finalization context capture for a completed sessions_yield turn", async () => {
+    // Exercises the real onYield -> onYieldDetected -> toolState.yieldDetected wiring
+    // (run-attempt-tool-setup.ts / dynamic-tool-build.ts) without createSessionsYieldTool's
+    // own requester/session-store side effects, which need a real spawned subagent.
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      {
+        name: "sessions_yield",
+        label: "Yield",
+        description: "sessions_yield test tool",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+          await options?.onYield?.(typeof args.message === "string" ? args.message : "");
+          return { content: [{ type: "text" as const, text: "yielded" }], details: {} };
+        },
+      } as unknown as ReturnType<typeof createOpenClawCodingTools>[number],
+    ]);
+    // This test owns the yield/finalize predicate, not requester-scoped MCP discovery.
+    agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const storePath = path.join(tempDir, "settled-finalization-context-yield.sqlite");
+    const sessionId = "session-settled-finalization-context-yield";
+    const sessionFile = `agent:main:${sessionId}`;
+    const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context-yield");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    params.prompt = "Spawn a subagent and yield.";
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const toolCallResponse = await harness.handleServerRequest({
+      id: "request-yield-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-yield-1",
+        namespace: null,
+        tool: "sessions_yield",
+        arguments: { message: "Waiting for subagent." },
+      },
+    });
+    expect(toolCallResponse).toMatchObject({ success: true });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(result.yieldDetected).toBe(true);
+    expect(result.assistantTexts.every((text) => !text.trim())).toBe(true);
+    expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(true);
+    expect(result.settledTurnFinalizationContext).toBeUndefined();
+    expect(
+      warn.mock.calls.some(([message]) =>
+        message.includes("codex settled-turn finalization context is unavailable"),
+      ),
+    ).toBe(false);
+  });
   it("preserves every command failure from official app-server events", async () => {
     const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
