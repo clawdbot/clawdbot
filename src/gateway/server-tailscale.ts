@@ -6,6 +6,7 @@ import {
   getTailnetHostname,
   getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort,
+  reconcileLegacyTailscaleRoute,
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -51,6 +52,11 @@ export async function startGatewayTailscaleExposure(params: {
 
   let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
   try {
+    if (await reconcileLegacyTailscaleRoute(params.tailscaleMode, params.port)) {
+      params.logTailscale.info(
+        `removed legacy persistent Tailscale ${params.tailscaleMode} route before claiming foreground ownership`,
+      );
+    }
     claim = await claimTailscaleRoute(params.tailscaleMode, backendTarget);
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     getTailnetHostname: vi.fn<() => Promise<string | null>>(async () => null),
     getTailnetHostnameAfterServe: vi.fn<() => Promise<string | null>>(async () => null),
     hasTailscaleFunnelRouteForPort: vi.fn(async (_port: number) => false),
+    reconcileLegacyTailscaleRoute: vi.fn(async () => false),
   };
 });
 
@@ -22,6 +23,7 @@ vi.mock("../infra/tailscale.js", () => ({
   getTailnetHostname: mocks.getTailnetHostname,
   getTailnetHostnameAfterServe: mocks.getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort: mocks.hasTailscaleFunnelRouteForPort,
+  reconcileLegacyTailscaleRoute: mocks.reconcileLegacyTailscaleRoute,
 }));
 
 import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
@@ -59,6 +61,7 @@ afterEach(() => {
   mocks.getTailnetHostname.mockResolvedValue(null);
   mocks.getTailnetHostnameAfterServe.mockResolvedValue(null);
   mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(false);
+  mocks.reconcileLegacyTailscaleRoute.mockResolvedValue(false);
 });
 
 describe("startGatewayTailscaleExposure", () => {
@@ -96,9 +99,26 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.reconcileLegacyTailscaleRoute).toHaveBeenCalledWith("serve", 18789);
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
+  });
+
+  it("reports an automatically migrated legacy route", async () => {
+    const logTailscale = createLogger();
+    mocks.reconcileLegacyTailscaleRoute.mockResolvedValue(true);
+
+    await startGatewayTailscaleExposure({
+      tailscaleMode: "funnel",
+      port: 18789,
+      logTailscale,
+    });
+
+    expect(logTailscale.info).toHaveBeenCalledWith(
+      expect.stringContaining("removed legacy persistent Tailscale funnel route"),
+    );
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("funnel", MANAGED_BACKEND_PORT);
   });
 
   it("fails startup when the managed route cannot be claimed", async () => {
