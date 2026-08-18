@@ -32,6 +32,7 @@ import type { DedupeEntry } from "../server-shared.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
+const AGENT_RUN_QUEUED_AT = Number.POSITIVE_INFINITY;
 
 type AgentJobTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
@@ -240,12 +241,19 @@ function clearPendingAgentRunTimeout(runId: string) {
 }
 
 function beginAgentJob(runId: string, startedAt?: number) {
+  for (const [trackedRunId, trackedAt] of agentRunStarts) {
+    if (trackedAt < 0 && -trackedAt <= Date.now()) {
+      agentRunStarts.delete(trackedRunId);
+    }
+  }
   nextAgentRunVersion();
   clearPendingAgentRunError(runId);
   clearPendingAgentRunTimeout(runId);
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
+    // Lifecycle start owns execution-scoped budgets; wake dormant waiters here.
+    notifyAgentRunWaiters(runId);
   }
 }
 
@@ -302,8 +310,9 @@ function createSnapshotFromLifecycleEvent(params: {
   data?: Record<string, unknown>;
 }): AgentRunObservation {
   const { runId, phase, data } = params;
-  const startedAt =
-    typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
+  const recordedStart = agentRunStarts.get(runId);
+  const finiteRecordedStart = Number.isFinite(recordedStart) ? recordedStart : undefined;
+  const startedAt = typeof data?.startedAt === "number" ? data.startedAt : finiteRecordedStart;
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
     phase,
@@ -502,9 +511,21 @@ export function setGatewayDedupeEntry(params: {
   }
   if (incomingObservation.state === "active") {
     beginAgentJob(key.runId);
+    if (key.source === "agent") {
+      const payload = asOptionalRecord(params.entry.payload);
+      const expiresAt = asFiniteNumber(payload?.expiresAtMs) ?? Date.now();
+      agentRunStarts.set(
+        key.runId,
+        typeof payload?.reservationId === "string" ? -expiresAt : AGENT_RUN_QUEUED_AT,
+      );
+      notifyAgentRunWaiters(key.runId);
+    }
     return;
   }
   if (incomingObservation.state === "terminal") {
+    if (key.source === "agent") {
+      agentRunStarts.delete(key.runId);
+    }
     recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,
@@ -591,6 +612,7 @@ export async function waitForAgentJob(params: {
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
   source?: "chat";
+  executionScoped?: boolean;
 }): Promise<AgentJobTerminalSnapshot | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
@@ -608,32 +630,22 @@ export async function waitForAgentJob(params: {
 
   return await new Promise((resolve) => {
     let settled = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
     let removeWaiter = () => {};
+    const clearWaitTimeout = () => {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    };
     const finish = (snapshot: AgentJobTerminalSnapshot | null) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timeoutHandle);
+      clearWaitTimeout();
       removeWaiter();
       resolve(snapshot);
     };
-    const onWake = (lifecycleReset = false) => {
-      if (lifecycleReset) {
-        finish(null);
-        return;
-      }
-      const snapshot = getAgentRunSnapshot({
-        runId: params.runId,
-        source: params.source,
-        afterVersion,
-      });
-      if (snapshot) {
-        finish(publicSnapshot(snapshot));
-      }
-    };
-    removeWaiter = addAgentRunWaiter(params.runId, onWake);
-    const timeoutHandle = setSafeTimeout(() => {
+    const onTimeout = () => {
       if (!params.source) {
         const pendingError = pendingAgentRunErrors.get(params.runId)?.snapshot;
         if (pendingError && pendingError.version > afterVersion) {
@@ -655,10 +667,54 @@ export async function waitForAgentJob(params: {
         }
       }
       finish(null);
-    }, params.timeoutMs);
-    timeoutHandle.unref?.();
+    };
+    const armTimeout = () => {
+      const observedStart = params.executionScoped ? agentRunStarts.get(params.runId) : Date.now();
+      if (params.executionScoped && observedStart === AGENT_RUN_QUEUED_AT) {
+        clearWaitTimeout();
+        return;
+      }
+      if (params.executionScoped && observedStart === undefined) {
+        if (pendingAgentRunErrors.has(params.runId) || pendingAgentRunTimeouts.has(params.runId)) {
+          return;
+        }
+        finish(null);
+        return;
+      }
+      if (timeoutHandle && !params.executionScoped) {
+        return;
+      }
+      clearWaitTimeout();
+      const startedAt = observedStart ?? Date.now();
+      const deadline =
+        params.executionScoped && startedAt < 0 ? -startedAt : startedAt + params.timeoutMs;
+      const delayMs = Math.max(0, deadline - Date.now());
+      timeoutHandle = setSafeTimeout(onTimeout, delayMs);
+      timeoutHandle.unref?.();
+    };
+    const onWake = (lifecycleReset = false) => {
+      if (lifecycleReset) {
+        finish(null);
+        return;
+      }
+      const snapshot = getAgentRunSnapshot({
+        runId: params.runId,
+        source: params.source,
+        afterVersion,
+      });
+      if (snapshot) {
+        finish(publicSnapshot(snapshot));
+        return;
+      }
+      armTimeout();
+    };
+    removeWaiter = addAgentRunWaiter(params.runId, onWake);
     onWake();
   });
+}
+
+export function waitForAgentJobExecution(params: { runId: string; timeoutMs: number }) {
+  return waitForAgentJob({ ...params, executionScoped: true });
 }
 
 ensureAgentRunListener();

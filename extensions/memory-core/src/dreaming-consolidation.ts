@@ -627,7 +627,7 @@ async function runConsolidationGroup(params: {
       ),
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
-      lane: `dreaming-consolidation:${params.sessionKey}`,
+      lane: "subagent",
       lightContext: true,
       deliver: false,
     });

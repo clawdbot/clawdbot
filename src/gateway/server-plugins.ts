@@ -23,6 +23,7 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
@@ -307,27 +308,15 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethodInProcess<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
-      let status = payload?.status;
-      if (status === "completed" || status === "succeeded") {
-        status = "ok";
-      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
-        status = "ok";
-      }
-      if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
-      }
+      // The job registry installs its lifecycle listener on import, so defer loading
+      // until a plugin actually waits for a run.
+      const { waitForAgentJobExecution } = await import("./agent-turn/agent-job.js");
+      const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+      const payload = await waitForAgentJobExecution({ runId: params.runId, timeoutMs });
+      const status = payload?.status ?? "timeout";
       return {
         status,
-        ...(status !== "ok" &&
-          typeof payload?.error === "string" &&
-          payload.error && { error: payload.error }),
+        ...(status !== "ok" && payload?.error ? { error: payload.error } : {}),
       };
     },
     getSessionMessages,

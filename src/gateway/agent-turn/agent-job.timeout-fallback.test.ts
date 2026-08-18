@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { waitForAgentJob } from "./agent-job.js";
+import type { DedupeEntry } from "../server-shared.js";
+import { setGatewayDedupeEntry, waitForAgentJob, waitForAgentJobExecution } from "./agent-job.js";
 
 const HARD_TIMEOUT_PHASES = ["preflight", "provider", "post_turn"] as const;
 const NON_HARD_TIMEOUTS = [
@@ -14,6 +15,14 @@ const NON_HARD_TIMEOUTS = [
 ] as const;
 
 let runSequence = 0;
+
+function registerQueuedRun(runId: string): void {
+  setGatewayDedupeEntry({
+    dedupe: new Map<string, DedupeEntry>(),
+    key: `agent:${runId}`,
+    entry: { ts: Date.now(), ok: true, payload: { runId, status: "in_flight" } },
+  });
+}
 
 async function resolveOuterTimeoutRace(
   data: Readonly<Record<string, unknown>>,
@@ -74,6 +83,150 @@ describe("waitForAgentJob timeout fallback", () => {
       await expect(resolveOuterTimeoutRace(scenario.data)).resolves.toBeNull();
     });
   }
+
+  it("does not spend execution timeout while a run is queued", async () => {
+    const runId = `run-execution-wait-queued-${runSequence++}`;
+    registerQueuedRun(runId);
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(settled).toBe(false);
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Date.now() },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("starts the execution timeout from lifecycle startedAt", async () => {
+    const runId = `run-execution-wait-started-${runSequence++}`;
+    vi.setSystemTime(10_000);
+    registerQueuedRun(runId);
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(75_000);
+    const startedAt = Date.now();
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt },
+    });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("resolves a queued restart cancellation from the terminal registry", async () => {
+    const runId = `run-execution-wait-cancelled-${runSequence++}`;
+    registerQueuedRun(runId);
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the queued run",
+      },
+    });
+
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+      error: "Restart interrupted the queued run",
+    });
+  });
+
+  it("keeps zero-time execution waits as nonblocking polls", async () => {
+    const runId = `run-execution-wait-poll-${runSequence++}`;
+    registerQueuedRun(runId);
+
+    await expect(waitForAgentJobExecution({ runId, timeoutMs: 0 })).resolves.toBeNull();
+  });
+
+  it("returns immediately for unknown execution waits", async () => {
+    const runId = `run-execution-wait-unknown-${runSequence++}`;
+
+    await expect(waitForAgentJobExecution({ runId, timeoutMs: 5 })).resolves.toBeNull();
+  });
+
+  it("bounds provisional reservations by their admission expiry", async () => {
+    const runId = `run-execution-wait-reserved-${runSequence++}`;
+    vi.setSystemTime(10_000);
+    setGatewayDedupeEntry({
+      dedupe: new Map<string, DedupeEntry>(),
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "accepted",
+          reservationId: "reservation-1",
+          expiresAtMs: 40_000,
+        },
+      },
+    });
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("lets late execution waiters observe retryable terminal errors", async () => {
+    const runId = `run-execution-wait-pending-error-${runSequence++}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Date.now() },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+        error: "Retryable provider failure",
+      },
+    });
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      error: "Retryable provider failure",
+    });
+  });
 
   it("keeps restart cancellation as an error instead of a hard timeout", async () => {
     await expect(

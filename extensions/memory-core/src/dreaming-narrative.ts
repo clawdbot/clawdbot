@@ -246,7 +246,7 @@ async function startNarrativeRunOrFallback(params: {
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
-      lane: `dreaming-narrative:${params.sessionKey}`,
+      lane: "subagent",
       lightContext: true,
       deliver: false,
     });
