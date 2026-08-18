@@ -243,9 +243,10 @@ Available flags:
   provider-native tools filtered because code mode owns the tool surface.
 
 These flags log through normal OpenClaw logging, so `openclaw logs --follow`
-and the Control UI Logs tab show them. General transport diagnostics remain
-available at `debug` level; dedicated code-mode diagnostics are emitted only
-when `OPENCLAW_DEBUG_CODE_MODE` is enabled.
+and the Control UI Logs tab show them. For backward compatibility,
+`OPENCLAW_DEBUG_CODE_MODE` also promotes general model-transport diagnostics to
+`info`; dedicated code-mode diagnostics are emitted only when that flag is
+enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
