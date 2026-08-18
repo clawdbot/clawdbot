@@ -3946,7 +3946,39 @@ describe("OpenAI Ultra wire capture", () => {
       "gpt-5.6-terra": "http://127.0.0.1:4102/v1",
     });
   });
+
+  it("uses the configured or official route for explicit fallback models", () => {
+    const candidate = createExplicitLiveFallbackModel("openai", "gpt-5.6-sol");
+
+    expect(
+      resolveOpenAIUltraUpstreamBaseUrl({
+        candidate,
+        cfg: { models: { providers: { openai: { baseUrl: "https://proxy.test/v1" } } } },
+      }),
+    ).toBe("https://proxy.test/v1");
+    expect(resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: {} })).toBe(
+      "https://api.openai.com/v1",
+    );
+  });
 });
+
+const OPENAI_LIVE_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function resolveOpenAIUltraUpstreamBaseUrl(params: {
+  candidate: Model;
+  cfg: OpenClawConfig;
+}): string {
+  const providerConfig = params.cfg.models?.providers?.openai;
+  const configuredModel = providerConfig?.models?.find(
+    (model) => model.id === params.candidate.id,
+  );
+  return (
+    params.candidate.baseUrl?.trim() ||
+    configuredModel?.baseUrl?.trim() ||
+    providerConfig?.baseUrl?.trim() ||
+    OPENAI_LIVE_DEFAULT_BASE_URL
+  );
+}
 
 function buildOpenAIUltraWireProviderOverride(params: {
   candidates: Array<Model>;
@@ -4587,12 +4619,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       "OPENCLAW_LIVE_GATEWAY_THINKING=ultra requires an explicit GPT-5.6 OpenAI model list",
     );
   }
-  const missingUltraUpstream = ultraCandidates.find((model) => !model.baseUrl?.trim());
-  if (missingUltraUpstream) {
-    throw new Error(
-      `Ultra wire capture requires an explicit OpenAI base URL for ${missingUltraUpstream.provider}/${missingUltraUpstream.id}`,
-    );
-  }
   const previousEnv = snapshotLiveEnv([
     "OPENCLAW_DISABLE_BONJOUR",
     "OPENCLAW_LOG_LEVEL",
@@ -4674,12 +4700,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     let providerOverrides = params.providerOverrides;
     if (ultraCandidates.length > 0) {
       for (const candidate of ultraCandidates) {
-        const upstreamBaseUrl = candidate.baseUrl?.trim();
-        if (!upstreamBaseUrl) {
-          throw new Error(
-            `Ultra wire capture requires an explicit OpenAI base URL for ${candidate.provider}/${candidate.id}`,
-          );
-        }
+        const upstreamBaseUrl = resolveOpenAIUltraUpstreamBaseUrl({
+          candidate,
+          cfg: sanitizedCfg,
+        });
         let capture = ultraWireCapturesByUpstream.get(upstreamBaseUrl);
         if (!capture) {
           capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
