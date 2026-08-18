@@ -7,6 +7,7 @@ import {
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { normalizeCronJobPrecheck } from "../job-precheck-normalize.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -256,7 +257,15 @@ export function createJob(
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
         : structuredClone(input.payload),
-    ...(input.precheck ? { precheck: structuredClone(input.precheck) } : {}),
+    ...(input.precheck
+      ? (() => {
+          const precheck = normalizeCronJobPrecheck(input.precheck);
+          if (!precheck) {
+            throw new Error("invalid cron job precheck");
+          }
+          return { precheck };
+        })()
+      : {}),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -374,7 +383,11 @@ export function applyJobPatch(
     if (patch.precheck === null || patch.precheck === undefined) {
       delete job.precheck;
     } else {
-      job.precheck = structuredClone(patch.precheck);
+      const precheck = normalizeCronJobPrecheck(patch.precheck);
+      if (!precheck) {
+        throw new Error("invalid cron job precheck");
+      }
+      job.precheck = precheck;
     }
   }
   if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
@@ -518,7 +531,11 @@ export function applyDeclarativeJobSpec(
   // Converge host-shell precheck with the declaration (add/change/clear), same
   // ownership model as trigger — omitting precheck clears a prior gate.
   if (input.precheck) {
-    job.precheck = structuredClone(input.precheck);
+    const precheck = normalizeCronJobPrecheck(input.precheck);
+    if (!precheck) {
+      throw new Error("invalid cron job precheck");
+    }
+    job.precheck = precheck;
   } else {
     delete job.precheck;
   }
