@@ -68,6 +68,27 @@ describe("notifyProviderHttpResponse", () => {
     expect(onResponse).toHaveBeenCalledWith(expect.objectContaining({ status: 429 }), model);
   });
 
+  it("does not resume response handling when a callback aborts its signal", async () => {
+    const controller = new AbortController();
+    const abortReason = Object.assign(new Error("operator canceled"), {
+      code: "OPERATOR_CANCELLED",
+    });
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 });
+
+    await expect(
+      notifyProviderHttpResponse({
+        options: {
+          signal: controller.signal,
+          onProviderAccepted: () => controller.abort(abortReason),
+        },
+        response,
+        model,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(cancel).toHaveBeenCalledWith(abortReason);
+  });
+
   it("uses the option signal to abort a pending HTTP acceptance callback", async () => {
     const controller = new AbortController();
     const abortReason = Object.assign(new Error("operator canceled"), {

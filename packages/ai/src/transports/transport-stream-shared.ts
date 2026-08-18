@@ -164,6 +164,9 @@ async function awaitProviderLifecycleCallback(
       signal.removeEventListener("abort", onAbort);
     }
   }
+  if (signal.aborted) {
+    throw transportAbortError(signal);
+  }
 }
 
 /** Report observed HTTP metadata; rejected responses use only onResponse. */
