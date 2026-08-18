@@ -55,6 +55,24 @@ function nodeModulePath(repoRoot, packageName) {
   return path.join(repoRoot, "node_modules", ...packageName.split("/"));
 }
 
+// Follow Node's importer-relative lookup: hoisted installs can contain several versions,
+// and root-only traversal can misclassify a kept dependency as exclusive to an omitted plugin.
+function resolveNodeModulePackageDir(importerDir, packageName) {
+  let currentDir = fs.realpathSync(importerDir);
+
+  while (true) {
+    const packageDir = path.join(currentDir, "node_modules", ...packageName.split("/"));
+    if (fs.existsSync(path.join(packageDir, "package.json"))) {
+      return fs.realpathSync(packageDir);
+    }
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return null;
+    }
+    currentDir = parentDir;
+  }
+}
+
 function removeEmptyScopeDir(repoRoot, packageName) {
   if (!packageName.startsWith("@")) {
     return;
@@ -68,32 +86,44 @@ function removeEmptyScopeDir(repoRoot, packageName) {
   }
 }
 
-function collectPackageRuntimeClosure(repoRoot, seedPackageNames, options = {}) {
-  const seen = new Set();
-  const stack = [...seedPackageNames];
+function collectPackageRuntimeClosure(repoRoot, seeds, options = {}) {
+  const packageDirs = new Set();
+  const rootPackageNames = new Set();
+  const stack = [...seeds];
 
   while (stack.length > 0) {
-    const packageName = stack.pop();
-    if (!packageName || seen.has(packageName)) {
+    const entry = stack.pop();
+    if (!entry) {
       continue;
     }
-    seen.add(packageName);
+    const packageDir = resolveNodeModulePackageDir(entry.importerDir, entry.packageName);
+    if (!packageDir) {
+      continue;
+    }
 
-    const packageJson = readPackageJson(
-      path.join(nodeModulePath(repoRoot, packageName), "package.json"),
-    );
+    const rootPackageDir = nodeModulePath(repoRoot, entry.packageName);
+    if (
+      fs.existsSync(path.join(rootPackageDir, "package.json")) &&
+      fs.realpathSync(rootPackageDir) === packageDir
+    ) {
+      rootPackageNames.add(entry.packageName);
+    }
+    if (packageDirs.has(packageDir)) {
+      continue;
+    }
+    packageDirs.add(packageDir);
+
+    const packageJson = readPackageJson(path.join(packageDir, "package.json"));
     for (const dependencyName of collectRuntimeDependencyNames(packageJson, options)) {
-      if (!seen.has(dependencyName)) {
-        stack.push(dependencyName);
-      }
+      stack.push({ importerDir: packageDir, packageName: dependencyName });
     }
   }
 
-  return seen;
+  return { packageDirs, rootPackageNames };
 }
 
 function collectWorkspacePackageRuntimeSeeds(repoRoot, workspaceDir, excludedPluginIds) {
-  const seeds = new Set();
+  const seeds = [];
   const workspaceRoot = path.join(repoRoot, workspaceDir);
   if (!fs.existsSync(workspaceRoot)) {
     return seeds;
@@ -103,12 +133,13 @@ function collectWorkspacePackageRuntimeSeeds(repoRoot, workspaceDir, excludedPlu
     if (!entry.isDirectory() || excludedPluginIds.has(entry.name)) {
       continue;
     }
-    const packageJson = readPackageJson(path.join(workspaceRoot, entry.name, "package.json"));
+    const importerDir = path.join(workspaceRoot, entry.name);
+    const packageJson = readPackageJson(path.join(importerDir, "package.json"));
     if (typeof packageJson?.name === "string") {
-      seeds.add(packageJson.name);
+      seeds.push({ importerDir, packageName: packageJson.name });
     }
-    for (const dependencyName of collectRuntimeDependencyNames(packageJson)) {
-      seeds.add(dependencyName);
+    for (const packageName of collectRuntimeDependencyNames(packageJson)) {
+      seeds.push({ importerDir, packageName });
     }
   }
   return seeds;
@@ -117,35 +148,27 @@ function collectWorkspacePackageRuntimeSeeds(repoRoot, workspaceDir, excludedPlu
 function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPluginIds) {
   const rootPackageJson = readPackageJson(path.join(repoRoot, "package.json"));
   const omittedPackageNames = new Set();
-  const omittedSeeds = new Set();
+  const omittedSeeds = [];
 
   for (const pluginId of omittedPluginIds) {
-    const packageJson = readPackageJson(
-      path.join(repoRoot, bundledPluginDir, pluginId, "package.json"),
-    );
+    const importerDir = path.join(repoRoot, bundledPluginDir, pluginId);
+    const packageJson = readPackageJson(path.join(importerDir, "package.json"));
     if (typeof packageJson?.name === "string") {
       omittedPackageNames.add(packageJson.name);
     }
-    for (const dependencyName of collectRuntimeDependencyNames(packageJson)) {
-      omittedSeeds.add(dependencyName);
+    for (const packageName of collectRuntimeDependencyNames(packageJson)) {
+      omittedSeeds.push({ importerDir, packageName });
     }
   }
 
-  const keptSeeds = new Set(collectRuntimeDependencyNames(rootPackageJson));
-  for (const dependencyName of collectWorkspacePackageRuntimeSeeds(
-    repoRoot,
-    "packages",
-    new Set(),
-  )) {
-    keptSeeds.add(dependencyName);
-  }
-  for (const dependencyName of collectWorkspacePackageRuntimeSeeds(
-    repoRoot,
-    bundledPluginDir,
-    omittedPluginIds,
-  )) {
-    keptSeeds.add(dependencyName);
-  }
+  const keptSeeds = [...collectRuntimeDependencyNames(rootPackageJson)].map((packageName) => ({
+    importerDir: repoRoot,
+    packageName,
+  }));
+  keptSeeds.push(...collectWorkspacePackageRuntimeSeeds(repoRoot, "packages", new Set()));
+  keptSeeds.push(
+    ...collectWorkspacePackageRuntimeSeeds(repoRoot, bundledPluginDir, omittedPluginIds),
+  );
 
   const keptClosure = collectPackageRuntimeClosure(repoRoot, keptSeeds);
   // Hoisted workspace dev dependencies can satisfy optional peers of omitted
@@ -155,16 +178,16 @@ function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPl
     includeOptionalPeers: true,
   });
   const removed = [];
-  const removalCandidates = new Set([...omittedPackageNames, ...omittedClosure]);
+  const removalCandidates = new Set([...omittedPackageNames, ...omittedClosure.rootPackageNames]);
 
   for (const packageName of [...removalCandidates].toSorted((left, right) =>
     left.localeCompare(right),
   )) {
-    if (keptClosure.has(packageName)) {
-      continue;
-    }
     const packageDir = nodeModulePath(repoRoot, packageName);
     if (!fs.existsSync(packageDir)) {
+      continue;
+    }
+    if (keptClosure.packageDirs.has(fs.realpathSync(packageDir))) {
       continue;
     }
     removePathIfExists(packageDir);
