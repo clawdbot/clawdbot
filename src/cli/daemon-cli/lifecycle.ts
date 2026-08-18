@@ -53,6 +53,7 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "./lifecycle-core.js";
+import { throwIfGatewayPortBusyWithoutOwner } from "./lifecycle-port-probe.js";
 import {
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
@@ -135,8 +136,7 @@ function resolveGatewayPortFallback(): Promise<number> {
 }
 
 async function resolveExplicitGatewayConfigPort(): Promise<number | undefined> {
-  const cfg = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return cfg?.gateway?.port;
+  return (await readBestEffortConfig({ observe: false }).catch(() => undefined))?.gateway?.port;
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
@@ -218,6 +218,7 @@ async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: numb
   // reporting the gateway as not running while it keeps serving.
   const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
+    await throwIfGatewayPortBusyWithoutOwner(port);
     return null;
   }
   for (const pid of pids) {

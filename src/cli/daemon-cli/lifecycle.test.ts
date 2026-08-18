@@ -37,6 +37,7 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
+const throwIfGatewayPortBusyWithoutOwner = vi.fn<(port: number) => Promise<void>>(async () => {});
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
 const probeGateway = vi.fn<
   (opts: {
@@ -172,6 +173,10 @@ vi.mock("./lifecycle-audit.js", () => ({
     createGatewayLifecycleMutationAudit(params),
 }));
 
+vi.mock("./lifecycle-port-probe.js", () => ({
+  throwIfGatewayPortBusyWithoutOwner: (port: number) => throwIfGatewayPortBusyWithoutOwner(port),
+}));
+
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -272,6 +277,7 @@ describe("runDaemonRestart health checks", () => {
     isTerminalInteractive.mockReset().mockReturnValue(true);
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
+    throwIfGatewayPortBusyWithoutOwner.mockReset().mockResolvedValue(undefined);
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
 
     service.readCommand.mockResolvedValue({
@@ -1114,6 +1120,31 @@ describe("runDaemonRestart health checks", () => {
 
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
+    expect(outcome).toBeNull();
+  });
+
+  it("throws when gateway-configured port is busy without an identified owner", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    throwIfGatewayPortBusyWithoutOwner.mockRejectedValue(
+      new Error("Port 18789 is in use but the owning process could not be identified."),
+    );
+
+    await expect(runUnmanagedStop()).rejects.toThrow(
+      /Port 18789 is in use but the owning process could not be identified/,
+    );
+    expect(throwIfGatewayPortBusyWithoutOwner).toHaveBeenCalledWith(18789);
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+  });
+
+  it("does not false-positive when port probe reports free", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    throwIfGatewayPortBusyWithoutOwner.mockResolvedValue(undefined);
+
+    const outcome = await runUnmanagedStop();
+
+    expect(throwIfGatewayPortBusyWithoutOwner).toHaveBeenCalledWith(18789);
     expect(outcome).toBeNull();
   });
 });
